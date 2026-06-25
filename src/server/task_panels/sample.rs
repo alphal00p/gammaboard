@@ -470,60 +470,57 @@ fn config_label(config: &AccumulatorConfig) -> &'static str {
     }
 }
 
+fn timeseries_point(x: f64, y: f64, error: Option<f64>) -> PlotPoint {
+    PlotPoint {
+        x,
+        y,
+        x_sampler_uptime_ms: None,
+        x_completed_samples_total: None,
+        y_min: error.map(|error| y - error),
+        y_max: error.map(|error| y + error),
+    }
+}
+
 fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
     }
-    let smooth = Some(true);
-    Some(match accumulator {
+    let points = match accumulator {
         AccumulatorState::Vector(state) => {
             let projection = &state.projection.state;
-            scalar_timeseries_panel_with_smoothing(
-                "real_estimate_history",
-                vec![PlotPoint {
-                    x: projection.count as f64,
-                    y: projection.mean(),
-                    x_sampler_uptime_ms: None,
-                    x_completed_samples_total: None,
-                    y_min: Some(projection.mean() - projection.stderr()),
-                    y_max: Some(projection.mean() + projection.stderr()),
-                }],
-                smooth,
-            )
+            vec![timeseries_point(
+                projection.count as f64,
+                projection.mean(),
+                Some(projection.stderr()),
+            )]
         }
-        AccumulatorState::Gammaloop(state) => scalar_timeseries_panel_with_smoothing(
-            "real_estimate_history",
-            vec![PlotPoint {
-                x: state.sample_count() as f64,
-                y: state.real_mean(),
-                x_sampler_uptime_ms: None,
-                x_completed_samples_total: None,
-                y_min: Some(state.real_mean() - state.real_stderr()),
-                y_max: Some(state.real_mean() + state.real_stderr()),
-            }],
-            smooth,
-        ),
-        _ => scalar_timeseries_panel_with_smoothing("real_estimate_history", Vec::new(), smooth),
-    })
+        AccumulatorState::Gammaloop(state) => vec![timeseries_point(
+            state.sample_count() as f64,
+            state.real_mean(),
+            Some(state.real_stderr()),
+        )],
+        _ => Vec::new(),
+    };
+    Some(scalar_timeseries_panel_with_smoothing(
+        "real_estimate_history",
+        points,
+        Some(true),
+    ))
 }
 
 fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
     }
-    let smooth = Some(true);
     match accumulator {
         AccumulatorState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
             "imag_estimate_history",
-            vec![PlotPoint {
-                x: state.sample_count() as f64,
-                y: state.imag_mean(),
-                x_sampler_uptime_ms: None,
-                x_completed_samples_total: None,
-                y_min: Some(state.imag_mean() - state.imag_stderr()),
-                y_max: Some(state.imag_mean() + state.imag_stderr()),
-            }],
-            smooth,
+            vec![timeseries_point(
+                state.sample_count() as f64,
+                state.imag_mean(),
+                Some(state.imag_stderr()),
+            )],
+            Some(true),
         )),
         _ => None,
     }
@@ -540,14 +537,11 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     };
     Some(scalar_timeseries_panel_with_smoothing(
         "abs_signal_to_noise_history",
-        vec![PlotPoint {
-            x: accumulator.sample_count() as f64,
-            y: rsd,
-            x_sampler_uptime_ms: None,
-            x_completed_samples_total: None,
-            y_min: None,
-            y_max: None,
-        }],
+        vec![timeseries_point(
+            accumulator.sample_count() as f64,
+            rsd,
+            None,
+        )],
         Some(true),
     ))
 }
@@ -791,31 +785,21 @@ fn base_estimate_summary_entries(
             ];
             if let Some(target) = run_target {
                 if let Some(real_target) = target.component(&["real", "value"]) {
-                    entries.push(key_value(
+                    entries.push(target_comparison_entry(
                         "target_comparison_real",
                         "Real vs Target",
-                        json!({
-                            "kind":"target_comparison",
-                            "value": state.real_mean(),
-                            "error": state.real_stderr(),
-                            "target": real_target,
-                            "delta_percent": delta_percent(state.real_mean(), real_target),
-                            "delta_sigma": delta_sigma(state.real_mean(), state.real_stderr(), real_target),
-                        }),
+                        state.real_mean(),
+                        state.real_stderr(),
+                        real_target,
                     ));
                 }
                 if let Some(imag_target) = target.component(&["imag"]) {
-                    entries.push(key_value(
+                    entries.push(target_comparison_entry(
                         "target_comparison_imag",
                         "Imag vs Target",
-                        json!({
-                            "kind":"target_comparison",
-                            "value": state.imag_mean(),
-                            "error": state.imag_stderr(),
-                            "target": imag_target,
-                            "delta_percent": delta_percent(state.imag_mean(), imag_target),
-                            "delta_sigma": delta_sigma(state.imag_mean(), state.imag_stderr(), imag_target),
-                        }),
+                        state.imag_mean(),
+                        state.imag_stderr(),
+                        imag_target,
                     ));
                 }
             }
@@ -906,6 +890,27 @@ fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
         },
         other => other,
     }
+}
+
+fn target_comparison_entry(
+    key: &str,
+    label: &str,
+    value: f64,
+    error: f64,
+    target: f64,
+) -> crate::server::panels::KeyValueEntry {
+    key_value(
+        key,
+        label,
+        json!({
+            "kind": "target_comparison",
+            "value": value,
+            "error": error,
+            "target": target,
+            "delta_percent": delta_percent(value, target),
+            "delta_sigma": delta_sigma(value, error, target),
+        }),
+    )
 }
 
 fn delta_sigma(value: f64, error: f64, target: f64) -> f64 {

@@ -89,9 +89,19 @@ pub enum AccumulatorState {
     FullVector(FullVectorAccumulatorState),
 }
 
-/// Canonical single-component name used when scalar config sugar is expanded
-/// into a one-component vector accumulator.
 pub const SCALAR_COMPONENT_NAME: &str = "value";
+
+fn scalar_value_vector(
+    discrete_projections: Option<crate::core::DiscreteProjectionConfig>,
+    moments: crate::core::AccumulatorMomentConfig,
+) -> VectorAccumulatorState {
+    VectorAccumulatorState::from_config(
+        vec![SCALAR_COMPONENT_NAME.to_string()],
+        crate::core::TrainingProjection::component(SCALAR_COMPONENT_NAME),
+        discrete_projections,
+        moments,
+    )
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -126,19 +136,12 @@ impl SemanticAccumulatorKind {
 
 impl AccumulatorState {
     pub fn from_aggregate_persistent_json(
-        kind: SemanticAccumulatorKind,
+        _kind: SemanticAccumulatorKind,
         value: &JsonValue,
     ) -> Result<Self, EngineError> {
-        // Scalar accumulators are stored as one-component vectors; both
-        // semantic kinds therefore deserialize into a vector state.
-        let _ = kind;
-        serde_json::from_value(value.clone())
-            .map(Self::Vector)
-            .map_err(|err| {
-                EngineError::build(format!(
-                    "invalid vector persistent accumulator payload: {err}"
-                ))
-            })
+        // Scalar accumulators are stored as one-component vectors, so both
+        // semantic kinds deserialize into a vector state.
+        Self::from_vector_persistent_json(value)
     }
 
     pub fn from_gammaloop_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
@@ -167,12 +170,7 @@ impl AccumulatorState {
             AccumulatorConfig::Scalar {
                 discrete_projections,
                 moments,
-            } => Self::Vector(VectorAccumulatorState::from_config(
-                vec![SCALAR_COMPONENT_NAME.to_string()],
-                crate::core::TrainingProjection::component(SCALAR_COMPONENT_NAME),
-                discrete_projections.clone(),
-                *moments,
-            )),
+            } => Self::Vector(scalar_value_vector(discrete_projections.clone(), *moments)),
             AccumulatorConfig::Vector {
                 components,
                 training_projection,
@@ -200,12 +198,7 @@ impl AccumulatorState {
     }
 
     pub fn empty_vector() -> Self {
-        Self::Vector(VectorAccumulatorState::from_config(
-            vec![SCALAR_COMPONENT_NAME.to_string()],
-            crate::core::TrainingProjection::component(SCALAR_COMPONENT_NAME),
-            None,
-            Default::default(),
-        ))
+        Self::Vector(scalar_value_vector(None, Default::default()))
     }
 
     pub fn empty_gammaloop() -> Self {

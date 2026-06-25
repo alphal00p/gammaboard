@@ -493,6 +493,26 @@ impl GammaLoopEvaluator {
         self.integrand = self.pristine_integrand.clone();
     }
 
+    fn ingest_vector_batch(
+        accumulator: &mut VectorAccumulatorState,
+        evaluation_results: &[EvaluationResult],
+        points: &[crate::evaluation::Point],
+        require_training_values: bool,
+        mut values_of: impl FnMut(&EvaluationResult) -> Vec<f64>,
+    ) -> Result<Option<Vec<f64>>, EvalError> {
+        let mut training_values =
+            require_training_values.then(|| Vec::with_capacity(evaluation_results.len()));
+        for (result, point) in evaluation_results.iter().zip(points.iter()) {
+            let projected = accumulator
+                .ingest_vector(&values_of(result), point)
+                .map_err(EvalError::eval)?;
+            if let Some(training_values) = training_values.as_mut() {
+                training_values.push(projected * point.total_weight());
+            }
+        }
+        Ok(training_values)
+    }
+
     fn batch_gammaloop_observable(
         &self,
         evaluation_results: &[EvaluationResult],
@@ -740,39 +760,31 @@ impl Evaluator for GammaLoopEvaluator {
                         observable_state.kind_str()
                     )));
                 };
-                let mut training_values = options
-                    .require_training_values
-                    .then(|| Vec::with_capacity(evaluation_results.len()));
-                for (result, point) in evaluation_results.iter().zip(points.iter()) {
-                    let value = Self::project_result_value(result);
-                    let projected = accumulator
-                        .ingest_vector(&[value.re, value.im], point)
-                        .map_err(EvalError::eval)?;
-                    if let Some(training_values) = training_values.as_mut() {
-                        training_values.push(projected * point.total_weight());
-                    }
-                }
-                training_values
+                Self::ingest_vector_batch(
+                    accumulator,
+                    &evaluation_results,
+                    points,
+                    options.require_training_values,
+                    |result| {
+                        let value = Self::project_result_value(result);
+                        vec![value.re, value.im]
+                    },
+                )?
             }
             _ => match accumulator.semantic_kind() {
                 crate::evaluation::SemanticAccumulatorKind::Scalar => match &mut observable_state {
-                    AccumulatorState::Vector(accumulator) => {
-                        let mut training_values = options
-                            .require_training_values
-                            .then(|| Vec::with_capacity(evaluation_results.len()));
-                        for (result, point) in evaluation_results.iter().zip(points.iter()) {
-                            let value = self
-                                .training_projection
-                                .project(Self::project_result_value(result));
-                            let projected = accumulator
-                                .ingest_vector(&[value], point)
-                                .map_err(EvalError::eval)?;
-                            if let Some(training_values) = training_values.as_mut() {
-                                training_values.push(projected * point.total_weight());
-                            }
-                        }
-                        training_values
-                    }
+                    AccumulatorState::Vector(accumulator) => Self::ingest_vector_batch(
+                        accumulator,
+                        &evaluation_results,
+                        points,
+                        options.require_training_values,
+                        |result| {
+                            vec![
+                                self.training_projection
+                                    .project(Self::project_result_value(result)),
+                            ]
+                        },
+                    )?,
                     AccumulatorState::FullVector(accumulator) => {
                         for (result, point) in evaluation_results.iter().zip(points.iter()) {
                             let value = self
