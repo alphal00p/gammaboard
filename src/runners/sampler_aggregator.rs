@@ -239,15 +239,6 @@ fn collect_discrete_pdf_subspaces(
 ) -> Result<Vec<(String, Vec<i64>, DiscreteSubspace)>, EngineError> {
     let mut out = Vec::new();
     match state {
-        AccumulatorState::Scalar(state) => {
-            collect_discrete_pdf_subspaces_from_bins(
-                &state.discrete_bins,
-                config,
-                bin_limit,
-                None,
-                &mut out,
-            )?;
-        }
         AccumulatorState::Vector(state) => {
             for component in state
                 .components
@@ -691,13 +682,6 @@ where
         projection: SampleErrorProjection,
     ) -> Option<ProjectedEstimate> {
         match &self.observable_state {
-            AccumulatorState::Scalar(state) => match projection {
-                SampleErrorProjection::Real => Some(ProjectedEstimate {
-                    value: state.mean(),
-                    error: state.stderr(),
-                }),
-                SampleErrorProjection::Imag | SampleErrorProjection::Abs => None,
-            },
             AccumulatorState::Vector(state) => Some(ProjectedEstimate {
                 value: state.projection.state.mean(),
                 error: state.projection.state.stderr(),

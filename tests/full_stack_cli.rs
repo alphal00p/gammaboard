@@ -631,20 +631,6 @@ impl FullStackHarness {
             .success();
     }
 
-    async fn wait_for_nodes_idle(&self, nodes: &[&str], timeout: Duration) -> anyhow::Result<()> {
-        let nodes: Vec<String> = nodes.iter().map(|s| s.to_string()).collect();
-        self.wait_for(format!("nodes {nodes:?} all idle"), timeout, || async {
-            for node in &nodes {
-                let s = self.node_state(node).await?;
-                if s.0.is_some() || s.1.is_some() || s.2.is_some() || s.3.is_some() {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        })
-        .await
-    }
-
     async fn cleanup(&mut self) -> anyhow::Result<()> {
         self.stop_children().await;
         self.pool.close().await;

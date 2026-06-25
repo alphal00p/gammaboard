@@ -52,7 +52,7 @@ impl UnitEvaluator {
     fn scalar_ingestor(state: &mut AccumulatorState) -> Result<&mut dyn IngestScalar, EvalError> {
         match state {
             AccumulatorState::Empty(accumulator) => Ok(accumulator),
-            AccumulatorState::Scalar(accumulator) => Ok(accumulator),
+            AccumulatorState::Vector(accumulator) => Ok(accumulator),
             AccumulatorState::FullVector(accumulator) => Ok(accumulator),
             other => Err(EvalError::eval(format!(
                 "unit evaluator scalar mode does not support accumulator kind {}",

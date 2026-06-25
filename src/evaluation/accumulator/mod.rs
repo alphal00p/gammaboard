@@ -84,11 +84,14 @@ pub trait Accumulator: Clone + Serialize + DeserializeOwned {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AccumulatorState {
     Empty(EmptyAccumulatorState),
-    Scalar(ScalarAccumulatorState),
     Vector(VectorAccumulatorState),
     Gammaloop(GammaLoopAccumulatorState),
     FullVector(FullVectorAccumulatorState),
 }
+
+/// Canonical single-component name used when scalar config sugar is expanded
+/// into a one-component vector accumulator.
+pub const SCALAR_COMPONENT_NAME: &str = "value";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -126,22 +129,16 @@ impl AccumulatorState {
         kind: SemanticAccumulatorKind,
         value: &JsonValue,
     ) -> Result<Self, EngineError> {
-        match kind {
-            SemanticAccumulatorKind::Scalar => serde_json::from_value(value.clone())
-                .map(Self::Scalar)
-                .map_err(|err| {
-                    EngineError::build(format!(
-                        "invalid scalar persistent accumulator payload: {err}"
-                    ))
-                }),
-            SemanticAccumulatorKind::Vector => serde_json::from_value(value.clone())
-                .map(Self::Vector)
-                .map_err(|err| {
-                    EngineError::build(format!(
-                        "invalid vector persistent accumulator payload: {err}"
-                    ))
-                }),
-        }
+        // Scalar accumulators are stored as one-component vectors; both
+        // semantic kinds therefore deserialize into a vector state.
+        let _ = kind;
+        serde_json::from_value(value.clone())
+            .map(Self::Vector)
+            .map_err(|err| {
+                EngineError::build(format!(
+                    "invalid vector persistent accumulator payload: {err}"
+                ))
+            })
     }
 
     pub fn from_gammaloop_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
@@ -170,7 +167,9 @@ impl AccumulatorState {
             AccumulatorConfig::Scalar {
                 discrete_projections,
                 moments,
-            } => Self::Scalar(ScalarAccumulatorState::from_config(
+            } => Self::Vector(VectorAccumulatorState::from_config(
+                vec![SCALAR_COMPONENT_NAME.to_string()],
+                crate::core::TrainingProjection::component(SCALAR_COMPONENT_NAME),
                 discrete_projections.clone(),
                 *moments,
             )),
@@ -197,13 +196,13 @@ impl AccumulatorState {
     }
 
     pub fn empty_scalar() -> Self {
-        Self::Scalar(ScalarAccumulatorState::default())
+        Self::empty_vector()
     }
 
     pub fn empty_vector() -> Self {
         Self::Vector(VectorAccumulatorState::from_config(
-            vec!["value".to_string()],
-            crate::core::TrainingProjection::component("value"),
+            vec![SCALAR_COMPONENT_NAME.to_string()],
+            crate::core::TrainingProjection::component(SCALAR_COMPONENT_NAME),
             None,
             Default::default(),
         ))
@@ -216,7 +215,6 @@ impl AccumulatorState {
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Empty(_) => "empty",
-            Self::Scalar(_) => "scalar",
             Self::Vector(_) => "vector",
             Self::Gammaloop(_) => "gammaloop",
             Self::FullVector(_) => "full_vector",
@@ -226,10 +224,6 @@ impl AccumulatorState {
     pub fn config(&self) -> AccumulatorConfig {
         match self {
             Self::Empty(_) => AccumulatorConfig::Empty,
-            Self::Scalar(state) => AccumulatorConfig::Scalar {
-                discrete_projections: state.discrete_projections.clone(),
-                moments: state.moments,
-            },
             Self::Vector(state) => AccumulatorConfig::Vector {
                 components: state
                     .components
@@ -256,10 +250,6 @@ impl AccumulatorState {
                 Accumulator::merge(left, right);
                 Ok(())
             }
-            (Self::Scalar(left), Self::Scalar(right)) => {
-                Accumulator::merge(left, right);
-                Ok(())
-            }
             (Self::Vector(left), Self::Vector(right)) => {
                 Accumulator::merge(left, right);
                 Ok(())
@@ -280,7 +270,6 @@ impl AccumulatorState {
     pub fn sample_count(&self) -> i64 {
         match self {
             Self::Empty(accumulator) => accumulator.sample_count(),
-            Self::Scalar(accumulator) => accumulator.sample_count(),
             Self::Vector(accumulator) => accumulator.sample_count(),
             Self::Gammaloop(accumulator) => accumulator.sample_count(),
             Self::FullVector(accumulator) => accumulator.sample_count(),
@@ -290,7 +279,6 @@ impl AccumulatorState {
     pub fn abs_signal_to_noise(&self) -> f64 {
         match self {
             Self::Empty(_) => 0.0,
-            Self::Scalar(accumulator) => accumulator.signal_to_noise(),
             Self::Vector(accumulator) => accumulator.signal_to_noise(),
             Self::Gammaloop(accumulator) => accumulator.signal_to_noise(),
             Self::FullVector(_) => 0.0,
@@ -310,7 +298,6 @@ impl AccumulatorState {
     pub fn to_persistent_json(&self) -> Result<JsonValue, EngineError> {
         match self {
             Self::Empty(accumulator) => accumulator.to_persistent_json(),
-            Self::Scalar(accumulator) => accumulator.to_persistent_json(),
             Self::Vector(accumulator) => accumulator.to_persistent_json(),
             Self::Gammaloop(accumulator) => accumulator.to_persistent_json(),
             Self::FullVector(accumulator) => accumulator.to_persistent_json(),
@@ -320,7 +307,6 @@ impl AccumulatorState {
     pub fn to_digest_json(&self, run_spec: &RunSpec) -> Result<JsonValue, EngineError> {
         match self {
             Self::Empty(accumulator) => accumulator.to_digest_json(run_spec),
-            Self::Scalar(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Vector(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Gammaloop(accumulator) => accumulator.to_digest_json(run_spec),
             Self::FullVector(accumulator) => accumulator.to_digest_json(run_spec),
@@ -340,16 +326,34 @@ mod tests {
         TrainingProjection,
     };
     use crate::evaluation::Point;
+    use crate::{NamedScalarAccumulator, VectorAccumulatorState};
 
     #[test]
     fn persistent_json_roundtrips_without_enum_tag() {
-        let snapshot = AccumulatorState::Scalar(ScalarAccumulatorState {
-            count: 2,
-            sum_weighted_value: 3.0,
-            sum_abs: 4.0,
-            sum_sq: 5.0,
-            nan_count: 0,
-            ..Default::default()
+        let snapshot = AccumulatorState::Vector(VectorAccumulatorState {
+            components: vec![NamedScalarAccumulator {
+                name: "value".to_string(),
+                state: ScalarAccumulatorState {
+                    count: 2,
+                    sum_weighted_value: 3.0,
+                    sum_abs: 4.0,
+                    sum_sq: 5.0,
+                    nan_count: 0,
+                    ..Default::default()
+                },
+            }],
+            projection_spec: TrainingProjection::component("value"),
+            projection: NamedScalarAccumulator {
+                name: "value".to_string(),
+                state: ScalarAccumulatorState {
+                    count: 2,
+                    sum_weighted_value: 3.0,
+                    sum_abs: 4.0,
+                    sum_sq: 5.0,
+                    nan_count: 0,
+                    ..Default::default()
+                },
+            },
         })
         .to_persistent_json()
         .expect("persistent snapshot");

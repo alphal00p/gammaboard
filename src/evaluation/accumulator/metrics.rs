@@ -22,12 +22,6 @@ pub fn extract_accumulator_metric(
         return Ok(None);
     }
     match state {
-        AccumulatorState::Scalar(scalar) => {
-            if selector.component.is_some() {
-                return Ok(None);
-            }
-            Ok(Some(metric_for_scalar(scalar, selector.name, None)))
-        }
         AccumulatorState::Vector(vector) => Ok(metric_for_vector(vector, selector)),
         AccumulatorState::Gammaloop(gammaloop) => Ok(metric_for_gammaloop(gammaloop, selector)),
         AccumulatorState::Empty(_) | AccumulatorState::FullVector(_) => Ok(None),

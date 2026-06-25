@@ -456,7 +456,9 @@ impl Evaluator for SymbolicaEngine {
             .map_err(|err| EngineError::Eval(err.to_string()))?;
         let has_imaginary_part = out.iter().any(|value| value.im != 0.0);
 
-        if matches!(&observable_state, AccumulatorState::Vector(_))
+        // Multi-component (real/imag) accumulators take the vector path; a
+        // single-component vector is scalar sugar and falls through below.
+        if matches!(&observable_state, AccumulatorState::Vector(vector) if vector.components.len() >= 2)
             || matches!(
                 &observable_state,
                 AccumulatorState::FullVector(full_vector)
@@ -500,7 +502,7 @@ impl Evaluator for SymbolicaEngine {
         let out_re = out.iter().map(|value| value.re).collect::<Vec<_>>();
         let scalar_accumulator: &mut dyn IngestScalar = match &mut observable_state {
             AccumulatorState::Empty(accumulator) => accumulator,
-            AccumulatorState::Scalar(accumulator) => accumulator,
+            AccumulatorState::Vector(accumulator) => accumulator,
             AccumulatorState::FullVector(accumulator) => accumulator,
             other => {
                 return Err(EvalError::eval(format!(

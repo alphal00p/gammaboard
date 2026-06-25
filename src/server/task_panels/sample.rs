@@ -409,7 +409,7 @@ fn accumulator_matches_requested_config(
         AccumulatorConfig::Empty => matches!(accumulator, AccumulatorState::Empty(_)),
         AccumulatorConfig::Scalar { .. } => matches!(
             accumulator,
-            AccumulatorState::Scalar(_) | AccumulatorState::FullVector(_)
+            AccumulatorState::Vector(_) | AccumulatorState::FullVector(_)
         ),
         AccumulatorConfig::Vector { .. } => matches!(accumulator, AccumulatorState::Vector(_)),
         AccumulatorConfig::Gammaloop => matches!(accumulator, AccumulatorState::Gammaloop(_)),
@@ -476,18 +476,6 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
     }
     let smooth = Some(true);
     Some(match accumulator {
-        AccumulatorState::Scalar(state) => scalar_timeseries_panel_with_smoothing(
-            "real_estimate_history",
-            vec![PlotPoint {
-                x: state.count as f64,
-                y: state.mean(),
-                x_sampler_uptime_ms: None,
-                x_completed_samples_total: None,
-                y_min: Some(state.mean() - state.stderr()),
-                y_max: Some(state.mean() + state.stderr()),
-            }],
-            smooth,
-        ),
         AccumulatorState::Vector(state) => {
             let projection = &state.projection.state;
             scalar_timeseries_panel_with_smoothing(
@@ -546,7 +534,6 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
         return None;
     }
     let rsd = match &accumulator {
-        AccumulatorState::Scalar(state) => state.rsd(),
         AccumulatorState::Vector(state) => state.rsd(),
         AccumulatorState::Gammaloop(state) => state.rsd(),
         _ => 0.0,
@@ -577,19 +564,6 @@ fn estimate_summary_panel(
 
 fn max_weight_summary_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     let entries = match accumulator {
-        AccumulatorState::Scalar(state) => vec![
-            key_value("max_weight_impact", "Impact", state.max_weight_impact()),
-            key_value(
-                "max_weighted_positive",
-                "Max +",
-                state.max_weighted_positive,
-            ),
-            key_value(
-                "max_weighted_negative",
-                "Max -",
-                state.max_weighted_negative,
-            ),
-        ],
         AccumulatorState::Vector(state) => vec![
             key_value(
                 "max_weight_impact",
@@ -642,27 +616,6 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
         "Point".to_string(),
     ];
     let rows = match accumulator {
-        AccumulatorState::Scalar(state) => {
-            let impact = state.max_weight_impact();
-            let mut rows = Vec::new();
-            push_max_weight_row(
-                &mut rows,
-                "scalar",
-                "+",
-                state.max_weighted_positive,
-                impact,
-                state.max_weighted_positive_point.as_ref(),
-            );
-            push_max_weight_row(
-                &mut rows,
-                "scalar",
-                "-",
-                state.max_weighted_negative,
-                impact,
-                state.max_weighted_negative_point.as_ref(),
-            );
-            rows
-        }
         AccumulatorState::Vector(state) => {
             let mut rows = Vec::new();
             for component in &state.components {
@@ -787,25 +740,6 @@ fn base_estimate_summary_entries(
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     match accumulator {
         AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
-        AccumulatorState::Scalar(state) => vec![
-            key_value("count", "Count", state.count),
-            key_value("rsd", "RSD", state.rsd()),
-            key_value(
-                "mean",
-                "Mean",
-                json!({"kind":"estimate","value":state.mean(),"error":state.stderr()}),
-            ),
-            key_value(
-                "mean_abs",
-                "Mean Abs",
-                json!({"kind":"estimate","value":state.mean_abs(),"error":state.stderr()}),
-            ),
-            key_value(
-                "signal_to_noise",
-                "Mean(|x|)^2 / abs_err^2",
-                state.signal_to_noise(),
-            ),
-        ],
         AccumulatorState::Vector(state) => {
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
@@ -1052,13 +986,6 @@ fn projected_estimate(
     projection: SampleErrorProjection,
 ) -> Option<ProjectedEstimate> {
     match accumulator {
-        AccumulatorState::Scalar(state) => match projection {
-            SampleErrorProjection::Real => Some(ProjectedEstimate {
-                value: state.mean(),
-                error: state.stderr(),
-            }),
-            SampleErrorProjection::Imag | SampleErrorProjection::Abs => None,
-        },
         AccumulatorState::Vector(state) => Some(ProjectedEstimate {
             value: state.projection.state.mean(),
             error: state.projection.state.stderr(),
@@ -1253,12 +1180,6 @@ fn discrete_projection_bundle_panel(
 ) -> Option<PanelState> {
     let discrete_pdf = sampler_engine_diagnostics.and_then(discrete_pdf_cache);
     let payload = match &accumulator {
-        AccumulatorState::Scalar(state) => scalar_discrete_projection_payload(
-            &state.discrete_bins,
-            state.count,
-            config,
-            discrete_pdf.as_ref(),
-        ),
         AccumulatorState::Vector(state) => {
             vector_discrete_projection_payload(state, config, discrete_pdf.as_ref())
         }
@@ -1309,51 +1230,6 @@ fn discrete_projection_bundle_panel(
             row_keys: Some(row_keys),
         },
     ))
-}
-
-fn scalar_discrete_projection_payload(
-    bins: &BTreeMap<String, DiscreteProjectionBinState>,
-    total_count: i64,
-    config: &DiscreteProjectionConfig,
-    discrete_pdf: Option<&DiscretePdfCache>,
-) -> Result<JsonValue, String> {
-    let projections = config
-        .items
-        .iter()
-        .map(|item| {
-            Ok((
-                item.name.clone(),
-                json!({
-                    "title": item.name,
-                    "type_description": discrete_projection_description(item),
-                    "metric_descriptors": discrete_projection_metric_descriptors(),
-                    "views": discrete_projection_histogram_views(discrete_pdf.is_some()),
-                    "controls": discrete_projection_histogram_controls(),
-                    "bins": scalar_projected_bins(
-                        bins,
-                        item,
-                        &item.name,
-                        config.normalization,
-                        total_count,
-                        config.bin_limit(),
-                        discrete_pdf
-                    )?,
-                }),
-            ))
-        })
-        .collect::<Result<serde_json::Map<String, JsonValue>, String>>()?;
-    Ok(json!({
-        "primary_histogram_name": config.items.first().map(|item| item.name.clone()),
-        "expands_to": {
-            "kind": "histogram",
-            "source": "selected_row",
-        },
-        "actions": {
-            "export": false,
-            "upload_bundle": false,
-        },
-        "histograms": projections,
-    }))
 }
 
 fn vector_discrete_projection_payload(

@@ -36,10 +36,6 @@ use self::raster::{
 fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> Option<f64> {
     let observable = handoff.and_then(|value| value.observable_state)?;
     match observable {
-        AccumulatorState::Scalar(state) => {
-            let value = state.mean_abs();
-            (value.is_finite() && value > 0.0).then_some(value)
-        }
         AccumulatorState::Vector(state) => {
             let value = state.projection.state.mean_abs();
             (value.is_finite() && value > 0.0).then_some(value)

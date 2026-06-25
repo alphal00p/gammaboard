@@ -1,4 +1,4 @@
-use super::{Accumulator, ScalarAccumulatorState};
+use super::{Accumulator, IngestScalar, ScalarAccumulatorState};
 use crate::core::{AccumulatorMomentConfig, DiscreteProjectionConfig, TrainingProjection};
 use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
@@ -90,6 +90,15 @@ impl VectorAccumulatorState {
 
     pub fn signal_to_noise(&self) -> f64 {
         self.projection.state.signal_to_noise()
+    }
+}
+
+impl IngestScalar for VectorAccumulatorState {
+    /// Ingest a single scalar into a one-component (scalar-sugar) vector. Only
+    /// valid for single-component accumulators; a length mismatch on any other
+    /// shape is ignored, since scalar ingestion is never dispatched to them.
+    fn ingest_scalar(&mut self, value: f64, point: &Point) {
+        let _ = self.ingest_vector(&[value], point);
     }
 }
 

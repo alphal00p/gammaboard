@@ -263,10 +263,6 @@ fn extract_central_value_metrics(
     source_task: &RunTask,
 ) -> Result<Vec<AccumulatorMetricValue>, ApiError> {
     let selectors = match accumulator {
-        AccumulatorState::Scalar(_) => vec![AccumulatorMetricSelector {
-            name: AccumulatorMetricName::Mean,
-            component: None,
-        }],
         AccumulatorState::Vector(vector) => vector
             .components
             .iter()
@@ -795,14 +791,14 @@ mod tests {
             discrete_projections: None,
             moments: crate::core::AccumulatorMomentConfig::MaxOrder4,
         };
-        let AccumulatorState::Scalar(mut state) = AccumulatorState::from_config(&config) else {
-            panic!("expected scalar accumulator");
+        let AccumulatorState::Vector(mut state) = AccumulatorState::from_config(&config) else {
+            panic!("expected vector accumulator");
         };
         let point = Point::new(vec![], vec![], 1.0);
         for value in [1.0, 2.0, 4.0, 8.0] {
-            state.add_sample(value, &point);
+            state.ingest_vector(&[value], &point).unwrap();
         }
-        AccumulatorState::Scalar(state)
+        AccumulatorState::Vector(state)
     }
 
     fn vector_state() -> AccumulatorState {
