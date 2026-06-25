@@ -154,13 +154,18 @@ def _build_runtime(
     flavor = subprocess.meta["flavors"][flavor_index]
     flavor_remap = [flavor["index"]]
     flavor_factors = [1]
+    # MG7 always builds process.pdf_grid from beam.pdf, even for leptonic beams.
+    # Passing a hadronic grid here makes the Integrand look up the lepton beam
+    # PIDs (e.g. PID 11) in a proton PDF and fail. Drop the grid for leptonic
+    # beams, mirroring _build_differential_cross_section above.
+    pdf_grid = None if process.leptonic else process.pdf_grid
     integrand = ms.Integrand(
         mapping,
         cross_section,
         None,
         None,
         None,
-        process.pdf_grid,
+        pdf_grid,
         subprocess.scale,
         None,
         None,

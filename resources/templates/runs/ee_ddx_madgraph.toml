@@ -44,9 +44,10 @@
 #   e_cm = 1000.0
 #   leptonic = true
 #
-# Print the MadSpace callable random_dim and pass it as continuous_dims:
+# Print the MadSpace callable random_dim and pass it as continuous_dims.
+# Run this from the repo root (so the root-relative state_path resolves):
 #
-#   cd integrations/madgraph && . .venv/bin/activate
+#   . integrations/madgraph/.venv/bin/activate
 #   python - <<'EOF'
 #   from madgraph_gammaboard.state import MadSpaceState
 #   s = MadSpaceState.load(
