@@ -31,7 +31,7 @@
 # (The card already sets e_cm = 1000.0 and integral_unit = "picobarn".)
 # =============================================================================
 
-replacements = { run_name = "ee_ddx_gammaloop", train_samples = 100000, sample_samples = 1000000, havana_bins = 128, samples_for_update = 10000, max_batch_size = 10000 }
+replacements = { run_name = "ee_ddx_gammaloop", train_samples = 1000000, sample_samples = 10000000, havana_bins = 128, samples_for_update = 50000, max_batch_size = 10000 }
 
 name = '$(run_name:"ee_ddx_gammaloop")'
 target = { kind = "vector", components = { real = 3.097e-2, imag = 0.0 } }
@@ -61,14 +61,14 @@ accumulator = "gammaloop"
 [[task_queue]]
 name = "havana-train"
 kind = "sample"
-stop_condition = { max_samples = "$(train_samples:100000)" }
+stop_condition = { max_samples = "$(train_samples:1000000)" }
 accumulator = "latest"
 
 [task_queue.sampler_aggregator.config]
 kind = "havana_training"
 seed = 0
 bins = "$(havana_bins:128)"
-samples_for_update = "$(samples_for_update:10000)"
+samples_for_update = "$(samples_for_update:50000)"
 initial_training_rate = 0.05
 final_training_rate = 0.005
 
@@ -80,7 +80,7 @@ max_batch_size = "$(max_batch_size:10000)"
 name = "sample"
 kind = "sample"
 measurement = { quantity = "central_value" }
-stop_condition = { max_samples = "$(sample_samples:1000000)" }
+stop_condition = { max_samples = "$(sample_samples:10000000)" }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
 accumulator = "latest"
 
