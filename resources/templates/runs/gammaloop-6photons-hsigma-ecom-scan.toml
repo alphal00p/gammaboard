@@ -8,12 +8,10 @@
 #
 #   ./gammaloop ./glnis_gammaloop_examples/6photons/massive/1L/1L_6photons_massive.toml run generate integrate -c "quit -o"
 #
-# This template scans two runtime parameters through GammaLoop post-load /
-# pre-initialization commands:
-#
-# These use `set process kv`, which writes into the loaded integrand's settings
-# (the values the evaluator actually reads). `set default-runtime kv` only
-# mutates the throwaway default runtime settings and has no effect here.
+# The template scans two runtime parameters via `set process kv` preprocessing
+# commands, which write into the loaded integrand's settings (what the evaluator
+# reads). `set default-runtime kv` only mutates throwaway defaults and has no
+# effect here.
 #
 #   h_sigma -> process.h_function.sigma
 #           -> process.subtraction.integrated_ct_settings.range.h_function_settings.sigma

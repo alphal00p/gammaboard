@@ -1,44 +1,11 @@
-# =============================================================================
-# e+ e- -> gamma* -> d d~  at LO, sqrt(s) = 1000 GeV  --  MadGraph7 / MadSpace
-# PHOTON-EXCHANGE ONLY (no Z), to match GammaLoop's epem_a_ddx head-to-head.
-# =============================================================================
+# e+ e- -> d d~ at LO, sqrt(s) = 1000 GeV, photon only (Z forbidden via "/ z").
+# MadGraph7/MadSpace half of the GammaLoop comparison; physics/results in ./README.md.
 #
-# LO cross section of e+ e- -> d d~ via the s-channel PHOTON ONLY (the Z diagram
-# is forbidden at generation time), at a fixed centre-of-mass energy of 1000 GeV,
-# through the MadGraph7/MadSpace tree-level matrix element x flat phase space
-# wrapper.
+# Run from the gammaboard repo root:
+#   gammaboard run add integrations/madgraph/experiments/gammaloop_vs_madgraph/ee_ddx_madgraph.toml
 #
-# Why photon-only: GammaLoop's epem_a_ddx is the photon self-energy supergraph,
-# i.e. e+ e- -> gamma* -> d d~ with NO Z exchange. The default MadGraph process
-# "e+ e- > d d~" instead includes gamma AND Z, which at 1 TeV differ by a large,
-# energy-dependent amount (a factor ~3 for the down quark) -- that gap is physics,
-# not a normalisation. Forbidding the Z ("/ z") makes both engines compute the
-# SAME thing, so the cross sections should agree to MC precision. The previously
-# generated gamma+Z state under artifacts/ee_ddx/ is left untouched; this run
-# uses a separate artifacts/ee_ddx_photon/ state.
-#
-# Both engines use identical SM inputs (aEWM1=132.507, Gf=1.16639e-5, MZ=91.188,
-# ...) and the same fixed sqrt(s)=1000 GeV (no PDF). GammaLoop reference: 3.097e-2 pb.
-#
-# Run with (override continuous_dims with the printed random_dim, see below):
-#   gammaboard run add resources/templates/runs/ee_ddx_madgraph.toml \
-#       --replace continuous_dims=<random_dim>
-#
-# -----------------------------------------------------------------------------
-# ARTIFACT -- MadGraph7 / MadSpace state for e+ e- -> gamma* -> d d~ (no Z)
-# -----------------------------------------------------------------------------
-# One-time wrapper setup:
-#
-#   cd integrations/madgraph
-#   python -m venv .venv && . .venv/bin/activate
-#   python -m pip install --upgrade pip
-#   python -m pip install --force-reinstall .
-#
-# Generate the photon-only MG7 state. Run from the gammaboard repo root; this
-# assumes the MadGraph7 checkout lives in a sister directory of the gammaboard
-# repo (../MadGraph7) -- adjust the path if yours is elsewhere. The "/ z" forbids
-# the Z propagator, leaving only the s-channel photon diagram:
-#
+# Build the artifact (from repo root; MadGraph7 a sister dir of gammaboard, and
+# the wrapper venv at integrations/madgraph/.venv installed -- see ../../README.md):
 #   mkdir -p integrations/madgraph/artifacts/ee_ddx_photon
 #   python ../MadGraph7/bin/mg5_aMC <<'EOF'
 #   import model sm
@@ -46,38 +13,15 @@
 #   output integrations/madgraph/artifacts/ee_ddx_photon/mg7_state -f
 #   quit
 #   EOF
+#   # then set [beam] e_cm=1000.0, leptonic=true in the state's Cards/run_card.toml
 #
-# Fix the collider to monochromatic e+e- beams at sqrt(s)=1000 GeV with NO PDF
-# so it matches GammaLoop's fixed externals. Edit the [beam] table in
-# integrations/madgraph/artifacts/ee_ddx_photon/mg7_state/Cards/run_card.toml:
-#
-#   [beam]
-#   e_cm = 1000.0
-#   leptonic = true
-#
-# Print the MadSpace callable random_dim and pass it as continuous_dims.
-# Run this from the repo root (so the root-relative state_path resolves):
-#
-#   . integrations/madgraph/.venv/bin/activate
-#   python - <<'EOF'
-#   from madgraph_gammaboard.state import MadSpaceState
-#   s = MadSpaceState.load(
-#       state_path="integrations/madgraph/artifacts/ee_ddx_photon/mg7_state",
-#       madgraph_root="../MadGraph7",
-#       subprocess_index=0, flavor_index=0,
-#   )
-#   print("random_dim =", s.random_dim)
-#   EOF
-#
-# A 2->2 final state is typically 2, but always confirm with the print above;
-# domain.continuous.dims MUST equal MadSpaceState.random_dim.
-# =============================================================================
+# continuous_dims must equal MadSpaceState.random_dim (2 for this 2->2 state).
 
 replacements = { run_name = "ee_ddx_photon_madgraph", train_samples = 1000000, sample_samples = 10000000, havana_bins = 128, samples_for_update = 50000, max_batch_size = 10000, continuous_dims = 2 }
 
 name = '$(run_name:"ee_ddx_photon_madgraph")'
-# Scalar target so the central-value panel picks it up: the target overlay is
-# matched by component name ("value"/"real"), not the accumulator's "weight".
+# Scalar target (GammaLoop reference). Must be scalar: the panel target overlay
+# matches component names "value"/"real", not the accumulator's "weight".
 target = 3.097e-2
 
 [evaluator]
@@ -89,10 +33,8 @@ components = ["weight"]
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/ee_ddx_photon/mg7_state"
-# Resolved relative to cwd (the gammaboard repo root, set above). Assumes the
-# MadGraph7 checkout is a sister directory of the gammaboard repo; set an
-# absolute path here if yours lives elsewhere, or omit it if `madgraph` is
-# already importable on the worker's PYTHONPATH.
+# Resolved against cwd (repo root). Sister dir of gammaboard; set an absolute
+# path if elsewhere, or omit if `madgraph` is already on the worker's PYTHONPATH.
 madgraph_root = "../MadGraph7"
 subprocess_index = 0
 flavor_index = 0
