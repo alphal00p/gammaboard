@@ -33,7 +33,9 @@
 replacements = { run_name = "ee_mumu_madgraph", train_samples = 1000000, sample_samples = 10000000, havana_bins = 128, samples_for_update = 50000, max_batch_size = 10000, continuous_dims = 2 }
 
 name = '$(run_name:"ee_mumu_madgraph")'
-target = { kind = "vector", components = { weight = 9.289e-2 } }
+# Scalar target so the central-value panel picks it up (overlay is matched by
+# component name "value"/"real", not the accumulator's "weight").
+target = 9.289e-2
 
 [evaluator]
 kind = "process_evaluator"
