@@ -85,3 +85,9 @@ quit
 EOF
 python /tmp/MadGraph7/bin/mg5_aMC /tmp/pp_eej_mg7.cmd
 ```
+
+## Experiments
+
+- [`experiments/gammaloop_vs_madgraph`](experiments/gammaloop_vs_madgraph/README.md):
+  LO e+ e- -> d d~ cross section checked against GammaLoop, with run configs for
+  both engines.
