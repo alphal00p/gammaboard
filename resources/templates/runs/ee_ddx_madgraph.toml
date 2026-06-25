@@ -34,11 +34,13 @@
 #   python -m pip install --upgrade pip
 #   python -m pip install --force-reinstall .
 #
-# Generate the photon-only MG7 state (from repos/gammaboard). The "/ z" forbids
+# Generate the photon-only MG7 state. Run from the gammaboard repo root; this
+# assumes the MadGraph7 checkout lives in a sister directory of the gammaboard
+# repo (../MadGraph7) -- adjust the path if yours is elsewhere. The "/ z" forbids
 # the Z propagator, leaving only the s-channel photon diagram:
 #
 #   mkdir -p integrations/madgraph/artifacts/ee_ddx_photon
-#   python /home/cedricsigrist/Workspace/repos/MadGraph7/bin/mg5_aMC <<'EOF'
+#   python ../MadGraph7/bin/mg5_aMC <<'EOF'
 #   import model sm
 #   generate e+ e- > d d~ / z
 #   output integrations/madgraph/artifacts/ee_ddx_photon/mg7_state -f
@@ -61,7 +63,7 @@
 #   from madgraph_gammaboard.state import MadSpaceState
 #   s = MadSpaceState.load(
 #       state_path="integrations/madgraph/artifacts/ee_ddx_photon/mg7_state",
-#       madgraph_root="/home/cedricsigrist/Workspace/repos/MadGraph7",
+#       madgraph_root="../MadGraph7",
 #       subprocess_index=0, flavor_index=0,
 #   )
 #   print("random_dim =", s.random_dim)
@@ -87,7 +89,11 @@ components = ["weight"]
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/ee_ddx_photon/mg7_state"
-madgraph_root = "/home/cedricsigrist/Workspace/repos/MadGraph7"
+# Resolved relative to cwd (the gammaboard repo root, set above). Assumes the
+# MadGraph7 checkout is a sister directory of the gammaboard repo; set an
+# absolute path here if yours lives elsewhere, or omit it if `madgraph` is
+# already importable on the worker's PYTHONPATH.
+madgraph_root = "../MadGraph7"
 subprocess_index = 0
 flavor_index = 0
 output = ["weight"]

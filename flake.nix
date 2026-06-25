@@ -93,6 +93,7 @@
           apptainer
           sqlx-cli
           nodejs
+          python313Packages.six
           (pkgs.rustPlatform.buildRustPackage rec {
             pname = "clinnet";
             version = "0.1.8";

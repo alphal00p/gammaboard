@@ -18,24 +18,27 @@
 #   wget https://lhapdfsets.web.cern.ch/lhapdfsets/current/NNPDF23_lo_as_0130_qed.tar.gz -P /tmp/
 #   sudo tar -xzf /tmp/NNPDF23_lo_as_0130_qed.tar.gz -C /usr/share/LHAPDF/
 #
-# One-time state generation (from repos/gammaboard):
+# One-time state generation. Run from the gammaboard repo root; this assumes the
+# MadGraph7 checkout lives in a sister directory of the gammaboard repo
+# (../MadGraph7) -- adjust the path if yours is elsewhere:
 #
 #   mkdir -p integrations/madgraph/artifacts/pp_eej
-#   python /home/cedricsigrist/Workspace/repos/MadGraph7/bin/mg5_aMC <<'EOF'
+#   python ../MadGraph7/bin/mg5_aMC <<'EOF'
 #   import model sm
 #   generate p p > e+ e- j
 #   output integrations/madgraph/artifacts/pp_eej/mg7_state -f
 #   quit
 #   EOF
 #
-# Print the callable random_dim to pass as a replacement before running:
+# Print the callable random_dim to pass as a replacement before running.
+# Run from the gammaboard repo root so the root-relative state_path resolves:
 #
-#   cd integrations/madgraph && . .venv/bin/activate
+#   . integrations/madgraph/.venv/bin/activate
 #   python - <<'EOF'
 #   from madgraph_gammaboard.state import MadSpaceState
 #   s = MadSpaceState.load(
 #       state_path="integrations/madgraph/artifacts/pp_eej/mg7_state",
-#       madgraph_root="/home/cedricsigrist/Workspace/repos/MadGraph7",
+#       madgraph_root="../MadGraph7",
 #       subprocess_index=0,
 #       flavor_index=0,
 #   )
@@ -63,7 +66,11 @@ components = ["weight"]
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
-madgraph_root = "/home/cedricsigrist/Workspace/repos/MadGraph7"
+# Resolved relative to cwd (the gammaboard repo root, set above). Assumes the
+# MadGraph7 checkout is a sister directory of the gammaboard repo; set an
+# absolute path here if yours lives elsewhere, or omit it if `madgraph` is
+# already importable on the worker's PYTHONPATH.
+madgraph_root = "../MadGraph7"
 subprocess_index = 0
 flavor_index = 0
 output = ["weight"]

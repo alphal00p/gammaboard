@@ -18,15 +18,18 @@
 # -----------------------------------------------------------------------------
 # ARTIFACT -- GammaLoop state for e+ e- -> d d~ @ LO
 # -----------------------------------------------------------------------------
-# The CLI example card ships with the gammaloop checkout. Generate the state and
-# copy it under resources/states so the relative state_folder below resolves:
+# The CLI example card ships with the gammaloop checkout. This assumes the
+# gammaloop checkout is a sister directory of the gammaboard repo (../gammaloop)
+# -- adjust the paths if yours is elsewhere. Generate the state and copy it under
+# resources/states so the relative state_folder below resolves (paths shown
+# relative to the gammaboard repo root):
 #
-#   cd /home/cedricsigrist/Workspace/repos/gammaloop
-#   ./gammaloop --clean-state ./examples/cli/epem_a_ddx/LO/epem_a_ddx.toml \
-#       run generate integrate -c "quit -o"
-#   mkdir -p /home/cedricsigrist/Workspace/repos/gammaboard/resources/states/epem_a_ddx/LO
-#   cp -r ./examples/cli/epem_a_ddx/LO/state \
-#       /home/cedricsigrist/Workspace/repos/gammaboard/resources/states/epem_a_ddx/LO/state
+#   ( cd ../gammaloop && ./gammaloop --clean-state \
+#       ./examples/cli/epem_a_ddx/LO/epem_a_ddx.toml \
+#       run generate integrate -c "quit -o" )
+#   mkdir -p resources/states/epem_a_ddx/LO
+#   cp -r ../gammaloop/examples/cli/epem_a_ddx/LO/state \
+#       resources/states/epem_a_ddx/LO/state
 #
 # (The card already sets e_cm = 1000.0 and integral_unit = "picobarn".)
 # =============================================================================

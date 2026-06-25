@@ -22,15 +22,16 @@
 # GammaLoop calls the center-of-mass energy setting `e_cm`; the scan parameter
 # is named `e_com` here to match the operator-facing search label.
 #
-# The default `state_folder` is an absolute path for the sibling checkout layout
-# used during development. For a portable deployment, either pass a replacement
-# for `state_folder` or start Gammaboard with:
+# The default `state_folder` assumes the gammaloop checkout is a sister directory
+# of the gammaboard repo (../gammaloop). Adjust it if yours is elsewhere. For a
+# portable deployment, either pass a replacement for `state_folder` or start
+# Gammaboard with:
 #
 #   --resource-root ../gammaloop/glnis_gammaloop_examples/6photons/massive/1L
 #
 # and set `state_folder = "state"` in the replacements.
 
-replacements = { run_name = "gammaloop_6photons_hsigma_ecom_scan", state_folder = "/home/cedricsigrist/Workspace/repos/gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state", havana_total_nr_of_samples = 50_000, havana_bins = 64, havana_samples_for_update = 10_000, trial_min_samples = 10_000, trial_max_samples = 100_000, trial_rsd_relative_error = 0.1, max_batch_size = 10000, max_concurrent_runs = 1 }
+replacements = { run_name = "gammaloop_6photons_hsigma_ecom_scan", state_folder = "../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state", havana_total_nr_of_samples = 50_000, havana_bins = 64, havana_samples_for_update = 10_000, trial_min_samples = 10_000, trial_max_samples = 100_000, trial_rsd_relative_error = 0.1, max_batch_size = 10000, max_concurrent_runs = 1 }
 
 name = '$(run_name:"gammaloop_6photons_hsigma_ecom_scan")'
 
@@ -46,7 +47,7 @@ name = '6photons-hsigma-$(h_sigma:1.0)-ecom-$(e_com:1000.0)'
 
 [evaluator]
 kind = "gammaloop"
-state_folder = '$(state_folder:"/home/cedricsigrist/Workspace/repos/gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state")'
+state_folder = '$(state_folder:"../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state")'
 integrand_name = "default"
 
 [evaluator.preprocessing]

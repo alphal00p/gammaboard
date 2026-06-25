@@ -75,7 +75,7 @@ Set `domain.continuous.dims` in the run config to `state.random_dim`.
 
 ```bash
 git clone https://github.com/MadGraphTeam/MadGraph7.git /tmp/MadGraph7
-cd /home/user/Workspace/repos/gammaboard
+cd /path/to/gammaboard   # the gammaboard repo root
 mkdir -p integrations/madgraph/artifacts/pp_eej
 cat > /tmp/pp_eej_mg7.cmd <<'EOF'
 import model sm
