@@ -36,14 +36,13 @@
 #   quit
 #   EOF
 #
-# Fix the collider to monochromatic 500+500 GeV e+e- beams with NO PDF so it
-# matches GammaLoop's fixed externals. Edit the run card
-# integrations/madgraph/artifacts/ee_ddx/mg7_state/Cards/run_card.dat and set:
+# Fix the collider to monochromatic e+e- beams at sqrt(s)=1000 GeV with NO PDF
+# so it matches GammaLoop's fixed externals. Edit the [beam] table in
+# integrations/madgraph/artifacts/ee_ddx/mg7_state/Cards/run_card.toml and set:
 #
-#   lpp1 = 0
-#   lpp2 = 0
-#   ebeam1 = 500.0
-#   ebeam2 = 500.0
+#   [beam]
+#   e_cm = 1000.0
+#   leptonic = true
 #
 # Print the MadSpace callable random_dim and pass it as continuous_dims:
 #
