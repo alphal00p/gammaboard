@@ -11,7 +11,7 @@ For local demos or machines where Apptainer is not available, install the
 sampler directly into a virtual environment under this integration directory:
 
 ```bash
-cd ~/gammaboard/integrations/madnis
+cd integrations/madnis   # from the gammaboard repo root
 
 uv venv --python 3.13 --seed .venv
 . .venv/bin/activate

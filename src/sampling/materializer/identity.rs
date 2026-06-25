@@ -1,4 +1,5 @@
 use crate::core::EngineError;
+use crate::core::EngineResultExt;
 use crate::evaluation::{Batch, Materializer};
 use crate::sampling::LatentBatch;
 
@@ -41,9 +42,6 @@ impl Materializer for IdentityMaterializer {
                 self.materialized_batches_total
             )));
         }
-        latent_batch
-            .payload
-            .as_batch()
-            .map_err(|err| EngineError::engine(err.to_string()))
+        latent_batch.payload.as_batch().engine_err()
     }
 }

@@ -1,3 +1,4 @@
+use crate::core::StoreResultExt;
 use crate::core::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
     RunTaskStore, StoreError, TaskMeasurementOutput, effective_parameter_scan_parameters,
@@ -210,7 +211,7 @@ where
                     },
                 )
                 .await
-                .map_err(|err| StoreError::store(err.to_string()))?;
+                .store_err()?;
                 created_child_run_ids.push(child.run_id);
                 capacity -= 1;
             }

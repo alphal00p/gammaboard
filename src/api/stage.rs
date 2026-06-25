@@ -1,3 +1,4 @@
+use crate::core::StoreResultExt;
 use crate::core::{
     AccumulatorConfig, AggregationStore, RunStageSnapshot, RunTask, RunTaskStore, SourceRefSpec,
     StoreError,
@@ -96,11 +97,7 @@ pub async fn try_resolve_effective_sample_accumulator_config<S>(
 where
     S: AggregationStore + RunTaskStore + Send + Sync,
 {
-    if let Some(config) = task
-        .task
-        .new_accumulator_config()
-        .map_err(|err| StoreError::store(err.to_string()))?
-    {
+    if let Some(config) = task.task.new_accumulator_config().store_err()? {
         return Ok(Some(config));
     }
 

@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, BatchTransform};
 use crate::utils::domain::Domain;
@@ -85,6 +86,6 @@ impl BatchTransform for SphericalBatchTransform {
             ));
         }
 
-        Batch::new(transformed_points).map_err(|err| EngineError::engine(err.to_string()))
+        Batch::new(transformed_points).engine_err()
     }
 }

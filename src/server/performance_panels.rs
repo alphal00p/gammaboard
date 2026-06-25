@@ -2,8 +2,8 @@ use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
     PlotSeries, TickBreakdownSegment, history_x, key_value, key_value_panel, key_value_with_tone,
-    merge_panel_state, multi_timeseries_panel, panel_spec, replace_panel, tick_breakdown_panel,
-    with_panel_width,
+    merge_panel_state, multi_timeseries_panel, replace_panel, sized_panel_spec,
+    tick_breakdown_panel,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
 use serde_json::Value as JsonValue;
@@ -96,43 +96,35 @@ fn build_performance_response<T>(
 
 fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {
     if include_summary {
-        return vec![with_panel_width(
-            panel_spec(
-                "evaluator_summary",
-                "Run Evaluator Summary",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        return vec![sized_panel_spec(
+            "evaluator_summary",
+            "Run Evaluator Summary",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Full,
         )];
     }
 
     vec![
-        with_panel_width(
-            panel_spec(
-                "evaluator_tick_breakdown",
-                "Evaluator Tick (Synchronous)",
-                PanelKind::TickBreakdown,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "evaluator_tick_breakdown",
+            "Evaluator Tick (Synchronous)",
+            PanelKind::TickBreakdown,
+            PanelHistoryMode::Replace,
             PanelWidth::Full,
         ),
-        with_panel_width(
-            panel_spec(
-                "evaluator_overview",
-                "Evaluator Overview",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "evaluator_overview",
+            "Evaluator Overview",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "evaluator_pipeline_metrics",
-                "Evaluator Pipeline Metrics",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "evaluator_pipeline_metrics",
+            "Evaluator Pipeline Metrics",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Half,
         ),
     ]
@@ -140,76 +132,60 @@ fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {
 
 fn sampler_panel_specs() -> Vec<PanelSpec> {
     vec![
-        with_panel_width(
-            panel_spec(
-                "sampler_priority_overview",
-                "Sampler Overview",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_priority_overview",
+            "Sampler Overview",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Full,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_completed_samples_per_second",
-                "Throughput",
-                PanelKind::MultiTimeseries,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_completed_samples_per_second",
+            "Throughput",
+            PanelKind::MultiTimeseries,
+            PanelHistoryMode::Replace,
             PanelWidth::Full,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_utilization_history",
-                "Utilization",
-                PanelKind::MultiTimeseries,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_utilization_history",
+            "Utilization",
+            PanelKind::MultiTimeseries,
+            PanelHistoryMode::Replace,
             PanelWidth::Full,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_tick_breakdown",
-                "Tick Breakdown",
-                PanelKind::TickBreakdown,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_tick_breakdown",
+            "Tick Breakdown",
+            PanelKind::TickBreakdown,
+            PanelHistoryMode::Replace,
             PanelWidth::Full,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_queue_state",
-                "Queue State",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_queue_state",
+            "Queue State",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_runtime_details",
-                "Runner State",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_runtime_details",
+            "Runner State",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_queue_efficiency",
-                "Queue I/O",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_queue_efficiency",
+            "Queue I/O",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "sampler_runtime_efficiency",
-                "Sampler Work",
-                PanelKind::KeyValue,
-                PanelHistoryMode::Replace,
-            ),
+        sized_panel_spec(
+            "sampler_runtime_efficiency",
+            "Sampler Work",
+            PanelKind::KeyValue,
+            PanelHistoryMode::Replace,
             PanelWidth::Half,
         ),
     ]
@@ -975,39 +951,20 @@ fn sampler_utilization_history_panel(
         let x_wall_time_ms = history_x(entry.created_at);
         let x_sampler_uptime_ms = sampler_uptime_ms(&runtime);
         let x_completed_samples_total = Some(runtime.completed_samples_total as f64);
-        sampler_tick_points.push(PlotPoint {
+        let point = |y: f64| PlotPoint {
             x: x_wall_time_ms,
-            y: runtime.sampler_tick_busy_ratio.unwrap_or(0.0),
+            y,
             x_sampler_uptime_ms,
             x_completed_samples_total,
-            y_min: None,
-            y_max: None,
-        });
-        insert_task_points.push(PlotPoint {
-            x: x_wall_time_ms,
-            y: runtime.queue.insert_task_utilization.unwrap_or(0.0),
-            x_sampler_uptime_ms,
-            x_completed_samples_total,
-            y_min: None,
-            y_max: None,
-        });
-        completed_fetch_points.push(PlotPoint {
-            x: x_wall_time_ms,
-            y: runtime.queue.completed_fetch_utilization.unwrap_or(0.0),
-            x_sampler_uptime_ms,
-            x_completed_samples_total,
-            y_min: None,
-            y_max: None,
-        });
+            ..Default::default()
+        };
+        sampler_tick_points.push(point(runtime.sampler_tick_busy_ratio.unwrap_or(0.0)));
+        insert_task_points.push(point(runtime.queue.insert_task_utilization.unwrap_or(0.0)));
+        completed_fetch_points.push(point(
+            runtime.queue.completed_fetch_utilization.unwrap_or(0.0),
+        ));
         if let Some(utilization) = runtime.avg_evaluator_utilization {
-            evaluator_utilization_points.push(PlotPoint {
-                x: x_wall_time_ms,
-                y: utilization.clamp(0.0, 1.0),
-                x_sampler_uptime_ms,
-                x_completed_samples_total,
-                y_min: None,
-                y_max: None,
-            });
+            evaluator_utilization_points.push(point(utilization.clamp(0.0, 1.0)));
         }
     }
 
@@ -1083,8 +1040,7 @@ fn instant_throughput_points_from_cumulative(samples: &[SamplerProgressPoint]) -
             y,
             x_sampler_uptime_ms: point.x_sampler_uptime_ms,
             x_completed_samples_total: Some(point.x_completed_samples_total),
-            y_min: None,
-            y_max: None,
+            ..Default::default()
         });
     }
     points

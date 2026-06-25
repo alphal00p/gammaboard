@@ -2,7 +2,7 @@ use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel,
     min_max_row_tones, multi_timeseries_panel, panel_spec, progress_panel, row_tone_labels,
-    table_panel_with_payload_and_options, with_panel_width,
+    sized_panel_spec, table_panel_with_payload_and_options,
 };
 use serde_json::{Value as JsonValue, json};
 use std::collections::BTreeSet;
@@ -107,13 +107,11 @@ fn tuning_best_projector() -> TaskPanelProjector {
 
 fn tuning_objective_projector() -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                TUNING_OBJECTIVE_PANEL_ID,
-                "Objective by Trial",
-                PanelKind::MultiTimeseries,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            TUNING_OBJECTIVE_PANEL_ID,
+            "Objective by Trial",
+            PanelKind::MultiTimeseries,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         |ctx| {
@@ -148,13 +146,11 @@ fn tuning_objective_projector() -> TaskPanelProjector {
 
 fn tuning_trials_projector() -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                TUNING_TRIALS_PANEL_ID,
-                "Tuning Trials",
-                PanelKind::Table,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            TUNING_TRIALS_PANEL_ID,
+            "Tuning Trials",
+            PanelKind::Table,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         |ctx| {

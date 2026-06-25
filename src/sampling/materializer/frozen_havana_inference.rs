@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Materializer};
 use crate::sampling::havana_grid::{sample_to_point, validate_havana_grid_domain};
@@ -63,14 +64,11 @@ impl Materializer for HavanaInferenceMaterializer {
                     points.push(sample_to_point(&sample)?);
                 }
 
-                Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))
+                Batch::new(points).engine_err()
             }
             LatentBatchPayload::IndexedBatch { .. } => {
                 // If the latent payload already encodes a concrete batch, accept it directly.
-                latent_batch
-                    .payload
-                    .as_batch()
-                    .map_err(|err| EngineError::engine(err.to_string()))
+                latent_batch.payload.as_batch().engine_err()
             }
         }
     }

@@ -2,7 +2,7 @@ use crate::core::{EngineError, EvaluatorConfig, SamplerAggregatorConfig};
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
-    key_value_panel, panel_spec, replace_panel, with_panel_width,
+    key_value_panel, replace_panel, sized_panel_spec,
 };
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
@@ -41,22 +41,18 @@ pub struct SamplerAggregatorPanelContext<'a> {
 impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     fn panel_specs(&self, _ctx: &EvaluatorPanelContext<'_>) -> Vec<PanelSpec> {
         vec![
-            with_panel_width(
-                panel_spec(
-                    "evaluator_summary",
-                    "Evaluator Summary",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
-                ),
+            sized_panel_spec(
+                "evaluator_summary",
+                "Evaluator Summary",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
                 PanelWidth::Full,
             ),
-            with_panel_width(
-                panel_spec(
-                    "evaluator_config",
-                    "Evaluator Config",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
-                ),
+            sized_panel_spec(
+                "evaluator_config",
+                "Evaluator Config",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
                 PanelWidth::Full,
             ),
         ]
@@ -104,22 +100,18 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
 impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfig {
     fn panel_specs(&self, _ctx: &SamplerAggregatorPanelContext<'_>) -> Vec<PanelSpec> {
         vec![
-            with_panel_width(
-                panel_spec(
-                    "sampler_summary",
-                    "Sampler Aggregator Summary",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
-                ),
+            sized_panel_spec(
+                "sampler_summary",
+                "Sampler Aggregator Summary",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
                 PanelWidth::Full,
             ),
-            with_panel_width(
-                panel_spec(
-                    "sampler_config",
-                    "Sampler Aggregator Config",
-                    PanelKind::KeyValue,
-                    PanelHistoryMode::None,
-                ),
+            sized_panel_spec(
+                "sampler_config",
+                "Sampler Aggregator Config",
+                PanelKind::KeyValue,
+                PanelHistoryMode::None,
                 PanelWidth::Full,
             ),
         ]

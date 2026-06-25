@@ -7,7 +7,7 @@ use crate::evaluation::{AccumulatorState, FullAccumulatorProgress};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState,
     PanelWidth, PlotPoint, PlotSeries, multi_timeseries_panel, panel_spec, progress_panel,
-    scalar_timeseries_panel, select_state_spec, state_option, with_panel_width,
+    scalar_timeseries_panel, select_state_spec, sized_panel_spec, state_option,
 };
 use num::Integer;
 use serde_json::Value as JsonValue;
@@ -110,8 +110,11 @@ fn progress_projector(
     unit: &'static str,
 ) -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(panel_id, label, PanelKind::Progress, PanelHistoryMode::None),
+        sized_panel_spec(
+            panel_id,
+            label,
+            PanelKind::Progress,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         move |ctx| {
@@ -133,13 +136,11 @@ fn image_view_projector(
     display: ImageDisplayMode,
 ) -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                "image_view",
-                "Rendered Image",
-                PanelKind::Image2d,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "image_view",
+            "Rendered Image",
+            PanelKind::Image2d,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         move |ctx| match ctx.source.accumulator() {
@@ -165,13 +166,11 @@ fn image_view_mode_projector(display: ImageDisplayMode) -> TaskPanelProjector {
 
 fn line_components_projector(geometry: LineRasterGeometry) -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                "line_components",
-                "Components",
-                PanelKind::MultiTimeseries,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "line_components",
+            "Components",
+            PanelKind::MultiTimeseries,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         move |ctx| match ctx.source.accumulator() {
@@ -184,13 +183,11 @@ fn line_components_projector(geometry: LineRasterGeometry) -> TaskPanelProjector
 
 fn line_real_projector(geometry: LineRasterGeometry, label: &'static str) -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                "line_real",
-                label,
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "line_real",
+            label,
+            PanelKind::ScalarTimeseries,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         move |ctx| match ctx.source.accumulator() {

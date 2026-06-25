@@ -120,3 +120,35 @@ impl From<serde_json::Error> for GammaboardEngineError {
         Self::Serialization(value.to_string())
     }
 }
+
+/// Map any `Display` error into a `GammaboardEngineError` variant by its
+/// stringified message, replacing `.map_err(|err| X::ctor(err.to_string()))`.
+pub trait EngineResultExt<T> {
+    fn engine_err(self) -> Result<T, GammaboardEngineError>;
+    fn build_err(self) -> Result<T, GammaboardEngineError>;
+    fn eval_err(self) -> Result<T, GammaboardEngineError>;
+}
+
+impl<T, E: std::fmt::Display> EngineResultExt<T> for Result<T, E> {
+    fn engine_err(self) -> Result<T, GammaboardEngineError> {
+        self.map_err(|err| GammaboardEngineError::engine(err.to_string()))
+    }
+    fn build_err(self) -> Result<T, GammaboardEngineError> {
+        self.map_err(|err| GammaboardEngineError::build(err.to_string()))
+    }
+    fn eval_err(self) -> Result<T, GammaboardEngineError> {
+        self.map_err(|err| GammaboardEngineError::eval(err.to_string()))
+    }
+}
+
+/// Map any `Display` error into `StoreError::Internal`, replacing
+/// `.map_err(|err| StoreError::store(err.to_string()))`.
+pub trait StoreResultExt<T> {
+    fn store_err(self) -> Result<T, StoreError>;
+}
+
+impl<T, E: std::fmt::Display> StoreResultExt<T> for Result<T, E> {
+    fn store_err(self) -> Result<T, StoreError> {
+        self.map_err(|err| StoreError::store(err.to_string()))
+    }
+}

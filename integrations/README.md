@@ -6,4 +6,5 @@ opt-in and may require separate Python environments, containers, GPUs, or large
 external artifacts.
 
 - `madnis/`: MADNIS process sampler wrapper.
-- `madgraph/`: placeholder for the future MadGraph7 integration.
+- `madgraph/`: MadGraph7/MadSpace process-evaluator wrapper, with example run
+  configs and the GammaLoop comparison experiment.

@@ -12,8 +12,7 @@ use crate::core::{
 use crate::evaluation::AccumulatorState;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelUpdate, PanelWidth,
-    append_panel, key_value, key_value_panel, merge_panel_state, panel_spec, replace_panel,
-    with_panel_width,
+    append_panel, key_value, key_value_panel, merge_panel_state, replace_panel, sized_panel_spec,
 };
 use crate::stores::{TaskOutputSnapshot, TaskStageSnapshot};
 use serde_json::Value as JsonValue;
@@ -255,13 +254,11 @@ fn task_summary_projector(
     effective_accumulator_config: Option<AccumulatorConfig>,
 ) -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                "task_summary",
-                "Task Summary",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "task_summary",
+            "Task Summary",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         move |ctx| {

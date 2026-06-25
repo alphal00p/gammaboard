@@ -2,7 +2,7 @@ use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState, PanelWidth,
     PlotPoint, PlotSeries, min_max_row_tones, multi_timeseries_panel, panel_spec, progress_panel,
-    row_tone_labels, table_panel_with_payload_and_options, with_panel_width,
+    row_tone_labels, sized_panel_spec, table_panel_with_payload_and_options,
 };
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -71,13 +71,11 @@ fn scan_progress_projector() -> TaskPanelProjector {
 
 fn scan_measurements_projector() -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                SCAN_MEAN_PANEL_ID,
-                "Central Value",
-                PanelKind::MultiTimeseries,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            SCAN_MEAN_PANEL_ID,
+            "Central Value",
+            PanelKind::MultiTimeseries,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         |ctx| {
@@ -112,13 +110,11 @@ fn scan_component_measurements_projector(
     title: &'static str,
 ) -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                panel_id,
-                title,
-                PanelKind::MultiTimeseries,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            panel_id,
+            title,
+            PanelKind::MultiTimeseries,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         |ctx| {
@@ -147,13 +143,11 @@ fn scan_component_measurements_projector(
 
 fn scan_heatmap_projector() -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                SCAN_MEAN_HEATMAP_PANEL_ID,
-                "Central Value Heatmap",
-                PanelKind::Image2d,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            SCAN_MEAN_HEATMAP_PANEL_ID,
+            "Central Value Heatmap",
+            PanelKind::Image2d,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         |ctx| {
@@ -169,13 +163,11 @@ fn scan_heatmap_projector() -> TaskPanelProjector {
 
 fn scan_points_projector() -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                SCAN_POINTS_PANEL_ID,
-                "Scan Points",
-                PanelKind::Table,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            SCAN_POINTS_PANEL_ID,
+            "Scan Points",
+            PanelKind::Table,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         |ctx| {

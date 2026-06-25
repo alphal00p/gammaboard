@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use std::process::Stdio;
 use std::sync::Mutex;
 
@@ -129,7 +130,7 @@ impl SamplerAggregator for ProcessSampler {
                 sample_batch.weights[sample_idx],
             ));
         }
-        let batch = Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))?;
+        let batch = Batch::new(points).engine_err()?;
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 

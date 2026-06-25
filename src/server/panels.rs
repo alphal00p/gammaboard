@@ -118,7 +118,7 @@ pub struct PanelActionInvocation {
     pub payload: Option<JsonValue>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlotPoint {
     pub x: f64,
     pub y: f64,
@@ -130,6 +130,20 @@ pub struct PlotPoint {
     pub y_min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y_max: Option<f64>,
+}
+
+impl PlotPoint {
+    /// Point at `x` with an optional `y +- error` band and no alternate
+    /// x-axis metadata.
+    pub(crate) fn timeseries(x: f64, y: f64, error: Option<f64>) -> Self {
+        Self {
+            x,
+            y,
+            y_min: error.map(|error| y - error),
+            y_max: error.map(|error| y + error),
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +317,18 @@ pub(crate) fn panel_spec(
 pub(crate) fn with_panel_width(mut spec: PanelSpec, width: PanelWidth) -> PanelSpec {
     spec.width = width;
     spec
+}
+
+/// `panel_spec` plus an explicit width, replacing the common
+/// `with_panel_width(panel_spec(...), width)` nesting.
+pub(crate) fn sized_panel_spec(
+    panel_id: &str,
+    label: &str,
+    kind: PanelKind,
+    history: PanelHistoryMode,
+    width: PanelWidth,
+) -> PanelSpec {
+    with_panel_width(panel_spec(panel_id, label, kind, history), width)
 }
 
 pub(crate) fn select_state_spec(

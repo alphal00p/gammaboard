@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe, path::PathBuf};
 
 use gammaloop_api::{
@@ -144,7 +145,7 @@ impl GammaLoopEvaluator {
         let integrand = state
             .process_list
             .get_integrand_mut(process_id, integrand_name.clone())
-            .map_err(|err| BuildError::build(err.to_string()))?
+            .build_err()?
             .clone();
         let model = state.model.clone();
         let momentum_space = params.momentum_space;

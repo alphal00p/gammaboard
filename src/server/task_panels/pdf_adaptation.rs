@@ -8,7 +8,7 @@ use crate::sampling::PdfAdaptationImagePersistedOutput;
 use crate::server::panels::{
     HistogramBin, ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState,
     PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
-    scalar_timeseries_panel, select_state_spec, state_option, with_panel_width,
+    scalar_timeseries_panel, select_state_spec, sized_panel_spec, state_option,
 };
 use serde_json::{Value as JsonValue, json};
 
@@ -79,13 +79,11 @@ pub(super) fn projectors(
 
 fn plane_oversampling_scalar_projector() -> TaskPanelProjector {
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "pdf_adaptation_plane_oversampling_scalar",
-                "Plane Oversampling (Global Norm)",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "pdf_adaptation_plane_oversampling_scalar",
+            "Plane Oversampling (Global Norm)",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Half,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -254,13 +252,11 @@ fn oversampling_metric_projector() -> TaskPanelProjector {
 
 fn progress_projector(total: usize, label: &'static str, unit: &'static str) -> TaskPanelProjector {
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "pdf_adaptation_progress",
-                label,
-                PanelKind::Progress,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "pdf_adaptation_progress",
+            label,
+            PanelKind::Progress,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -286,13 +282,11 @@ fn line_projector(
     image_kind: ImageKind,
 ) -> TaskPanelProjector {
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                panel_id,
-                label,
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            panel_id,
+            label,
+            PanelKind::ScalarTimeseries,
+            PanelHistoryMode::None,
             width,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -321,8 +315,11 @@ fn image_projector(
     image_kind: ImageKind,
 ) -> TaskPanelProjector {
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(panel_id, label, PanelKind::Image2d, PanelHistoryMode::None),
+        sized_panel_spec(
+            panel_id,
+            label,
+            PanelKind::Image2d,
+            PanelHistoryMode::None,
             width,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -350,13 +347,11 @@ fn histogram_projector(
     image_kind: ImageKind,
 ) -> TaskPanelProjector {
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                panel_id,
-                label,
-                PanelKind::Histogram,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            panel_id,
+            label,
+            PanelKind::Histogram,
+            PanelHistoryMode::None,
             width,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,

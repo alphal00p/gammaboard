@@ -14,9 +14,9 @@ use crate::evaluation::{
 use crate::runners::sampler_aggregator::MIN_BATCH_SIZE;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TableStateOptions,
-    TickBreakdownSegment, key_value, key_value_panel, panel_spec, progress_panel,
-    scalar_timeseries_panel_with_smoothing, table_panel_with_payload,
-    table_panel_with_payload_and_options, tick_breakdown_panel, with_panel_width,
+    TickBreakdownSegment, key_value, key_value_panel, progress_panel,
+    scalar_timeseries_panel_with_smoothing, sized_panel_spec, table_panel_with_payload,
+    table_panel_with_payload_and_options, tick_breakdown_panel,
 };
 #[cfg(feature = "gammaloop")]
 use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
@@ -65,56 +65,55 @@ pub(super) fn projectors(
     projectors
 }
 
-fn max_weight_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+/// Projector that renders only the current accumulator (no history) by applying
+/// `panel_fn` to `sample_accumulator`.
+fn accumulator_summary_projector(
+    panel_id: &'static str,
+    label: &'static str,
+    kind: PanelKind,
+    width: PanelWidth,
+    accumulator_config: &AccumulatorConfig,
+    panel_fn: fn(AccumulatorState) -> Option<PanelState>,
+) -> TaskPanelProjector {
     let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "max_weight_summary",
-                "Max Weight Impact",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Half,
-        ),
+        sized_panel_spec(panel_id, label, kind, PanelHistoryMode::None, width),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| {
-            Ok(sample_accumulator(ctx, &accumulator_config)?.and_then(max_weight_summary_panel))
-        },
+        move |ctx| Ok(sample_accumulator(ctx, &accumulator_config)?.and_then(panel_fn)),
         |_ctx| Ok(None),
     )
 }
 
+fn max_weight_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    accumulator_summary_projector(
+        "max_weight_summary",
+        "Max Weight Impact",
+        PanelKind::KeyValue,
+        PanelWidth::Half,
+        accumulator_config,
+        max_weight_summary_panel,
+    )
+}
+
 fn max_weight_points_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
-    let accumulator_config = accumulator_config.clone();
-    panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "max_weight_points",
-                "Max Weight Points",
-                PanelKind::Table,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Full,
-        ),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| {
-            Ok(sample_accumulator(ctx, &accumulator_config)?.and_then(max_weight_points_panel))
-        },
-        |_ctx| Ok(None),
+    accumulator_summary_projector(
+        "max_weight_points",
+        "Max Weight Points",
+        PanelKind::Table,
+        PanelWidth::Full,
+        accumulator_config,
+        max_weight_points_panel,
     )
 }
 
 fn sample_progress_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
     let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "sample_progress",
-                "Sample Progress",
-                PanelKind::Progress,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "sample_progress",
+            "Sample Progress",
+            PanelKind::Progress,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -145,13 +144,11 @@ fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
         PanelWidth::Full
     };
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "real_estimate_history",
-                estimate_label(accumulator_config),
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
+        sized_panel_spec(
+            "real_estimate_history",
+            estimate_label(accumulator_config),
+            PanelKind::ScalarTimeseries,
+            PanelHistoryMode::Append,
             width,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -173,13 +170,11 @@ fn imag_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
     let current_config = accumulator_config.clone();
     let history_config = accumulator_config.clone();
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "imag_estimate_history",
-                "Imaginary Mean",
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
+        sized_panel_spec(
+            "imag_estimate_history",
+            "Imaginary Mean",
+            PanelKind::ScalarTimeseries,
+            PanelHistoryMode::Append,
             PanelWidth::Half,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -218,13 +213,11 @@ where
     let current_config = accumulator_config.clone();
     let history_config = accumulator_config;
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                panel_id,
-                label,
-                PanelKind::ScalarTimeseries,
-                PanelHistoryMode::Append,
-            ),
+        sized_panel_spec(
+            panel_id,
+            label,
+            PanelKind::ScalarTimeseries,
+            PanelHistoryMode::Append,
             PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -236,13 +229,11 @@ where
 fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
     let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
-        with_panel_width(
-            panel_spec(
-                "estimate_summary",
-                "Estimate Summary",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "estimate_summary",
+            "Estimate Summary",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
@@ -255,28 +246,36 @@ fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPan
     )
 }
 
-#[cfg(feature = "gammaloop")]
-fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
+/// Projector over the Gammaloop accumulator, applying `panel_fn` to both the
+/// current and decoded-history observable.
+fn gammaloop_panel_projector(
+    panel_id: &'static str,
+    label: &'static str,
+    kind: PanelKind,
+    panel_fn: fn(AccumulatorState) -> Option<PanelState>,
+) -> TaskPanelProjector {
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                "gammaloop_histogram_bundle",
-                "GammaLoop Histograms",
-                PanelKind::Table,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            panel_id,
+            label,
+            kind,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
-        |ctx| {
-            Ok(sample_accumulator(ctx, &AccumulatorConfig::Gammaloop)?
-                .and_then(gammaloop_histogram_bundle_panel))
+        move |ctx| Ok(sample_accumulator(ctx, &AccumulatorConfig::Gammaloop)?.and_then(panel_fn)),
+        move |ctx| {
+            Ok(decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?.and_then(panel_fn))
         },
-        |ctx| {
-            Ok(
-                decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?
-                    .and_then(gammaloop_histogram_bundle_panel),
-            )
-        },
+    )
+}
+
+#[cfg(feature = "gammaloop")]
+fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
+    gammaloop_panel_projector(
+        "gammaloop_histogram_bundle",
+        "GammaLoop Histograms",
+        PanelKind::Table,
+        gammaloop_histogram_bundle_panel,
     )
 }
 
@@ -289,13 +288,11 @@ fn discrete_projection_bundle_projector(
     let current_projection_config = projection_config.clone();
     let history_projection_config = projection_config;
     panel_projector(
-        with_panel_width(
-            panel_spec(
-                "discrete_projection_bundle",
-                "Discrete Projections",
-                PanelKind::Table,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "discrete_projection_bundle",
+            "Discrete Projections",
+            PanelKind::Table,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
         move |ctx| {
@@ -326,50 +323,20 @@ fn discrete_projection_bundle_projector(
 }
 
 fn gammaloop_evaluation_diagnostics_projector() -> TaskPanelProjector {
-    panel_projector(
-        with_panel_width(
-            panel_spec(
-                "gammaloop_evaluation_diagnostics",
-                "Evaluation Diagnostics",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Full,
-        ),
-        |ctx| {
-            Ok(sample_accumulator(ctx, &AccumulatorConfig::Gammaloop)?
-                .and_then(gammaloop_evaluation_diagnostics_panel))
-        },
-        |ctx| {
-            Ok(
-                decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?
-                    .and_then(gammaloop_evaluation_diagnostics_panel),
-            )
-        },
+    gammaloop_panel_projector(
+        "gammaloop_evaluation_diagnostics",
+        "Evaluation Diagnostics",
+        PanelKind::KeyValue,
+        gammaloop_evaluation_diagnostics_panel,
     )
 }
 
 fn gammaloop_evaluation_timing_projector() -> TaskPanelProjector {
-    panel_projector(
-        with_panel_width(
-            panel_spec(
-                "gammaloop_evaluation_timing",
-                "Evaluation Timing Breakdown",
-                PanelKind::TickBreakdown,
-                PanelHistoryMode::None,
-            ),
-            PanelWidth::Full,
-        ),
-        |ctx| {
-            Ok(sample_accumulator(ctx, &AccumulatorConfig::Gammaloop)?
-                .and_then(gammaloop_evaluation_timing_panel))
-        },
-        |ctx| {
-            Ok(
-                decode_history_observable(ctx, &AccumulatorConfig::Gammaloop)?
-                    .and_then(gammaloop_evaluation_timing_panel),
-            )
-        },
+    gammaloop_panel_projector(
+        "gammaloop_evaluation_timing",
+        "Evaluation Timing Breakdown",
+        PanelKind::TickBreakdown,
+        gammaloop_evaluation_timing_panel,
     )
 }
 
@@ -470,17 +437,6 @@ fn config_label(config: &AccumulatorConfig) -> &'static str {
     }
 }
 
-fn timeseries_point(x: f64, y: f64, error: Option<f64>) -> PlotPoint {
-    PlotPoint {
-        x,
-        y,
-        x_sampler_uptime_ms: None,
-        x_completed_samples_total: None,
-        y_min: error.map(|error| y - error),
-        y_max: error.map(|error| y + error),
-    }
-}
-
 fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
@@ -488,13 +444,13 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
     let points = match accumulator {
         AccumulatorState::Vector(state) => {
             let projection = &state.projection.state;
-            vec![timeseries_point(
+            vec![PlotPoint::timeseries(
                 projection.count as f64,
                 projection.mean(),
                 Some(projection.stderr()),
             )]
         }
-        AccumulatorState::Gammaloop(state) => vec![timeseries_point(
+        AccumulatorState::Gammaloop(state) => vec![PlotPoint::timeseries(
             state.sample_count() as f64,
             state.real_mean(),
             Some(state.real_stderr()),
@@ -515,7 +471,7 @@ fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
     match accumulator {
         AccumulatorState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
             "imag_estimate_history",
-            vec![timeseries_point(
+            vec![PlotPoint::timeseries(
                 state.sample_count() as f64,
                 state.imag_mean(),
                 Some(state.imag_stderr()),
@@ -537,7 +493,7 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     };
     Some(scalar_timeseries_panel_with_smoothing(
         "abs_signal_to_noise_history",
-        vec![timeseries_point(
+        vec![PlotPoint::timeseries(
             accumulator.sample_count() as f64,
             rsd,
             None,
@@ -738,14 +694,11 @@ fn base_estimate_summary_entries(
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
                 key_value("projection_rsd", "Projection RSD", state.rsd()),
-                key_value(
+                estimate_entry(
                     "projection_mean",
                     "Projection Mean",
-                    json!({
-                        "kind":"estimate",
-                        "value":state.projection.state.mean(),
-                        "error":state.projection.state.stderr()
-                    }),
+                    state.projection.state.mean(),
+                    state.projection.state.stderr(),
                 ),
                 key_value(
                     "projection_signal_to_noise",
@@ -754,16 +707,11 @@ fn base_estimate_summary_entries(
                 ),
             ];
             for component in &state.components {
-                let key = format!("component_{}_mean", component.name);
-                let label = format!("{} Mean", component.name);
-                entries.push(key_value(
-                    &key,
-                    &label,
-                    json!({
-                        "kind":"estimate",
-                        "value":component.state.mean(),
-                        "error":component.state.stderr()
-                    }),
+                entries.push(estimate_entry(
+                    &format!("component_{}_mean", component.name),
+                    &format!("{} Mean", component.name),
+                    component.state.mean(),
+                    component.state.stderr(),
                 ));
             }
             entries
@@ -772,15 +720,17 @@ fn base_estimate_summary_entries(
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
                 key_value("rsd", "RSD", state.rsd()),
-                key_value(
+                estimate_entry(
                     "real_mean",
                     "Real Mean",
-                    json!({"kind":"estimate","value":state.real_mean(),"error":state.real_stderr()}),
+                    state.real_mean(),
+                    state.real_stderr(),
                 ),
-                key_value(
+                estimate_entry(
                     "imag_mean",
                     "Imag Mean",
-                    json!({"kind":"estimate","value":state.imag_mean(),"error":state.imag_stderr()}),
+                    state.imag_mean(),
+                    state.imag_stderr(),
                 ),
             ];
             if let Some(target) = run_target {
@@ -803,10 +753,11 @@ fn base_estimate_summary_entries(
                     ));
                 }
             }
-            entries.push(key_value(
+            entries.push(estimate_entry(
                 "abs_mean",
                 "Abs Mean",
-                json!({"kind":"estimate","value":state.abs_mean(),"error":state.abs_stderr()}),
+                state.abs_mean(),
+                state.abs_stderr(),
             ));
             entries
         }
@@ -890,6 +841,19 @@ fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
         },
         other => other,
     }
+}
+
+fn estimate_entry(
+    key: &str,
+    label: &str,
+    value: f64,
+    error: f64,
+) -> crate::server::panels::KeyValueEntry {
+    key_value(
+        key,
+        label,
+        json!({ "kind": "estimate", "value": value, "error": error }),
+    )
 }
 
 fn target_comparison_entry(

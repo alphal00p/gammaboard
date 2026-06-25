@@ -1,7 +1,7 @@
 use crate::core::{EngineError, RunSpec, RunTask};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
-    key_value_panel, panel_spec, replace_panel, text_panel, with_panel_width,
+    key_value_panel, replace_panel, sized_panel_spec, text_panel,
 };
 use crate::stores::{RegisteredWorkerEntry, RunProgress};
 use serde_json::Value as JsonValue;
@@ -30,67 +30,53 @@ pub fn build_run_panel_response(
 
 fn panel_specs(_run_spec: &RunSpec) -> Vec<PanelSpec> {
     let panels = vec![
-        with_panel_width(
-            panel_spec(
-                "run_identity",
-                "Run Identity",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "run_identity",
+            "Run Identity",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "run_lifecycle",
-                "Lifecycle",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "run_lifecycle",
+            "Lifecycle",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "run_progress",
-                "Progress",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "run_progress",
+            "Progress",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "run_queue",
-                "Queue",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "run_queue",
+            "Queue",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "run_batch",
-                "Batch",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "run_batch",
+            "Batch",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "run_engine",
-                "Engine Summary",
-                PanelKind::KeyValue,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "run_engine",
+            "Engine Summary",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
             PanelWidth::Half,
         ),
-        with_panel_width(
-            panel_spec(
-                "run_target",
-                "Target",
-                PanelKind::Text,
-                PanelHistoryMode::None,
-            ),
+        sized_panel_spec(
+            "run_target",
+            "Target",
+            PanelKind::Text,
+            PanelHistoryMode::None,
             PanelWidth::Full,
         ),
     ];

@@ -25,6 +25,14 @@ MadGraph7 itself is not a pip dependency. Provide its root path via
 `madgraph_root` in the evaluator config. The wrapper adds both
 `<madgraph_root>` and `<madgraph_root>/madspace/install` to `sys.path`.
 
+MadSpace must be installed into that MG7 instance (`python
+<madgraph_root>/madspace/install.py --source --no-cuda --no-hip --no-simd
+--no-debug`; `--bin` pulls the released wheel but may lag the MG7 source).
+MadGraph7 moves fast: a generated `mg7_state` is tied to the MG7 version that
+wrote it (run-card schema and MadSpace ABI), so regenerate states with the MG7
+on the node that runs them, and expect reruns to occasionally need wrapper
+updates.
+
 ## Runtime Flow
 
 GammaBoard sends batches of points in `[0, 1]^N`, where `N` is the callable

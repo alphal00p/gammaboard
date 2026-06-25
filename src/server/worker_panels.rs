@@ -1,6 +1,6 @@
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelState, PanelWidth, key_value, key_value_panel,
-    panel_spec, replace_panel, with_panel_width,
+    replace_panel, sized_panel_spec,
 };
 use crate::stores::RegisteredWorkerEntry;
 use serde_json::Value as JsonValue;
@@ -24,48 +24,40 @@ pub fn build_worker_panel_response(worker: &RegisteredWorkerEntry) -> PanelRespo
 }
 
 fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::panels::PanelSpec> {
-    let mut panels = vec![with_panel_width(
-        panel_spec(
-            "worker_overview",
-            "Node Overview",
-            PanelKind::KeyValue,
-            PanelHistoryMode::None,
-        ),
+    let mut panels = vec![sized_panel_spec(
+        "worker_overview",
+        "Node Overview",
+        PanelKind::KeyValue,
+        PanelHistoryMode::None,
         PanelWidth::Half,
     )];
 
     match worker.current_role.as_deref() {
         Some("sampler_aggregator") => {
             if json_has_object_fields(worker.sampler_engine_diagnostics.as_ref()) {
-                panels.push(with_panel_width(
-                    panel_spec(
-                        "sampler_diagnostics",
-                        "Sampler Queue",
-                        PanelKind::KeyValue,
-                        PanelHistoryMode::None,
-                    ),
+                panels.push(sized_panel_spec(
+                    "sampler_diagnostics",
+                    "Sampler Queue",
+                    PanelKind::KeyValue,
+                    PanelHistoryMode::None,
                     PanelWidth::Full,
                 ));
             } else {
-                panels.push(with_panel_width(
-                    panel_spec(
-                        "sampler_diagnostics_status",
-                        "Sampler Queue",
-                        PanelKind::Text,
-                        PanelHistoryMode::None,
-                    ),
+                panels.push(sized_panel_spec(
+                    "sampler_diagnostics_status",
+                    "Sampler Queue",
+                    PanelKind::Text,
+                    PanelHistoryMode::None,
                     PanelWidth::Full,
                 ));
             }
         }
         _ => {
-            panels.push(with_panel_width(
-                panel_spec(
-                    "worker_role_status",
-                    "Role Details",
-                    PanelKind::Text,
-                    PanelHistoryMode::None,
-                ),
+            panels.push(sized_panel_spec(
+                "worker_role_status",
+                "Role Details",
+                PanelKind::Text,
+                PanelHistoryMode::None,
                 PanelWidth::Half,
             ));
         }

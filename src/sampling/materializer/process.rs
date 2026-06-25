@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
@@ -247,7 +248,7 @@ fn decode_materialized_batch(
             weights[sample_idx],
         ));
     }
-    Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))
+    Batch::new(points).engine_err()
 }
 
 fn parse_offsets_or_fixed(

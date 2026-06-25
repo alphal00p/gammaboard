@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
 use crate::sampling::{
@@ -137,7 +138,7 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             points.push(Point::new(continuous, discrete, 1.0));
         }
 
-        let batch = Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))?;
+        let batch = Batch::new(points).engine_err()?;
         if self.training_target_samples > 0 {
             let reserved = self
                 .training_target_samples

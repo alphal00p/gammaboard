@@ -1,4 +1,5 @@
 use crate::core::StoreError;
+use crate::core::StoreResultExt;
 use crate::runners::{EvaluatorRunner, EvaluatorRunnerError, RunnerError, SamplerAggregatorRunner};
 use async_trait::async_trait;
 use std::time::Duration;
@@ -43,18 +44,14 @@ impl<S: crate::core::SamplerWorkerStore + Clone + Send + Sync + 'static> RoleRun
         match SamplerAggregatorRunner::tick(self).await {
             Ok(done) => {
                 if done {
-                    self.complete_task()
-                        .await
-                        .map_err(|err| StoreError::store(err.to_string()))?;
+                    self.complete_task().await.store_err()?;
                     return Ok(true);
                 }
                 Ok(false)
             }
             Err(RunnerError::Store(err)) if err.is_database_error() => Err(err),
             Err(err) => {
-                self.fail_task(&err.to_string())
-                    .await
-                    .map_err(|persist_err| StoreError::store(persist_err.to_string()))?;
+                self.fail_task(&err.to_string()).await.store_err()?;
                 match err {
                     RunnerError::Store(err) => Err(err),
                     err => Err(StoreError::store(err.to_string())),

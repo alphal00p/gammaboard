@@ -2,6 +2,7 @@ use super::{
     ActiveRoleRunner, ActiveWorker, NodeRunner, NodeRunnerStore, RoleTarget,
     role_runner::RoleRunner,
 };
+use crate::core::StoreResultExt;
 
 use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{
@@ -441,10 +442,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             }
         };
 
-        let new_accumulator_config = task
-            .task
-            .new_accumulator_config()
-            .map_err(|err| StoreError::store(err.to_string()))?;
+        let new_accumulator_config = task.task.new_accumulator_config().store_err()?;
 
         let observable_state = Self::resolve_observable_state_for_sampler_task(
             worker.run_id,

@@ -6,7 +6,7 @@ pub mod tasks;
 pub mod traits;
 
 pub use batch_ids::next_batch_ids;
-pub use errors::{BuildError, EngineError, EvalError, StoreError};
+pub use errors::{BuildError, EngineError, EngineResultExt, EvalError, StoreError, StoreResultExt};
 pub use models::{
     BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch,
     DesiredAssignment, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,

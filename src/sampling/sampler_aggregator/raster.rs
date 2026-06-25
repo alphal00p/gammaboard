@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use crate::core::{BuildError, EngineError};
 use crate::core::{LineRasterGeometry, PlaneRasterGeometry};
 use crate::evaluation::{Batch, Point};
@@ -485,7 +486,7 @@ impl SamplerAggregator for RasterPlaneSampler {
                 1.0,
             )
         }))
-        .map_err(|err| EngineError::engine(err.to_string()))?;
+        .engine_err()?;
         self.next_index += nr_samples;
         Ok(LatentBatchSpec::from_batch(&batch))
     }
@@ -501,7 +502,7 @@ impl SamplerAggregator for RasterPlaneSampler {
                 next_index: self.next_index,
                 stride: self.stride,
             })
-            .map_err(|err| EngineError::engine(err.to_string()))?,
+            .engine_err()?,
         })
     }
 }
@@ -537,7 +538,7 @@ impl SamplerAggregator for RasterLineSampler {
                 1.0,
             )
         }))
-        .map_err(|err| EngineError::engine(err.to_string()))?;
+        .engine_err()?;
         self.next_index += nr_samples;
         Ok(LatentBatchSpec::from_batch(&batch))
     }
@@ -553,7 +554,7 @@ impl SamplerAggregator for RasterLineSampler {
                 next_index: self.next_index,
                 stride: self.stride,
             })
-            .map_err(|err| EngineError::engine(err.to_string()))?,
+            .engine_err()?,
         })
     }
 }
@@ -589,7 +590,7 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
                 1.0,
             )
         }))
-        .map_err(|err| EngineError::engine(err.to_string()))?;
+        .engine_err()?;
         self.next_index += nr_samples;
         Ok(LatentBatchSpec::from_batch(&batch))
     }
@@ -631,7 +632,7 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
         serde_json::to_value(self.output_for_frontend())
             .map(Some)
-            .map_err(|err| EngineError::engine(err.to_string()))
+            .engine_err()
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -646,7 +647,7 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
                 global_pdf_norm: self.global_pdf_norm,
                 source_sampler_snapshot: self.source_sampler_snapshot.clone(),
             })
-            .map_err(|err| EngineError::engine(err.to_string()))?,
+            .engine_err()?,
         })
     }
 }
@@ -682,7 +683,7 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
                 1.0,
             )
         }))
-        .map_err(|err| EngineError::engine(err.to_string()))?;
+        .engine_err()?;
         self.next_index += nr_samples;
         Ok(LatentBatchSpec::from_batch(&batch))
     }
@@ -724,7 +725,7 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
         serde_json::to_value(self.output_for_frontend())
             .map(Some)
-            .map_err(|err| EngineError::engine(err.to_string()))
+            .engine_err()
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -739,7 +740,7 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
                 global_pdf_norm: self.global_pdf_norm,
                 source_sampler_snapshot: self.source_sampler_snapshot.clone(),
             })
-            .map_err(|err| EngineError::engine(err.to_string()))?,
+            .engine_err()?,
         })
     }
 }

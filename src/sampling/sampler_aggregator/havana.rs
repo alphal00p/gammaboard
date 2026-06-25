@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::VecDeque;
@@ -613,7 +614,7 @@ impl SamplerAggregator for HavanaSampler {
             }
         }
 
-        let batch = Batch::new(points).map_err(|err| EngineError::engine(err.to_string()))?;
+        let batch = Batch::new(points).engine_err()?;
         self.batches_produced += 1;
         self.samples_produced = self.samples_produced.saturating_add(nr_samples);
         Ok(LatentBatchSpec::from_batch(&batch))
@@ -641,7 +642,7 @@ impl SamplerAggregator for HavanaSampler {
         for (eval, sample) in training_values.iter().zip(samples.iter()).take(train_len) {
             self.grid
                 .add_training_sample(sample, *eval / sample.get_weight()) // the evaluator return the weighted eval, so it needs to be divided by the sample weight
-                .map_err(|err| EngineError::engine(err.to_string()))?;
+                .engine_err()?;
         }
         self.batches_ingested += 1;
         self.samples_ingested = self.samples_ingested.saturating_add(train_len);

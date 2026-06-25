@@ -1,3 +1,4 @@
+use crate::core::EngineResultExt;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
@@ -103,8 +104,7 @@ impl SymbolicaEngine {
 
         let mut args = Vec::with_capacity(params.args.len());
         for arg in &params.args {
-            let parsed = Atom::parse(wrap_input!(arg), settings.clone())
-                .map_err(|err| BuildError::build(err.to_string()))?;
+            let parsed = Atom::parse(wrap_input!(arg), settings.clone()).build_err()?;
             args.push(parsed);
         }
 
@@ -134,8 +134,7 @@ impl SymbolicaEngine {
 
                 // Keep these plain parser calls unless updating Symbolica requires
                 // default-namespace parsing for generated benchmark expressions.
-                let parsed_expr = Atom::parse(wrap_input!(&expr), settings.clone())
-                    .map_err(|err| BuildError::build(err.to_string()))?;
+                let parsed_expr = Atom::parse(wrap_input!(&expr), settings.clone()).build_err()?;
                 let root_artifacts_dir = evaluator_tmp_dir("symbolica").map_err(|err| {
                     BuildError::build(format!("failed to resolve evaluator tmp dir: {err}"))
                 })?;
@@ -282,13 +281,11 @@ fn build_function_map(
     let mut function_map = FunctionMap::new();
     let imaginary_unit = SymbolicaComplex::new(Rational::from(0), Rational::from(1));
     function_map.add_constant(
-        Atom::parse(wrap_input!("i"), settings.clone())
-            .map_err(|err| BuildError::build(err.to_string()))?,
+        Atom::parse(wrap_input!("i"), settings.clone()).build_err()?,
         imaginary_unit.clone(),
     );
     function_map.add_constant(
-        Atom::parse(wrap_input!("I"), settings.clone())
-            .map_err(|err| BuildError::build(err.to_string()))?,
+        Atom::parse(wrap_input!("I"), settings.clone()).build_err()?,
         imaginary_unit,
     );
 
@@ -391,7 +388,7 @@ fn compile_complex_evaluator(
 ) -> Result<CompiledComplexEvaluator, BuildError> {
     let evaluator = expr
         .evaluator(function_map, args, OptimizationSettings::default())
-        .map_err(|err| BuildError::build(err.to_string()))?
+        .build_err()?
         .map_coeff(&|x| SymbolicaComplex::new(x.re.to_f64(), x.im.to_f64()));
     let stem = "eval";
     let path = artifacts_dir.path().join(stem);
@@ -401,13 +398,11 @@ fn compile_complex_evaluator(
             stem,
             ExportSettings::default(),
         )
-        .map_err(|err| BuildError::build(err.to_string()))?;
+        .build_err()?;
     let compiled_code = exported_code
         .compile(path.with_extension("so"), CompileOptions::default())
-        .map_err(|err| BuildError::build(err.to_string()))?;
-    compiled_code
-        .load()
-        .map_err(|err| BuildError::build(err.to_string()))
+        .build_err()?;
+    compiled_code.load().build_err()
 }
 
 impl Evaluator for SymbolicaEngine {

@@ -3,6 +3,7 @@ use crate::api::{
     measurement::load_task_measurement_output,
     runs::{ChildRunRequest, CreatedRun, create_child_run},
 };
+use crate::core::StoreResultExt;
 use crate::core::{
     AggregationStore, ControlPlaneStore, DesiredAssignment, RegisteredNode, RunReadStore,
     RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput, WorkerRole,
@@ -201,7 +202,7 @@ pub async fn load_child_task_measurement(
 ) -> Result<ChildTaskMeasurement, StoreError> {
     let output = load_task_measurement_output(store, child_run_id, source_task)
         .await
-        .map_err(|err| StoreError::store(err.to_string()))?;
+        .store_err()?;
     Ok(ChildTaskMeasurement {
         task_state: output.task_state,
         output: output.output,
