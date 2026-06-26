@@ -31,8 +31,26 @@ name = "channel_for_spin_1"
 dims = [1]
 fixed_dims = { "0" = 1 }
 
+# Training: update the Havana grid and write it to havana_demo.grid on checkpoints.
 [[task_queue]]
-name = "sample"
+name = "train"
 kind = "sample"
 stop_condition = { max_samples = 100000 }
-sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = 16, samples_for_update = 4096, stop_training_after_n_samples = 100000, initial_training_rate = 0.1, final_training_rate = 0.01 } } }
+sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = 16, samples_for_update = 4096, stop_training_after_n_samples = 100000, initial_training_rate = 0.1, final_training_rate = 0.01, save_path = "havana_demo.grid" } } }
+
+# Reset the accumulator so the inference estimate is not polluted by training samples.
+[[task_queue]]
+name = "reset-for-inference"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "vector"
+components = ["value"]
+training_projection = { kind = "component", name = "value" }
+
+# Inference: sample from the frozen grid, no grid updates, no training values.
+[[task_queue]]
+name = "infer"
+kind = "sample"
+stop_condition = { max_samples = 1000000 }
+sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", requires_training_values = false, args = { seed = 0, samples_for_update = 100000, inference = true, grid_path = "havana_demo.grid" } } }

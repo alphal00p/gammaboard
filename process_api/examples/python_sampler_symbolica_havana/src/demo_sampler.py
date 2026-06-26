@@ -27,6 +27,24 @@ def build_integrator(
     )
 
 
+def _load_grid(path: str) -> NumericalIntegrator:
+    with open(path, "rb") as handle:
+        return NumericalIntegrator.import_grid(handle.read())
+
+
+def _save_grid(path: str, integrator: NumericalIntegrator) -> None:
+    import os
+
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    # Write-then-rename so a concurrent inference run never sees a partial grid.
+    tmp = f"{path}.tmp"
+    with open(tmp, "wb") as handle:
+        handle.write(integrator.export_grid())
+    os.replace(tmp, path)
+
+
 def sample_weight(sample: Sample) -> float:
     if not sample.weights:
         raise ValueError("symbolica sample did not expose weights")
@@ -52,6 +70,9 @@ class SymbolicaHavanaSampler(Sampler):
         stop_training_after_n_samples: int = 10_240,
         initial_training_rate: float = 0.1,
         final_training_rate: float = 0.1,
+        inference: bool = False,
+        grid_path: str | None = None,
+        save_path: str | None = None,
         integrator: NumericalIntegrator | None = None,
         evaluator_metadata: dict[str, object] | None = None,
     ) -> None:
@@ -64,6 +85,12 @@ class SymbolicaHavanaSampler(Sampler):
         self.stop_training_after_n_samples = int(stop_training_after_n_samples)
         self.initial_training_rate = float(initial_training_rate)
         self.final_training_rate = float(final_training_rate)
+        # Inference mode: sample from a frozen grid without updating it and
+        # without needing evaluator training values. Set the run config's
+        # `requires_training_values = false` for an inference run.
+        self.inference = bool(inference)
+        self.grid_path = grid_path
+        self.save_path = save_path
 
         if self.bins <= 0 or self.samples_for_update <= 0:
             raise ValueError("bins and samples_for_update must be > 0")
@@ -76,12 +103,22 @@ class SymbolicaHavanaSampler(Sampler):
         if self.initial_training_rate < 0.0 or self.final_training_rate < 0.0:
             raise ValueError("training rates must be >= 0")
 
-        self.integrator = integrator or build_integrator(
-            self.discrete_cardinalities,
-            self.continuous_dims,
-            self.bins,
-            self.samples_for_update,
-        )
+        if integrator is not None:
+            self.integrator = integrator
+        elif self.inference:
+            if not self.grid_path:
+                raise ValueError(
+                    "inference mode requires 'grid_path' (a grid file from a training run) "
+                    "or a restored snapshot"
+                )
+            self.integrator = _load_grid(self.grid_path)
+        else:
+            self.integrator = build_integrator(
+                self.discrete_cardinalities,
+                self.continuous_dims,
+                self.bins,
+                self.samples_for_update,
+            )
         self.pending_samples: list[list[Sample]] = []
         self.batches_produced = 0
         self.samples_produced = 0
@@ -123,6 +160,9 @@ class SymbolicaHavanaSampler(Sampler):
             final_training_rate=float(
                 snapshot.get("final_training_rate", args.get("final_training_rate", 0.1))
             ),
+            inference=bool(args.get("inference", False)),
+            grid_path=args.get("grid_path"),
+            save_path=args.get("save_path"),
             integrator=NumericalIntegrator.import_grid(base64.b64decode(grid_b64)),
             evaluator_metadata=evaluator_metadata,
         )
@@ -166,10 +206,15 @@ class SymbolicaHavanaSampler(Sampler):
         ) ** progress
 
     def training_samples_remaining(self) -> int | None:
+        if self.inference:
+            return None
         remaining = self.remaining_training_samples_to_produce()
         return remaining if remaining else None
 
     def sample_plan(self) -> dict[str, Any]:
+        if self.inference:
+            # Keep producing from the frozen grid; the run's stop_condition ends it.
+            return {"kind": "produce", "nr_samples": self.samples_for_update}
         nr_samples = self.training_window_samples_remaining()
         if nr_samples == 0:
             return {"kind": "pause"}
@@ -178,7 +223,9 @@ class SymbolicaHavanaSampler(Sampler):
     def produce_latent_batch(self, nr_samples: int) -> SampleBatch:
         rng = NumericalIntegrator.rng(self.seed, self.batches_produced)
         samples = list(self.integrator.sample(nr_samples, rng))
-        self.pending_samples.append(samples)
+        if not self.inference:
+            # Retain the batch so the matching training values can update the grid.
+            self.pending_samples.append(samples)
         self.batches_produced += 1
         self.samples_produced += nr_samples
         return SampleBatch(
@@ -188,6 +235,8 @@ class SymbolicaHavanaSampler(Sampler):
         )
 
     def ingest_training_values(self, training_values: Any) -> None:
+        if self.inference:
+            return
         if not self.pending_samples:
             raise ValueError("received training values with no pending training batch")
 
@@ -270,6 +319,10 @@ class SymbolicaHavanaSampler(Sampler):
         return values
 
     def snapshot(self) -> dict[str, Any]:
+        # Persist the grid to disk too, so a separate inference run can load it
+        # via `grid_path` without chaining snapshots.
+        if self.save_path:
+            _save_grid(self.save_path, self.integrator)
         return {
             "seed": self.seed,
             "bins": self.bins,
@@ -287,6 +340,7 @@ class SymbolicaHavanaSampler(Sampler):
     def get_diagnostics(self) -> dict[str, Any]:
         _, _, chi_sq, _, _, processed = self.integrator.get_live_estimate()
         return {
+            "inference": self.inference,
             "chi_sq": chi_sq,
             "processed_samples": processed,
             "samples_ingested": self.samples_ingested,
