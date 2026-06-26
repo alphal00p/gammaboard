@@ -8,7 +8,9 @@ use serde_json::Value;
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
 use crate::process_runtime::build_process_worker_command;
-use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
+use crate::process_worker::{
+    PROCESS_PROTOCOL, ProcessWorker, extend_le_f64, pipe_process_stderr, read_le_f64, read_le_i64,
+};
 use crate::sampling::{
     DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
     SamplerAggregatorSnapshot,
@@ -284,98 +286,44 @@ impl ProcessSamplerWorker {
         &mut self,
         nr_samples: usize,
     ) -> Result<ProcessSampleBatch, EngineError> {
-        let response = self
+        let (response, binary) = self
             .process
-            .request(
+            .request_with_binary(
                 "produce_latent_batch",
                 serde_json::json!({
                     "nr_samples": nr_samples,
                 }),
+                &[],
             )
             .map_err(EngineError::engine)?;
-        let xs_discrete = response
-            .get("xs_discrete_row_major")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                EngineError::engine(
-                    "process sampler response missing 'xs_discrete_row_major' array",
-                )
-            })?;
+        // Binary block layout: i64 discrete, f64 continuous, f64 weights. Offsets
+        // (and thus the array lengths) come from the JSON envelope.
         let discrete_dims = self.domain.fixed_discrete_depth().unwrap_or(0);
-        let xs_discrete_offsets = parse_offsets_or_fixed(
-            &response,
-            "xs_discrete_offsets",
-            nr_samples,
-            discrete_dims,
-            xs_discrete.len(),
-        )?;
-        let xs_continuous = response
-            .get("xs_continuous_row_major")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                EngineError::engine(
-                    "process sampler response missing 'xs_continuous_row_major' array",
-                )
-            })?;
+        let continuous_dims = self.domain.fixed_continuous_dims().unwrap_or(0);
+        let discrete_len = offsets_total_len(&response, "xs_discrete_offsets", nr_samples, discrete_dims)?;
+        let continuous_len =
+            offsets_total_len(&response, "xs_continuous_offsets", nr_samples, continuous_dims)?;
+        let xs_discrete_offsets =
+            parse_offsets_or_fixed(&response, "xs_discrete_offsets", nr_samples, discrete_dims, discrete_len)?;
         let xs_continuous_offsets = parse_offsets_or_fixed(
             &response,
             "xs_continuous_offsets",
             nr_samples,
-            self.domain.fixed_continuous_dims().unwrap_or(0),
-            xs_continuous.len(),
+            continuous_dims,
+            continuous_len,
         )?;
-        let xs_discrete_row_major = xs_discrete
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                value.as_i64().ok_or_else(|| {
-                    EngineError::engine(format!(
-                        "process sampler returned non-i64 value at xs_discrete_row_major[{index}]"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let xs_continuous_row_major = xs_continuous
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                value.as_f64().ok_or_else(|| {
-                    EngineError::engine(format!(
-                        "process sampler returned non-f64 value at xs_continuous_row_major[{index}]"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let weights = response
-            .get("weights")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                EngineError::engine("process sampler response missing 'weights' array")
-            })?;
-        if weights.len() != nr_samples {
-            return Err(EngineError::engine(format!(
-                "process sampler weights size mismatch: expected {} values, got {}",
-                nr_samples,
-                weights.len()
-            )));
+        let (xs_discrete_row_major, next) =
+            read_le_i64(&binary, 0, discrete_len).map_err(EngineError::engine)?;
+        let (xs_continuous_row_major, next) =
+            read_le_f64(&binary, next, continuous_len).map_err(EngineError::engine)?;
+        let (weights, _next) = read_le_f64(&binary, next, nr_samples).map_err(EngineError::engine)?;
+        for (index, weight) in weights.iter().enumerate() {
+            if !weight.is_finite() || *weight <= 0.0 {
+                return Err(EngineError::engine(format!(
+                    "process sampler returned non-positive or non-finite value at weights[{index}]"
+                )));
+            }
         }
-        let weights = weights
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                let weight = value.as_f64().ok_or_else(|| {
-                    EngineError::engine(format!(
-                        "process sampler returned non-f64 value at weights[{index}]"
-                    ))
-                })?;
-                if !weight.is_finite() || weight <= 0.0 {
-                    return Err(EngineError::engine(format!(
-                        "process sampler returned non-positive or non-finite value at weights[{index}]"
-                    )));
-                }
-                Ok(weight)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         Ok(ProcessSampleBatch {
             xs_discrete_row_major,
             xs_discrete_offsets,
@@ -386,13 +334,14 @@ impl ProcessSamplerWorker {
     }
 
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let response = self
+        let mut binary = Vec::with_capacity(training_values.len() * 8);
+        extend_le_f64(&mut binary, training_values);
+        let (response, _binary) = self
             .process
-            .request(
+            .request_with_binary(
                 "ingest_training_values",
-                serde_json::json!({
-                    "training_values": training_values,
-                }),
+                serde_json::json!({ "nr_values": training_values.len() }),
+                &binary,
             )
             .map_err(EngineError::engine)?;
         Self::expect_ack(response).map_err(EngineError::engine)
@@ -544,6 +493,28 @@ impl ProcessSamplerWorker {
 
 fn default_args() -> Value {
     Value::Object(serde_json::Map::new())
+}
+
+/// Total row-major length implied by an offsets field: its last entry when
+/// present, otherwise the homogeneous `nr_samples * fixed_width`.
+fn offsets_total_len(
+    response: &Value,
+    field: &str,
+    nr_samples: usize,
+    fixed_width: usize,
+) -> Result<usize, EngineError> {
+    match response.get(field).and_then(Value::as_array) {
+        Some(offsets) => offsets
+            .last()
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .ok_or_else(|| {
+                EngineError::engine(format!(
+                    "process sampler response field '{field}' must be a non-empty integer array"
+                ))
+            }),
+        None => Ok(nr_samples.saturating_mul(fixed_width)),
+    }
 }
 
 fn parse_offsets_or_fixed(

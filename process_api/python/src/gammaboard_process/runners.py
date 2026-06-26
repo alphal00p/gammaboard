@@ -187,7 +187,10 @@ class _SamplerWorker:
         if method == "produce_latent_batch":
             return self._produce_latent_batch(int(params["nr_samples"]))
         if method == "ingest_training_values":
-            training_values = np.asarray(params["training_values"], dtype=np.float64).reshape((-1,))
+            nr_values = int(params["nr_values"])
+            training_values = np.array(
+                np.frombuffer(req_binary, dtype="<f8", count=nr_values)
+            )
             self.sampler.ingest_training_values(training_values)
             return {"ok": True}
         if method == "pdf":
@@ -213,11 +216,9 @@ class _SamplerWorker:
         weights = np.asarray(batch.weights, dtype=np.float64).reshape((nr_samples,))
         self._validate_sample_batch(xs_discrete, xs_continuous, weights)
         return {
-            "xs_discrete_row_major": xs_discrete.reshape((nr_samples * discrete_dims,)).tolist(),
             "xs_discrete_offsets": [index * discrete_dims for index in range(nr_samples + 1)],
-            "xs_continuous_row_major": xs_continuous.reshape((nr_samples * continuous_dims,)).tolist(),
             "xs_continuous_offsets": [index * continuous_dims for index in range(nr_samples + 1)],
-            "weights": weights.tolist(),
+            "__binary__": _encode_batch_binary(xs_discrete, xs_continuous, weights),
         }
 
     def _pdf(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -424,6 +425,19 @@ def _decode_eval_inputs(
     ).reshape((nr_samples, continuous_dims))
     # frombuffer views are read-only; hand user code writable copies.
     return np.array(xs_discrete), np.array(xs_continuous)
+
+
+def _encode_batch_binary(
+    xs_discrete: np.ndarray, xs_continuous: np.ndarray, weights: np.ndarray
+) -> bytes:
+    """Pack a produced batch into the response binary block: little-endian i64
+    discrete, then f64 continuous, then f64 weights (see produce_latent_batch in
+    src/sampling/sampler_aggregator/process.rs)."""
+    return (
+        np.ascontiguousarray(xs_discrete.reshape(-1), dtype="<i8").tobytes()
+        + np.ascontiguousarray(xs_continuous.reshape(-1), dtype="<f8").tobytes()
+        + np.ascontiguousarray(weights.reshape(-1), dtype="<f8").tobytes()
+    )
 
 
 def _normalize_gammaloop_result(raw: Any, nr_samples: int) -> GammaLoopBatchResult:

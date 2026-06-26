@@ -4,9 +4,10 @@ GammaBoard can run evaluators, samplers, batch transforms, and materializers as 
 
 ## Contract
 
-The extension protocol is `gammaboard-jsonrpc-v1`.
+The extension protocol is `gammaboard-jsonrpc-v2`.
 
-- Transport: JSON-RPC 2.0 messages framed with `Content-Length` headers.
+- Transport: JSON-RPC 2.0 messages framed with `Content-Length` headers, plus an
+  optional raw binary block (see "Binary payloads" below).
 - Direction: GammaBoard sends requests on process stdin; the process writes responses on stdout.
 - Logging: stderr is for logs (stdout is reserved for framed responses; GammaBoard tolerates only limited accidental line-oriented stdout before a frame). Worker stderr is recorded as runtime logs with `source = "worker"`. A line of the form `@gblog\t<level>\t<message>` (level ∈ trace,debug,info,warn,error) is emitted at that level; any other stderr line is recorded at `warn`. Both are then filtered by the server's `db_gammaboard_level` (default `info`). See "Logging" below for the Python helper.
 - Concurrency: requests are synchronous. GammaBoard sends one request at a time per process and waits for the matching response id before sending the next.
@@ -18,9 +19,26 @@ Frame shape:
 
 ```text
 Content-Length: <UTF-8 JSON byte length>\r\n
+Binary-Length: <binary byte length>\r\n      (optional; absent means 0)
 \r\n
-<JSON payload>
+<JSON payload><binary payload>
 ```
+
+Binary payloads: large numeric arrays are carried as a raw little-endian binary
+block appended after the JSON, instead of as JSON number arrays, to avoid
+text encode/parse overhead on the hot path. The JSON envelope describes the
+layout; the receiver splits the block accordingly.
+
+- `eval_batch` request: `i64` `xs_discrete_row_major` then `f64`
+  `xs_continuous_row_major` (lengths from the JSON offsets). Response: the `f64`
+  `values_row_major` block (length `nr_samples * len(components)`).
+- `produce_latent_batch` response: `i64` discrete, `f64` continuous, `f64`
+  weights (offsets stay in the JSON envelope).
+- `ingest_training_values` request: the `f64` training-values block (`nr_values`
+  in the JSON envelope).
+
+Other batched methods (`pdf`, `transform_batch`, `materialize_batch`) currently
+still pass their arrays as JSON numbers.
 
 Every response must be a JSON object with:
 

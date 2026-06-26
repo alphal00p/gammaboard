@@ -259,6 +259,56 @@ fn format_json_rpc_error(error: &Value) -> String {
     format!("process worker error: {error}")
 }
 
+/// Append `values` as little-endian `f64` bytes to `out`.
+pub(crate) fn extend_le_f64(out: &mut Vec<u8>, values: &[f64]) {
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Append `values` as little-endian `i64` bytes to `out`.
+pub(crate) fn extend_le_i64(out: &mut Vec<u8>, values: &[i64]) {
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Read `count` little-endian `f64`s from `bytes` starting at `byte_offset`,
+/// returning the values and the next byte offset.
+pub(crate) fn read_le_f64(
+    bytes: &[u8],
+    byte_offset: usize,
+    count: usize,
+) -> Result<(Vec<f64>, usize), String> {
+    let end = byte_offset + count * 8;
+    let slice = bytes
+        .get(byte_offset..end)
+        .ok_or_else(|| format!("binary block too short: need {end} bytes, have {}", bytes.len()))?;
+    let values = slice
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
+        .collect();
+    Ok((values, end))
+}
+
+/// Read `count` little-endian `i64`s from `bytes` starting at `byte_offset`,
+/// returning the values and the next byte offset.
+pub(crate) fn read_le_i64(
+    bytes: &[u8],
+    byte_offset: usize,
+    count: usize,
+) -> Result<(Vec<i64>, usize), String> {
+    let end = byte_offset + count * 8;
+    let slice = bytes
+        .get(byte_offset..end)
+        .ok_or_else(|| format!("binary block too short: need {end} bytes, have {}", bytes.len()))?;
+    let values = slice
+        .chunks_exact(8)
+        .map(|chunk| i64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
+        .collect();
+    Ok((values, end))
+}
+
 pub(crate) fn pipe_process_stderr(
     label: &'static str,
     stderr: impl std::io::Read + Send + 'static,
