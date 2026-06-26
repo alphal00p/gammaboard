@@ -13,7 +13,7 @@ use crate::runners::{
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
 };
 use crate::sampling::StageHandoffOwned;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {
     async fn fail_task_activation_and_pause_run(
@@ -173,7 +173,21 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         }
 
-        match self.build_runner_for_target(target).await {
+        // Build under a run/node context span so process workers spawned during
+        // construction (e.g. their stderr log threads) carry run_id/node fields.
+        let build_span = tracing::span!(
+            tracing::Level::TRACE,
+            "role_runner_context",
+            run_id = target.run_id,
+            node_name = %self.node_name,
+            node_uuid = %self.node_uuid,
+            role = %target.role
+        );
+        match self
+            .build_runner_for_target(target)
+            .instrument(build_span)
+            .await
+        {
             Ok(Some(runner)) => Ok(Some((target, runner))),
             Ok(None) => Ok(None),
             Err(err) if err.is_database_error() => Err(err),

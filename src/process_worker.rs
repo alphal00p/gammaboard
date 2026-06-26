@@ -220,7 +220,11 @@ pub(crate) fn pipe_process_stderr(
 ) -> ProcessStderrTail {
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_STDERR_TAIL_LINES)));
     let tail_for_thread = Arc::clone(&tail);
+    // Capture the caller's span (carries run_id/node_name/node_uuid) and re-enter
+    // it on the detached reader thread, which otherwise has no span context.
+    let context_span = tracing::Span::current();
     std::thread::spawn(move || {
+        let _entered = context_span.enter();
         let reader = std::io::BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
             let display = emit_worker_stderr_line(label, &line);
