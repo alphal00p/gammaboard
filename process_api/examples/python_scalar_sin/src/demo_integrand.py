@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from gammaboard_process import Evaluator
+from gammaboard_process import Evaluator, log
 
 
 class SinIntegrand(Evaluator):
@@ -39,6 +39,19 @@ class SinIntegrand(Evaluator):
         phases = phase_offsets or [[0.00, 0.35, -0.20], [0.45, -0.10, 0.25]]
         self.branch_weights = self._read_2x3(weights, "branch_weights")
         self.phase_offsets = self._read_2x3(phases, "phase_offsets")
+        self._batches = 0
+
+        # Logging showcase (see docs/process-runtime.md#logging). `print` is
+        # captured at INFO; `log(..., level=...)` records at the given level.
+        print("SinIntegrand worker starting")
+        log(
+            f"config: scale={self.scale}, bias={self.bias}, "
+            f"freq_u={self.freq_u}, freq_v={self.freq_v}",
+            level="info",
+        )
+        # Multi-line, debug level: dropped unless GAMMABOARD_LOG_LEVEL=debug and
+        # the server's db_gammaboard_level is debug.
+        log(f"branch_weights=\n{self.branch_weights}", level="debug")
 
     @staticmethod
     def _read_2x3(values: list[list[float]], name: str) -> np.ndarray:
@@ -66,6 +79,15 @@ class SinIntegrand(Evaluator):
         if ((channel < 0) | (channel >= 3)).any():
             raise ValueError("channel axis out of bounds; expected values in [0, 2]")
 
+        self._batches += 1
+        if self._batches == 1:
+            # One-time demonstration of every level (this is a toy process).
+            log("logging showcase: trace-level detail", level="trace")
+            log("logging showcase: debug-level detail", level="debug")
+            log("logging showcase: info-level message", level="info")
+            log("logging showcase: warn-level message", level="warn")
+            log("logging showcase: error-level message", level="error")
+
         u = xs_continuous[:, 0]
         v = xs_continuous[:, 1]
         spin_f = spin.astype(np.float64)
@@ -78,4 +100,11 @@ class SinIntegrand(Evaluator):
             (spin_f + 1.0) * self.freq_u * u + (channel_f + 1.0) * self.freq_v * v + phase
         )
         coupling = 1.0 + 0.15 * np.cos((spin_f - channel_f) * u * v)
-        return self.bias + self.scale * branch_weight * coupling * oscillation * np.exp(-radial)
+        result = self.bias + self.scale * branch_weight * coupling * oscillation * np.exp(-radial)
+
+        # Per-batch detail at debug (off by default; raise the log levels to see).
+        log(
+            f"batch {self._batches}: n={result.shape[0]}, mean={float(np.mean(result)):.3e}",
+            level="debug",
+        )
+        return result

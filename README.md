@@ -173,6 +173,11 @@ domain and passes them as keyword arguments together with the process config
 Examples live in
 [process_api/examples](process_api/examples).
 
+Log from a worker with `gammaboard_process.log("msg", level="info")`
+(`trace|debug|info|warn|error`); plain `print()` is captured at info. Logs become
+runtime logs with `source = "worker"`. See
+[docs/process-runtime.md](docs/process-runtime.md#logging).
+
 Use a process batch transform for process-side parametrizations that map
 concrete sampled coordinates to evaluator coordinates:
 

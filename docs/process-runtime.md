@@ -8,7 +8,7 @@ The extension protocol is `gammaboard-jsonrpc-v1`.
 
 - Transport: JSON-RPC 2.0 messages framed with `Content-Length` headers.
 - Direction: GammaBoard sends requests on process stdin; the process writes responses on stdout.
-- Logging: stderr is for logs. GammaBoard also tolerates limited accidental line-oriented stdout before a protocol frame and forwards it to logs, but stdout should be treated as reserved for framed responses.
+- Logging: stderr is for logs (stdout is reserved for framed responses; GammaBoard tolerates only limited accidental line-oriented stdout before a frame). Worker stderr is recorded as runtime logs with `source = "worker"`. A line of the form `@gblog\t<level>\t<message>` (level ∈ trace,debug,info,warn,error) is emitted at that level; any other stderr line is recorded at `warn`. Both are then filtered by the server's `db_gammaboard_level` (default `info`). See "Logging" below for the Python helper.
 - Concurrency: requests are synchronous. GammaBoard sends one request at a time per process and waits for the matching response id before sending the next.
 - Batching: evaluator `eval_batch`, sampler `produce_latent_batch`, sampler `ingest_training_values`, sampler `pdf`, batch transform `transform_batch`, and materializer `materialize_batch` are batched.
 - Arguments: run TOML `args = { ... }` is passed unchanged in `initialize`.
@@ -417,6 +417,38 @@ Fresh initialization uses
 `ClassName(discrete_cardinalities=..., continuous_dims=..., **args)`.
 Sampler restore may instead implement
 `from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)`.
+
+### Logging
+
+The framed protocol owns the worker's real stdout, so the Python package routes
+logs over stderr for you:
+
+```python
+import gammaboard_process as gb
+
+gb.log("training started")                 # default level: info
+gb.log("grid looks unstable", level="warn")
+gb.log(f"loss={loss:.3e}", level="debug")
+print("also recorded, at info")            # print() is rerouted to info
+```
+
+- `gb.log(message, level=...)` accepts `trace|debug|info|warn|error` (default
+  `info`; `warning` is accepted as `warn`). Each line becomes a runtime log with
+  `source = "worker"` at the matching level.
+- Plain `print()` is rerouted to `log(..., level="info")`, so existing prints are
+  captured at info instead of corrupting the protocol.
+- Anything written directly to stderr (tracebacks, native libraries) is recorded
+  unstructured at `warn`.
+
+Two filters apply, low to high: the worker drops messages below
+`GAMMABOARD_LOG_LEVEL` (env, default `info`); the server then stores only
+messages at or above `db_gammaboard_level` (server config, default `info`). So
+`info` and above reach the runtime log DB out of the box; to capture `debug`,
+raise both.
+
+Non-Python workers get the same behavior by writing
+`@gblog\t<level>\t<message>\n` lines to stderr (tab-separated; level is one of
+`trace,debug,info,warn,error`).
 
 ## Benchmark
 

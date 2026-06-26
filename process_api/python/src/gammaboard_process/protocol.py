@@ -13,8 +13,12 @@ JSON_RPC_VERSION = "2.0"
 
 class ProtocolIo:
     def __init__(self) -> None:
+        # The framed protocol owns the real stdout (fd 1); keep a private copy
+        # and route user `print()` to the host log at INFO instead.
         self.stdout = os.fdopen(os.dup(1), "wb", buffering=0)
-        sys.stdout = sys.stderr
+        from .log import install_print_redirect
+
+        install_print_redirect("info")
 
     def send_frame(self, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")

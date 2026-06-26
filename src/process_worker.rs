@@ -223,19 +223,42 @@ pub(crate) fn pipe_process_stderr(
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
+            let display = emit_worker_stderr_line(label, &line);
             if let Ok(mut lines) = tail_for_thread.lock() {
                 if lines.len() == MAX_STDERR_TAIL_LINES {
                     lines.pop_front();
                 }
-                lines.push_back(line.clone());
+                lines.push_back(display);
             }
-            tracing::warn!(
-                source = "worker",
-                message = format!("[{label} stderr] {line}")
-            );
         }
     });
     tail
+}
+
+/// Sentinel prefix for structured worker logs on stderr. Must match `_SENTINEL`
+/// in process_api/python/src/gammaboard_process/log.py.
+const WORKER_LOG_SENTINEL: &str = "@gblog\t";
+
+/// Re-emit one worker stderr line through `tracing` and return the text to keep
+/// in the stderr tail. Structured `@gblog\t<level>\t<message>` lines are emitted
+/// at the matching level; everything else is unstructured worker output at warn.
+fn emit_worker_stderr_line(label: &str, line: &str) -> String {
+    if let Some(rest) = line.strip_prefix(WORKER_LOG_SENTINEL) {
+        let (level, text) = rest.split_once('\t').unwrap_or(("info", rest));
+        let message = format!("[{label}] {text}");
+        match level {
+            "trace" => tracing::trace!(source = "worker", message = message.clone()),
+            "debug" => tracing::debug!(source = "worker", message = message.clone()),
+            "warn" => tracing::warn!(source = "worker", message = message.clone()),
+            "error" => tracing::error!(source = "worker", message = message.clone()),
+            _ => tracing::info!(source = "worker", message = message.clone()),
+        }
+        message
+    } else {
+        let message = format!("[{label} stderr] {line}");
+        tracing::warn!(source = "worker", message = message.clone());
+        message
+    }
 }
 
 fn validate_response_envelope(
@@ -276,8 +299,31 @@ fn validate_response_envelope(
 
 #[cfg(test)]
 mod tests {
-    use super::{JSON_RPC_VERSION, format_json_rpc_error, validate_response_envelope};
+    use super::{
+        JSON_RPC_VERSION, emit_worker_stderr_line, format_json_rpc_error,
+        validate_response_envelope,
+    };
     use serde_json::json;
+
+    #[test]
+    fn structured_worker_log_is_unwrapped_for_tail() {
+        assert_eq!(
+            emit_worker_stderr_line("evaluator", "@gblog\tinfo\thello"),
+            "[evaluator] hello"
+        );
+        assert_eq!(
+            emit_worker_stderr_line("evaluator", "@gblog\terror\tboom"),
+            "[evaluator] boom"
+        );
+    }
+
+    #[test]
+    fn unstructured_worker_stderr_keeps_stderr_prefix() {
+        assert_eq!(
+            emit_worker_stderr_line("sampler", "Traceback (most recent call last):"),
+            "[sampler stderr] Traceback (most recent call last):"
+        );
+    }
 
     #[test]
     fn json_rpc_error_prefers_traceback_data() {

@@ -130,3 +130,24 @@ This wrapper shape is only a convenience layer. Non-Python runtimes can implemen
 the protocol directly. The bundled Python wrappers intentionally support only
 homogeneous fixed-width evaluator/sampler/batch-transform/materializer batches
 and reject ragged offset layouts with a clear error.
+
+## Logging
+
+The protocol owns stdout, so logs go over stderr. The package handles this:
+
+```python
+import gammaboard_process as gb
+
+gb.log("started")                  # default info
+gb.log("unstable", level="warn")
+gb.log(f"loss={loss}", level="debug")
+print("captured at info")          # print() is rerouted to info
+```
+
+`gb.log(message, level=...)` takes `trace|debug|info|warn|error` and records a
+runtime log with `source = "worker"` at that level. Direct stderr writes
+(tracebacks, native libraries) are recorded unstructured at `warn`. Messages
+below `GAMMABOARD_LOG_LEVEL` (env, default `info`) are dropped in the worker; the
+server then keeps only those at or above `db_gammaboard_level` (default `info`).
+See [../docs/process-runtime.md](../docs/process-runtime.md) for the wire format
+non-Python workers use.
