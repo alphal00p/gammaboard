@@ -6,7 +6,7 @@ This example uses a plain Python virtual environment.
 cd process_api/examples/python_scalar_sin
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt --force-reinstall
 ```
 
 `requirements.txt` installs the GammaBoard Python process wrapper from the
