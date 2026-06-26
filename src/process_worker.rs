@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-pub(crate) const PROCESS_PROTOCOL: &str = "gammaboard-jsonrpc-v1";
+pub(crate) const PROCESS_PROTOCOL: &str = "gammaboard-jsonrpc-v2";
 const JSON_RPC_VERSION: &str = "2.0";
 const MAX_STDOUT_LOG_BYTES_BEFORE_FRAME: usize = 64 * 1024;
 const MAX_STDERR_TAIL_LINES: usize = 40;
@@ -42,6 +42,18 @@ impl ProcessWorker {
     }
 
     pub(crate) fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let (result, _binary) = self.request_with_binary(method, params, &[])?;
+        Ok(result)
+    }
+
+    /// Like `request`, but attaches `binary` to the request frame and returns the
+    /// response JSON `result` together with its (possibly empty) binary block.
+    pub(crate) fn request_with_binary(
+        &mut self,
+        method: &str,
+        params: Value,
+        binary: &[u8],
+    ) -> Result<(Value, Vec<u8>), String> {
         let id = self.allocate_request_id();
         let request = serde_json::json!({
             "jsonrpc": JSON_RPC_VERSION,
@@ -49,32 +61,45 @@ impl ProcessWorker {
             "method": method,
             "params": params,
         });
-        self.write_frame(&request)?;
-        let response = self.read_response(id)?;
+        self.write_frame(&request, binary)?;
+        let (response, response_binary) = self.read_response(id)?;
         if let Some(error) = response.get("error") {
             return Err(format_json_rpc_error(error));
         }
-        response
+        let result = response
             .get("result")
             .cloned()
-            .ok_or_else(|| format!("{} response missing 'result'", self.label))
+            .ok_or_else(|| format!("{} response missing 'result'", self.label))?;
+        Ok((result, response_binary))
     }
 
-    fn write_frame(&mut self, value: &Value) -> Result<(), String> {
+    fn write_frame(&mut self, value: &Value, binary: &[u8]) -> Result<(), String> {
         let payload = serde_json::to_vec(value)
             .map_err(|error| format!("failed to serialize {} request: {error}", self.label))?;
-        write!(self.stdin, "Content-Length: {}\r\n\r\n", payload.len())
+        write!(self.stdin, "Content-Length: {}\r\n", payload.len())
+            .map_err(|error| format!("failed writing {} frame header: {error}", self.label))?;
+        if !binary.is_empty() {
+            write!(self.stdin, "Binary-Length: {}\r\n", binary.len())
+                .map_err(|error| format!("failed writing {} frame header: {error}", self.label))?;
+        }
+        self.stdin
+            .write_all(b"\r\n")
             .map_err(|error| format!("failed writing {} frame header: {error}", self.label))?;
         self.stdin
             .write_all(&payload)
             .map_err(|error| format!("failed writing {} frame payload: {error}", self.label))?;
+        if !binary.is_empty() {
+            self.stdin
+                .write_all(binary)
+                .map_err(|error| format!("failed writing {} binary payload: {error}", self.label))?;
+        }
         self.stdin
             .flush()
             .map_err(|error| format!("failed flushing {} request: {error}", self.label))
     }
 
-    fn read_response(&mut self, expected_id: u64) -> Result<Value, String> {
-        let Some(content_len) = self.read_frame_header()? else {
+    fn read_response(&mut self, expected_id: u64) -> Result<(Value, Vec<u8>), String> {
+        let Some((content_len, binary_len)) = self.read_frame_header()? else {
             return Err(self.worker_terminated_message(&format!(
                 "{} worker terminated before responding",
                 self.label
@@ -87,6 +112,13 @@ impl ProcessWorker {
                 self.label
             ))
         })?;
+        let mut binary = vec![0_u8; binary_len];
+        self.stdout.read_exact(&mut binary).map_err(|error| {
+            self.worker_terminated_message(&format!(
+                "failed reading {} binary payload: {error}",
+                self.label
+            ))
+        })?;
         let response = serde_json::from_slice::<Value>(&payload).map_err(|error| {
             format!(
                 "failed to parse {} response frame as JSON: {error}; payload='{}'",
@@ -95,10 +127,12 @@ impl ProcessWorker {
             )
         })?;
         validate_response_envelope(&self.label, &response, expected_id)?;
-        Ok(response)
+        Ok((response, binary))
     }
 
-    fn read_frame_header(&mut self) -> Result<Option<usize>, String> {
+    /// Reads a frame header block, returning `(content_length, binary_length)`.
+    /// `Binary-Length` is optional (absent means 0).
+    fn read_frame_header(&mut self) -> Result<Option<(usize, usize)>, String> {
         loop {
             let mut line = String::new();
             let read = self
@@ -120,13 +154,8 @@ impl ProcessWorker {
                 self.log_stdout_text(trimmed)?;
                 continue;
             }
-            let content_len = value.trim().parse::<usize>().map_err(|error| {
-                format!(
-                    "invalid {} Content-Length header value {:?}: {error}",
-                    self.label,
-                    value.trim()
-                )
-            })?;
+            let content_len = self.parse_header_len("Content-Length", value)?;
+            let mut binary_len = 0usize;
             loop {
                 let mut header_line = String::new();
                 let read = self.stdout.read_line(&mut header_line).map_err(|error| {
@@ -141,12 +170,28 @@ impl ProcessWorker {
                         self.label
                     )));
                 }
-                if header_line == "\r\n" || header_line == "\n" {
+                let trimmed = header_line.trim_end_matches(['\r', '\n']);
+                if trimmed.is_empty() {
                     break;
                 }
+                if let Some((name, value)) = trimmed.split_once(':')
+                    && name.eq_ignore_ascii_case("Binary-Length")
+                {
+                    binary_len = self.parse_header_len("Binary-Length", value)?;
+                }
             }
-            return Ok(Some(content_len));
+            return Ok(Some((content_len, binary_len)));
         }
+    }
+
+    fn parse_header_len(&self, header: &str, value: &str) -> Result<usize, String> {
+        value.trim().parse::<usize>().map_err(|error| {
+            format!(
+                "invalid {} {header} header value {:?}: {error}",
+                self.label,
+                value.trim()
+            )
+        })
     }
 
     fn log_stdout_text(&mut self, line: &str) -> Result<(), String> {

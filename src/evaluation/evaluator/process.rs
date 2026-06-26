@@ -145,6 +145,36 @@ struct RaggedRowMajorInputs {
     xs_continuous_offsets: Vec<usize>,
 }
 
+/// Pack the row-major eval inputs into the request binary block: little-endian
+/// `i64` discrete values followed by little-endian `f64` continuous values. The
+/// receiver splits them using the offsets carried in the JSON envelope.
+fn pack_eval_inputs(inputs: &RaggedRowMajorInputs) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(
+        inputs.xs_discrete_row_major.len() * 8 + inputs.xs_continuous_row_major.len() * 8,
+    );
+    for value in &inputs.xs_discrete_row_major {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in &inputs.xs_continuous_row_major {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+/// Decode a little-endian `f64` binary block into a `Vec<f64>`.
+fn unpack_f64_le(bytes: &[u8], what: &str) -> Result<Vec<f64>, EvalError> {
+    if !bytes.len().is_multiple_of(8) {
+        return Err(EvalError::eval(format!(
+            "process worker {what} binary block length {} is not a multiple of 8",
+            bytes.len()
+        )));
+    }
+    Ok(bytes
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
+        .collect())
+}
+
 fn ragged_row_major_inputs(batch: &Batch) -> RaggedRowMajorInputs {
     let mut xs_discrete = Vec::new();
     let mut xs_discrete_offsets = Vec::with_capacity(batch.size() + 1);
@@ -245,24 +275,20 @@ impl ProcessRuntimeWorker {
         inputs: &RaggedRowMajorInputs,
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
-        let response = self
+        let (_result, response_binary) = self
             .process
-            .request(
+            .request_with_binary(
                 "eval_batch",
                 serde_json::json!({
                     "nr_samples": nr_samples,
                     "components": self.components,
-                    "xs_discrete_row_major": inputs.xs_discrete_row_major,
                     "xs_discrete_offsets": inputs.xs_discrete_offsets,
-                    "xs_continuous_row_major": inputs.xs_continuous_row_major,
                     "xs_continuous_offsets": inputs.xs_continuous_offsets,
                 }),
+                &pack_eval_inputs(inputs),
             )
             .map_err(EvalError::eval)?;
-        let values = response
-            .get("values_row_major")
-            .and_then(Value::as_array)
-            .ok_or_else(|| EvalError::eval("process worker response missing 'values_row_major'"))?;
+        let values = unpack_f64_le(&response_binary, "values")?;
         let expected_len = nr_samples.saturating_mul(self.components.len());
         if values.len() != expected_len {
             return Err(EvalError::eval(format!(
@@ -271,17 +297,7 @@ impl ProcessRuntimeWorker {
                 values.len()
             )));
         }
-        values
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                value.as_f64().ok_or_else(|| {
-                    EvalError::eval(format!(
-                        "process worker returned non-f64 at output index {index}"
-                    ))
-                })
-            })
-            .collect()
+        Ok(values)
     }
 
     fn eval_batch_gammaloop(
@@ -289,18 +305,17 @@ impl ProcessRuntimeWorker {
         inputs: &RaggedRowMajorInputs,
         nr_samples: usize,
     ) -> Result<(GammaLoopAccumulatorState, Option<Vec<f64>>), EvalError> {
-        let response = self
+        let (response, _response_binary) = self
             .process
-            .request(
+            .request_with_binary(
                 "eval_batch",
                 serde_json::json!({
                     "nr_samples": nr_samples,
                     "accumulator": "gammaloop",
-                    "xs_discrete_row_major": inputs.xs_discrete_row_major,
                     "xs_discrete_offsets": inputs.xs_discrete_offsets,
-                    "xs_continuous_row_major": inputs.xs_continuous_row_major,
                     "xs_continuous_offsets": inputs.xs_continuous_offsets,
                 }),
+                &pack_eval_inputs(inputs),
             )
             .map_err(EvalError::eval)?;
         let state: GammaLoopAccumulatorState = serde_json::from_value(
@@ -370,6 +385,7 @@ import json, sys
 
 def read_frame():
     content_length = None
+    binary_length = 0
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
@@ -380,34 +396,68 @@ def read_frame():
                 break
             continue
         name, sep, value = line.partition(":")
-        if sep and name.lower() == "content-length":
+        if not sep:
+            continue
+        key = name.strip().lower()
+        if key == "content-length":
             content_length = int(value.strip())
-    return json.loads(sys.stdin.buffer.read(content_length))
+        elif key == "binary-length":
+            binary_length = int(value.strip())
+    body = sys.stdin.buffer.read(content_length)
+    binary = sys.stdin.buffer.read(binary_length) if binary_length else b""
+    return json.loads(body), binary
 
-def send_result(req_id, result):
+def send_result(req_id, result, binary=b""):
     body = json.dumps(
         {"jsonrpc": "2.0", "id": req_id, "result": result},
         separators=(",", ":"),
     ).encode("utf-8")
-    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
+    header = "Content-Length: %d\r\n" % len(body)
+    if binary:
+        header += "Binary-Length: %d\r\n" % len(binary)
+    header += "\r\n"
+    sys.stdout.buffer.write(header.encode("ascii"))
     sys.stdout.buffer.write(body)
+    if binary:
+        sys.stdout.buffer.write(binary)
     sys.stdout.buffer.flush()
 
 while True:
-    req = read_frame()
-    if req is None:
+    frame = read_frame()
+    if frame is None:
         break
+    req, _binary = frame
     method = req.get("method")
     params = req.get("params") or {}
-    if method == "initialize":
-        send_result(req.get("id"), {"ok": True})
-    elif method == "eval_batch":
+    if method == "eval_batch":
         nr_samples = int(params["nr_samples"])
         components = params.get("components") or ["value"]
-        send_result(req.get("id"), {"values_row_major": [0.0] * (nr_samples * len(components))})
+        # values_row_major as little-endian f64 zeros in the binary block.
+        send_result(req.get("id"), {}, bytes(8 * nr_samples * len(components)))
     else:
         send_result(req.get("id"), {"ok": True})
 "#;
+
+    #[test]
+    fn eval_input_pack_and_value_unpack_roundtrip() {
+        let inputs = RaggedRowMajorInputs {
+            xs_discrete_row_major: vec![0_i64, 1, 2, 3],
+            xs_discrete_offsets: vec![0, 2, 4],
+            xs_continuous_row_major: vec![0.5_f64, 1.5, 2.5, 3.5],
+            xs_continuous_offsets: vec![0, 2, 4],
+        };
+        let packed = super::pack_eval_inputs(&inputs);
+        // 4 i64 + 4 f64 = 64 bytes; discrete block first.
+        assert_eq!(packed.len(), 4 * 8 + 4 * 8);
+        assert_eq!(&packed[0..8], &0_i64.to_le_bytes());
+        assert_eq!(&packed[24..32], &3_i64.to_le_bytes());
+        assert_eq!(&packed[32..40], &0.5_f64.to_le_bytes());
+
+        let values = vec![1.0_f64, -2.0, 3.25];
+        let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(super::unpack_f64_le(&bytes, "values").unwrap(), values);
+        assert!(super::unpack_f64_le(&[0_u8; 7], "values").is_err());
+    }
 
     #[test]
     fn process_evaluator_deserializes_command_and_args() {

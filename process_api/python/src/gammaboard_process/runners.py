@@ -36,6 +36,26 @@ def run_batch_transform(target: Any) -> None:
     worker.run()
 
 
+def _serve(io: ProtocolIo, handle: Any) -> None:
+    """Frame loop shared by all worker roles.
+
+    `handle(method, params, req_binary)` returns a JSON-serializable dict; a
+    `__binary__` bytes entry (if present) is sent as the frame's binary block.
+    """
+    while True:
+        frame = io.read_frame()
+        if frame is None:
+            break
+        req, req_binary = frame
+        req_id = req.get("id")
+        try:
+            result = handle(req["method"], req.get("params") or {}, req_binary)
+            binary = result.pop("__binary__", b"") if isinstance(result, dict) else b""
+            io.send_result(req_id, result, binary)
+        except Exception as exc:
+            io.send_error(req_id, exc)
+
+
 class _EvaluatorWorker:
     def __init__(self, target: Any) -> None:
         self.target = target
@@ -47,18 +67,9 @@ class _EvaluatorWorker:
         self._accumulator_kind: str = "vector"
 
     def run(self) -> None:
-        while True:
-            req = self.io.read_frame()
-            if req is None:
-                break
-            req_id = req.get("id")
-            try:
-                result = self.handle(req["method"], req.get("params") or {})
-                self.io.send_result(req_id, result)
-            except Exception as exc:
-                self.io.send_error(req_id, exc)
+        _serve(self.io, self.handle)
 
-    def handle(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def handle(self, method: str, params: dict[str, Any], req_binary: bytes = b"") -> dict[str, Any]:
         if method == "initialize":
             if params.get("protocol") != PROTOCOL:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
@@ -89,18 +100,18 @@ class _EvaluatorWorker:
             discrete_dims = len(self.discrete_cardinalities)
             require_homogeneous_offsets(params, "xs_discrete_offsets", nr_samples, discrete_dims, "evaluator")
             require_homogeneous_offsets(params, "xs_continuous_offsets", nr_samples, self.continuous_dims, "evaluator")
-            xs_discrete = np.asarray(params["xs_discrete_row_major"], dtype=np.int64).reshape(
-                (nr_samples, discrete_dims)
-            )
-            xs_continuous = np.asarray(params["xs_continuous_row_major"], dtype=np.float64).reshape(
-                (nr_samples, self.continuous_dims)
+            xs_discrete, xs_continuous = _decode_eval_inputs(
+                req_binary, nr_samples, discrete_dims, self.continuous_dims
             )
             self._validate_points(xs_discrete, xs_continuous)
             if self._accumulator_kind == "gammaloop":
                 return self._eval_batch_gammaloop(xs_discrete, xs_continuous, nr_samples)
             raw_values = self.evaluator.eval(xs_discrete, xs_continuous)
             values = _normalize_evaluator_values(raw_values, nr_samples, self.components)
-            return {"values_row_major": values.reshape((nr_samples * len(self.components),)).tolist()}
+            values_row_major = np.ascontiguousarray(
+                values.reshape((nr_samples * len(self.components),)), dtype="<f8"
+            )
+            return {"__binary__": values_row_major.tobytes()}
         raise ValueError(f"unknown method: {method}")
 
     def _eval_batch_gammaloop(
@@ -142,18 +153,9 @@ class _SamplerWorker:
         self.evaluator_metadata: Any = {}
 
     def run(self) -> None:
-        while True:
-            req = self.io.read_frame()
-            if req is None:
-                break
-            req_id = req.get("id")
-            try:
-                result = self.handle(req["method"], req.get("params") or {})
-                self.io.send_result(req_id, result)
-            except Exception as exc:
-                self.io.send_error(req_id, exc)
+        _serve(self.io, self.handle)
 
-    def handle(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def handle(self, method: str, params: dict[str, Any], req_binary: bytes = b"") -> dict[str, Any]:
         if method == "initialize":
             if params.get("protocol") != PROTOCOL:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
@@ -267,18 +269,9 @@ class _MaterializerWorker:
         self.continuous_dims: int | None = None
 
     def run(self) -> None:
-        while True:
-            req = self.io.read_frame()
-            if req is None:
-                break
-            req_id = req.get("id")
-            try:
-                result = self.handle(req["method"], req.get("params") or {})
-                self.io.send_result(req_id, result)
-            except Exception as exc:
-                self.io.send_error(req_id, exc)
+        _serve(self.io, self.handle)
 
-    def handle(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def handle(self, method: str, params: dict[str, Any], req_binary: bytes = b"") -> dict[str, Any]:
         if method == "initialize":
             if params.get("protocol") != PROTOCOL:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
@@ -345,18 +338,9 @@ class _BatchTransformWorker:
         self.continuous_dims: int | None = None
 
     def run(self) -> None:
-        while True:
-            req = self.io.read_frame()
-            if req is None:
-                break
-            req_id = req.get("id")
-            try:
-                result = self.handle(req["method"], req.get("params") or {})
-                self.io.send_result(req_id, result)
-            except Exception as exc:
-                self.io.send_error(req_id, exc)
+        _serve(self.io, self.handle)
 
-    def handle(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def handle(self, method: str, params: dict[str, Any], req_binary: bytes = b"") -> dict[str, Any]:
         if method == "initialize":
             if params.get("protocol") != PROTOCOL:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
@@ -422,6 +406,24 @@ class _BatchTransformWorker:
                 raise ValueError(
                     f"transform_batch returned discrete values outside [0, {cardinality}) on axis {axis}"
                 )
+
+
+def _decode_eval_inputs(
+    req_binary: bytes, nr_samples: int, discrete_dims: int, continuous_dims: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decode the eval request binary block: little-endian i64 discrete values
+    followed by little-endian f64 continuous values (see pack_eval_inputs in
+    src/evaluation/evaluator/process.rs). Returns writable arrays."""
+    n_discrete = nr_samples * discrete_dims
+    n_continuous = nr_samples * continuous_dims
+    xs_discrete = np.frombuffer(req_binary, dtype="<i8", count=n_discrete).reshape(
+        (nr_samples, discrete_dims)
+    )
+    xs_continuous = np.frombuffer(
+        req_binary, dtype="<f8", count=n_continuous, offset=n_discrete * 8
+    ).reshape((nr_samples, continuous_dims))
+    # frombuffer views are read-only; hand user code writable copies.
+    return np.array(xs_discrete), np.array(xs_continuous)
 
 
 def _normalize_gammaloop_result(raw: Any, nr_samples: int) -> GammaLoopBatchResult:

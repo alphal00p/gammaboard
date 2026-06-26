@@ -7,7 +7,7 @@ import sys
 import traceback
 from typing import Any
 
-PROTOCOL = "gammaboard-jsonrpc-v1"
+PROTOCOL = "gammaboard-jsonrpc-v2"
 JSON_RPC_VERSION = "2.0"
 
 
@@ -20,13 +20,20 @@ class ProtocolIo:
 
         install_print_redirect("info")
 
-    def send_frame(self, payload: dict[str, Any]) -> None:
+    def send_frame(self, payload: dict[str, Any], binary: bytes = b"") -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self.stdout.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
+        header = f"Content-Length: {len(body)}\r\n"
+        if binary:
+            header += f"Binary-Length: {len(binary)}\r\n"
+        header += "\r\n"
+        self.stdout.write(header.encode("ascii"))
         self.stdout.write(body)
+        if binary:
+            self.stdout.write(binary)
 
-    def read_frame(self) -> dict[str, Any] | None:
-        content_length = None
+    def read_frame(self) -> tuple[dict[str, Any], bytes] | None:
+        content_length: int | None = None
+        binary_length = 0
         while True:
             line = sys.stdin.buffer.readline()
             if not line:
@@ -37,12 +44,33 @@ class ProtocolIo:
                     break
                 continue
             name, sep, value = decoded.partition(":")
-            if sep and name.lower() == "content-length":
+            if not sep:
+                continue
+            key = name.strip().lower()
+            if key == "content-length":
                 content_length = int(value.strip())
-        return json.loads(sys.stdin.buffer.read(content_length).decode("utf-8"))
+            elif key == "binary-length":
+                binary_length = int(value.strip())
+        body = _read_exact(content_length or 0)
+        binary = _read_exact(binary_length) if binary_length else b""
+        return json.loads(body.decode("utf-8")), binary
 
-    def send_result(self, req_id: Any, result: dict[str, Any]) -> None:
-        self.send_frame({"jsonrpc": JSON_RPC_VERSION, "id": req_id, "result": result})
+    def send_result(self, req_id: Any, result: dict[str, Any], binary: bytes = b"") -> None:
+        self.send_frame(
+            {"jsonrpc": JSON_RPC_VERSION, "id": req_id, "result": result}, binary
+        )
+
+
+def _read_exact(length: int) -> bytes:
+    chunks = []
+    remaining = length
+    while remaining > 0:
+        chunk = sys.stdin.buffer.read(remaining)
+        if not chunk:
+            raise EOFError("worker stdin closed mid-frame")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
     def send_error(self, req_id: Any, exc: BaseException) -> None:
         self.send_frame(
