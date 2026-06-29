@@ -29,7 +29,12 @@ impl BranchingDomainEvaluator {
         xs_continuous_offsets: &[usize],
         nr_samples: usize,
     ) -> Result<Vec<f64>, String> {
-        validate_offsets("xs_discrete_offsets", xs_discrete_offsets, nr_samples, xs_discrete.len())?;
+        validate_offsets(
+            "xs_discrete_offsets",
+            xs_discrete_offsets,
+            nr_samples,
+            xs_discrete.len(),
+        )?;
         validate_offsets(
             "xs_continuous_offsets",
             xs_continuous_offsets,
@@ -39,8 +44,8 @@ impl BranchingDomainEvaluator {
 
         let mut values = Vec::with_capacity(nr_samples);
         for sample_index in 0..nr_samples {
-            let discrete =
-                &xs_discrete[xs_discrete_offsets[sample_index]..xs_discrete_offsets[sample_index + 1]];
+            let discrete = &xs_discrete
+                [xs_discrete_offsets[sample_index]..xs_discrete_offsets[sample_index + 1]];
             let continuous = &xs_continuous
                 [xs_continuous_offsets[sample_index]..xs_continuous_offsets[sample_index + 1]];
             values.push(self.config.scale * branching_domain_value(discrete, continuous)?);
@@ -117,7 +122,10 @@ mod tests {
 
     #[test]
     fn evaluates_all_branch_shapes() {
-        assert_eq!(branching_domain_value(&[0], &[1.0, 2.0, 3.0]).unwrap(), 14.0);
+        assert_eq!(
+            branching_domain_value(&[0], &[1.0, 2.0, 3.0]).unwrap(),
+            14.0
+        );
         assert_eq!(branching_domain_value(&[1, 0], &[4.0]).unwrap(), 26.0);
         assert_eq!(
             branching_domain_value(&[1, 1, 3], &[1.0, 1.0, 1.0, 1.0, 1.0]).unwrap(),
