@@ -60,18 +60,6 @@ class ProtocolIo:
             {"jsonrpc": JSON_RPC_VERSION, "id": req_id, "result": result}, binary
         )
 
-
-def _read_exact(length: int) -> bytes:
-    chunks = []
-    remaining = length
-    while remaining > 0:
-        chunk = sys.stdin.buffer.read(remaining)
-        if not chunk:
-            raise EOFError("worker stdin closed mid-frame")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
     def send_error(self, req_id: Any, exc: BaseException) -> None:
         self.send_frame(
             {
@@ -84,6 +72,18 @@ def _read_exact(length: int) -> bytes:
                 },
             }
         )
+
+
+def _read_exact(length: int) -> bytes:
+    chunks = []
+    remaining = length
+    while remaining > 0:
+        chunk = sys.stdin.buffer.read(remaining)
+        if not chunk:
+            raise EOFError("worker stdin closed mid-frame")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 def fixed_domain_shape(domain: dict[str, Any]) -> tuple[list[int], int]:

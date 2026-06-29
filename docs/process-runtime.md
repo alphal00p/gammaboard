@@ -30,10 +30,11 @@ text encode/parse overhead on the hot path. The JSON envelope describes the
 layout; the receiver splits the block accordingly.
 
 - `eval_batch` request: `i64` `xs_discrete_row_major` then `f64`
-  `xs_continuous_row_major` (lengths from the JSON offsets). Response: the `f64`
-  `values_row_major` block (length `nr_samples * len(components)`).
+  `xs_continuous_row_major` (lengths from the JSON offsets or fixed domain
+  widths). Response: the `f64` `values_row_major` block (length `nr_samples *
+  len(components)`).
 - `produce_latent_batch` response: `i64` discrete, `f64` continuous, `f64`
-  weights (offsets stay in the JSON envelope).
+  weights (lengths from the JSON offsets or fixed domain widths).
 - `ingest_training_values` request: the `f64` training-values block (`nr_values`
   in the JSON envelope).
 
@@ -68,7 +69,7 @@ GammaBoard requires exactly one of `result` or `error`.
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v1",
+  "protocol": "gammaboard-jsonrpc-v2",
   "role": "evaluator",
   "domain": { "continuous": { "dims": 2 } },
   "components": ["value"],
@@ -86,7 +87,12 @@ Return:
 `metadata` is optional and defaults to `{}`. It may contain any JSON-safe
 evaluator-derived information the sampler needs at initialization.
 
-`eval_batch` evaluates a batch in ragged row-major form. The offset arrays have length `nr_samples + 1`; sample `i` uses `row_major[offsets[i]..offsets[i + 1]]`.
+`eval_batch` evaluates a batch in ragged row-major form. When present, the
+offset arrays have length `nr_samples + 1`; sample `i` uses
+`row_major[offsets[i]..offsets[i + 1]]`. An offset array may be omitted only
+when the corresponding width is fixed across the initialized domain. Workers
+must support explicit offsets so domains with varying discrete depth or
+continuous dimensionality remain representable.
 
 ```json
 {
@@ -113,7 +119,7 @@ Process evaluators should use a `kind = "vector"` accumulator with matching `com
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v1",
+  "protocol": "gammaboard-jsonrpc-v2",
   "role": "sampler",
   "domain": { "continuous": { "dims": 2 } },
   "args": {},
@@ -157,6 +163,10 @@ Use `{ "plan": { "kind": "pause" } }` when the sampler cannot produce work yet.
   "weights": [1.0, 1.0]
 }
 ```
+
+The response may omit either offset array when its width is fixed across the
+initialized domain. For a ragged dimension, the corresponding explicit offset
+array is required.
 
 `ingest_training_values` receives one projected training value per sample:
 

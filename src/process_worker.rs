@@ -89,9 +89,9 @@ impl ProcessWorker {
             .write_all(&payload)
             .map_err(|error| format!("failed writing {} frame payload: {error}", self.label))?;
         if !binary.is_empty() {
-            self.stdin
-                .write_all(binary)
-                .map_err(|error| format!("failed writing {} binary payload: {error}", self.label))?;
+            self.stdin.write_all(binary).map_err(|error| {
+                format!("failed writing {} binary payload: {error}", self.label)
+            })?;
         }
         self.stdin
             .flush()
@@ -281,9 +281,12 @@ pub(crate) fn read_le_f64(
     count: usize,
 ) -> Result<(Vec<f64>, usize), String> {
     let end = byte_offset + count * 8;
-    let slice = bytes
-        .get(byte_offset..end)
-        .ok_or_else(|| format!("binary block too short: need {end} bytes, have {}", bytes.len()))?;
+    let slice = bytes.get(byte_offset..end).ok_or_else(|| {
+        format!(
+            "binary block too short: need {end} bytes, have {}",
+            bytes.len()
+        )
+    })?;
     let values = slice
         .chunks_exact(8)
         .map(|chunk| f64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
@@ -299,9 +302,12 @@ pub(crate) fn read_le_i64(
     count: usize,
 ) -> Result<(Vec<i64>, usize), String> {
     let end = byte_offset + count * 8;
-    let slice = bytes
-        .get(byte_offset..end)
-        .ok_or_else(|| format!("binary block too short: need {end} bytes, have {}", bytes.len()))?;
+    let slice = bytes.get(byte_offset..end).ok_or_else(|| {
+        format!(
+            "binary block too short: need {end} bytes, have {}",
+            bytes.len()
+        )
+    })?;
     let values = slice
         .chunks_exact(8)
         .map(|chunk| i64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))

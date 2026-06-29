@@ -216,8 +216,6 @@ class _SamplerWorker:
         weights = np.asarray(batch.weights, dtype=np.float64).reshape((nr_samples,))
         self._validate_sample_batch(xs_discrete, xs_continuous, weights)
         return {
-            "xs_discrete_offsets": [index * discrete_dims for index in range(nr_samples + 1)],
-            "xs_continuous_offsets": [index * continuous_dims for index in range(nr_samples + 1)],
             "__binary__": _encode_batch_binary(xs_discrete, xs_continuous, weights),
         }
 

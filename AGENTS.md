@@ -29,8 +29,9 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Raster geometry uses its `discrete` path to select a domain branch with a
   unique continuous dimensionality; it does not require globally rectangular domains.
 - Process evaluators use `kind = "process_evaluator"` and the
-  `gammaboard-jsonrpc-v1` `eval_batch` method. Requests use ragged row-major
-  coordinate arrays plus offsets; responses use `values_row_major`. Process
+  `gammaboard-jsonrpc-v2` `eval_batch` method. Requests use ragged row-major
+  coordinate arrays; offsets may be omitted only for dimensions fixed across
+  the domain. Responses use `values_row_major`. Process
   evaluator tasks should use a vector accumulator with matching components.
 - Process samplers may expose `discrete_pdf` for batched marginal PDFs over
   discrete subspaces. The live sampler runner probes it during performance

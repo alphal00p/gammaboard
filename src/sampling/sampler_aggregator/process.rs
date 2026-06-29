@@ -300,11 +300,21 @@ impl ProcessSamplerWorker {
         // (and thus the array lengths) come from the JSON envelope.
         let discrete_dims = self.domain.fixed_discrete_depth().unwrap_or(0);
         let continuous_dims = self.domain.fixed_continuous_dims().unwrap_or(0);
-        let discrete_len = offsets_total_len(&response, "xs_discrete_offsets", nr_samples, discrete_dims)?;
-        let continuous_len =
-            offsets_total_len(&response, "xs_continuous_offsets", nr_samples, continuous_dims)?;
-        let xs_discrete_offsets =
-            parse_offsets_or_fixed(&response, "xs_discrete_offsets", nr_samples, discrete_dims, discrete_len)?;
+        let discrete_len =
+            offsets_total_len(&response, "xs_discrete_offsets", nr_samples, discrete_dims)?;
+        let continuous_len = offsets_total_len(
+            &response,
+            "xs_continuous_offsets",
+            nr_samples,
+            continuous_dims,
+        )?;
+        let xs_discrete_offsets = parse_offsets_or_fixed(
+            &response,
+            "xs_discrete_offsets",
+            nr_samples,
+            discrete_dims,
+            discrete_len,
+        )?;
         let xs_continuous_offsets = parse_offsets_or_fixed(
             &response,
             "xs_continuous_offsets",
@@ -316,7 +326,8 @@ impl ProcessSamplerWorker {
             read_le_i64(&binary, 0, discrete_len).map_err(EngineError::engine)?;
         let (xs_continuous_row_major, next) =
             read_le_f64(&binary, next, continuous_len).map_err(EngineError::engine)?;
-        let (weights, _next) = read_le_f64(&binary, next, nr_samples).map_err(EngineError::engine)?;
+        let (weights, _next) =
+            read_le_f64(&binary, next, nr_samples).map_err(EngineError::engine)?;
         for (index, weight) in weights.iter().enumerate() {
             if !weight.is_finite() || *weight <= 0.0 {
                 return Err(EngineError::engine(format!(

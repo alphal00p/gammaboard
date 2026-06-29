@@ -196,6 +196,24 @@ fn ragged_row_major_inputs(batch: &Batch) -> RaggedRowMajorInputs {
     }
 }
 
+fn add_required_offsets(params: &mut Value, domain: &Domain, inputs: &RaggedRowMajorInputs) {
+    let object = params
+        .as_object_mut()
+        .expect("eval_batch params are constructed as an object");
+    if domain.fixed_discrete_depth().is_none() {
+        object.insert(
+            "xs_discrete_offsets".to_string(),
+            serde_json::json!(inputs.xs_discrete_offsets),
+        );
+    }
+    if domain.fixed_continuous_dims().is_none() {
+        object.insert(
+            "xs_continuous_offsets".to_string(),
+            serde_json::json!(inputs.xs_continuous_offsets),
+        );
+    }
+}
+
 struct ProcessRuntimeWorker {
     process: ProcessWorker,
     domain: Domain,
@@ -275,18 +293,14 @@ impl ProcessRuntimeWorker {
         inputs: &RaggedRowMajorInputs,
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
+        let mut params = serde_json::json!({
+            "nr_samples": nr_samples,
+            "components": self.components,
+        });
+        add_required_offsets(&mut params, &self.domain, inputs);
         let (_result, response_binary) = self
             .process
-            .request_with_binary(
-                "eval_batch",
-                serde_json::json!({
-                    "nr_samples": nr_samples,
-                    "components": self.components,
-                    "xs_discrete_offsets": inputs.xs_discrete_offsets,
-                    "xs_continuous_offsets": inputs.xs_continuous_offsets,
-                }),
-                &pack_eval_inputs(inputs),
-            )
+            .request_with_binary("eval_batch", params, &pack_eval_inputs(inputs))
             .map_err(EvalError::eval)?;
         let values = unpack_f64_le(&response_binary, "values")?;
         let expected_len = nr_samples.saturating_mul(self.components.len());
@@ -305,18 +319,14 @@ impl ProcessRuntimeWorker {
         inputs: &RaggedRowMajorInputs,
         nr_samples: usize,
     ) -> Result<(GammaLoopAccumulatorState, Option<Vec<f64>>), EvalError> {
+        let mut params = serde_json::json!({
+            "nr_samples": nr_samples,
+            "accumulator": "gammaloop",
+        });
+        add_required_offsets(&mut params, &self.domain, inputs);
         let (response, _response_binary) = self
             .process
-            .request_with_binary(
-                "eval_batch",
-                serde_json::json!({
-                    "nr_samples": nr_samples,
-                    "accumulator": "gammaloop",
-                    "xs_discrete_offsets": inputs.xs_discrete_offsets,
-                    "xs_continuous_offsets": inputs.xs_continuous_offsets,
-                }),
-                &pack_eval_inputs(inputs),
-            )
+            .request_with_binary("eval_batch", params, &pack_eval_inputs(inputs))
             .map_err(EvalError::eval)?;
         let state: GammaLoopAccumulatorState = serde_json::from_value(
             response
@@ -376,6 +386,7 @@ mod tests {
     use super::{
         ProcessAccumulatorKind, ProcessEvaluatorParams, ProcessRuntimeWorker, RaggedRowMajorInputs,
     };
+    use crate::utils::domain::Domain;
     use serde_json::json;
     use std::error::Error;
     use std::time::Instant;
@@ -457,6 +468,43 @@ while True:
         let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
         assert_eq!(super::unpack_f64_le(&bytes, "values").unwrap(), values);
         assert!(super::unpack_f64_le(&[0_u8; 7], "values").is_err());
+    }
+
+    #[test]
+    fn eval_offsets_are_omitted_only_for_fixed_domain_dimensions() {
+        let inputs = RaggedRowMajorInputs {
+            xs_discrete_row_major: vec![0, 1, 1],
+            xs_discrete_offsets: vec![0, 1, 3],
+            xs_continuous_row_major: vec![0.5, 1.5, 2.5],
+            xs_continuous_offsets: vec![0, 1, 3],
+        };
+
+        let mut fixed_params = json!({});
+        super::add_required_offsets(&mut fixed_params, &Domain::rectangular(2, 2), &inputs);
+        assert_eq!(fixed_params, json!({}));
+
+        let ragged_domain = Domain::discrete(
+            None,
+            [
+                crate::utils::domain::DomainBranch {
+                    index: 0,
+                    domain: Box::new(Domain::continuous(1)),
+                },
+                crate::utils::domain::DomainBranch {
+                    index: 1,
+                    domain: Box::new(Domain::rectangular(2, 1)),
+                },
+            ],
+        );
+        let mut ragged_params = json!({});
+        super::add_required_offsets(&mut ragged_params, &ragged_domain, &inputs);
+        assert_eq!(
+            ragged_params,
+            json!({
+                "xs_discrete_offsets": [0, 1, 3],
+                "xs_continuous_offsets": [0, 1, 3],
+            })
+        );
     }
 
     #[test]
