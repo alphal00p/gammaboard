@@ -53,7 +53,7 @@ reverse-proxy mount below a URL path instead of at `/`.
 - The node supervisor leader advances task state and controller tasks in the control plane; sampler/evaluator assignments are reserved for compute work.
 - Run names are human-facing and not unique. Ambiguous CLI name references fail.
 - Node identity is a human-facing `name` plus a live-process `uuid`.
-- Process evaluators, samplers, batch transforms, and materializers are external commands speaking `gammaboard-jsonrpc-v1`.
+- Process evaluators, samplers, batch transforms, and materializers are external commands speaking `gammaboard-jsonrpc-v2`.
 
 ## Core Ideas
 

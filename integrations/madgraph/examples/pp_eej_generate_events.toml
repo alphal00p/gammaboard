@@ -1,0 +1,40 @@
+# Complete native MG7/MadSpace event generation exposed through the standard
+# process-evaluator protocol and GammaLoop observable bundle.
+#
+# This reuses the state generated for pp_eej_madspace.toml. Native generation
+# settings remain in:
+#   integrations/madgraph/artifacts/pp_eej/mg7_state/Cards/run_card.toml
+#
+# Configure MG7 histograms there, for example:
+#
+#   [histograms]
+#   jet_1-pt = { min = 0.0, max = 1000.0, bin_count = 50 }
+#   lepton_1-pt = { min = 0.0, max = 500.0, bin_count = 50 }
+#   lepton_1-lepton_2-sum-mass = { min = 0.0, max = 1000.0, bin_count = 50 }
+#
+# Reinstall integrations/madgraph after changing its Python source:
+#   integrations/madgraph/.venv/bin/pip install --force-reinstall integrations/madgraph
+
+name = "madgraph-pp-eej-native-events"
+
+[evaluator]
+kind = "process_evaluator"
+command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-event-evaluator"]
+cwd = "$resources/.."
+domain = { continuous = { dims = 1 } }
+accumulator = "gammaloop"
+
+[evaluator.args]
+state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
+python = "/usr/bin/python3"
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "gammaloop"
+
+[[task_queue]]
+name = "generate-events"
+kind = "sample"
+stop_condition = { max_samples = 1 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }

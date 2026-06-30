@@ -56,6 +56,7 @@ components = ["weight"]
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
+python = "/usr/bin/python3" # interpreter with MG7's lhapdf module
 madgraph_root = "/path/to/MadGraph7"   # omit if MG7 is already on sys.path
 subprocess_index = 0
 flavor_index = 0
@@ -99,3 +100,44 @@ python /tmp/MadGraph7/bin/mg5_aMC /tmp/pp_eej_mg7.cmd
 - [`experiments/gammaloop_vs_madgraph`](experiments/gammaloop_vs_madgraph/README.md):
   LO e+ e- -> d d~ cross section checked against GammaLoop, with run configs for
   both engines.
+
+## Native Event Generation
+
+The `madgraph-gammaboard-event-evaluator` process evaluator runs an existing
+state's native `bin/generate_events -f` command. MG7 remains responsible for
+survey, adaptation, multichannel generation, unweighting, channel combination,
+and event files.
+
+The evaluator reads the new run's `Events/<run>_NN/info.json` and returns:
+
+- the MG7 cross-section estimate and uncertainty;
+- generated and unweighted event counts plus native timings;
+- every histogram configured in the state's `Cards/run_card.toml`;
+- a GammaLoop-compatible observable bundle rendered by the existing backend.
+
+Use it with `accumulator = "gammaloop"` and exactly one trigger sample:
+
+```toml
+[evaluator]
+kind = "process_evaluator"
+command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-event-evaluator"]
+cwd = "$resources/.."
+domain = { continuous = { dims = 1 } }
+accumulator = "gammaloop"
+
+[evaluator.args]
+state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
+
+[[task_queue]]
+kind = "set_accumulator"
+accumulator = "gammaloop"
+
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 1 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+```
+
+[`examples/pp_eej_generate_events.toml`](examples/pp_eej_generate_events.toml)
+reuses the same local generated state as the direct MadSpace evaluator example.
+Event files remain under the state directory and are not stored in PostgreSQL.
