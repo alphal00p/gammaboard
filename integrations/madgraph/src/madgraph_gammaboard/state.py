@@ -17,6 +17,7 @@ class MadSpaceState:
     runtime: Any
     subprocess_index: int
     flavor_index: int
+    external_discrete_dim: int = 0
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -41,9 +42,11 @@ class MadSpaceState:
         state_dir = Path(state_path).expanduser().resolve()
         if not state_dir.is_dir():
             raise ValueError(f"MadGraph state_path does not exist: {state_dir}")
+
         if madgraph_root:
             root = Path(madgraph_root).expanduser().resolve()
             _prepend_sys_path(root)
+
             madspace_install = root / "madspace" / "install"
             if madspace_install.is_dir():
                 _prepend_sys_path(madspace_install)
@@ -51,10 +54,11 @@ class MadSpaceState:
         _ensure_lhapdf_data_path()
 
         with _pushd(state_dir):
-            from madgraph.iolibs.template_files.mg7.madevent import MadgraphProcess
             import madspace as ms
+            from madgraph.iolibs.template_files.mg7.madevent import MadgraphProcess
 
             process = MadgraphProcess()
+
             if subprocess_index < 0 or subprocess_index >= len(process.subprocesses):
                 raise ValueError(
                     f"subprocess_index={subprocess_index} is out of range for "
@@ -62,125 +66,115 @@ class MadSpaceState:
                 )
 
             subprocess = process.subprocesses[subprocess_index]
+
             if flavor_index < 0 or flavor_index >= len(subprocess.meta["flavors"]):
                 raise ValueError(
                     f"flavor_index={flavor_index} is out of range for "
                     f"{len(subprocess.meta['flavors'])} flavor option(s)"
                 )
-            mapping = _build_flat_phase_space_mapping(process, subprocess, ms)
-            cross_section = _build_differential_cross_section(
-                process, subprocess, flavor_index, ms
+
+            original_flavors = subprocess.meta["flavors"]
+            selected_flavor = original_flavors[flavor_index]
+
+            try:
+                subprocess.meta["flavors"] = [selected_flavor]
+
+                phasespace = subprocess.build_flat_phasespace()
+                integrands = subprocess.build_integrands(
+                    phasespace,
+                    madnis_training=False,
+                    drop_cuts_and_rescale=False,
+                )
+            finally:
+                subprocess.meta["flavors"] = original_flavors
+
+            if not integrands:
+                raise RuntimeError("MadSpace build_integrands returned no integrands")
+
+            _initialize_madspace_globals(process, subprocess)
+
+            integrand = integrands[0]
+            mapping = integrand.mapping()
+            diff_xs = integrand.diff_xs()
+            random_dim = int(mapping.random_dim())
+
+            if not getattr(process, "contexts", None):
+                raise RuntimeError("MadGraph process has no MadSpace contexts")
+
+            batch = ms.BatchSize("batch_size")
+            input_types = ms.NamedTypes(
+                [
+                    ("xs", ms.Type(ms.DataType.float, batch, [random_dim])),
+                    ("flavor", ms.Type(ms.DataType.int, batch, [])),
+                    ("pdf_id", ms.Type(ms.DataType.int, batch, [])),
+                    ("pdf1", ms.Type(ms.DataType.float, batch, [])),
+                    ("pdf2", ms.Type(ms.DataType.float, batch, [])),
+                    ("alpha_s", ms.Type(ms.DataType.float, batch, [])),
+                ]
             )
-            runtime, random_dim = _build_runtime(
-                process, subprocess, flavor_index, mapping, cross_section, ms
+            output_types = ms.NamedTypes(
+                [
+                    ("weight", ms.Type(ms.DataType.float, batch, [])),
+                ]
             )
+            fb = ms.FunctionBuilder(input_types, output_types)
+
+            mapping_out = mapping.build_forward(fb, [fb.input(0)], [])
+            dxs_in = ms.NamedValues(
+                [
+                    ("momenta", mapping_out["momenta"]),
+                    ("flavor", fb.input(1)),
+                    ("x1", mapping_out["x1"]),
+                    ("x2", mapping_out["x2"]),
+                    ("pdf_id", fb.input(2)),
+                    ("pdf1", fb.input(3)),
+                    ("pdf2", fb.input(4)),
+                    ("alpha_s", fb.input(5)),
+                ]
+            )
+            dxs_out = diff_xs.build_function(fb, dxs_in)
+            fb.output(0, fb.mul(mapping_out["det"], dxs_out["matrix_element"]))
+
+            runtime = ms.FunctionRuntime(fb.function(), process.contexts[0])
+
             return cls(
                 random_dim=random_dim,
-                mapping_random_dim=int(mapping.random_dim()),
+                mapping_random_dim=random_dim,
                 runtime=runtime,
                 subprocess_index=subprocess_index,
                 flavor_index=flavor_index,
+                external_discrete_dim=0,
             )
 
     def evaluate(self, xs: np.ndarray) -> np.ndarray:
         xs = np.asarray(xs, dtype=np.float64)
+
         if xs.ndim != 2 or xs.shape[1] != self.random_dim:
-            raise ValueError(f"MadSpace expects xs shape (n, {self.random_dim}), got {xs.shape}")
-        outputs = self.runtime.call([np.ascontiguousarray(xs)])
-        if len(outputs) != 1:
             raise ValueError(
-                f"expected one MadSpace output named 'weight', got {len(outputs)}"
+                f"MadSpace expects xs shape (n, {self.random_dim}), got {xs.shape}"
             )
-        return np.asarray(np.from_dlpack(outputs[0]), dtype=np.float64).reshape(
-            (xs.shape[0],)
-        )
 
+        n = xs.shape[0]
+        xs = np.ascontiguousarray(xs, dtype=np.float64)
 
-def _build_flat_phase_space_mapping(process: Any, subprocess: Any, ms: Any) -> Any:
-    return ms.PhaseSpaceMapping(
-        subprocess.incoming_masses + subprocess.outgoing_masses,
-        process.e_cm,
-        mode=subprocess.t_channel_mode(process.run_card["phasespace"]["flat_mode"]),
-        cuts=subprocess.cuts,
-        leptonic=process.leptonic,
-    )
+        flavor = np.zeros((n,), dtype=np.int32)
+        pdf_id = np.zeros((n,), dtype=np.int32)
 
+        # Bare phase-space × matrix/cross-section mode.
+        # Replace these with real PDF evaluations if you want physical pp luminosity.
+        pdf1 = np.ones((n,), dtype=np.float64)
+        pdf2 = np.ones((n,), dtype=np.float64)
 
-def _build_differential_cross_section(
-    process: Any, subprocess: Any, flavor_index: int, ms: Any
-) -> tuple[Any, int]:
-    flavor = subprocess.meta["flavors"][flavor_index]
-    flavors = [flavor["options"][0]]
-    if subprocess.matrix_element:
-        matrix_element = ms.MatrixElement(
-            subprocess.matrix_element,
-            ms.Integrand.matrix_element_inputs,
-            ms.Integrand.matrix_element_outputs,
-            True,
-        )
-    else:
-        matrix_element = ms.MatrixElement(
-            0xBADCAFE,
-            subprocess.particle_count,
-            ms.Integrand.matrix_element_inputs,
-            ms.Integrand.matrix_element_outputs,
-            subprocess.meta["diagram_count"],
-            True,
-        )
-    pdf_grid = None if len(flavors) > 1 or process.leptonic else process.pdf_grid
-    return ms.DifferentialCrossSection(
-        matrix_element=matrix_element,
-        cm_energy=process.e_cm,
-        running_coupling=process.running_coupling,
-        energy_scale=subprocess.scale,
-        pid_options=flavors,
-        has_pdf1=not process.leptonic,
-        has_pdf2=not process.leptonic,
-        pdf_grid1=pdf_grid,
-        pdf_grid2=pdf_grid,
-        has_mirror=subprocess.meta["has_mirror_process"],
-        input_momentum_fraction=True,
-    )
+        # Fixed alpha_s test value. Replace with running alpha_s if desired.
+        alpha_s = np.full((n,), 0.118, dtype=np.float64)
 
+        outputs = self.runtime(xs, flavor, pdf_id, pdf1, pdf2, alpha_s)
 
-def _build_runtime(
-    process: Any,
-    subprocess: Any,
-    flavor_index: int,
-    mapping: Any,
-    cross_section: Any,
-    ms: Any,
-) -> Any:
-    flavor = subprocess.meta["flavors"][flavor_index]
-    flavor_remap = [flavor["index"]]
-    flavor_factors = [1]
-    # MG7 always builds process.pdf_grid from beam.pdf, even for leptonic beams.
-    # Passing a hadronic grid here makes the Integrand look up the lepton beam
-    # PIDs (e.g. PID 11) in a proton PDF and fail. Drop the grid for leptonic
-    # beams, mirroring _build_differential_cross_section above.
-    pdf_grid = None if process.leptonic else process.pdf_grid
-    integrand = ms.Integrand(
-        mapping,
-        cross_section,
-        None,
-        None,
-        None,
-        pdf_grid,
-        subprocess.scale,
-        None,
-        None,
-        None,
-        [0] * subprocess.meta["diagram_count"],
-        1,
-        0,
-        [0],
-        [],
-        flavor_remap,
-        flavor_factors,
-    )
-    return ms.FunctionRuntime(integrand.function(), process.contexts[0]), int(
-        integrand.random_dim()
-    )
+        if not isinstance(outputs, tuple):
+            return np.asarray(outputs, dtype=np.float64).reshape((n,))
+
+        weight = outputs[0]
+        return np.asarray(weight, dtype=np.float64).reshape((n,))
 
 
 _LHAPDF_SEARCH_PATHS = [
@@ -212,3 +206,35 @@ def _pushd(path: Path):
         yield
     finally:
         os.chdir(previous)
+
+
+def _initialize_madspace_globals(process: Any, subprocess: Any) -> None:
+    contexts = list(getattr(process, "contexts", []) or [])
+
+    single_context = getattr(process, "context", None)
+    if single_context is not None and single_context not in contexts:
+        contexts.append(single_context)
+
+    objects = [
+        ("alphas_grid", getattr(process, "alphas_grid", None)),
+        ("pdf_grid", getattr(process, "pdf_grid", None)),
+        ("running_coupling", getattr(process, "running_coupling", None)),
+        ("scale", getattr(subprocess, "scale", None)),
+    ]
+
+    for name, obj in objects:
+        if obj is None:
+            continue
+
+        init = getattr(obj, "initialize_globals", None)
+        if init is None:
+            continue
+
+        for context in contexts:
+            try:
+                init(context)
+            except ValueError as exc:
+                msg = str(exc)
+                if "already contains a global named" in msg:
+                    continue
+                raise

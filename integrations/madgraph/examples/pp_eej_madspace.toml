@@ -1,9 +1,11 @@
 # MadGraph7 p p -> e+ e- j (Drell-Yan + jet) direct MadSpace demo.
 #
-# The wrapper intentionally uses only the flat PhaseSpaceMapping plus
-# DifferentialCrossSection from MG7's madevent.py. It does not use MG7's
-# build_integrands helper, Vegas mappings, adaptive mappings, discrete channel
-# sampling, or multichannel phase-space machinery.
+# The wrapper uses MG7's generated flat PhaseSpace builder and build_integrands
+# helper from madevent.py. This keeps the Python wrapper aligned with the
+# current MadSpace API and lets MG7 construct the correct channel/flavour
+# bookkeeping internally.
+#
+# It still uses the flat phase-space mode, not the multichannel/MADNIS path.
 #
 # One-time wrapper setup:
 #
@@ -51,9 +53,9 @@
 #   gammaboard run add integrations/madgraph/examples/pp_eej_madspace.toml \
 #     --replace continuous_dims=<random_dim>
 #
-# For the generated pp_eej artifact in this repo, the current value is 8.
+# For the generated pp_eej artifact in this repo, the current value is 7.
 
-replacements = { run_name = "madgraph_pp_eej_madspace", samples = 1000000, continuous_dims = 8 }
+replacements = { run_name = "madgraph_pp_eej_madspace", samples = 1000000, continuous_dims = 7 }
 
 name = '$(run_name:"madgraph_pp_eej_madspace")'
 
@@ -61,7 +63,7 @@ name = '$(run_name:"madgraph_pp_eej_madspace")'
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = "$(continuous_dims:8)" } }
+domain = { continuous = { dims = "$(continuous_dims:7)" } }
 components = ["weight"]
 
 [evaluator.args]
