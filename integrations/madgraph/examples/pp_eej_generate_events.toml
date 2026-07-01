@@ -5,6 +5,16 @@
 # settings remain in:
 #   integrations/madgraph/artifacts/pp_eej/mg7_state/Cards/run_card.toml
 #
+# The state, runtime checkout, and MadSpace build must all use MG7 revision:
+#   920d224232b24a3a736443986e2040369929298f
+#
+# Reproduce the checkout and MadSpace installation from the repository root:
+#
+#   git clone https://github.com/MadGraphTeam/MadGraph7.git ../MadGraph7
+#   git -C ../MadGraph7 checkout --detach 920d224232b24a3a736443986e2040369929298f
+#   /usr/bin/python3 ../MadGraph7/madspace/install.py \
+#     --source --no-cuda --no-hip --no-simd --no-debug
+#
 # Configure MG7 histograms there, for example:
 #
 #   [histograms]

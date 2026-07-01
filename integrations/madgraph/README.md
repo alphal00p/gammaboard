@@ -8,39 +8,47 @@ The wrapper is intentionally narrow. For one selected MG7 subprocess it builds:
 2. a `madspace.DifferentialCrossSection`
 3. the minimal MadSpace callable needed to evaluate their product on batches
 
-It does not use MG7's `build_integrands` helper, Vegas/adaptive mappings,
-discrete samplers, channel weights, or multichannel phase-space machinery.
+It uses MG7's `build_integrands` helper to construct those objects, but bypasses
+the resulting integrand's sampler, adaptive mapping, discrete samplers, channel
+weights, and multichannel phase-space machinery.
 
-## Install
+## Reproducible Install
+
+The examples are pinned to MadGraph7 commit
+`920d224232b24a3a736443986e2040369929298f` (2026-06-28). MadSpace is part of
+that repository and must be built from the same checkout. Do not install the
+released MadSpace wheel or run `pip install .` in `madspace/`; either can select
+different build settings or an ABI that does not match MG7.
+
+Run these commands from the GammaBoard repository root:
 
 ```bash
-cd integrations/madgraph
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install --force-reinstall .
+git clone https://github.com/MadGraphTeam/MadGraph7.git ../MadGraph7
+git -C ../MadGraph7 checkout --detach 920d224232b24a3a736443986e2040369929298f
+
+/usr/bin/python3 ../MadGraph7/madspace/install.py \
+  --source --no-cuda --no-hip --no-simd --no-debug
+
+/usr/bin/python3 -m venv integrations/madgraph/.venv
+integrations/madgraph/.venv/bin/python -m pip install --upgrade pip
+integrations/madgraph/.venv/bin/python -m pip install --force-reinstall \
+  integrations/madgraph
 ```
 
 MadGraph7 itself is not a pip dependency. Provide its root path via
 `madgraph_root` in the evaluator config. The wrapper adds both
 `<madgraph_root>` and `<madgraph_root>/madspace/install` to `sys.path`.
 
-MadSpace must be installed into that MG7 instance (`python
-<madgraph_root>/madspace/install.py --source --no-cuda --no-hip --no-simd
---no-debug`; `--bin` pulls the released wheel but may lag the MG7 source).
 MadGraph7 moves fast: a generated `mg7_state` is tied to the MG7 version that
-wrote it (run-card schema and MadSpace ABI), so regenerate states with the MG7
-on the node that runs them, and expect reruns to occasionally need wrapper
-updates.
+wrote it. Generate the state with the pinned checkout and use that same checkout
+and its `madspace/install` directory at runtime.
 
 ## Runtime Flow
 
 GammaBoard sends batches of points in `[0, 1]^N`, where `N` is the callable
-MadSpace dimension reported by `MadSpaceState.random_dim`. This can be larger
-than `PhaseSpaceMapping.random_dim()` because MadSpace may add direct
-non-adaptive choice variables around the mapping/cross-section pair. The wrapper
-maps those points to phase space, evaluates the differential cross section, and
-returns one component: `weight`.
+dimension reported by `MadSpaceState.random_dim` and equals
+`PhaseSpaceMapping.random_dim()`. The wrapper maps those points to phase space,
+evaluates the differential cross section, and returns one component: `weight`.
 
 Use a vector accumulator with component `weight`.
 
@@ -51,7 +59,7 @@ Use a vector accumulator with component `weight`.
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = 8 } }   # must equal MadSpaceState.random_dim
+domain = { continuous = { dims = 7 } }   # must equal MadSpaceState.random_dim
 components = ["weight"]
 
 [evaluator.args]
@@ -82,8 +90,9 @@ Set `domain.continuous.dims` in the run config to `state.random_dim`.
 
 ## Generating a MG7 State
 
+After completing the pinned install above, run:
+
 ```bash
-git clone https://github.com/MadGraphTeam/MadGraph7.git /tmp/MadGraph7
 cd /path/to/gammaboard   # the gammaboard repo root
 mkdir -p integrations/madgraph/artifacts/pp_eej
 cat > /tmp/pp_eej_mg7.cmd <<'EOF'
@@ -92,8 +101,10 @@ generate p p > e+ e- j
 output integrations/madgraph/artifacts/pp_eej/mg7_state -f
 quit
 EOF
-python /tmp/MadGraph7/bin/mg5_aMC /tmp/pp_eej_mg7.cmd
+/usr/bin/python3 ../MadGraph7/bin/mg5_aMC /tmp/pp_eej_mg7.cmd
 ```
+
+For this pinned revision and process, `random_dim` is `7`.
 
 ## Experiments
 
