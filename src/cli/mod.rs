@@ -64,6 +64,11 @@ enum Command {
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
+    if cli.postgres_public {
+        eprintln!(
+            "WARNING: --postgres-public exposes PostgreSQL on 0.0.0.0/0 with trust authentication; any host that can reach the port can connect without a password"
+        );
+    }
     let runtime = RuntimeContext::load(
         &cli.runtime_config,
         RuntimeOverrides {

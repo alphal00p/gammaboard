@@ -2,6 +2,23 @@
 name = "gammaboard"
 version = "0.2.0"
 edition = "2024"
+description = "Distributed numerical integration control plane and dashboard"
+license = "MIT"
+repository = "https://github.com/alphal00p/gammaboard"
+homepage = "https://github.com/alphal00p/gammaboard"
+readme = "README.md"
+keywords = ["integration", "monte-carlo", "distributed", "scientific"]
+categories = ["science", "command-line-utilities"]
+include = [
+    "/src/**",
+    "/migrations/**",
+    "/resources/templates/**",
+    "/ops/ubelix/resources/templates/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+]
 
 [features]
 default = ["gammaloop"]

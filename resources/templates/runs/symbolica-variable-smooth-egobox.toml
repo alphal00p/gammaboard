@@ -4,6 +4,8 @@
 #
 #   resources/artifacts/variable_theta.so
 #
+# Build it for the current host with `just symbolica-variable-theta`.
+#
 # The natural numerical hyperparameters are inferred from triangler's
 # `IntegrandBuilder`/`TriangleIntegrandContext`:
 #

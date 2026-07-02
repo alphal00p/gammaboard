@@ -9,6 +9,10 @@
 #
 #   resources/artifacts/variable_theta.so
 #
+# Build the checked-in generated C++ source for the current host with:
+#
+#   just symbolica-variable-theta
+#
 # The compiled evaluator input order is:
 #
 #   [pi, a, b, c, subtraction_width, max_imag_root_part, max_eta_min, mask_width,

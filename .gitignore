@@ -1,4 +1,6 @@
 __pycache__/
+process_api/python/build/
+process_api/python/src/*.egg-info/
 /resources/*
 !/resources/templates/
 !/resources/templates/**

@@ -278,6 +278,35 @@ impl ServerConfig {
             .map(|host| format!("http://{host}:{port}"))
             .collect()
     }
+
+    pub fn security_warnings(&self) -> Vec<String> {
+        let remotely_accessible =
+            !self.api_host.is_loopback() || !host_is_loopback(&self.frontend.host);
+        if !remotely_accessible {
+            return Vec::new();
+        }
+
+        let mut warnings = Vec::new();
+        if self.auth.is_none() {
+            warnings.push(
+                "dashboard authentication is disabled on a non-loopback deployment; anyone who can reach the dashboard can perform administrative actions"
+                    .to_string(),
+            );
+        } else if !self.secure_cookie {
+            warnings.push(
+                "dashboard authentication uses a non-secure session cookie on a non-loopback deployment; use HTTPS and set secure_cookie = true to protect the cookie in transit"
+                    .to_string(),
+            );
+        }
+        warnings
+    }
+}
+
+fn host_is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn default_advertise_host(host: &str) -> String {
@@ -2167,6 +2196,34 @@ async fn create_and_maybe_resolve_node_launch_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn security_warnings_keep_passwordless_loopback_deployments_quiet() {
+        let mut config: ServerConfig =
+            toml::from_str(DEFAULT_SERVER_CONFIG_TOML).expect("default server config");
+        config.server_config_path = PathBuf::new();
+        assert!(config.security_warnings().is_empty());
+    }
+
+    #[test]
+    fn security_warnings_report_insecure_remote_deployments() {
+        let mut config: ServerConfig =
+            toml::from_str(DEFAULT_SERVER_CONFIG_TOML).expect("default server config");
+        config.server_config_path = PathBuf::new();
+        config.frontend.host = "0.0.0.0".to_string();
+
+        let warnings = config.security_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("authentication is disabled"));
+
+        config.auth = Some(ServerAuthConfig {
+            admin_password_hash: "public-development-placeholder".to_string(),
+            session_secret: "public-development-placeholder".to_string(),
+        });
+        let warnings = config.security_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("non-secure session cookie"));
+    }
 
     #[test]
     fn resolve_node_launch_groups_expands_typed_top_level_replacements() {

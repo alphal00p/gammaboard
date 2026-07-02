@@ -28,6 +28,9 @@ pub async fn run_server(
         config.api_port = api_port;
     }
     config.allowed_origins.extend(args.allowed_origins);
+    for warning in config.security_warnings() {
+        eprintln!("WARNING: {warning}");
+    }
     let bind = config.bind_addr();
     let span = tracing::span!(
         tracing::Level::TRACE,

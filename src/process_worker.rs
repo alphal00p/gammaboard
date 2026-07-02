@@ -266,13 +266,6 @@ pub(crate) fn extend_le_f64(out: &mut Vec<u8>, values: &[f64]) {
     }
 }
 
-/// Append `values` as little-endian `i64` bytes to `out`.
-pub(crate) fn extend_le_i64(out: &mut Vec<u8>, values: &[i64]) {
-    for value in values {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-}
-
 /// Read `count` little-endian `f64`s from `bytes` starting at `byte_offset`,
 /// returning the values and the next byte offset.
 pub(crate) fn read_le_f64(

@@ -1,6 +1,7 @@
 # Shared CLI/runtime settings used by all commands.
 # Keep deploy and server host/auth settings out of this file.
 [database]
+# Public development credential for the loopback-only managed Postgres.
 url = "postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:5400/gammaboard_db"
 
 [tracing]

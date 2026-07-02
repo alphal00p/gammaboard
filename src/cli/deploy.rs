@@ -56,6 +56,9 @@ async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()>
     server_config
         .allowed_origins
         .extend(args.allowed_origins.clone());
+    for warning in server_config.security_warnings() {
+        eprintln!("WARNING: {warning}");
+    }
     preflight_deploy_ports(&server_config)?;
     validate_frontend_build(&server_config)?;
 

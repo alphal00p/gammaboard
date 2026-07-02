@@ -1,11 +1,20 @@
 test-e2e:
     cargo test -q --test full_stack_cli -- --ignored
 
-# Build optional process-runtime artifacts that are intentionally not checked in.
-process-artifacts: process-rust-breit-wigner-sif
+# Build optional runtime artifacts that are intentionally not checked in.
+process-artifacts: process-rust-breit-wigner-sif symbolica-variable-theta
 
 process-rust-breit-wigner-sif:
     cd process_api/examples/rust_breit_wigner_evaluator && apptainer build runtime.sif apptainer.def
+
+symbolica-variable-theta:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p resources/artifacts
+    "${CXX:-c++}" \
+        -shared -O3 -fPIC -ffast-math -funsafe-math-optimizations \
+        -o resources/artifacts/variable_theta.so \
+        resources/artifacts/variable_theta.cpp
 
 # Build optional artifacts, create every bundled example run, and start two local workers for each run.
 start-example-runs: process-artifacts

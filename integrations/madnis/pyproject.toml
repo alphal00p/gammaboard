@@ -4,13 +4,28 @@ requires = ["setuptools>=61.0"]
 [project]
 name = "madnis_gammaboard_api"
 version = "0.1.0"
+description = "MADNIS process sampler integration for GammaBoard"
+readme = "README.md"
 requires-python = ">=3.12,<3.14"
 authors = [ { name = "Nic Fink", email = "nic.fink@students.unibe.ch" } ]
+license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 
 dependencies = [
     "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python",
     "madnis @ git+https://github.com/madgraph-ml/madnis.git@main",
 ]
+
+[project.urls]
+Homepage = "https://github.com/alphal00p/gammaboard"
+Repository = "https://github.com/alphal00p/gammaboard"
+Issues = "https://github.com/alphal00p/gammaboard/issues"
 
 [project.scripts]
 madnis-gammaboard-sampler = "run_sampler:main"

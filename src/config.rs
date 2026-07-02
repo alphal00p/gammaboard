@@ -167,6 +167,7 @@ pub fn read_toml_with_default_fallback(
 }
 
 fn default_database_url() -> String {
+    // Public development credential for the loopback-only managed Postgres.
     "postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:5400/gammaboard_db"
         .to_string()
 }
