@@ -1,4 +1,7 @@
 # Symbolica precompiled evaluator mass scan.
+# Requires: a C++ compiler and the locally built variable_theta.so below.
+# Scale: 21 mass points; reduce replacements for a quick test.
+# Run: ./gammaboard run add resources/templates/runs/symbolica-variable-smooth-compiled.toml
 #
 # This expects a Symbolica shared library exported with function name
 # `variable_theta`, for example from:

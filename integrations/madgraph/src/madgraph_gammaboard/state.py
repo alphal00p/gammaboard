@@ -57,7 +57,13 @@ class MadSpaceState:
             import madspace as ms
             from madgraph.iolibs.template_files.mg7.madevent import MadgraphProcess
 
-            process = MadgraphProcess()
+            try:
+                process = MadgraphProcess()
+            except Exception as error:
+                hint = _madgraph_setup_hint(error)
+                if hint is None:
+                    raise
+                raise RuntimeError(f"{error}\n{hint}") from error
 
             if subprocess_index < 0 or subprocess_index >= len(process.subprocesses):
                 raise ValueError(
@@ -190,6 +196,38 @@ def _ensure_lhapdf_data_path() -> None:
         if Path(candidate).is_dir():
             os.environ["LHAPDF_DATA_PATH"] = candidate
             return
+
+
+def _madgraph_setup_hint(error: Exception) -> str | None:
+    message = str(error)
+    if "Can't load lhapdf module" in message:
+        return (
+            "Set LHAPDF_DATA_PATH to a user-writable directory containing the "
+            "PDF set selected by Cards/run_card.toml, for example "
+            "$HOME/.local/share/LHAPDF. Installing PDF data does not require sudo."
+        )
+    if "cut_efficiency_threshold" in message:
+        return (
+            "The MadSpace binary does not match this MadGraph checkout. Rebuild "
+            "it with `python <madgraph_root>/madspace/install.py --source "
+            "--no-cuda --no-hip --no-simd --no-debug`."
+        )
+    if isinstance(error, KeyError) and "mirror" in message:
+        return (
+            "The generated MG7 state uses an older schema. Regenerate it with "
+            "the pinned MadGraph7 checkout documented in integrations/madgraph/README.md."
+        )
+    if "/bin/bash: No such file or directory" in message:
+        return (
+            "MG7 invoked a generated makefile with /bin/bash. Start GammaBoard "
+            "from `nix develop`, which supplies a MAKEFLAGS shell override."
+        )
+    if "compilation Error" in message:
+        return (
+            "MG7 could not compile its matrix element. Start from `nix develop` "
+            "and verify that make, g++, and gfortran are available."
+        )
+    return None
 
 
 def _prepend_sys_path(path: Path) -> None:

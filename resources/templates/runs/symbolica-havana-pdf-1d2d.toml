@@ -1,4 +1,7 @@
 # Symbolica + Havana training, then PDF adaptation plots in 2D and 1D.
+# Requires: a working Symbolica runtime license.
+# Scale: 200k training samples plus 2D/1D PDF projections; typically minutes.
+# Run: ./gammaboard run add resources/templates/runs/symbolica-havana-pdf-1d2d.toml
 # Asymmetric 3D integrand sampled on [0,1]^3:
 # f(x,y,z) = 1 + x + 2*y^2 + 3*z^3 + x*y + 2*y*z + 3*x*z^2
 # Integral = 25/6.

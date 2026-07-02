@@ -95,7 +95,8 @@ class MadGraphEventEvaluator(Evaluator):
                 hint = (
                     "\nThe bundled MadSpace extension is stale. Rebuild it from the "
                     "current MadGraph source with: "
-                    "/usr/bin/python3 madspace/install.py --source"
+                    "python madspace/install.py --source --no-cuda --no-hip "
+                    "--no-simd --no-debug"
                 )
             raise RuntimeError(
                 f"native MadGraph event generation exited with code {result.returncode}"

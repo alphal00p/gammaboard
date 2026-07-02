@@ -1,4 +1,7 @@
 # Hyperparameter tuning showcase: random search, grid search, and variance objectives.
+# Requires: a working Symbolica runtime license.
+# Scale: dozens of child runs; this is a tuning showcase, not a smoke test.
+# Run: ./gammaboard run add resources/templates/runs/hyperparameter-tuning-symbolica.toml
 #
 # Each trial integrates a 2D Symbolica family with the same exact central value:
 #

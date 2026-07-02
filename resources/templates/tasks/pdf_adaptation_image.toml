@@ -1,4 +1,7 @@
 # Train a Havana sampler, then rasterize its PDF.
+# Requires: an existing run with a compatible evaluator and domain.
+# Scale: 100k training samples plus a 128x128 image.
+# Run: ./gammaboard run task add <RUN> resources/templates/tasks/pdf_adaptation_image.toml
 
 replacements = { train_samples = 100_000, havana_bins = 64, samples_for_update = 16384, image_bins = 128 }
 

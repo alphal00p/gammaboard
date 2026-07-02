@@ -10,8 +10,13 @@ process-rust-breit-wigner-sif:
 symbolica-variable-theta:
     #!/usr/bin/env bash
     set -euo pipefail
+    compiler="${CXX:-c++}"
+    if ! command -v "${compiler}" >/dev/null 2>&1; then
+        echo "missing C++ compiler '${compiler}'; run 'nix develop' or set CXX" >&2
+        exit 127
+    fi
     mkdir -p resources/artifacts
-    "${CXX:-c++}" \
+    "${compiler}" \
         -shared -O3 -fPIC -ffast-math -funsafe-math-optimizations \
         -o resources/artifacts/variable_theta.so \
         resources/artifacts/variable_theta.cpp

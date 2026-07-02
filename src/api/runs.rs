@@ -1171,6 +1171,7 @@ accumulator = { config = "scalar" }
     fn bundled_run_and_task_templates_parse_after_replacement_expansion() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
+            "resources/templates/runs/installation-smoke.toml",
             "resources/templates/runs/ghost_bump.toml",
             "resources/templates/runs/gammaloop-6photons-hsigma-ecom-scan.toml",
             "resources/templates/runs/hyperparameter-tuning-symbolica.toml",

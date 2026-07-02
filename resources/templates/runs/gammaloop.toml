@@ -1,6 +1,8 @@
 # GammaLoop ttH@LO showcase with graph Monte Carlo and observable histograms.
+# Requires: GammaLoop support and the generated ttH state referenced below.
+# Scale: 100k training + 1M inference samples; this is not a smoke test.
+# Run: ./gammaboard run add resources/templates/runs/gammaloop.toml
 # Create the state with ./gammaloop --clean-state ./examples/cli/epem_a_ttxh/LO/epem_a_tth_LO.toml run generate integrate -c "quit -o"
-# Move it to the resources folder and run this config with gammaboard run add examples/runs/gammaloop_tth_lo_histograms.toml
 # contains the ttH@LO observable definitions: graph/orientation/lmb-channel
 # discrete histograms plus Higgs, top, and jet kinematic distributions. The
 # GammaLoop accumulator imports and updates the whole observable bundle, so no

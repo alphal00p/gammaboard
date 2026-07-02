@@ -212,6 +212,7 @@ fn resolve_migrations_dir() -> String {
 }
 
 pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+    require_commands(&["initdb", "pg_ctl", "createdb", "psql", "sqlx"])?;
     ensure_postgres_data_dir_permissions(local)?;
     if !is_cluster_initialized(local) {
         println!("postgres cluster not initialized; creating new cluster");
@@ -229,6 +230,23 @@ pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Resul
     }
 
     ensure_database_and_migrations(local, database_url)
+}
+
+pub(crate) fn require_commands(commands: &[&str]) -> Result<()> {
+    for command in commands {
+        if !command_in_path(command) {
+            bail!(
+                "missing required command '{command}' in PATH; run `nix develop` or install it and retry"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn command_in_path(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| directory.join(command).is_file())
+    })
 }
 
 pub(crate) fn stop_db(local: &LocalPostgresConfig) -> Result<()> {

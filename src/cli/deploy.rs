@@ -59,6 +59,7 @@ async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()>
     for warning in server_config.security_warnings() {
         eprintln!("WARNING: {warning}");
     }
+    db::require_commands(&["nginx"])?;
     preflight_deploy_ports(&server_config)?;
     validate_frontend_build(&server_config)?;
 

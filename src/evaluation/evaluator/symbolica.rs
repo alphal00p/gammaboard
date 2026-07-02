@@ -190,6 +190,12 @@ impl SymbolicaEngine {
                         path.display()
                     ))
                 })?;
+                if !path.is_file() {
+                    return Err(BuildError::build(format!(
+                        "symbolica compiled evaluator does not exist at {}; build or copy the configured shared library into a resource root (for the bundled variable_theta example run `just symbolica-variable-theta`)",
+                        path.display()
+                    )));
+                }
                 let evaluator = CompiledComplexEvaluator::load(&path, &name).map_err(|err| {
                     BuildError::build(format!(
                         "failed to load symbolica compiled evaluator '{}' from {}: {err}",

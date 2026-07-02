@@ -1,4 +1,7 @@
 # GammaLoop TTH training + inference sample workflow.
+# Requires: an existing GammaLoop ttH run and generated state.
+# Scale: 100M training + 1B inference samples; intended for cluster runs.
+# Run: ./gammaboard run task add <RUN> resources/templates/tasks/train_sample.toml
 
 replacements = { train_samples = 100_000_000, sample_samples = 1_000_000_000, relative_error = 0.001, havana_bins = 128, samples_for_update = 10_000_000, max_batch_size = 100_000 }
 

@@ -4,6 +4,21 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${repo_root}"
 
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "missing required command '$1'; run 'nix develop' or install it and retry" >&2
+        exit 127
+    fi
+}
+
+require_command cargo
+
+# Local builds use the regular Symbolica runtime path unless an OEM build is
+# explicitly requested. Non-Symbolica evaluators then need no license.
+if [[ -z "${SYMBOLICA_OEM_LICENSE:-}" && -z "${NO_SYMBOLICA_OEM_LICENSE:-}" ]]; then
+    export NO_SYMBOLICA_OEM_LICENSE=1
+fi
+
 profile="${GAMMABOARD_PROFILE:-dev-optim}"
 case "${profile}" in
     dev-optim)
@@ -36,6 +51,7 @@ for ((i = 1; i < $#; i++)); do
 done
 
 if [[ "${uses_deploy_run}" == true ]]; then
+    require_command npm
     cd "${repo_root}/dashboard"
     if [[ ! -x node_modules/.bin/vite ]]; then
         npm ci

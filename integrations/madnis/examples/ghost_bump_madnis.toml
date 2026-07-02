@@ -1,4 +1,7 @@
 # Ghost bump with the MADNIS process sampler.
+# Requires: the MADNIS environment described in integrations/madnis/README.md.
+# Scale: GPU-oriented adaptive training; this is not an installation smoke test.
+# Run: ./gammaboard run add integrations/madnis/examples/ghost_bump_madnis.toml
 
 name = "ghost_bump_madnis"
 

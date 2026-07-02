@@ -4,20 +4,53 @@ Gammaboard runs distributed numerical integration jobs with PostgreSQL as the
 shared control plane. The dashboard shows runs, task output, nodes, performance,
 logs, and active runtime settings.
 
-## Start Here
+## Quickstart
 
-Use the self-contained docs quickstart for setup and operator workflows:
-
-- [docs/quickstart.md](docs/quickstart.md)
-- [docs/README.md](docs/README.md)
-
-Minimal local launch from the repo root:
+The shortest supported setup uses Nix on Linux. From a fresh clone:
 
 ```bash
+nix develop
 ./gammaboard deploy run
 ```
 
-Minimal ITPhlies release launch:
+This builds GammaBoard and the dashboard, starts the managed PostgreSQL
+database, and opens the dashboard at `http://localhost:8080`. Leave it running.
+
+In a second terminal, enter the same repository and run the dependency-free
+installation smoke test:
+
+```bash
+nix develop
+./gammaboard run add resources/templates/runs/installation-smoke.toml
+./gammaboard node auto-run 2
+./gammaboard auto-assign installation-smoke
+```
+
+Open the `installation-smoke` run in the dashboard. It integrates
+`f(x) = 1` on `[0,1]`, normally finishes within a few seconds, and should report
+a central value of `1.0`. Stop the workers and deployment with:
+
+```bash
+./gammaboard node stop -a
+# Press Ctrl-C in the deployment terminal.
+```
+
+This local workflow intentionally uses public development credentials and
+passwordless control on loopback. Security configuration is optional.
+
+For setup without Nix, shared-machine use, and physics integrations, continue
+with:
+
+- [docs/quickstart.md](docs/quickstart.md)
+- [docs/README.md](docs/README.md)
+- [integrations/README.md](integrations/README.md)
+
+If you use Nix, the repository flake provides a development/operator shell with
+Rust, Node.js, PostgreSQL, nginx, Apptainer, and helper tools. It is not the
+deployment mechanism; production runs use the `gammaboard` binary, ops configs,
+and, on UBELIX, Apptainer/Slurm images.
+
+For ITPhlies:
 
 ```bash
 GAMMABOARD_PROFILE=release ./gammaboard \
@@ -25,12 +58,8 @@ GAMMABOARD_PROFILE=release ./gammaboard \
   --server-config ops/itphlies/config/server.toml
 ```
 
-For UBELIX Slurm/Apptainer operation, use [ops/ubelix/README.md](ops/ubelix/README.md).
-
-If you use Nix, the repository flake provides a development/operator shell with
-Rust, Node.js, PostgreSQL, nginx, Apptainer, and helper tools. It is not the
-deployment mechanism; production runs use the `gammaboard` binary, ops configs,
-and, on UBELIX, Apptainer/Slurm images.
+For UBELIX Slurm/Apptainer operation, use
+[ops/ubelix/README.md](ops/ubelix/README.md).
 
 ## Core Commands
 
