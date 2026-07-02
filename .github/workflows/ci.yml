@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NO_SYMBOLICA_OEM_LICENSE: "1"
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo check --locked
+      - run: cargo check --locked --no-default-features
+      - run: cargo test --locked
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: dashboard/.nvmrc
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install --upgrade build pytest
+      - run: python -m build process_api/python
+      - run: python -m pip install -e process_api/python
+      - run: python -m pip install --no-deps -e integrations/madgraph
+      - run: python -m pytest -q integrations/madgraph/tests
+      - name: Validate tracked TOML
+        run: |
+          python - <<'PY'
+          import subprocess
+          import tomllib
+
+          paths = subprocess.check_output(
+              ["git", "ls-files", "*.toml"], text=True
+          ).splitlines()
+          for path in paths:
+              with open(path, "rb") as handle:
+                  tomllib.load(handle)
+          PY

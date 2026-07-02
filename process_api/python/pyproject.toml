@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gammaboard-process"
+version = "0.1.0"
+description = "Python protocol helpers for GammaBoard process evaluators and samplers"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "alphaLoop" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = ["numpy"]
+
+[project.urls]
+Homepage = "https://github.com/alphal00p/gammaboard"
+Repository = "https://github.com/alphal00p/gammaboard"
+Documentation = "https://github.com/alphal00p/gammaboard/tree/main/process_api"
+Issues = "https://github.com/alphal00p/gammaboard/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
