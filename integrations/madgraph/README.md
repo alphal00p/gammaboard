@@ -126,14 +126,16 @@ The evaluator reads the new run's `Events/<run>_NN/info.json` and returns:
 - every histogram configured in the state's `Cards/run_card.toml`;
 - a GammaLoop-compatible observable bundle rendered by the existing backend.
 
-Use it with `accumulator = "gammaloop"` and exactly one trigger sample:
+Use it with `accumulator = "gammaloop"` and exactly one zero-dimensional
+trigger sample. The empty point makes explicit that MG7 ignores GammaBoard
+sample coordinates and owns native event generation:
 
 ```toml
 [evaluator]
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-event-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = 1 } }
+domain = { continuous = { dims = 0 } }
 accumulator = "gammaloop"
 
 [evaluator.args]

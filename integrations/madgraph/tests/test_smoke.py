@@ -215,7 +215,7 @@ def test_native_event_evaluator_runs_generated_state(tmp_path) -> None:
 
     evaluator = MadGraphEventEvaluator(
         discrete_cardinalities=[],
-        continuous_dims=1,
+        continuous_dims=0,
         state_path=str(state_path),
         python="/usr/bin/python3",
     )
@@ -225,7 +225,7 @@ def test_native_event_evaluator_runs_generated_state(tmp_path) -> None:
     ):
         result = evaluator.eval_gammaloop(
             np.zeros((1, 0), dtype=np.int64),
-            np.zeros((1, 1), dtype=np.float64),
+            np.zeros((1, 0), dtype=np.float64),
         )
 
     assert result.state["estimate"]["components"][0]["state"]["count"] == 100
@@ -242,7 +242,7 @@ def test_native_event_evaluator_explains_stale_madspace(tmp_path) -> None:
     result.stdout = "ValueError: Key already present in NamedVector"
     evaluator = MadGraphEventEvaluator(
         discrete_cardinalities=[],
-        continuous_dims=1,
+        continuous_dims=0,
         state_path=str(state_path),
         python="/usr/bin/python3",
     )
@@ -256,5 +256,5 @@ def test_native_event_evaluator_explains_stale_madspace(tmp_path) -> None:
     ):
         evaluator.eval_gammaloop(
             np.zeros((1, 0), dtype=np.int64),
-            np.zeros((1, 1), dtype=np.float64),
+            np.zeros((1, 0), dtype=np.float64),
         )

@@ -31,7 +31,8 @@ name = "madgraph-pp-eej-native-events"
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-event-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = 1 } }
+# GammaBoard supplies one empty point only to trigger native MG7 generation.
+domain = { continuous = { dims = 0 } }
 accumulator = "gammaloop"
 
 [evaluator.args]

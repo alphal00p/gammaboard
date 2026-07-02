@@ -23,9 +23,9 @@ class MadGraphEventEvaluator(Evaluator):
     ) -> None:
         if discrete_cardinalities:
             raise ValueError("MadGraph event generation does not use discrete dimensions")
-        if int(continuous_dims) != 1:
+        if int(continuous_dims) != 0:
             raise ValueError(
-                "MadGraph event generation expects a one-dimensional trigger domain"
+                "MadGraph event generation expects a zero-dimensional trigger domain"
             )
         self.state_path = Path(state_path).expanduser().resolve()
         if not self.state_path.is_dir():
