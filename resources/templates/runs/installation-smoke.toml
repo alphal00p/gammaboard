@@ -1,0 +1,30 @@
+# Installation smoke test: integrate f(x) = 1 over x in [0, 1].
+#
+# Expected result: exactly 1.0, up to floating-point representation.
+# Dependencies: GammaBoard only; no GammaLoop, Symbolica expression, Python
+# process, generated state, or external physics package is used.
+# Runtime: normally a few seconds with two local workers.
+#
+# Run from the repository root:
+#   ./gammaboard run add resources/templates/runs/installation-smoke.toml
+#   ./gammaboard node auto-run 2
+#   ./gammaboard auto-assign installation-smoke
+
+name = "installation-smoke"
+target = { kind = "scalar", value = 1.0 }
+
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+accumulator = "scalar"
+
+[[task_queue]]
+name = "integrate-one"
+kind = "sample"
+stop_condition = { max_samples = 10_000 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
