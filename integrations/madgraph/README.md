@@ -26,10 +26,10 @@ Run these commands from the GammaBoard repository root:
 git clone https://github.com/MadGraphTeam/MadGraph7.git ../MadGraph7
 git -C ../MadGraph7 checkout --detach 920d224232b24a3a736443986e2040369929298f
 
-/usr/bin/python3 ../MadGraph7/madspace/install.py \
+python ../MadGraph7/madspace/install.py \
   --source --no-cuda --no-hip --no-simd --no-debug
 
-/usr/bin/python3 -m venv integrations/madgraph/.venv
+python -m venv integrations/madgraph/.venv
 integrations/madgraph/.venv/bin/python -m pip install --upgrade pip
 integrations/madgraph/.venv/bin/python -m pip install --force-reinstall \
   integrations/madgraph
@@ -64,7 +64,6 @@ components = ["weight"]
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
-python = "/usr/bin/python3" # interpreter with MG7's lhapdf module
 madgraph_root = "/path/to/MadGraph7"   # omit if MG7 is already on sys.path
 subprocess_index = 0
 flavor_index = 0
@@ -101,7 +100,7 @@ generate p p > e+ e- j
 output integrations/madgraph/artifacts/pp_eej/mg7_state -f
 quit
 EOF
-/usr/bin/python3 ../MadGraph7/bin/mg5_aMC /tmp/pp_eej_mg7.cmd
+python ../MadGraph7/bin/mg5_aMC /tmp/pp_eej_mg7.cmd
 ```
 
 For this pinned revision and process, `random_dim` is `7`.

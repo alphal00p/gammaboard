@@ -9,11 +9,12 @@
 #
 # Pinned MG7/MadSpace setup. Run from the GammaBoard repository root:
 #
+#   nix develop
 #   git clone https://github.com/MadGraphTeam/MadGraph7.git ../MadGraph7
 #   git -C ../MadGraph7 checkout --detach 920d224232b24a3a736443986e2040369929298f
-#   /usr/bin/python3 ../MadGraph7/madspace/install.py \
+#   python ../MadGraph7/madspace/install.py \
 #     --source --no-cuda --no-hip --no-simd --no-debug
-#   /usr/bin/python3 -m venv integrations/madgraph/.venv
+#   python -m venv integrations/madgraph/.venv
 #   integrations/madgraph/.venv/bin/python -m pip install --upgrade pip
 #   integrations/madgraph/.venv/bin/python -m pip install --force-reinstall \
 #     integrations/madgraph
@@ -27,7 +28,7 @@
 # Generate the state with the same pinned checkout:
 #
 #   mkdir -p integrations/madgraph/artifacts/pp_eej
-#   /usr/bin/python3 ../MadGraph7/bin/mg5_aMC <<'EOF'
+#   python ../MadGraph7/bin/mg5_aMC <<'EOF'
 #   import model sm
 #   generate p p > e+ e- j
 #   output integrations/madgraph/artifacts/pp_eej/mg7_state -f

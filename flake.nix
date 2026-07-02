@@ -80,8 +80,28 @@
           gmp
           mpfr
           libmpc
-          cargo-nextest
+          # MadGraph7/MadSpace source build and runtime dependencies.
+          cmake
+          ninja
+          gnumake
+          git
+          curl
+          wget
+          cacert
+          gnutar
+          xz
           pkg-config
+          patchelf
+          openblas
+          lhapdf
+          python313
+          python313Packages.pip
+          python313Packages.setuptools
+          python313Packages.wheel
+          python313Packages.packaging
+          python313Packages.scikit-build-core
+          python313Packages.numpy
+          cargo-nextest
           cargo-watch
           gfortran
           gcc

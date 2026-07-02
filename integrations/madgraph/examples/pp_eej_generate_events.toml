@@ -12,7 +12,7 @@
 #
 #   git clone https://github.com/MadGraphTeam/MadGraph7.git ../MadGraph7
 #   git -C ../MadGraph7 checkout --detach 920d224232b24a3a736443986e2040369929298f
-#   /usr/bin/python3 ../MadGraph7/madspace/install.py \
+#   python ../MadGraph7/madspace/install.py \
 #     --source --no-cuda --no-hip --no-simd --no-debug
 #
 # Configure MG7 histograms there, for example:
@@ -37,7 +37,8 @@ accumulator = "gammaloop"
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
-python = "/usr/bin/python3"
+# Resolve the Python and LHAPDF environment inherited from `nix develop`.
+python = "python"
 
 [[task_queue]]
 name = "accumulator"
