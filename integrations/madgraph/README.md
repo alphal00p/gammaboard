@@ -35,6 +35,11 @@ integrations/madgraph/.venv/bin/python -m pip install --force-reinstall \
   integrations/madgraph
 ```
 
+The development shell sets `MAKEFLAGS` to override the `/bin/bash` path
+hardcoded by generated MG7 makefiles with Nix's Bash path. Start the GammaBoard
+server and workers from `nix develop` so evaluator-time compilation inherits
+this setting.
+
 MadGraph7 itself is not a pip dependency. Provide its root path via
 `madgraph_root` in the evaluator config. The wrapper adds both
 `<madgraph_root>` and `<madgraph_root>/madspace/install` to `sys.path`.

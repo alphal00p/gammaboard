@@ -70,6 +70,10 @@
         "${cargoLinkerVar}" = nixCc;
         RUSTFLAGS = "-C linker=${nixCc}";
 
+        # MG7-generated makefiles hardcode /bin/bash, which does not exist on
+        # non-FHS Nix systems. A make command-line variable overrides that value.
+        MAKEFLAGS = "SHELL=${pkgs.bash}/bin/bash";
+
         # Make libpython + libgmp/libmpfr/libmpc visible to local binaries.
         LD_LIBRARY_PATH = runtimeLibPath;
         DYLD_LIBRARY_PATH = runtimeLibPath;
