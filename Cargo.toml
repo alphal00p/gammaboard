@@ -8,9 +8,9 @@ default = ["gammaloop"]
 gammaloop = ["dep:gammalooprs", "dep:gammaloop_api"]
 
 [dependencies]
-gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "044248705670c4f0b7841c2a4b9db1532d73ef5d", package = "gammalooprs", optional = true }
+gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "4fdbf430b29edd24b9e1292c07ab24a151427dc7", package = "gammalooprs", optional = true }
 
-gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "044248705670c4f0b7841c2a4b9db1532d73ef5d", package = "gammaloop-api", default-features = false, features = ["cli", "no_pyo3"], optional = true }
+gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "4fdbf430b29edd24b9e1292c07ab24a151427dc7", package = "gammaloop-api", default-features = false, features = ["cli", "no_pyo3"], optional = true }
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
 rand = { package = "rand", version = "0.9" }
@@ -26,7 +26,7 @@ clap_complete = "4.5"
 toml = "0.8"
 async-trait = "0.1"
 thiserror = "2.0"
-symbolica = { version = "1.5", features = ["serde"] }
+symbolica = { version = "2.1", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 num = "0.4.3"

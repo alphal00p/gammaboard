@@ -15,15 +15,17 @@ use crate::{
     runtime_context::evaluator_tmp_dir,
 };
 use serde::{Deserialize, Serialize};
-use symbolica::domains::{float::Complex as SymbolicaComplex, rational::Rational};
 use symbolica::evaluate::{
     BatchEvaluator, CompileOptions, CompiledComplexEvaluator, FunctionMap, OptimizationSettings,
 };
 use symbolica::parser::ParseSettings;
-use symbolica::wrap_input;
 use symbolica::{
     atom::{Atom, AtomCore},
     evaluate::ExportSettings,
+};
+use symbolica::{
+    domains::{float::Complex as SymbolicaComplex, rational::Rational},
+    namespace,
 };
 use tempfile::TempDir;
 
@@ -104,7 +106,7 @@ impl SymbolicaEngine {
 
         let mut args = Vec::with_capacity(params.args.len());
         for arg in &params.args {
-            let parsed = Atom::parse(wrap_input!(arg), settings.clone()).build_err()?;
+            let parsed = Atom::parse(&arg, namespace!(), settings.clone()).build_err()?;
             args.push(parsed);
         }
 
@@ -134,7 +136,7 @@ impl SymbolicaEngine {
 
                 // Keep these plain parser calls unless updating Symbolica requires
                 // default-namespace parsing for generated benchmark expressions.
-                let parsed_expr = Atom::parse(wrap_input!(&expr), settings.clone()).build_err()?;
+                let parsed_expr = Atom::parse(&expr, namespace!(), settings.clone()).build_err()?;
                 let root_artifacts_dir = evaluator_tmp_dir("symbolica").map_err(|err| {
                     BuildError::build(format!("failed to resolve evaluator tmp dir: {err}"))
                 })?;
@@ -247,7 +249,7 @@ fn fixed_input_value(name: &str, value: &toml::Value) -> Result<SymbolicaComplex
     }
 
     let settings = ParseSettings::symbolica();
-    let parsed_value = Atom::parse(wrap_input!(&value_expr), settings).map_err(|err| {
+    let parsed_value = Atom::parse(&value_expr, namespace!(), settings).map_err(|err| {
         BuildError::build(format!(
             "invalid value for symbolica compiled binding {name:?}: {err}"
         ))
@@ -280,22 +282,26 @@ fn build_function_map(
 ) -> Result<FunctionMap, BuildError> {
     let mut function_map = FunctionMap::new();
     let imaginary_unit = SymbolicaComplex::new(Rational::from(0), Rational::from(1));
-    function_map.add_constant(
-        Atom::parse(wrap_input!("i"), settings.clone()).build_err()?,
-        imaginary_unit.clone(),
-    );
-    function_map.add_constant(
-        Atom::parse(wrap_input!("I"), settings.clone()).build_err()?,
-        imaginary_unit,
-    );
+    function_map
+        .add_aliases([
+            (
+                Atom::parse("i", namespace!(), settings.clone()).build_err()?,
+                Atom::num(imaginary_unit.clone()),
+            ),
+            (
+                Atom::parse("I", namespace!(), settings.clone()).build_err()?,
+                Atom::num(imaginary_unit.clone()),
+            ),
+        ])
+        .build_err()?;
 
     for (name, value) in constants {
-        let key = Atom::parse(wrap_input!(name), settings.clone()).map_err(|err| {
+        let key = Atom::parse(&name, namespace!(), settings.clone()).map_err(|err| {
             BuildError::build(format!("invalid symbolica constant {name:?}: {err}"))
         })?;
         let value_expr = constant_value_expr(value)?;
         let parsed_value =
-            Atom::parse(wrap_input!(&value_expr), settings.clone()).map_err(|err| {
+            Atom::parse(&value_expr, namespace!(), settings.clone()).map_err(|err| {
                 BuildError::build(format!(
                     "invalid value for symbolica constant {name:?}: {err}"
                 ))
@@ -305,7 +311,9 @@ fn build_function_map(
                 "symbolica constant {name:?} must be a numeric real or complex value, got {value_expr:?}: {err}"
             ))
         })?;
-        function_map.add_constant(key, value);
+        function_map
+            .add_aliases(std::iter::once((key, Atom::num(value))))
+            .build_err()?;
     }
 
     Ok(function_map)
@@ -387,7 +395,10 @@ fn compile_complex_evaluator(
     artifacts_dir: &TempDir,
 ) -> Result<CompiledComplexEvaluator, BuildError> {
     let evaluator = expr
-        .evaluator(function_map, args, OptimizationSettings::default())
+        .evaluator(args)
+        .function_map(function_map.clone())
+        .optimization_settings(OptimizationSettings::default())
+        .build()
         .build_err()?
         .map_coeff(&|x| SymbolicaComplex::new(x.re.to_f64(), x.im.to_f64()));
     let stem = "eval";
@@ -518,7 +529,9 @@ impl Evaluator for SymbolicaEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{SymbolicaEngine, SymbolicaParams, SymbolicaSource, compile_complex_evaluator};
+    use super::{
+        SymbolicaEngine, SymbolicaParams, SymbolicaSource, compile_complex_evaluator, namespace,
+    };
     use crate::core::AccumulatorConfig;
     use crate::evaluation::{Batch, EvalBatchOptions, Evaluator, Point};
     use std::collections::BTreeMap;
@@ -698,11 +711,11 @@ mod tests {
     #[test]
     fn symbolica_compiled_source_loads_with_bound_fixed_inputs() {
         let settings = ParseSettings::symbolica();
-        let expr = Atom::parse(wrap_input!("a + k0 + k1 + k2"), settings.clone())
+        let expr = Atom::parse("a + k0 + k1 + k2", namespace!(), settings.clone())
             .expect("parse expression");
         let args = ["a", "k0", "k1", "k2"]
             .iter()
-            .map(|arg| Atom::parse(wrap_input!(arg), settings.clone()).expect("parse arg"))
+            .map(|arg| Atom::parse(&arg, namespace!(), settings.clone()).expect("parse arg"))
             .collect::<Vec<_>>();
         let artifacts_dir = tempfile::tempdir().expect("create artifacts dir");
         let _compiled =
