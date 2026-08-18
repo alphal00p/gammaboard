@@ -48,6 +48,16 @@ MadGraph7 moves fast: a generated `mg7_state` is tied to the MG7 version that
 wrote it. Generate the state with the pinned checkout and use that same checkout
 and its `madspace/install` directory at runtime.
 
+To run the optional real-checkout smoke test, keep PDF data in a user-writable
+directory and provide the documented state explicitly:
+
+```bash
+export LHAPDF_DATA_PATH="$HOME/.local/share/LHAPDF"
+export GAMMABOARD_MADGRAPH_ROOT="$PWD/../MadGraph7"
+export GAMMABOARD_MADGRAPH_STATE="$PWD/integrations/madgraph/artifacts/pp_eej/mg7_state"
+integrations/madgraph/.venv/bin/python -m pytest integrations/madgraph/tests
+```
+
 ## Runtime Flow
 
 GammaBoard sends batches of points in `[0, 1]^N`, where `N` is the callable

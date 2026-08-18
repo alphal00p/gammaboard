@@ -81,10 +81,10 @@ where
             return Ok(());
         }
         let mut first_error = None;
-        for run in self.store.get_all_runs().await? {
-            if let Err(err) = self.reconcile_run(run.run_id).await {
+        for run_id in self.store.get_control_plane_run_ids().await? {
+            if let Err(err) = self.reconcile_run(run_id).await {
                 warn!(
-                    run_id = run.run_id,
+                    run_id,
                     error = %err,
                     "task control loop failed to reconcile run"
                 );

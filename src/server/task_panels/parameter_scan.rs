@@ -474,19 +474,10 @@ fn scan_parameter_names(ctx: &TaskPanelContext<'_>) -> Vec<String> {
         return vec![name.to_string()];
     }
     match &ctx.task.task {
-        crate::core::RunTaskSpec::ParameterScan {
-            parameter,
-            parameters,
-            ..
-        } => parameter
-            .as_ref()
-            .map(|parameter| vec![parameter.name.clone()])
-            .unwrap_or_else(|| {
-                parameters
-                    .iter()
-                    .map(|parameter| parameter.name.clone())
-                    .collect()
-            }),
+        crate::core::RunTaskSpec::ParameterScan { parameters, .. } => parameters
+            .iter()
+            .map(|parameter| parameter.name.clone())
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -528,7 +519,7 @@ mod tests {
 
     fn scan_task(controller_output: Option<JsonValue>) -> RunTask {
         let task = RunTaskSpec::ParameterScan {
-            parameter: Some(ParameterScanParameterSpec {
+            parameters: vec![ParameterScanParameterSpec {
                 name: "scale".to_string(),
                 source: crate::core::ParameterValueSourceSpec {
                     values: vec![
@@ -538,8 +529,7 @@ mod tests {
                     ],
                     ..Default::default()
                 },
-            }),
-            parameters: Vec::new(),
+            }],
             measurement: ParameterScanMeasurementSpec {
                 source_task: "sample".to_string(),
             },

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -14,6 +16,9 @@ from madgraph_gammaboard.event_evaluator import (
 from madgraph_gammaboard.state import MadSpaceState
 
 
+PINNED_MADGRAPH_REVISION = "920d224232b24a3a736443986e2040369929298f"
+
+
 def test_state_rejects_missing_dir() -> None:
     try:
         MadSpaceState.load(state_path="/nonexistent/madspace_state")
@@ -21,6 +26,40 @@ def test_state_rejects_missing_dir() -> None:
         assert "does not exist" in str(error)
     else:
         raise AssertionError("expected ValueError for missing state_path")
+
+
+def test_pinned_checkout_with_user_writable_lhapdf_data() -> None:
+    """Exercise a real documented MG7 state when CI provides the optional assets."""
+    madgraph_root = os.environ.get("GAMMABOARD_MADGRAPH_ROOT")
+    state_path = os.environ.get("GAMMABOARD_MADGRAPH_STATE")
+    lhapdf_data = os.environ.get("LHAPDF_DATA_PATH")
+    if not (madgraph_root and state_path and lhapdf_data):
+        pytest.skip("optional pinned MadGraph checkout/state not configured")
+
+    revision = subprocess.check_output(
+        ["git", "-C", madgraph_root, "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert revision == PINNED_MADGRAPH_REVISION
+    assert os.access(lhapdf_data, os.W_OK)
+
+    state = MadSpaceState.load(
+        state_path=state_path,
+        madgraph_root=madgraph_root,
+        subprocess_index=0,
+        flavor_index=0,
+    )
+    evaluator = MadGraphEvaluator(
+        discrete_cardinalities=[],
+        continuous_dims=state.random_dim,
+        state_path=state_path,
+        madgraph_root=madgraph_root,
+        output=["weight"],
+    )
+    result = evaluator.eval(
+        np.zeros((1, 0), dtype=np.int64),
+        np.full((1, state.random_dim), 0.5),
+    )
+    assert np.isfinite(result["weight"]).all()
 
 
 def _fake_state(random_dim: int, weights: np.ndarray) -> MagicMock:

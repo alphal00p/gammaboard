@@ -505,6 +505,27 @@ impl Serialize for AccumulatorConfig {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum HumanAccumulatorConfig {
+    Named(String),
+    Rich(RichAccumulatorConfig),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RichAccumulatorConfig {
+    kind: String,
+    #[serde(default)]
+    discrete_projections: Option<DiscreteProjectionConfig>,
+    #[serde(default)]
+    moments: AccumulatorMomentConfig,
+    #[serde(default)]
+    components: Option<Vec<String>>,
+    #[serde(default)]
+    training_projection: Option<TrainingProjection>,
+}
+
 impl<'de> Deserialize<'de> for AccumulatorConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -528,99 +549,22 @@ impl<'de> Deserialize<'de> for AccumulatorConfig {
             ));
         }
 
-        struct AccumulatorConfigVisitor;
-
-        impl<'de> Visitor<'de> for AccumulatorConfigVisitor {
-            type Value = AccumulatorConfig;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("an accumulator name or accumulator config table")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                accumulator_from_kind_str(
-                    value,
-                    None,
-                    AccumulatorMomentConfig::default(),
-                    None,
-                    None,
-                )
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let mut kind = None::<String>;
-                let mut discrete_projections = None::<DiscreteProjectionConfig>;
-                let mut moments = None::<AccumulatorMomentConfig>;
-                let mut components = None::<Vec<String>>;
-                let mut training_projection = None::<TrainingProjection>;
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "kind" => {
-                            if kind.is_some() {
-                                return Err(serde::de::Error::duplicate_field("kind"));
-                            }
-                            kind = Some(map.next_value()?);
-                        }
-                        "discrete_projections" => {
-                            if discrete_projections.is_some() {
-                                return Err(serde::de::Error::duplicate_field(
-                                    "discrete_projections",
-                                ));
-                            }
-                            discrete_projections = Some(map.next_value()?);
-                        }
-                        "components" => {
-                            if components.is_some() {
-                                return Err(serde::de::Error::duplicate_field("components"));
-                            }
-                            components = Some(map.next_value()?);
-                        }
-                        "moments" => {
-                            if moments.is_some() {
-                                return Err(serde::de::Error::duplicate_field("moments"));
-                            }
-                            moments = Some(map.next_value()?);
-                        }
-                        "training_projection" => {
-                            if training_projection.is_some() {
-                                return Err(serde::de::Error::duplicate_field(
-                                    "training_projection",
-                                ));
-                            }
-                            training_projection = Some(map.next_value()?);
-                        }
-                        other => {
-                            return Err(serde::de::Error::unknown_field(
-                                other,
-                                &[
-                                    "kind",
-                                    "discrete_projections",
-                                    "moments",
-                                    "components",
-                                    "training_projection",
-                                ],
-                            ));
-                        }
-                    }
-                }
-                let kind = kind.ok_or_else(|| serde::de::Error::missing_field("kind"))?;
-                accumulator_from_kind_str(
-                    &kind,
-                    discrete_projections,
-                    moments.unwrap_or_default(),
-                    components,
-                    training_projection,
-                )
-            }
+        match HumanAccumulatorConfig::deserialize(deserializer)? {
+            HumanAccumulatorConfig::Named(kind) => accumulator_from_kind_str(
+                &kind,
+                None,
+                AccumulatorMomentConfig::default(),
+                None,
+                None,
+            ),
+            HumanAccumulatorConfig::Rich(config) => accumulator_from_kind_str(
+                &config.kind,
+                config.discrete_projections,
+                config.moments,
+                config.components,
+                config.training_projection,
+            ),
         }
-
-        deserializer.deserialize_any(AccumulatorConfigVisitor)
     }
 }
 

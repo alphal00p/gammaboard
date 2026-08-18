@@ -439,16 +439,11 @@ fn build_task_summary_entries(
             }
         }
         RunTaskSpec::ParameterScan {
-            parameter,
             parameters,
             max_concurrent_runs,
             ..
         } => {
-            let parameter_count = parameter
-                .as_ref()
-                .map(|_| 1)
-                .unwrap_or_else(|| parameters.len());
-            entries.push(key_value("parameters", "Parameters", parameter_count));
+            entries.push(key_value("parameters", "Parameters", parameters.len()));
             if let Some(points) = task.task.nr_expected_samples() {
                 entries.push(key_value("points", "Points", points));
             }

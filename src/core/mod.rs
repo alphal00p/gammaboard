@@ -36,7 +36,7 @@ pub use tasks::{
     PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
     SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
     SamplerQueueTuning, SourceRefSpec, TaskMeasurementOutput, TaskMeasurementSpec,
-    canonical_task_toml, effective_parameter_scan_parameters, generated_task_name,
+    canonical_task_toml, generated_task_name,
 };
 pub use traits::{
     AggregationStore, ControlPlaneStore, EvaluatorWorkerStore, RunReadStore, RunSpecStore,

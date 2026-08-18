@@ -407,15 +407,14 @@ async fn load_batch_stats_for_runs(
         r#"
         SELECT
             run_id,
-            COUNT(*) AS total_batches,
-            COALESCE(SUM(batch_size), 0)::BIGINT AS total_samples,
-            COUNT(*) FILTER (WHERE status = 'pending') AS pending_batches,
-            COUNT(*) FILTER (WHERE status = 'claimed') AS claimed_batches,
-            COUNT(*) FILTER (WHERE status = 'completed') AS completed_batches,
-            COUNT(*) FILTER (WHERE status = 'failed') AS failed_batches
-        FROM batches
+            total_batches,
+            total_samples,
+            pending_batches,
+            claimed_batches,
+            completed_batches,
+            failed_batches
+        FROM run_batch_queue_counters
         WHERE run_id = ANY($1)
-        GROUP BY run_id
         "#,
     )
     .bind(run_ids)
@@ -475,10 +474,135 @@ pub(crate) async fn get_run_progress(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunProgress>, sqlx::Error> {
-    Ok(get_all_runs(pool)
-        .await?
+    Ok(load_run_progress_for_targets(pool, &[run_id]).await?.pop())
+}
+
+pub(crate) async fn get_runs_by_name(
+    pool: &PgPool,
+    run_name: &str,
+) -> Result<Vec<RunProgress>, sqlx::Error> {
+    let run_ids = sqlx::query_scalar::<_, i32>(
+        "SELECT id FROM runs WHERE name = $1 ORDER BY started_at DESC, id DESC",
+    )
+    .bind(run_name)
+    .fetch_all(pool)
+    .await?;
+    load_run_progress_for_targets(pool, &run_ids).await
+}
+
+pub(crate) async fn get_runs_page(
+    pool: &PgPool,
+    limit: usize,
+    offset: usize,
+    include_children: bool,
+) -> Result<Vec<RunProgress>, sqlx::Error> {
+    let run_ids = sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT id
+        FROM runs
+        WHERE $1 OR parent_run_id IS NULL
+        ORDER BY started_at DESC, id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(include_children)
+    .bind(limit as i64)
+    .bind(offset as i64)
+    .fetch_all(pool)
+    .await?;
+    load_run_progress_for_targets(pool, &run_ids).await
+}
+
+pub(crate) async fn get_child_runs_for_task(
+    pool: &PgPool,
+    parent_run_id: i32,
+    parent_task_id: i64,
+    spawn_kind: &str,
+) -> Result<Vec<RunProgress>, sqlx::Error> {
+    let run_ids = sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT id
+        FROM runs
+        WHERE parent_run_id = $1
+          AND parent_task_id = $2
+          AND spawn_kind = $3
+        ORDER BY started_at DESC, id DESC
+        "#,
+    )
+    .bind(parent_run_id)
+    .bind(parent_task_id)
+    .bind(spawn_kind)
+    .fetch_all(pool)
+    .await?;
+    load_run_progress_for_targets(pool, &run_ids).await
+}
+
+pub(crate) async fn get_control_plane_run_ids(pool: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
+    sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT DISTINCT r.id
+        FROM runs r
+        LEFT JOIN nodes n
+          ON n.lease_expires_at > now()
+         AND (n.desired_run_id = r.id OR n.active_run_id = r.id)
+        LEFT JOIN run_tasks active_task
+          ON active_task.run_id = r.id
+         AND active_task.state = 'active'
+        WHERE n.uuid IS NOT NULL
+           OR active_task.task->>'kind' IN ('parameter_scan', 'hyperparameter_tuning', 'set_accumulator')
+        ORDER BY r.id
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+}
+
+async fn load_run_progress_for_targets(
+    pool: &PgPool,
+    target_ids: &[i32],
+) -> Result<Vec<RunProgress>, sqlx::Error> {
+    if target_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let all_ids = sqlx::query_scalar::<_, i32>(
+        r#"
+        WITH RECURSIVE descendants(id) AS (
+            SELECT UNNEST($1::int[])
+            UNION
+            SELECT child.id
+            FROM runs child
+            JOIN descendants parent ON child.parent_run_id = parent.id
+        )
+        SELECT id FROM descendants
+        "#,
+    )
+    .bind(target_ids)
+    .fetch_all(pool)
+    .await?;
+    let sql = run_progress_sql("WHERE r.id = ANY($1) ORDER BY r.started_at DESC, r.id DESC");
+    let rows = sqlx::query_as::<_, RunProgressBaseRow>(&sql)
+        .bind(&all_ids)
+        .fetch_all(pool)
+        .await?;
+    let batch_stats = load_batch_stats_for_runs(pool, &all_ids).await?;
+    let mut runs = rows
         .into_iter()
-        .find(|run| run.run_id == run_id))
+        .map(|row| {
+            let stats = batch_stats.get(&row.run_id).copied().unwrap_or_default();
+            row.into_run_progress(stats)
+        })
+        .collect::<Vec<_>>();
+    apply_child_run_sample_totals(&mut runs);
+
+    let mut by_id = runs
+        .into_iter()
+        .map(|run| (run.run_id, run))
+        .collect::<HashMap<_, _>>();
+    Ok(target_ids
+        .iter()
+        .filter_map(|run_id| by_id.remove(run_id))
+        .collect())
 }
 
 fn apply_child_run_sample_totals(runs: &mut [RunProgress]) {

@@ -37,6 +37,8 @@ pub struct Cli {
     postgres_public: bool,
     #[arg(short = 'q', long, global = true, action = ArgAction::SetTrue)]
     quiet: bool,
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    json: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -61,6 +63,7 @@ enum Command {
 
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
+    shared::set_json_output(cli.json);
     if cli.postgres_public {
         eprintln!(
             "WARNING: --postgres-public exposes PostgreSQL on 0.0.0.0/0 with trust authentication; any host that can reach the port can connect without a password"

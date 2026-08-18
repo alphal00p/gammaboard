@@ -109,6 +109,13 @@ pub trait ControlPlaneStore: Send + Sync {
         spawn_kind: &str,
         spawn_label: Option<&str>,
     ) -> Result<(), StoreError>;
+    async fn record_evaluator_metadata(
+        &self,
+        _run_id: i32,
+        _metadata: &JsonValue,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError>;
 }
 
@@ -309,6 +316,54 @@ pub trait RunReadStore: Send + Sync {
     async fn health_check(&self) -> Result<(), StoreError>;
     async fn get_all_runs(&self) -> Result<Vec<RunProgress>, StoreError>;
     async fn get_run_progress(&self, run_id: i32) -> Result<Option<RunProgress>, StoreError>;
+    async fn get_runs_by_name(&self, run_name: &str) -> Result<Vec<RunProgress>, StoreError> {
+        Ok(self
+            .get_all_runs()
+            .await?
+            .into_iter()
+            .filter(|run| run.run_name == run_name)
+            .collect())
+    }
+    async fn get_runs_page(
+        &self,
+        limit: usize,
+        offset: usize,
+        include_children: bool,
+    ) -> Result<Vec<RunProgress>, StoreError> {
+        Ok(self
+            .get_all_runs()
+            .await?
+            .into_iter()
+            .filter(|run| include_children || run.parent_run_id.is_none())
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
+    async fn get_control_plane_run_ids(&self) -> Result<Vec<i32>, StoreError> {
+        Ok(self
+            .get_all_runs()
+            .await?
+            .into_iter()
+            .map(|run| run.run_id)
+            .collect())
+    }
+    async fn get_child_runs_for_task(
+        &self,
+        parent_run_id: i32,
+        parent_task_id: i64,
+        spawn_kind: &str,
+    ) -> Result<Vec<RunProgress>, StoreError> {
+        Ok(self
+            .get_all_runs()
+            .await?
+            .into_iter()
+            .filter(|run| {
+                run.parent_run_id == Some(parent_run_id)
+                    && run.parent_task_id.as_deref() == Some(&parent_task_id.to_string())
+                    && run.spawn_kind.as_deref() == Some(spawn_kind)
+            })
+            .collect())
+    }
     async fn get_work_queue_stats(&self, run_id: i32) -> Result<Vec<WorkQueueStats>, StoreError>;
     async fn get_task_output_snapshots(
         &self,

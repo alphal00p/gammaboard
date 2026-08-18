@@ -18,7 +18,10 @@ use std::collections::HashSet;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use symbolica::numerical_integration::{ContinuousGrid, DiscreteGrid, Grid, Sample};
 use tempfile::{NamedTempFile, TempDir};
@@ -59,13 +62,31 @@ fn resolve_bin_path() -> anyhow::Result<PathBuf> {
         return Ok(PathBuf::from(path));
     }
 
-    let current_exe = std::env::current_exe()?;
+    static BUILT_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    BUILT_BIN
+        .get_or_init(build_test_binary)
+        .as_ref()
+        .map(PathBuf::clone)
+        .map_err(|err| anyhow::anyhow!(err))
+}
+
+fn build_test_binary() -> Result<PathBuf, String> {
+    let status = std::process::Command::new("cargo")
+        .args(["build", "--bin", "gammaboard"])
+        .status()
+        .map_err(|err| format!("failed to start cargo build for gammaboard test binary: {err}"))?;
+    if !status.success() {
+        return Err(format!(
+            "cargo build --bin gammaboard failed with status {status}"
+        ));
+    }
+
+    let current_exe = std::env::current_exe()
+        .map_err(|err| format!("failed to resolve current test executable: {err}"))?;
     let debug_dir = current_exe
         .parent()
         .and_then(|path| path.parent())
-        .ok_or_else(|| {
-            anyhow::anyhow!("failed to resolve target/debug from current test binary")
-        })?;
+        .ok_or_else(|| "failed to resolve target/debug from current test binary".to_string())?;
     let bin_name = if cfg!(windows) {
         "gammaboard.exe"
     } else {
@@ -76,10 +97,10 @@ fn resolve_bin_path() -> anyhow::Result<PathBuf> {
         return Ok(candidate);
     }
 
-    anyhow::bail!(
-        "missing gammaboard test binary; expected CARGO_BIN_EXE_gammaboard or {}",
+    Err(format!(
+        "cargo build succeeded but gammaboard binary is missing at {}",
         candidate.display()
-    );
+    ))
 }
 
 struct TestDatabase {
@@ -618,7 +639,7 @@ impl FullStackHarness {
     fn add_run(&self, config: &NamedTempFile) {
         self.cli()
             .arg("run")
-            .arg("add")
+            .arg("create")
             .arg(config.path())
             .assert()
             .success();
@@ -695,7 +716,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -839,7 +860,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_inference" }} }}
         .args([
             "run",
             "task",
-            "add",
+            "append",
             &run_id.to_string(),
             inference_task.path().to_str().expect("task file path"),
         ])
@@ -971,7 +992,7 @@ count = 8
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -1040,7 +1061,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
         .args([
             "run",
             "task",
-            "add",
+            "append",
             &run_id.to_string(),
             task_file.path().to_str().unwrap(),
         ])
@@ -1171,7 +1192,7 @@ count = 128
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -1530,7 +1551,7 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -1712,7 +1733,7 @@ training_projection = {{ kind = "component", name = "real" }}
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -2011,7 +2032,7 @@ accumulator = "latest"
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -2176,7 +2197,7 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -2868,7 +2889,7 @@ discrete_dims = 0
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(invalid_config.path())
         .assert()
         .failure()
@@ -2885,7 +2906,7 @@ name = "full-stack-e2e"
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(valid_config.path())
         .assert()
         .success();
@@ -3135,7 +3156,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .failure()
@@ -3185,7 +3206,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -3302,7 +3323,6 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
             .arg("--database-url")
             .arg(database_url)
             .arg("deploy")
-            .arg("run")
             .arg("--server-config")
             .arg(deploy_config_path)
             .arg("--api-port")
@@ -3378,7 +3398,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -3500,7 +3520,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -3606,7 +3626,7 @@ completed_batch_fetch_limit = 64
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -3804,7 +3824,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -3923,7 +3943,7 @@ accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 """
 
-[task_queue.parameter]
+[[task_queue.parameters]]
 name = "scale"
 values = [1]
 
@@ -3935,7 +3955,7 @@ source_task = "sample"
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4048,7 +4068,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4115,7 +4135,7 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4434,14 +4454,14 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config_a.path())
         .assert()
         .success();
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config_b.path())
         .assert()
         .success();
@@ -4525,7 +4545,7 @@ strict_batch_ordering = true
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4661,7 +4681,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4722,7 +4742,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4792,7 +4812,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4858,7 +4878,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -4942,7 +4962,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -5037,7 +5057,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -5144,7 +5164,7 @@ accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 """
 
-[task_queue.parameter]
+[[task_queue.parameters]]
 name = "scale"
 values = [1, 2, 3]
 
@@ -5156,7 +5176,7 @@ source_task = "sample"
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -5322,7 +5342,7 @@ source_task = "sample"
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -5442,7 +5462,7 @@ accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 """
 
-[task_queue.parameter]
+[[task_queue.parameters]]
 name = "scale"
 values = [1, 2]
 
@@ -5470,7 +5490,7 @@ accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 """
 
-[task_queue.parameter]
+[[task_queue.parameters]]
 name = "offset"
 values = [10, 20]
 
@@ -5482,7 +5502,7 @@ source_task = "sample"
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -5590,7 +5610,7 @@ accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 """
 
-[task_queue.parameter]
+[[task_queue.parameters]]
 name = "scale"
 values = [1, 2, 3, 4, 5]
 
@@ -5602,7 +5622,7 @@ source_task = "sample"
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -5789,7 +5809,7 @@ values = ["auto", "none"]
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -5930,7 +5950,7 @@ max = 4
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -6082,7 +6102,7 @@ values = ["auto", "none"]
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -6187,7 +6207,7 @@ max = 1.0
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -6302,7 +6322,7 @@ max = 1
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -6428,7 +6448,7 @@ max = 4
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();
@@ -6569,7 +6589,7 @@ stop_condition = { max_samples = 16 }
     harness
         .cli()
         .arg("run")
-        .arg("add")
+        .arg("create")
         .arg(config.path())
         .assert()
         .success();

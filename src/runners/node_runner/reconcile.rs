@@ -6,7 +6,8 @@ use crate::core::StoreResultExt;
 
 use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{
-    AggregationStore, BatchTransformConfig, RunStageSnapshot, RunTask, RunTaskStore, StoreError,
+    AggregationStore, BatchTransformConfig, ControlPlaneStore, RunStageSnapshot, RunTask,
+    RunTaskStore, StoreError,
 };
 use crate::runners::{
     EvaluatorRunner, SamplerAggregatorRunner,
@@ -435,6 +436,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             }
         };
         let evaluator_metadata = evaluator.metadata();
+        role_store
+            .record_evaluator_metadata(worker.run_id, &evaluator_metadata)
+            .await?;
 
         let sampler = match sampler_config.build(
             spec.domain.clone(),

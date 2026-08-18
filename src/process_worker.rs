@@ -9,6 +9,9 @@ pub(crate) const PROCESS_PROTOCOL: &str = "gammaboard-jsonrpc-v2";
 const JSON_RPC_VERSION: &str = "2.0";
 const MAX_STDOUT_LOG_BYTES_BEFORE_FRAME: usize = 64 * 1024;
 const MAX_STDERR_TAIL_LINES: usize = 40;
+const MAX_FRAME_HEADER_LINE_BYTES: usize = 8 * 1024;
+const MAX_JSON_FRAME_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BINARY_FRAME_BYTES: usize = 256 * 1024 * 1024;
 
 pub(crate) type ProcessStderrTail = Arc<Mutex<VecDeque<String>>>;
 
@@ -134,14 +137,9 @@ impl ProcessWorker {
     /// `Binary-Length` is optional (absent means 0).
     fn read_frame_header(&mut self) -> Result<Option<(usize, usize)>, String> {
         loop {
-            let mut line = String::new();
-            let read = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|error| format!("failed reading {} frame header: {error}", self.label))?;
-            if read == 0 {
+            let Some(line) = self.read_header_line("frame header")? else {
                 return Ok(None);
-            }
+            };
             let trimmed = line.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
                 continue;
@@ -157,19 +155,12 @@ impl ProcessWorker {
             let content_len = self.parse_header_len("Content-Length", value)?;
             let mut binary_len = 0usize;
             loop {
-                let mut header_line = String::new();
-                let read = self.stdout.read_line(&mut header_line).map_err(|error| {
-                    format!(
-                        "failed reading {} frame header continuation: {error}",
-                        self.label
-                    )
-                })?;
-                if read == 0 {
+                let Some(header_line) = self.read_header_line("frame header continuation")? else {
                     return Err(self.worker_terminated_message(&format!(
                         "{} worker terminated inside frame header",
                         self.label
                     )));
-                }
+                };
                 let trimmed = header_line.trim_end_matches(['\r', '\n']);
                 if trimmed.is_empty() {
                     break;
@@ -185,13 +176,62 @@ impl ProcessWorker {
     }
 
     fn parse_header_len(&self, header: &str, value: &str) -> Result<usize, String> {
-        value.trim().parse::<usize>().map_err(|error| {
+        let parsed = value.trim().parse::<usize>().map_err(|error| {
             format!(
                 "invalid {} {header} header value {:?}: {error}",
                 self.label,
                 value.trim()
             )
-        })
+        })?;
+        let limit = if header == "Content-Length" {
+            MAX_JSON_FRAME_BYTES
+        } else {
+            MAX_BINARY_FRAME_BYTES
+        };
+        if parsed > limit {
+            return Err(format!(
+                "{} {header}={parsed} exceeds protocol limit of {limit} bytes",
+                self.label
+            ));
+        }
+        Ok(parsed)
+    }
+
+    fn read_header_line(&mut self, context: &str) -> Result<Option<String>, String> {
+        let mut bytes = Vec::with_capacity(MAX_FRAME_HEADER_LINE_BYTES.min(256));
+        loop {
+            let available = self
+                .stdout
+                .fill_buf()
+                .map_err(|error| format!("failed reading {} {context}: {error}", self.label))?;
+            if available.is_empty() {
+                return if bytes.is_empty() {
+                    Ok(None)
+                } else {
+                    Err(self.worker_terminated_message(&format!(
+                        "{} worker terminated inside {context}",
+                        self.label
+                    )))
+                };
+            }
+            let remaining = MAX_FRAME_HEADER_LINE_BYTES.saturating_sub(bytes.len());
+            let newline = available.iter().position(|byte| *byte == b'\n');
+            let take = newline.map_or(available.len().min(remaining), |index| index + 1);
+            if take > remaining {
+                return Err(format!(
+                    "{} {context} exceeds protocol limit of {} bytes",
+                    self.label, MAX_FRAME_HEADER_LINE_BYTES
+                ));
+            }
+            bytes.extend_from_slice(&available[..take]);
+            self.stdout.consume(take);
+            if newline.is_some() {
+                break;
+            }
+        }
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|error| format!("{} {context} is not valid UTF-8: {error}", self.label))
     }
 
     fn log_stdout_text(&mut self, line: &str) -> Result<(), String> {
@@ -273,7 +313,7 @@ pub(crate) fn read_le_f64(
     byte_offset: usize,
     count: usize,
 ) -> Result<(Vec<f64>, usize), String> {
-    let end = byte_offset + count * 8;
+    let end = checked_binary_end(byte_offset, count)?;
     let slice = bytes.get(byte_offset..end).ok_or_else(|| {
         format!(
             "binary block too short: need {end} bytes, have {}",
@@ -294,7 +334,7 @@ pub(crate) fn read_le_i64(
     byte_offset: usize,
     count: usize,
 ) -> Result<(Vec<i64>, usize), String> {
-    let end = byte_offset + count * 8;
+    let end = checked_binary_end(byte_offset, count)?;
     let slice = bytes.get(byte_offset..end).ok_or_else(|| {
         format!(
             "binary block too short: need {end} bytes, have {}",
@@ -306,6 +346,15 @@ pub(crate) fn read_le_i64(
         .map(|chunk| i64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
         .collect();
     Ok((values, end))
+}
+
+fn checked_binary_end(byte_offset: usize, count: usize) -> Result<usize, String> {
+    let byte_len = count
+        .checked_mul(8)
+        .ok_or_else(|| "binary element count is too large".to_string())?;
+    byte_offset
+        .checked_add(byte_len)
+        .ok_or_else(|| "binary byte offset is too large".to_string())
 }
 
 pub(crate) fn pipe_process_stderr(
@@ -398,7 +447,7 @@ fn validate_response_envelope(
 #[cfg(test)]
 mod tests {
     use super::{
-        JSON_RPC_VERSION, emit_worker_stderr_line, format_json_rpc_error,
+        JSON_RPC_VERSION, emit_worker_stderr_line, format_json_rpc_error, read_le_f64, read_le_i64,
         validate_response_envelope,
     };
     use serde_json::json;
@@ -459,6 +508,20 @@ mod tests {
             )
             .expect_err("result+error should fail")
             .contains("exactly one")
+        );
+    }
+
+    #[test]
+    fn binary_decoders_reject_overflowing_layouts() {
+        assert!(
+            read_le_f64(&[], usize::MAX, 1)
+                .expect_err("overflow must fail")
+                .contains("offset")
+        );
+        assert!(
+            read_le_i64(&[], 0, usize::MAX)
+                .expect_err("overflow must fail")
+                .contains("count")
         );
     }
 }

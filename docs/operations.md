@@ -76,3 +76,30 @@ Useful locations:
   errors can fail the task.
 - Stale workers: stop/unassign from the dashboard or use the profile helper
   command, then start fresh workers.
+## Capacity Planning
+
+Each `node run` process keeps one PostgreSQL connection for leases and control
+traffic. Its active evaluator or sampler role is capped at two additional
+connections, so plan for at most three database connections per live node plus
+the server and occasional CLI commands. The default local PostgreSQL limit is
+128; reserve at least 16 connections for the server, maintenance, and operator
+commands before choosing a worker count.
+
+Performance snapshots default to every two seconds. One evaluator therefore
+creates 43,200 history rows per day. Runtime logs and performance history are
+retained until the operator's retention policy is applied, so monitor database
+size during multi-day campaigns.
+
+Before increasing a deployment, measure its intended configuration rather than
+extrapolating from a smoke test:
+
+```bash
+cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
+./gammaboard run create resources/templates/runs/installation-smoke.toml
+./gammaboard node start-local <worker-count>
+./gammaboard node auto-assign installation-smoke
+```
+
+Record evaluator count, samples/second, queue depth, active PostgreSQL
+connections, and telemetry growth over at least ten minutes. Increase workers
+only while the queue stays bounded and database latency remains stable.

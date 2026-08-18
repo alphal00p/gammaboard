@@ -1,5 +1,8 @@
 use super::auto_assign::{AutoAssignArgs, run_auto_assign_command};
-use super::shared::{NodeSelection, RoleArg, resolve_run_ref, with_cli_store, with_control_store};
+use super::shared::{
+    NodeSelection, RoleArg, json_output_enabled, print_json, resolve_run_ref, with_cli_store,
+    with_control_store,
+};
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
@@ -95,18 +98,19 @@ pub async fn run_node_commands(
     quiet: bool,
 ) -> Result<()> {
     let config = runtime.runtime_config();
-    if let NodeCommand::Run(args) = command {
-        return run_node(args, config, quiet).await;
+    match command {
+        NodeCommand::Run(args) => return run_node(args, config, quiet).await,
+        NodeCommand::StartLocal(args) => return run_auto_run_command(args, runtime, quiet).await,
+        NodeCommand::AutoAssign(args) => return run_auto_assign_command(args, config, quiet).await,
+        command => run_control_node_command(command, config, quiet).await,
     }
+}
 
-    if let NodeCommand::StartLocal(args) = command {
-        return run_auto_run_command(args, runtime, quiet).await;
-    }
-
-    if let NodeCommand::AutoAssign(args) = command {
-        return run_auto_assign_command(args, config, quiet).await;
-    }
-
+async fn run_control_node_command(
+    command: NodeCommand,
+    config: &RuntimeConfig,
+    quiet: bool,
+) -> Result<()> {
     with_control_store(
         config,
         10,
@@ -122,23 +126,33 @@ pub async fn run_node_commands(
                     let run = resolve_run_ref(&store, &run).await?;
                     let assigned =
                         node_api::assign_node(&store, &node_name, run.run_id, role.into()).await?;
-                    println!(
-                        "assigned node={} role={} run_id={} run_name={}",
-                        assigned.node_name, assigned.role, assigned.run_id, assigned.run_name
-                    );
+                    if json_output_enabled() {
+                        print_json(&serde_json::json!({"node_name": assigned.node_name, "role": assigned.role.to_string(), "run_id": assigned.run_id, "run_name": assigned.run_name}));
+                    } else {
+                        println!(
+                            "assigned node={} role={} run_id={} run_name={}",
+                            assigned.node_name, assigned.role, assigned.run_id, assigned.run_name
+                        );
+                    }
                 }
                 NodeCommand::Unassign { node_name } => {
                     node_api::unassign_node(&store, &node_name).await?;
-                    println!("unassigned node={}", node_name);
+                    if json_output_enabled() {
+                        print_json(&serde_json::json!({"node_name": node_name, "unassigned": true}));
+                    } else {
+                        println!("unassigned node={}", node_name);
+                    }
                 }
                 NodeCommand::List { node_name } => {
                     let nodes = store.list_nodes(node_name.as_deref()).await?;
-                    print_node_table(build_node_rows(nodes));
+                    if json_output_enabled() {
+                        print_json(&nodes);
+                    } else {
+                        print_node_table(build_node_rows(nodes));
+                    }
                 }
                 NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
-                NodeCommand::Run(_) | NodeCommand::StartLocal(_) | NodeCommand::AutoAssign(_) => {
-                    unreachable!()
-                }
+                NodeCommand::Run(_) | NodeCommand::StartLocal(_) | NodeCommand::AutoAssign(_) => unreachable!(),
             }
             Ok(())
         },
@@ -252,16 +266,26 @@ async fn run_auto_run_command(
 async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {
     if selection.all {
         let rows = store.request_all_nodes_shutdown().await?;
-        println!("requested shutdown for all nodes: rows_updated={rows}");
+        if json_output_enabled() {
+            print_json(&serde_json::json!({"all": true, "rows_updated": rows}));
+        } else {
+            println!("requested shutdown for all nodes: rows_updated={rows}");
+        }
         return Ok(());
     }
 
     for node_name in selection.node_names {
         let stopped = node_api::stop_node(store, &node_name).await?;
-        println!(
-            "requested shutdown for node={}: rows_updated={}",
-            stopped.node_name, stopped.rows_updated
-        );
+        if json_output_enabled() {
+            print_json(
+                &serde_json::json!({"node_name": stopped.node_name, "rows_updated": stopped.rows_updated}),
+            );
+        } else {
+            println!(
+                "requested shutdown for node={}: rows_updated={}",
+                stopped.node_name, stopped.rows_updated
+            );
+        }
     }
     Ok(())
 }

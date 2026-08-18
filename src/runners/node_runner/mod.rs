@@ -27,6 +27,10 @@ use uuid::Uuid;
 use self::active_worker::ActiveWorker;
 use self::role_runner::RoleRunner;
 
+/// Each node retains one control-plane connection; cap the role pool so a
+/// worker fleet cannot exhaust the local PostgreSQL default by configuration.
+const MAX_ROLE_DB_CONNECTIONS_PER_NODE: u32 = 2;
+
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
     pub capabilities: NodeCapabilities,
@@ -203,9 +207,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     }
 
     async fn init_role_store(&self, max_connections: u32) -> Result<crate::PgStore, StoreError> {
-        init_pg_store(&self.database_url, max_connections)
-            .await
-            .map_err(StoreError::from)
+        init_pg_store(
+            &self.database_url,
+            max_connections.clamp(1, MAX_ROLE_DB_CONNECTIONS_PER_NODE),
+        )
+        .await
+        .map_err(StoreError::from)
     }
 
     fn spawn_lease_renewal_task(&self) -> LeaseRenewalHandle {

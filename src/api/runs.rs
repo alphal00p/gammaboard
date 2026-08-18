@@ -14,7 +14,7 @@ use std::path::Path;
 
 const DEFAULT_RUN_CONFIG_TOML: &str = include_str!("../config_defaults/run.toml");
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CreatedRun {
     pub run_id: i32,
     pub run_name: String,
@@ -31,7 +31,7 @@ pub struct ChildRunRequest {
     pub replacements: BTreeMap<String, toml::Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClonedRun {
     pub run_id: i32,
     pub run_name: String,
@@ -45,14 +45,14 @@ pub struct AppendedTasks {
     pub tasks: Vec<RunTask>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PausedRun {
     pub run_id: i32,
     pub run_name: String,
     pub assignments_cleared: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RemovedRun {
     pub run_id: i32,
     pub run_name: String,
@@ -1080,7 +1080,7 @@ accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 """
 
-[task_queue.parameter]
+[[task_queue.parameters]]
 name = "scale"
 linspace = { start = 1.0, stop = 3.0, count = 3 }
 
@@ -1091,7 +1091,6 @@ source_task = "sample"
         .expect("run config");
 
         let RunTaskSpec::ParameterScan {
-            parameter,
             parameters,
             max_concurrent_runs,
             ..
@@ -1099,10 +1098,7 @@ source_task = "sample"
         else {
             panic!("expected parameter scan task");
         };
-        let parameter = parameter
-            .as_ref()
-            .or_else(|| parameters.first())
-            .expect("parameter");
+        let parameter = parameters.first().expect("parameter");
         assert_eq!(parameter.name, "scale");
         assert_eq!(
             parameter.values().expect("values"),
@@ -1141,15 +1137,11 @@ source_task = "sample"
         )
         .expect("run config");
 
-        let RunTaskSpec::ParameterScan {
-            parameter,
-            parameters,
-            ..
-        } = &config.task_queue.expect("tasks")[0].task
+        let RunTaskSpec::ParameterScan { parameters, .. } =
+            &config.task_queue.expect("tasks")[0].task
         else {
             panic!("expected parameter scan task");
         };
-        assert!(parameter.is_none());
         assert_eq!(parameters.len(), 2);
         assert_eq!(parameters[0].name, "scale");
         assert_eq!(parameters[1].name, "offset");
@@ -1385,7 +1377,7 @@ name = "scan"
 kind = "parameter_scan"
 trial_run_toml = "name = \"child\"\n[evaluator]\nkind = \"unit\"\ncontinuous_dims = 1\ndiscrete_dims = 0\n"
 
-[task_queue.parameter]
+[[task_queue.parameters]]
 name = "scale"
 values = [1]
 

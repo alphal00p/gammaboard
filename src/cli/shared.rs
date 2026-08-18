@@ -6,7 +6,25 @@ use gammaboard::stores::RunProgress;
 use gammaboard::tracing::init_tracing;
 use gammaboard::{PgStore, init_pg_store};
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::Instrument;
+
+static JSON_OUTPUT: AtomicBool = AtomicBool::new(false);
+
+pub fn set_json_output(enabled: bool) {
+    JSON_OUTPUT.store(enabled, Ordering::Relaxed);
+}
+
+pub fn json_output_enabled() -> bool {
+    JSON_OUTPUT.load(Ordering::Relaxed)
+}
+
+pub fn print_json(value: &impl serde::Serialize) {
+    println!(
+        "{}",
+        serde_json::to_string(value).expect("CLI output must be JSON serializable")
+    );
+}
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum RoleArg {
@@ -27,6 +45,10 @@ impl From<RoleArg> for WorkerRole {
 pub struct RunSelection {
     #[arg(short = 'a', long = "all", conflicts_with = "run_refs")]
     pub all: bool,
+    #[arg(long, help = "Confirm destructive run removal in non-interactive use")]
+    pub yes: bool,
+    #[arg(long, help = "Show selected runs without changing them")]
+    pub dry_run: bool,
     #[arg(value_name = "RUN", required_unless_present = "all")]
     pub run_refs: Vec<String>,
 }
@@ -108,18 +130,13 @@ where
 }
 
 pub async fn resolve_run_ref(store: &impl RunReadStore, run_ref: &str) -> Result<RunProgress> {
-    let runs = store.get_all_runs().await?;
-
     if let Ok(run_id) = run_ref.parse::<i32>() {
-        if let Some(run) = runs.iter().find(|run| run.run_id == run_id) {
-            return Ok(run.clone());
+        if let Some(run) = store.get_run_progress(run_id).await? {
+            return Ok(run);
         }
     }
 
-    let matches = runs
-        .into_iter()
-        .filter(|run| run.run_name == run_ref)
-        .collect::<Vec<_>>();
+    let matches = store.get_runs_by_name(run_ref).await?;
 
     match matches.as_slice() {
         [] => Err(anyhow!("run '{run_ref}' not found")),
@@ -147,12 +164,7 @@ pub async fn list_runs_by_name(
     store: &impl RunReadStore,
     run_name: &str,
 ) -> Result<Vec<RunProgress>> {
-    Ok(store
-        .get_all_runs()
-        .await?
-        .into_iter()
-        .filter(|run| run.run_name == run_name)
-        .collect())
+    store.get_runs_by_name(run_name).await.map_err(Into::into)
 }
 
 fn format_ambiguous_runs(run_ref: &str, runs: &[RunProgress]) -> String {

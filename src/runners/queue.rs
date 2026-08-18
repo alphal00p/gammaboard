@@ -45,45 +45,49 @@ pub struct SamplerQueueConfig {
 
 impl SamplerQueueConfig {
     pub fn apply_tuning(&mut self, tuning: &SamplerQueueTuning) {
-        if let Some(value) = tuning.queue_buffer {
-            self.queue_buffer = value;
-        }
-        if let Some(value) = tuning.target_batch_eval_ms {
-            self.target_batch_eval_ms = value;
-        }
-        if let Some(value) = tuning.batch_size_deadband_ratio {
-            self.batch_size_deadband_ratio = value;
-        }
-        if let Some(value) = tuning.batch_size_cooldown_ticks {
-            self.batch_size_cooldown_ticks = value;
-        }
-        if let Some(value) = tuning.pending_refill_low_ratio {
-            self.pending_refill_low_ratio = value;
-        }
-        if let Some(value) = tuning.pending_refill_high_ratio {
-            self.pending_refill_high_ratio = value;
-        }
-        if let Some(value) = tuning.max_batch_size {
-            self.max_batch_size = value;
-        }
-        if let Some(value) = tuning.local_pending_buffer_multiplier {
-            self.local_pending_buffer_multiplier = value;
-        }
-        if let Some(value) = tuning.max_queue_size {
-            self.max_queue_size = value;
-        }
-        if let Some(value) = tuning.max_batches_per_tick {
-            self.max_batches_per_tick = value;
-        }
-        if let Some(value) = tuning.max_insert_bundle_size {
-            self.max_insert_bundle_size = value;
-        }
-        if let Some(value) = tuning.max_concurrent_insert_tasks {
-            self.max_concurrent_insert_tasks = value;
-        }
-        if let Some(value) = tuning.completed_batch_fetch_limit {
-            self.completed_batch_fetch_limit = value;
-        }
+        apply_option(&mut self.queue_buffer, tuning.queue_buffer);
+        apply_option(&mut self.target_batch_eval_ms, tuning.target_batch_eval_ms);
+        apply_option(
+            &mut self.batch_size_deadband_ratio,
+            tuning.batch_size_deadband_ratio,
+        );
+        apply_option(
+            &mut self.batch_size_cooldown_ticks,
+            tuning.batch_size_cooldown_ticks,
+        );
+        apply_option(
+            &mut self.pending_refill_low_ratio,
+            tuning.pending_refill_low_ratio,
+        );
+        apply_option(
+            &mut self.pending_refill_high_ratio,
+            tuning.pending_refill_high_ratio,
+        );
+        apply_option(&mut self.max_batch_size, tuning.max_batch_size);
+        apply_option(
+            &mut self.local_pending_buffer_multiplier,
+            tuning.local_pending_buffer_multiplier,
+        );
+        apply_option(&mut self.max_queue_size, tuning.max_queue_size);
+        apply_option(&mut self.max_batches_per_tick, tuning.max_batches_per_tick);
+        apply_option(
+            &mut self.max_insert_bundle_size,
+            tuning.max_insert_bundle_size,
+        );
+        apply_option(
+            &mut self.max_concurrent_insert_tasks,
+            tuning.max_concurrent_insert_tasks,
+        );
+        apply_option(
+            &mut self.completed_batch_fetch_limit,
+            tuning.completed_batch_fetch_limit,
+        );
+    }
+}
+
+fn apply_option<T>(destination: &mut T, value: Option<T>) {
+    if let Some(value) = value {
+        *destination = value;
     }
 }
 

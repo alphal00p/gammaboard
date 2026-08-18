@@ -302,7 +302,7 @@ impl TaskMeasurementSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct MeasurementSpec {
     pub source_task: String,
@@ -310,6 +310,17 @@ pub struct MeasurementSpec {
     pub metric: Option<MeasurementMetricSpec>,
     #[serde(default)]
     pub mode: MeasurementMode,
+}
+
+impl Default for MeasurementSpec {
+    fn default() -> Self {
+        Self {
+            source_task: "sample".to_string(),
+            quantity: MeasurementQuantitySpec::default(),
+            metric: None,
+            mode: MeasurementMode::default(),
+        }
+    }
 }
 
 impl MeasurementSpec {
@@ -481,25 +492,10 @@ impl ParameterScanMeasurementSpec {
     }
 }
 
-pub fn effective_parameter_scan_parameters(
-    parameter: &Option<ParameterScanParameterSpec>,
-    parameters: &[ParameterScanParameterSpec],
-) -> Result<Vec<ParameterScanParameterSpec>, String> {
-    match (parameter, parameters.is_empty()) {
-        (Some(_), false) => Err(
-            "parameter_scan must use either [parameter] or [[parameters]], not both".to_string(),
-        ),
-        (Some(parameter), true) => Ok(vec![parameter.clone()]),
-        (None, false) => Ok(parameters.to_vec()),
-        (None, true) => Err("parameter_scan.parameters must not be empty".to_string()),
+pub fn parameter_scan_grid_len(parameters: &[ParameterScanParameterSpec]) -> Option<usize> {
+    if parameters.is_empty() {
+        return None;
     }
-}
-
-pub fn parameter_scan_grid_len(
-    parameter: &Option<ParameterScanParameterSpec>,
-    parameters: &[ParameterScanParameterSpec],
-) -> Option<usize> {
-    let parameters = effective_parameter_scan_parameters(parameter, parameters).ok()?;
     parameters.iter().try_fold(1usize, |count, parameter| {
         count.checked_mul(parameter.values().ok()?.len())
     })
@@ -620,9 +616,7 @@ pub struct EgoboxOptimizerParams {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EgoboxInfillStrategy {
-    #[serde(alias = "expected_improvement")]
     Ei,
-    #[serde(alias = "log_expected_improvement")]
     LogEi,
     Wb2,
     Wb2s,
@@ -704,41 +698,7 @@ impl HyperparameterTuningOptimizerSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct HyperparameterTuningObjectiveSpec {
-    pub source_task: String,
-    pub quantity: MeasurementQuantitySpec,
-    pub metric: Option<MeasurementMetricSpec>,
-    #[serde(default)]
-    pub mode: MeasurementMode,
-}
-
-impl Default for HyperparameterTuningObjectiveSpec {
-    fn default() -> Self {
-        Self {
-            source_task: "sample".to_string(),
-            quantity: MeasurementQuantitySpec::default(),
-            metric: None,
-            mode: MeasurementMode::default(),
-        }
-    }
-}
-
-impl HyperparameterTuningObjectiveSpec {
-    pub fn validate(&self) -> Result<(), String> {
-        validate_source_name(
-            "hyperparameter_tuning.objective.source_task",
-            &self.source_task,
-        )?;
-        TaskMeasurementSpec {
-            quantity: self.quantity.clone(),
-            metric: self.metric.clone(),
-            mode: self.mode,
-        }
-        .validate()
-    }
-}
+pub type HyperparameterTuningObjectiveSpec = MeasurementSpec;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -902,27 +862,15 @@ pub enum SourceRefSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum SamplerAggregatorSourceSpec {
+pub enum StageSourceSpec<T> {
     Latest(String),
     FromName { from_name: String },
-    Config { config: SamplerAggregatorConfig },
+    Config { config: T },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum EvaluatorSourceSpec {
-    Latest(String),
-    FromName { from_name: String },
-    Config { config: EvaluatorConfig },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum AccumulatorSourceSpec {
-    Latest(String),
-    FromName { from_name: String },
-    Config { config: AccumulatorConfig },
-}
+pub type SamplerAggregatorSourceSpec = StageSourceSpec<SamplerAggregatorConfig>;
+pub type EvaluatorSourceSpec = StageSourceSpec<EvaluatorConfig>;
+pub type AccumulatorSourceSpec = StageSourceSpec<AccumulatorConfig>;
 
 fn validate_source_name(field: &str, from_name: &str) -> Result<(), String> {
     let trimmed = from_name.trim();
@@ -937,50 +885,20 @@ fn validate_source_name(field: &str, from_name: &str) -> Result<(), String> {
     Ok(())
 }
 
-impl SamplerAggregatorSourceSpec {
-    pub fn validate(&self) -> Result<(), String> {
+impl<T> StageSourceSpec<T> {
+    pub fn validate_ref(&self, field: &str) -> Result<(), String> {
         match self {
             Self::Latest(value) => {
                 if value == "latest" {
                     Ok(())
                 } else {
-                    Err("sampler_aggregator must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
+                    Err(format!(
+                        "{field} must be one of: \"latest\", {{ from_name = ... }}, {{ config = ... }}"
+                    ))
                 }
             }
-            Self::FromName { from_name } => validate_source_name("sampler_aggregator", from_name),
+            Self::FromName { from_name } => validate_source_name(field, from_name),
             Self::Config { .. } => Ok(()),
-        }
-    }
-}
-
-impl EvaluatorSourceSpec {
-    pub fn validate(&self) -> Result<(), String> {
-        match self {
-            Self::Latest(value) => {
-                if value == "latest" {
-                    Ok(())
-                } else {
-                    Err("evaluator must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
-                }
-            }
-            Self::FromName { from_name } => validate_source_name("evaluator", from_name),
-            Self::Config { .. } => Ok(()),
-        }
-    }
-}
-
-impl AccumulatorSourceSpec {
-    pub fn validate(&self) -> Result<(), String> {
-        match self {
-            Self::Latest(value) => {
-                if value == "latest" {
-                    Ok(())
-                } else {
-                    Err("accumulator must be one of: \"latest\", { from_name = ... }, { config = ... }".to_string())
-                }
-            }
-            Self::FromName { from_name } => validate_source_name("accumulator", from_name),
-            Self::Config { config } => config.validate(),
         }
     }
 }
@@ -1041,9 +959,6 @@ pub enum RunTaskSpec {
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     ParameterScan {
-        #[serde(default)]
-        parameter: Option<ParameterScanParameterSpec>,
-        #[serde(default)]
         parameters: Vec<ParameterScanParameterSpec>,
         #[serde(default)]
         measurement: ParameterScanMeasurementSpec,
@@ -1098,13 +1013,16 @@ impl RunTaskSpec {
                     measurement.validate()?;
                 }
                 if let Some(source) = evaluator {
-                    source.validate()?;
+                    source.validate_ref("evaluator")?;
                 }
                 if let Some(source) = sampler_aggregator {
-                    source.validate()?;
+                    source.validate_ref("sampler_aggregator")?;
                 }
                 if let Some(source) = accumulator {
-                    source.validate()?;
+                    source.validate_ref("accumulator")?;
+                    if let AccumulatorSourceSpec::Config { config } = source {
+                        config.validate()?;
+                    }
                 }
                 if let Some(queue_tuning) = queue_tuning {
                     queue_tuning.validate()?;
@@ -1116,7 +1034,7 @@ impl RunTaskSpec {
             } => {
                 geometry.validate()?;
                 if let Some(source) = evaluator {
-                    source.validate()?;
+                    source.validate_ref("evaluator")?;
                 }
                 Ok(())
             }
@@ -1134,7 +1052,7 @@ impl RunTaskSpec {
                                     .to_string(),
                             );
                         }
-                        _ => source.validate()?,
+                        _ => source.validate_ref("sampler_aggregator")?,
                     }
                 }
                 Ok(())
@@ -1153,7 +1071,7 @@ impl RunTaskSpec {
                                     .to_string(),
                             );
                         }
-                        _ => source.validate()?,
+                        _ => source.validate_ref("sampler_aggregator")?,
                     }
                 }
                 Ok(())
@@ -1163,19 +1081,20 @@ impl RunTaskSpec {
             } => {
                 geometry.validate()?;
                 if let Some(source) = evaluator {
-                    source.validate()?;
+                    source.validate_ref("evaluator")?;
                 }
                 Ok(())
             }
             Self::ParameterScan {
-                parameter,
                 parameters,
                 measurement,
                 trial_run_toml,
                 max_concurrent_runs,
             } => {
-                let parameters = effective_parameter_scan_parameters(parameter, parameters)?;
-                for parameter in &parameters {
+                if parameters.is_empty() {
+                    return Err("parameter_scan.parameters must not be empty".to_string());
+                }
+                for parameter in parameters {
                     parameter.validate()?;
                 }
                 measurement.validate()?;
@@ -1464,11 +1383,9 @@ impl RunTaskSpec {
             Self::PdfAdaptationImage { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PdfAdaptationPlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PlotLine { geometry, .. } => Some(geometry.nr_points() as i64),
-            Self::ParameterScan {
-                parameter,
-                parameters,
-                ..
-            } => parameter_scan_grid_len(parameter, parameters).map(|value| value as i64),
+            Self::ParameterScan { parameters, .. } => {
+                parameter_scan_grid_len(parameters).map(|value| value as i64)
+            }
             Self::HyperparameterTuning {
                 optimizer,
                 parameters,
@@ -1586,129 +1503,6 @@ fn hyperparameter_grid_domain_len(domain: &HyperparameterTuningParameterDomain) 
 
 pub fn generated_task_name(task: &RunTaskSpec, sequence_nr: i32) -> String {
     format!("{}-{sequence_nr}", task.kind_str())
-}
-
-pub trait IntoPreflightTask: Sized {
-    fn into_preflight(self) -> Result<Option<Self>, BuildError>;
-}
-
-impl IntoPreflightTask for RunTaskSpec {
-    fn into_preflight(self) -> Result<Option<Self>, BuildError> {
-        self.validate().map_err(BuildError::invalid_input)?;
-        match self {
-            Self::SetAccumulator { accumulator } => Ok(Some(Self::SetAccumulator { accumulator })),
-            Self::Sample {
-                mut stop_condition,
-                measurement,
-                evaluator,
-                sampler_aggregator,
-                accumulator,
-                queue_tuning,
-                batch_transforms,
-            } => Ok(Some(Self::Sample {
-                stop_condition: SampleStopCondition {
-                    min_samples: stop_condition.min_samples.take(),
-                    max_samples: Some(if stop_condition.max_samples == Some(0) {
-                        0
-                    } else {
-                        1
-                    }),
-                    absolute_error: stop_condition.absolute_error.take(),
-                    relative_error: stop_condition.relative_error.take(),
-                    projection: stop_condition.projection.take(),
-                    metric: stop_condition.metric.take(),
-                },
-                measurement,
-                evaluator,
-                sampler_aggregator,
-                accumulator,
-                queue_tuning,
-                batch_transforms,
-            })),
-            Self::Image {
-                mut geometry,
-                accumulator,
-                evaluator,
-                display,
-                batch_transforms,
-            } => {
-                geometry.reduce_for_preflight(4, 4);
-                Ok(Some(Self::Image {
-                    geometry,
-                    accumulator,
-                    evaluator,
-                    display,
-                    batch_transforms,
-                }))
-            }
-            Self::PdfAdaptationImage {
-                mut geometry,
-                sampler_aggregator,
-                batch_transforms,
-            } => {
-                geometry.reduce_for_preflight(4, 4);
-                Ok(Some(Self::PdfAdaptationImage {
-                    geometry,
-                    sampler_aggregator,
-                    batch_transforms,
-                }))
-            }
-            Self::PdfAdaptationPlotLine {
-                mut geometry,
-                sampler_aggregator,
-                batch_transforms,
-            } => {
-                geometry.reduce_for_preflight(8);
-                Ok(Some(Self::PdfAdaptationPlotLine {
-                    geometry,
-                    sampler_aggregator,
-                    batch_transforms,
-                }))
-            }
-            Self::PlotLine {
-                mut geometry,
-                accumulator,
-                evaluator,
-                display,
-                batch_transforms,
-            } => {
-                geometry.reduce_for_preflight(8);
-                Ok(Some(Self::PlotLine {
-                    geometry,
-                    accumulator,
-                    evaluator,
-                    display,
-                    batch_transforms,
-                }))
-            }
-            Self::ParameterScan {
-                parameter,
-                parameters,
-                measurement,
-                trial_run_toml,
-                max_concurrent_runs,
-            } => Ok(Some(Self::ParameterScan {
-                parameter,
-                parameters,
-                measurement,
-                trial_run_toml,
-                max_concurrent_runs,
-            })),
-            Self::HyperparameterTuning {
-                optimizer,
-                objective,
-                parameters,
-                trial_run_toml,
-                max_concurrent_trials,
-            } => Ok(Some(Self::HyperparameterTuning {
-                optimizer,
-                objective,
-                parameters,
-                trial_run_toml,
-                max_concurrent_trials,
-            })),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

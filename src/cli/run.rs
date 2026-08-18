@@ -1,5 +1,6 @@
 use super::shared::{
-    RunSelection, list_runs_by_name, resolve_run_ref, resolve_run_selection, with_control_store,
+    RunSelection, json_output_enabled, list_runs_by_name, print_json, resolve_run_ref,
+    resolve_run_selection, with_control_store,
 };
 use anyhow::{Result, anyhow};
 use clap::{Args, Subcommand};
@@ -8,6 +9,7 @@ use gammaboard::PgStore;
 use gammaboard::api::runs as run_api;
 use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore, SourceRefSpec};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Debug, Args)]
@@ -28,8 +30,20 @@ pub enum RunCommand {
     },
     /// List runs, optionally filtered by exact name
     List { run_name: Option<String> },
+    /// Show run state, tasks, persisted configuration, and recent logs
+    Inspect {
+        run: String,
+        #[arg(long, default_value_t = 100)]
+        log_limit: i64,
+    },
     /// Pause one run or all runs
     Pause(RunSelection),
+    /// Resume a run by assigning available nodes
+    Resume {
+        run: String,
+        #[arg(long)]
+        max_evaluators: Option<usize>,
+    },
     /// Delete one run or all runs
     Remove(RunSelection),
     /// Append, list, or remove queued run tasks
@@ -71,7 +85,14 @@ pub async fn run_run_commands(
                     new_name,
                 } => clone_run(&store, &source_run, from_snapshot_id, &new_name).await?,
                 RunCommand::List { run_name } => list_runs(&store, run_name.as_deref()).await?,
+                RunCommand::Inspect { run, log_limit } => {
+                    inspect_run(&store, &run, log_limit).await?
+                }
                 RunCommand::Pause(selection) => pause_runs(&store, selection).await?,
+                RunCommand::Resume {
+                    run,
+                    max_evaluators,
+                } => resume_run(&store, &run, max_evaluators).await?,
                 RunCommand::Remove(selection) => remove_runs(&store, selection).await?,
                 RunCommand::Task(args) => run_task_command(&store, args.command).await?,
             }
@@ -86,10 +107,54 @@ fn run_command_name(command: &RunCommand) -> &'static str {
         RunCommand::Create { .. } => "run_create",
         RunCommand::Clone { .. } => "run_clone",
         RunCommand::List { .. } => "run_list",
+        RunCommand::Inspect { .. } => "run_inspect",
         RunCommand::Pause(_) => "run_pause",
+        RunCommand::Resume { .. } => "run_resume",
         RunCommand::Remove(_) => "run_remove",
         RunCommand::Task(_) => "run_task",
     }
+}
+
+async fn inspect_run(store: &PgStore, run_ref: &str, log_limit: i64) -> Result<()> {
+    let run = resolve_run_ref(store, run_ref).await?;
+    let tasks = store.list_run_tasks(run.run_id).await?;
+    let logs = store
+        .get_runtime_logs(
+            log_limit.clamp(1, 500),
+            None,
+            Some(run.run_id),
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+    let output = serde_json::json!({"run": run, "tasks": tasks, "logs": logs});
+    if json_output_enabled() {
+        print_json(&output);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
+    Ok(())
+}
+
+async fn resume_run(store: &PgStore, run_ref: &str, max_evaluators: Option<usize>) -> Result<()> {
+    let run = resolve_run_ref(store, run_ref).await?;
+    let result = gammaboard::api::nodes::auto_assign_run(store, run.run_id, max_evaluators).await?;
+    if json_output_enabled() {
+        print_json(&result);
+    } else {
+        println!(
+            "resumed run_id={} run_name={} assigned_sampler={} assigned_evaluators={}",
+            result.run_id,
+            result.run_name,
+            result.assigned_sampler.as_deref().unwrap_or("none"),
+            result.assigned_evaluators.join(",")
+        );
+    }
+    Ok(())
 }
 
 async fn run_create(store: &PgStore, config_file: &PathBuf) -> Result<()> {
@@ -97,10 +162,14 @@ async fn run_create(store: &PgStore, config_file: &PathBuf) -> Result<()> {
     let created = run_api::create_run(store, config)
         .await
         .map_err(api_to_anyhow)?;
-    println!(
-        "created run_id={} name={}",
-        created.run_id, created.run_name
-    );
+    if json_output_enabled() {
+        print_json(&created);
+    } else {
+        println!(
+            "created run_id={} name={}",
+            created.run_id, created.run_name
+        );
+    }
     Ok(())
 }
 
@@ -115,14 +184,18 @@ async fn clone_run(
         .await
         .map_err(api_to_anyhow)?;
 
-    println!(
-        "cloned run_id={} name={} from run_id={} snapshot_id={} copied_tasks={}",
-        cloned.run_id,
-        cloned.run_name,
-        cloned.source_run_id,
-        cloned.from_snapshot_id,
-        cloned.cloned_tasks
-    );
+    if json_output_enabled() {
+        print_json(&cloned);
+    } else {
+        println!(
+            "cloned run_id={} name={} from run_id={} snapshot_id={} copied_tasks={}",
+            cloned.run_id,
+            cloned.run_name,
+            cloned.source_run_id,
+            cloned.from_snapshot_id,
+            cloned.cloned_tasks
+        );
+    }
     Ok(())
 }
 
@@ -131,31 +204,65 @@ async fn list_runs(store: &PgStore, run_name: Option<&str>) -> Result<()> {
         Some(run_name) => list_runs_by_name(store, run_name).await?,
         None => store.get_all_runs().await?,
     };
-    print_run_table(runs);
+    if json_output_enabled() {
+        print_json(&runs);
+    } else {
+        print_run_table(runs);
+    }
     Ok(())
 }
 
 async fn pause_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
     if selection.all {
         let assignments_cleared = store.clear_all_desired_assignments().await?;
-        println!("paused all runs: assignments_cleared={assignments_cleared}");
+        if json_output_enabled() {
+            print_json(
+                &serde_json::json!({"all": true, "assignments_cleared": assignments_cleared}),
+            );
+        } else {
+            println!("paused all runs: assignments_cleared={assignments_cleared}");
+        }
         return Ok(());
     }
 
+    let mut paused = Vec::new();
     for run in resolve_run_selection(store, selection).await? {
-        let assignments_cleared = run_api::pause_run(store, run.run_id)
+        let result = run_api::pause_run(store, run.run_id)
             .await
-            .map_err(api_to_anyhow)?
-            .assignments_cleared;
-        println!(
-            "run {} ({}) paused assignments_cleared={}",
-            run.run_id, run.run_name, assignments_cleared
-        );
+            .map_err(api_to_anyhow)?;
+        if !json_output_enabled() {
+            println!(
+                "run {} ({}) paused assignments_cleared={}",
+                run.run_id, run.run_name, result.assignments_cleared
+            );
+        }
+        paused.push(result);
+    }
+    if json_output_enabled() {
+        print_json(&paused);
     }
     Ok(())
 }
 
 async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
+    if !selection.dry_run && !selection.yes && !std::io::stdin().is_terminal() {
+        return Err(anyhow!("run remove requires --yes in non-interactive mode"));
+    }
+    if selection.dry_run {
+        let runs = if selection.all {
+            store.get_all_runs().await?
+        } else {
+            resolve_run_selection(store, selection).await?
+        };
+        if json_output_enabled() {
+            print_json(&serde_json::json!({"dry_run": true, "runs": runs}));
+        } else {
+            for run in runs {
+                println!("would remove run {} ({})", run.run_id, run.run_name);
+            }
+        }
+        return Ok(());
+    }
     if selection.all {
         let runs = store.get_all_runs().await?;
         let mut removed = 0u64;
@@ -165,15 +272,26 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
                 .map_err(api_to_anyhow)?;
             removed += 1;
         }
-        println!("removed all runs: removed={removed}");
+        if json_output_enabled() {
+            print_json(&serde_json::json!({"all": true, "removed": removed}));
+        } else {
+            println!("removed all runs: removed={removed}");
+        }
         return Ok(());
     }
 
+    let mut removed = Vec::new();
     for run in resolve_run_selection(store, selection).await? {
-        run_api::remove_run(store, run.run_id)
+        let result = run_api::remove_run(store, run.run_id)
             .await
             .map_err(api_to_anyhow)?;
-        println!("removed run {} ({})", run.run_id, run.run_name);
+        if !json_output_enabled() {
+            println!("removed run {} ({})", run.run_id, run.run_name);
+        }
+        removed.push(result);
+    }
+    if json_output_enabled() {
+        print_json(&removed);
     }
     Ok(())
 }
@@ -190,15 +308,23 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
             )
             .await
             .map_err(api_to_anyhow)?;
-            println!(
-                "appended run tasks: run_id={run_id} count={}",
-                inserted.tasks.len()
-            );
+            if json_output_enabled() {
+                print_json(&inserted.tasks);
+            } else {
+                println!(
+                    "appended run tasks: run_id={run_id} count={}",
+                    inserted.tasks.len()
+                );
+            }
         }
         TaskCommand::List { run } => {
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;
             let tasks = store.list_run_tasks(run_id).await?;
+            if json_output_enabled() {
+                print_json(&tasks);
+                return Ok(());
+            }
             if tasks.is_empty() {
                 println!("no tasks found for run_id={run_id}");
             }
@@ -233,7 +359,13 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
             run_api::remove_pending_task(store, run_id, task_id)
                 .await
                 .map_err(api_to_anyhow)?;
-            println!("removed pending run task: run_id={run_id} task_id={task_id}");
+            if json_output_enabled() {
+                print_json(
+                    &serde_json::json!({"run_id": run_id, "task_id": task_id, "removed": true}),
+                );
+            } else {
+                println!("removed pending run task: run_id={run_id} task_id={task_id}");
+            }
         }
     }
     Ok(())

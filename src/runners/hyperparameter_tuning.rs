@@ -1,3 +1,4 @@
+use crate::api::runs::{ChildRunRequest, create_child_run};
 use crate::core::{
     AccumulatorMetricName, AggregationStore, ControlPlaneStore, EgoboxInfillStrategy,
     EgoboxQeiStrategy, HyperparameterTuningAlgorithm, HyperparameterTuningObjectiveSpec,
@@ -6,9 +7,7 @@ use crate::core::{
     RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerChildRunRequest, choose_child_capacity, create_controller_child_run,
-    list_child_runs_for_task, load_child_task_measurement,
-    redistribute_parent_assignments_to_children,
+    load_child_task_measurement, redistribute_parent_assignments_to_children,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use egobox_ego::{EgorServiceBuilder, InfillStrategy, QEiStrategy, XType};
@@ -120,13 +119,10 @@ where
             ));
         };
 
-        let child_runs = list_child_runs_for_task(
-            &self.store,
-            self.run_id,
-            self.task.id,
-            HYPERPARAMETER_TUNING_SPAWN_KIND,
-        )
-        .await?;
+        let child_runs = self
+            .store
+            .get_child_runs_for_task(self.run_id, self.task.id, HYPERPARAMETER_TUNING_SPAWN_KIND)
+            .await?;
         let child_runs_by_label = child_runs
             .iter()
             .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
@@ -147,8 +143,7 @@ where
                     && trial.status != "failed"
             })
             .count();
-        let candidate_capacity =
-            choose_child_capacity(*max_concurrent_trials, previous_running_count);
+        let candidate_capacity = max_concurrent_trials.saturating_sub(previous_running_count);
         let optimizer_plan = plan_optimizer_trials(
             optimizer,
             parameters,
@@ -324,7 +319,7 @@ where
         }
 
         let mut created_child_run_ids = Vec::new();
-        let mut capacity = choose_child_capacity(*max_concurrent_trials, running_count);
+        let mut capacity = max_concurrent_trials.saturating_sub(running_count);
         if capacity > 0 {
             for index in candidates_by_index.keys().copied().collect::<Vec<_>>() {
                 if capacity == 0 {
@@ -341,13 +336,13 @@ where
                     })?
                     .parameters
                     .clone();
-                let child = match create_controller_child_run(
+                let child = match create_child_run(
                     &self.store,
-                    ControllerChildRunRequest {
+                    ChildRunRequest {
                         parent_run_id: self.run_id,
-                        parent_task_id: self.task.id,
+                        parent_task_id: Some(self.task.id),
                         spawn_kind: HYPERPARAMETER_TUNING_SPAWN_KIND.to_string(),
-                        spawn_label: label,
+                        spawn_label: Some(label),
                         run_toml: trial_run_toml.clone(),
                         replacements,
                     },

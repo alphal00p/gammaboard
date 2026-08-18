@@ -1,12 +1,11 @@
+use crate::api::runs::{ChildRunRequest, create_child_run};
 use crate::core::StoreResultExt;
 use crate::core::{
     AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
-    RunTaskStore, StoreError, TaskMeasurementOutput, effective_parameter_scan_parameters,
+    RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerChildRunRequest, choose_child_capacity, create_controller_child_run,
-    list_child_runs_for_task, load_child_task_measurement,
-    redistribute_parent_assignments_to_children,
+    load_child_task_measurement, redistribute_parent_assignments_to_children,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use serde::{Deserialize, Serialize};
@@ -64,7 +63,6 @@ where
 {
     pub async fn tick(&mut self) -> Result<bool, StoreError> {
         let RunTaskSpec::ParameterScan {
-            parameter,
             parameters,
             measurement,
             trial_run_toml,
@@ -73,18 +71,13 @@ where
         else {
             return Err(StoreError::store("parameter scan runner got non-scan task"));
         };
-        let parameters = effective_parameter_scan_parameters(parameter, parameters)
-            .map_err(StoreError::store)?;
-        let grid_items = parameter_scan_grid_items(&parameters)?;
+        let grid_items = parameter_scan_grid_items(parameters)?;
         let total_points = cartesian_grid_len(&grid_items)?;
 
-        let child_runs = list_child_runs_for_task(
-            &self.store,
-            self.run_id,
-            self.task.id,
-            PARAMETER_SCAN_SPAWN_KIND,
-        )
-        .await?;
+        let child_runs = self
+            .store
+            .get_child_runs_for_task(self.run_id, self.task.id, PARAMETER_SCAN_SPAWN_KIND)
+            .await?;
         let child_runs_by_label = child_runs
             .iter()
             .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
@@ -188,7 +181,7 @@ where
         }
 
         let mut created_child_run_ids = Vec::new();
-        let mut capacity = choose_child_capacity(*max_concurrent_runs, running_count);
+        let mut capacity = max_concurrent_runs.saturating_sub(running_count);
         if capacity > 0 {
             for index in 0..total_points {
                 if capacity == 0 {
@@ -199,13 +192,13 @@ where
                     continue;
                 }
                 let replacements = cartesian_grid_point(&grid_items, index)?;
-                let child = create_controller_child_run(
+                let child = create_child_run(
                     &self.store,
-                    ControllerChildRunRequest {
+                    ChildRunRequest {
                         parent_run_id: self.run_id,
-                        parent_task_id: self.task.id,
+                        parent_task_id: Some(self.task.id),
                         spawn_kind: PARAMETER_SCAN_SPAWN_KIND.to_string(),
-                        spawn_label: index_label,
+                        spawn_label: Some(index_label),
                         run_toml: trial_run_toml.clone(),
                         replacements,
                     },

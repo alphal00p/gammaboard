@@ -3,6 +3,7 @@ use crate::core::{
     CapabilityRequirements, ControlPlaneStore, NodeCapabilities, NodeLaunchRequest, RegisteredNode,
     RunReadStore, RunSpecStore, WorkerRole,
 };
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -15,7 +16,7 @@ pub struct AssignedNode {
     pub role: WorkerRole,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AutoAssignResult {
     pub run_id: i32,
     pub run_name: String,
@@ -112,11 +113,7 @@ pub async fn mark_node_launch_request_starting(
     started_count: usize,
     result: &JsonValue,
 ) -> Result<NodeLaunchRequest, ApiError> {
-    let started_count = i32::try_from(started_count)
-        .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
-    Ok(store
-        .update_node_launch_request_state(id, "starting", started_count, result, None)
-        .await?)
+    update_node_launch_request_state(store, id, "starting", started_count, result, None).await
 }
 
 pub async fn mark_node_launch_request_running(
@@ -125,11 +122,7 @@ pub async fn mark_node_launch_request_running(
     started_count: usize,
     result: &JsonValue,
 ) -> Result<NodeLaunchRequest, ApiError> {
-    let started_count = i32::try_from(started_count)
-        .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
-    Ok(store
-        .update_node_launch_request_state(id, "running", started_count, result, None)
-        .await?)
+    update_node_launch_request_state(store, id, "running", started_count, result, None).await
 }
 
 pub async fn mark_node_launch_request_failed(
@@ -139,11 +132,7 @@ pub async fn mark_node_launch_request_failed(
     result: &JsonValue,
     error: &str,
 ) -> Result<NodeLaunchRequest, ApiError> {
-    let started_count = i32::try_from(started_count)
-        .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
-    Ok(store
-        .update_node_launch_request_state(id, "failed", started_count, result, Some(error))
-        .await?)
+    update_node_launch_request_state(store, id, "failed", started_count, result, Some(error)).await
 }
 
 pub async fn mark_node_launch_request_canceled(
@@ -152,10 +141,21 @@ pub async fn mark_node_launch_request_canceled(
     started_count: usize,
     result: &JsonValue,
 ) -> Result<NodeLaunchRequest, ApiError> {
+    update_node_launch_request_state(store, id, "canceled", started_count, result, None).await
+}
+
+async fn update_node_launch_request_state(
+    store: &impl ControlPlaneStore,
+    id: i64,
+    state: &str,
+    started_count: usize,
+    result: &JsonValue,
+    error: Option<&str>,
+) -> Result<NodeLaunchRequest, ApiError> {
     let started_count = i32::try_from(started_count)
         .map_err(|_| ApiError::Internal("started node count is too large".to_string()))?;
     Ok(store
-        .update_node_launch_request_state(id, "canceled", started_count, result, None)
+        .update_node_launch_request_state(id, state, started_count, result, error)
         .await?)
 }
 

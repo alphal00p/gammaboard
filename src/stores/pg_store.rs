@@ -257,6 +257,25 @@ fn parse_run_create_payload(integration_params: &JsonValue) -> Result<JsonValue,
     Ok(JsonValue::Object(root))
 }
 
+fn decode_node_assignment(
+    node_name: &str,
+    role: Option<String>,
+    run_id: Option<i32>,
+    run_name: Option<String>,
+    invalid_row_message: &str,
+) -> Result<Option<DesiredAssignment>, StoreError> {
+    match (role, run_id) {
+        (Some(role), Some(run_id)) => Ok(Some(DesiredAssignment {
+            node_name: node_name.to_string(),
+            role: role.parse().map_err(store_err)?,
+            run_id,
+            run_name,
+        })),
+        (None, None) => Ok(None),
+        _ => Err(store_err(invalid_row_message)),
+    }
+}
+
 #[async_trait::async_trait]
 impl RunReadStore for PgStore {
     async fn health_check(&self) -> Result<(), StoreError> {
@@ -273,6 +292,38 @@ impl RunReadStore for PgStore {
         run_id: i32,
     ) -> Result<Option<crate::stores::RunProgress>, StoreError> {
         Ok(queries::get_run_progress(&self.pool, run_id).await?)
+    }
+
+    async fn get_runs_by_name(
+        &self,
+        run_name: &str,
+    ) -> Result<Vec<crate::stores::RunProgress>, StoreError> {
+        Ok(queries::get_runs_by_name(&self.pool, run_name).await?)
+    }
+
+    async fn get_runs_page(
+        &self,
+        limit: usize,
+        offset: usize,
+        include_children: bool,
+    ) -> Result<Vec<crate::stores::RunProgress>, StoreError> {
+        Ok(queries::get_runs_page(&self.pool, limit, offset, include_children).await?)
+    }
+
+    async fn get_control_plane_run_ids(&self) -> Result<Vec<i32>, StoreError> {
+        Ok(queries::get_control_plane_run_ids(&self.pool).await?)
+    }
+
+    async fn get_child_runs_for_task(
+        &self,
+        parent_run_id: i32,
+        parent_task_id: i64,
+        spawn_kind: &str,
+    ) -> Result<Vec<crate::stores::RunProgress>, StoreError> {
+        Ok(
+            queries::get_child_runs_for_task(&self.pool, parent_run_id, parent_task_id, spawn_kind)
+                .await?,
+        )
     }
 
     async fn get_work_queue_stats(
@@ -521,26 +572,20 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let desired_assignment = match (row.desired_role, row.desired_run_id) {
-                (Some(role), Some(run_id)) => Some(DesiredAssignment {
-                    node_name: row.name.clone(),
-                    role: role.parse().map_err(store_err)?,
-                    run_id,
-                    run_name: row.desired_run_name,
-                }),
-                (None, None) => None,
-                _ => return Err(store_err("invalid node assignment row")),
-            };
-            let current_assignment = match (row.current_role, row.current_run_id) {
-                (Some(role), Some(run_id)) => Some(DesiredAssignment {
-                    node_name: row.name.clone(),
-                    role: role.parse().map_err(store_err)?,
-                    run_id,
-                    run_name: row.current_run_name,
-                }),
-                (None, None) => None,
-                _ => return Err(store_err("invalid current node assignment row")),
-            };
+            let desired_assignment = decode_node_assignment(
+                &row.name,
+                row.desired_role,
+                row.desired_run_id,
+                row.desired_run_name,
+                "invalid node assignment row",
+            )?;
+            let current_assignment = decode_node_assignment(
+                &row.name,
+                row.current_role,
+                row.current_run_id,
+                row.current_run_name,
+                "invalid current node assignment row",
+            )?;
             out.push(RegisteredNode {
                 name: row.name,
                 uuid: row.uuid,
@@ -756,6 +801,22 @@ impl ControlPlaneStore for PgStore {
         )
         .await
         .map_err(map_sqlx)
+    }
+
+    async fn record_evaluator_metadata(
+        &self,
+        run_id: i32,
+        metadata: &JsonValue,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE runs SET provenance = jsonb_set(provenance, '{evaluator_metadata}', $2, true) WHERE id = $1",
+        )
+        .bind(run_id)
+        .bind(metadata)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        Ok(())
     }
 
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {

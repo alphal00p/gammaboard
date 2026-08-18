@@ -166,16 +166,15 @@ pub(crate) async fn get_pending_batch_count(
 ) -> Result<i64, sqlx::Error> {
     let count = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT COUNT(*)
-        FROM batches
+        SELECT COALESCE(pending_batches, 0)
+        FROM run_batch_queue_counters
         WHERE run_id = $1
-          AND status = 'pending'
         "#,
     )
     .bind(run_id)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(count)
+    Ok(count.unwrap_or(0))
 }
 
 pub(crate) async fn get_batch_queue_counts(
@@ -187,12 +186,18 @@ pub(crate) async fn get_batch_queue_counts(
     let (pending, claimed, completed, failed) = sqlx::query_as::<_, (i64, i64, i64, i64)>(
         r#"
         SELECT
-            COUNT(*) FILTER (WHERE status = 'pending') AS pending,
-            COUNT(*) FILTER (WHERE status = 'claimed') AS claimed,
-            COUNT(*) FILTER (WHERE status = 'completed' AND id > $2) AS completed,
-            COUNT(*) FILTER (WHERE status = 'failed') AS failed
-        FROM batches
-        WHERE run_id = $1
+            COALESCE(c.pending_batches, 0),
+            COALESCE(c.claimed_batches, 0),
+            (
+                SELECT COUNT(*)
+                FROM batches
+                WHERE run_id = $1
+                  AND status = 'completed'
+                  AND id > $2
+            ),
+            COALESCE(c.failed_batches, 0)
+        FROM (SELECT 1) seed
+        LEFT JOIN run_batch_queue_counters c ON c.run_id = $1
         "#,
     )
     .bind(run_id)
@@ -210,16 +215,15 @@ pub(crate) async fn get_batch_queue_counts(
 pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i64, sqlx::Error> {
     let count = sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT COUNT(*)
-        FROM batches
+        SELECT COALESCE(pending_batches + claimed_batches + completed_batches, 0)
+        FROM run_batch_queue_counters
         WHERE run_id = $1
-          AND status IN ('pending', 'claimed', 'completed')
         "#,
     )
     .bind(run_id)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    Ok(count)
+    Ok(count.unwrap_or(0))
 }
 
 pub(crate) async fn fetch_batches_by_status(
