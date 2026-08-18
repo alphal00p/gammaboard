@@ -1,7 +1,7 @@
 # Real-valued Monte Carlo sampling.
 # Requires: an existing scalar-compatible run.
 # Scale: 1000 samples; normally a few seconds.
-# Run: ./gammaboard run task add <RUN> resources/templates/tasks/sample_monte_carlo_real.toml
+# Run: ./gammaboard run task append <RUN> resources/templates/tasks/sample_monte_carlo_real.toml
 
 replacements = { samples = 1_000 }
 

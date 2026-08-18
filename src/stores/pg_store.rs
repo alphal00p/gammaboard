@@ -655,6 +655,7 @@ impl ControlPlaneStore for PgStore {
         &self,
         name: &str,
         run_toml: &str,
+        provenance: &serde_json::Value,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         domain: &Domain,
@@ -668,16 +669,18 @@ impl ControlPlaneStore for PgStore {
             INSERT INTO runs (
                 name,
                 run_toml,
+                provenance,
                 integration_params,
                 target,
                 point_spec
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
             "#,
         )
         .bind(name)
         .bind(run_toml)
+        .bind(provenance)
         .bind(&sanitized_params)
         .bind(target)
         .bind(sqlx::types::Json(domain))

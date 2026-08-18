@@ -16,7 +16,9 @@ include = [
     "/ops/ubelix/resources/templates/**",
     "/Cargo.toml",
     "/Cargo.lock",
+    "/build.rs",
     "/README.md",
+    "/CHANGELOG.md",
     "/LICENSE",
 ]
 
@@ -52,6 +54,7 @@ anyhow = "1"
 comfy-table = "7"
 uuid = { version = "1", features = ["v4", "serde"] }
 argon2 = "0.5"
+rpassword = "7"
 jsonwebtoken = "9"
 url = "2"
 egobox-ego = "0.37"

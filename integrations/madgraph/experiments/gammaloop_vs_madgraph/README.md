@@ -16,7 +16,7 @@ Analytic photon-only value: `N_c * Q_d^2 * 4*pi*alpha^2/(3 s) = 3.096e-2 pb`
 
 Both run havana training (1e6 samples, samples_for_update = 5e4, 128 bins) then
 havana inference (1e7 samples). Paths inside resolve against the gammaboard repo
-root; run `gammaboard run add <file>` from there. Artifact build steps are in
+root; run `gammaboard run create <file>` from there. Artifact build steps are in
 each config header.
 
 GammaLoop's `epem_a_ddx` is the photon self-energy supergraph (no Z). MadGraph's

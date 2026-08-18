@@ -1,7 +1,7 @@
 # Parameter scan demo: compare 1D, 2D, and 3D Cartesian scans.
 # Requires: a working Symbolica runtime license.
 # Scale: 26 short child runs with 4096 samples each.
-# Run: ./gammaboard run add resources/templates/runs/parameter-scan-symbolica.toml
+# Run: ./gammaboard run create resources/templates/runs/parameter-scan-symbolica.toml
 #
 # Each child run integrates
 #

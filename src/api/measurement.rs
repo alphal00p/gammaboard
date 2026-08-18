@@ -728,6 +728,7 @@ mod tests {
             &self,
             _name: &str,
             _run_toml: &str,
+            _provenance: &JsonValue,
             _integration_params: &JsonValue,
             _target: Option<&JsonValue>,
             _domain: &crate::utils::domain::Domain,

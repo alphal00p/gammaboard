@@ -3,7 +3,7 @@
 # physics/results in ./README.md.
 #
 # Run from the gammaboard repo root:
-#   gammaboard run add integrations/madgraph/experiments/gammaloop_vs_madgraph/ee_ddx_gammaloop.toml
+#   gammaboard run create integrations/madgraph/experiments/gammaloop_vs_madgraph/ee_ddx_gammaloop.toml
 #
 # Build the artifact (from repo root; gammaloop a sister dir of gammaboard). The
 # card already sets e_cm = 1000.0 and integral_unit = "picobarn":

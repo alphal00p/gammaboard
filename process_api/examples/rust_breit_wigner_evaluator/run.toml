@@ -1,7 +1,7 @@
 # Rust process evaluator with nested/ragged Breit-Wigner domains.
 # Requires: Apptainer and `just process-rust-breit-wigner-sif`.
 # Scale: a small protocol example; normally seconds after image construction.
-# Run: ./gammaboard run add process_api/examples/rust_breit_wigner_evaluator/run.toml
+# Run: ./gammaboard run create process_api/examples/rust_breit_wigner_evaluator/run.toml
 
 name = "rust-breit-wigner-evaluator-demo"
 

@@ -91,7 +91,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Backend owns panel/read-model semantics; frontend should render generic panel payloads.
 
 ## Ops Rules
-- `gammaboard deploy run` is the normal dashboard stack supervisor for nginx/backend/Postgres.
+- `gammaboard deploy` is the normal dashboard stack supervisor for nginx/backend/Postgres.
 - `server.toml` owns both backend API settings and deploy exposure/cleanup settings; there is no separate deploy config.
 - `server.toml` also owns the human-facing server `name` shown by the frontend connection status and settings view.
 - `--port-offset` is a global runtime/deploy option: it shifts frontend/API/Postgres ports and local Postgres state paths for every spawned child process.

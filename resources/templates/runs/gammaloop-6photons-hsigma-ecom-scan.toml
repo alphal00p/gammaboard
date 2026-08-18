@@ -1,7 +1,7 @@
 # GammaLoop 1L massive six-photon h-function sigma / center-of-mass energy scan.
 # Requires: GammaLoop support and the generated six-photon state below.
 # Scale: a heavy multi-run loop calculation; reduce replacements when testing.
-# Run: ./gammaboard run add resources/templates/runs/gammaloop-6photons-hsigma-ecom-scan.toml
+# Run: ./gammaboard run create resources/templates/runs/gammaloop-6photons-hsigma-ecom-scan.toml
 #
 # Source state:
 #

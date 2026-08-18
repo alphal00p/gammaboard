@@ -9,8 +9,7 @@ pub mod server;
 pub mod shared;
 
 use anyhow::Result;
-use auth::{AuthArgs, run_auth_hash_command};
-use auto_assign::{AutoAssignArgs, run_auto_assign_command};
+use auth::{AuthArgs, run_auth_command};
 use clap::{ArgAction, Parser, Subcommand};
 use completion::{CompletionArgs, run_completion};
 use db::{DbArgs, run_db_command};
@@ -44,8 +43,6 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Assign free nodes to a run automatically
-    AutoAssign(AutoAssignArgs),
     /// Run lifecycle commands
     Run(RunArgs),
     /// Node assignment and node lifecycle commands
@@ -80,13 +77,40 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
     )?;
     let config = runtime.runtime_config();
     match cli.command {
-        Command::AutoAssign(args) => run_auto_assign_command(args, config, quiet).await,
         Command::Run(args) => run_run_commands(args.command, config, quiet).await,
         Command::Node(args) => run_node_commands(args.command, &runtime, quiet).await,
         Command::Server(args) => run_server(args, &runtime, quiet).await,
-        Command::Auth(args) => run_auth_hash_command(args),
+        Command::Auth(args) => run_auth_command(args),
         Command::Completion(args) => run_completion(args),
         Command::Db(args) => run_db_command(args, config),
         Command::Deploy(args) => run_deploy_command(args, &runtime).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+
+    #[test]
+    fn public_command_tree_uses_release_names() {
+        let command = Cli::command();
+        let run = command.find_subcommand("run").expect("run command");
+        assert!(run.find_subcommand("create").is_some());
+        assert!(run.find_subcommand("add").is_none());
+        let task = run.find_subcommand("task").expect("run task command");
+        assert!(task.find_subcommand("append").is_some());
+        assert!(task.find_subcommand("add").is_none());
+
+        let node = command.find_subcommand("node").expect("node command");
+        assert!(node.find_subcommand("auto-assign").is_some());
+        assert!(node.find_subcommand("start-local").is_some());
+        assert!(node.find_subcommand("auto-run").is_none());
+        assert!(command.find_subcommand("auto-assign").is_none());
+
+        let auth = command.find_subcommand("auth").expect("auth command");
+        assert!(auth.find_subcommand("hash-password").is_some());
+        let deploy = command.find_subcommand("deploy").expect("deploy command");
+        assert!(deploy.find_subcommand("run").is_none());
     }
 }

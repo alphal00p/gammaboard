@@ -1,7 +1,7 @@
 # Symbolica precompiled evaluator Egobox tuning demo.
 # Requires: a C++ compiler, variable_theta.so, and the Egobox feature path.
 # Scale: iterative hyperparameter tuning; this is not a smoke test.
-# Run: ./gammaboard run add resources/templates/runs/symbolica-variable-smooth-egobox.toml
+# Run: ./gammaboard run create resources/templates/runs/symbolica-variable-smooth-egobox.toml
 #
 # This reuses the `variable_theta` shared library used by the mass-scan demo:
 #

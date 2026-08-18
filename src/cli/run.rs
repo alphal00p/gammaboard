@@ -19,7 +19,7 @@ pub struct RunArgs {
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
     /// Create a run from a run TOML file
-    Add { config_file: PathBuf },
+    Create { config_file: PathBuf },
     /// Clone a run from a persisted stage snapshot
     Clone {
         source_run: String,
@@ -32,7 +32,7 @@ pub enum RunCommand {
     Pause(RunSelection),
     /// Delete one run or all runs
     Remove(RunSelection),
-    /// Add, list, or remove queued run tasks
+    /// Append, list, or remove queued run tasks
     Task(TaskArgs),
 }
 
@@ -45,7 +45,7 @@ pub struct TaskArgs {
 #[derive(Debug, Subcommand)]
 pub enum TaskCommand {
     /// Append tasks from a task TOML file
-    Add { run: String, task_file: PathBuf },
+    Append { run: String, task_file: PathBuf },
     /// List queued and historical tasks for a run
     List { run: String },
     /// Remove a pending task
@@ -64,7 +64,7 @@ pub async fn run_run_commands(
         run_command_name(&command),
         |store| async move {
             match command {
-                RunCommand::Add { config_file } => run_add(&store, &config_file).await?,
+                RunCommand::Create { config_file } => run_create(&store, &config_file).await?,
                 RunCommand::Clone {
                     source_run,
                     from_snapshot_id,
@@ -83,7 +83,7 @@ pub async fn run_run_commands(
 
 fn run_command_name(command: &RunCommand) -> &'static str {
     match command {
-        RunCommand::Add { .. } => "run_add",
+        RunCommand::Create { .. } => "run_create",
         RunCommand::Clone { .. } => "run_clone",
         RunCommand::List { .. } => "run_list",
         RunCommand::Pause(_) => "run_pause",
@@ -92,7 +92,7 @@ fn run_command_name(command: &RunCommand) -> &'static str {
     }
 }
 
-async fn run_add(store: &PgStore, config_file: &PathBuf) -> Result<()> {
+async fn run_create(store: &PgStore, config_file: &PathBuf) -> Result<()> {
     let config = run_api::load_run_add_config_file(config_file).map_err(api_to_anyhow)?;
     let created = run_api::create_run(store, config)
         .await
@@ -180,7 +180,7 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
 
 async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
     match command {
-        TaskCommand::Add { run, task_file } => {
+        TaskCommand::Append { run, task_file } => {
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;
             let inserted = run_api::append_tasks(

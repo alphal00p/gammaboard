@@ -2,7 +2,7 @@
 # MadGraph7/MadSpace half of the GammaLoop comparison; physics/results in ./README.md.
 #
 # Run from the gammaboard repo root:
-#   gammaboard run add integrations/madgraph/experiments/gammaloop_vs_madgraph/ee_ddx_madgraph.toml
+#   gammaboard run create integrations/madgraph/experiments/gammaloop_vs_madgraph/ee_ddx_madgraph.toml
 #
 # Build the artifact (from repo root; MadGraph7 a sister dir of gammaboard, and
 # the wrapper venv at integrations/madgraph/.venv installed -- see ../../README.md):

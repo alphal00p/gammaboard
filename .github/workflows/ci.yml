@@ -52,9 +52,18 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade build pytest
       - run: python -m build process_api/python
-      - run: python -m pip install -e process_api/python
+      - name: Install process wheel into a clean environment
+        run: |
+          python -m venv /tmp/gammaboard-process-wheel
+          /tmp/gammaboard-process-wheel/bin/pip install process_api/python/dist/*.whl
+          /tmp/gammaboard-process-wheel/bin/python -c 'import gammaboard_process'
+      - run: python -m pip install process_api/python/dist/*.whl
       - run: python -m pip install --no-deps -e integrations/madgraph
       - run: python -m pytest -q integrations/madgraph/tests
+      - name: Reject retired CLI and protocol spellings
+        run: |
+          ! rg -n '(run add|run task add|node auto-run|deploy run|gammaboard-jsonrpc-v1)' \
+            README.md TODO.md docs integrations ops resources process_api justfile
       - name: Validate tracked TOML
         run: |
           python - <<'PY'

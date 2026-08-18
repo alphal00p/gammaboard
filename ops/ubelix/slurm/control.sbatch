@@ -65,4 +65,4 @@ apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --resource-root "${WORKSPACE_ROOT}/resources" \
   --port-offset "${PORT_OFFSET}" \
   --postgres-public \
-  deploy run --server-config "${SERVER_CFG}"
+  deploy --server-config "${SERVER_CFG}"

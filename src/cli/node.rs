@@ -1,3 +1,4 @@
+use super::auto_assign::{AutoAssignArgs, run_auto_assign_command};
 use super::shared::{NodeSelection, RoleArg, resolve_run_ref, with_cli_store, with_control_store};
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
@@ -21,7 +22,9 @@ pub enum NodeCommand {
     /// Run one worker node in the foreground
     Run(NodeRunArgs),
     /// Spawn local worker node processes
-    AutoRun(AutoRunArgs),
+    StartLocal(AutoRunArgs),
+    /// Assign free nodes to a run automatically
+    AutoAssign(AutoAssignArgs),
     /// Assign a node role for a run
     Assign {
         node_name: String,
@@ -96,8 +99,12 @@ pub async fn run_node_commands(
         return run_node(args, config, quiet).await;
     }
 
-    if let NodeCommand::AutoRun(args) = command {
+    if let NodeCommand::StartLocal(args) = command {
         return run_auto_run_command(args, runtime, quiet).await;
+    }
+
+    if let NodeCommand::AutoAssign(args) = command {
+        return run_auto_assign_command(args, config, quiet).await;
     }
 
     with_control_store(
@@ -129,7 +136,9 @@ pub async fn run_node_commands(
                     print_node_table(build_node_rows(nodes));
                 }
                 NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
-                NodeCommand::Run(_) | NodeCommand::AutoRun(_) => unreachable!(),
+                NodeCommand::Run(_) | NodeCommand::StartLocal(_) | NodeCommand::AutoAssign(_) => {
+                    unreachable!()
+                }
             }
             Ok(())
         },
@@ -140,7 +149,8 @@ pub async fn run_node_commands(
 fn node_command_name(command: &NodeCommand) -> &'static str {
     match command {
         NodeCommand::Run(_) => "node_run",
-        NodeCommand::AutoRun(_) => "node_auto_run",
+        NodeCommand::StartLocal(_) => "node_start_local",
+        NodeCommand::AutoAssign(_) => "node_auto_assign",
         NodeCommand::Assign { .. } => "node_assign",
         NodeCommand::Unassign { .. } => "node_unassign",
         NodeCommand::List { .. } => "node_list",

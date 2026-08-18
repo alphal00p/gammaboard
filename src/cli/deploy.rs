@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand};
+use clap::Args;
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::{DEFAULT_SERVER_CONFIG_PATH, RuntimeConfig};
 use gammaboard::runtime_context::{RuntimeContext, checked_add_port};
@@ -19,18 +19,6 @@ use super::shared::with_control_store;
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
-    #[command(subcommand)]
-    pub command: DeployCommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum DeployCommand {
-    /// Run the local deploy stack in the foreground.
-    Run(DeployRunArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct DeployRunArgs {
     #[arg(long = "server-config", default_value = DEFAULT_SERVER_CONFIG_PATH, value_name = "PATH")]
     server_config: PathBuf,
     #[arg(long)]
@@ -40,12 +28,10 @@ pub struct DeployRunArgs {
 }
 
 pub async fn run_deploy_command(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
-    match args.command {
-        DeployCommand::Run(args) => deploy_run(args, runtime).await,
-    }
+    deploy_run(args, runtime).await
 }
 
-async fn deploy_run(args: DeployRunArgs, runtime: &RuntimeContext) -> Result<()> {
+async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
     let mut server_config = ServerConfig::load(&args.server_config)?;
     let runtime_config = runtime.runtime_config();
     apply_port_offset(&mut server_config, runtime.port_offset())?;

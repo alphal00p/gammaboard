@@ -6,9 +6,9 @@
 # Runtime: normally a few seconds with two local workers.
 #
 # Run from the repository root:
-#   ./gammaboard run add resources/templates/runs/installation-smoke.toml
-#   ./gammaboard node auto-run 2
-#   ./gammaboard auto-assign installation-smoke
+#   ./gammaboard run create resources/templates/runs/installation-smoke.toml
+#   ./gammaboard node start-local 2
+#   ./gammaboard node auto-assign installation-smoke
 
 name = "installation-smoke"
 target = { kind = "scalar", value = 1.0 }

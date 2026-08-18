@@ -1,7 +1,7 @@
 # Python process evaluator returning a GammaLoop-compatible observable bundle.
 # Requires: the example virtualenv described by process_api/README.md.
 # Scale: 1024 samples; normally seconds.
-# Run: ./gammaboard run add process_api/examples/python_gammaloop_observable/run.toml
+# Run: ./gammaboard run create process_api/examples/python_gammaloop_observable/run.toml
 
 name = "python-gammaloop-observable-demo"
 

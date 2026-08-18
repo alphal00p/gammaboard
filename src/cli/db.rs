@@ -33,6 +33,7 @@ pub enum DbCommand {
     },
     /// Dump the configured database as SQL
     DumpSql,
+    /// Recreate the local Postgres cluster and run migrations
     Reset {
         #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
         yes: bool,

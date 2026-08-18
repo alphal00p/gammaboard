@@ -19,7 +19,7 @@ symbolica-variable-theta:
     "${compiler}" \
         -shared -O3 -fPIC -ffast-math -funsafe-math-optimizations \
         -o resources/artifacts/variable_theta.so \
-        resources/artifacts/variable_theta.cpp
+        examples/symbolica-variable-theta/variable_theta.cpp
 
 # Build optional artifacts, create every bundled example run, and start two local workers for each run.
 start-example-runs: process-artifacts
@@ -43,14 +43,14 @@ start-example-runs: process-artifacts
     )
     for template in "${templates[@]}"; do
         echo "creating run from ${template}"
-        run_output="$("$gb" run add "$template")"
+        run_output="$("$gb" run create "$template")"
         echo "$run_output"
         run_id="$(printf '%s\n' "$run_output" | sed -n 's/.*created run_id=\([0-9][0-9]*\).*/\1/p' | tail -1)"
         if [[ -z "$run_id" ]]; then
             echo "failed to parse run id from run-add output for ${template}" >&2
             exit 1
         fi
-        "$gb" node auto-run "$workers_per_run"
+        "$gb" node start-local "$workers_per_run"
         sleep "${GAMMABOARD_EXAMPLE_WORKER_REGISTER_SLEEP:-1}"
-        "$gb" auto-assign "$run_id" "$max_evaluators"
+        "$gb" node auto-assign "$run_id" --max-evaluators "$max_evaluators"
     done

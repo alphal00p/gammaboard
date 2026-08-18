@@ -5,6 +5,7 @@ use crate::core::{
     RunTask, RunTaskInput, RunTaskState, RunTaskStore, SamplerQueueTuning, SourceRefSpec,
 };
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
+use crate::provenance::RunProvenance;
 use crate::stores::RunProgress;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -72,6 +73,7 @@ pub struct UpdatedTaskQueueTuning {
 #[derive(Debug, Clone, Serialize)]
 struct RunReproToml {
     name: String,
+    gammaboard: serde_json::Value,
     #[serde(flatten)]
     integration_params: IntegrationParams,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -220,11 +222,23 @@ pub async fn create_run(
         processed.target.as_ref(),
         &initial_tasks,
     )?;
+    let effective_toml = canonical_run_toml(
+        &processed.name,
+        resolved_integration_params,
+        processed.target.as_ref(),
+        &initial_tasks,
+    )?;
+    let provenance = serde_json::to_value(RunProvenance::capture(
+        processed.original_toml.clone(),
+        effective_toml,
+    ))
+    .map_err(|err| ApiError::Internal(format!("failed to serialize run provenance: {err}")))?;
 
     let run_id = store
         .create_run(
             &processed.name,
             &run_toml,
+            &provenance,
             &integration_params,
             processed.target.as_ref(),
             domain,
@@ -314,15 +328,19 @@ pub async fn clone_run(
     let root_snapshot_name =
         format_clone_root_snapshot_name(&source_run.run_name, &source_tasks, &snapshot);
     let cloned_tasks: Vec<RunTaskInput> = Vec::new();
+    let run_toml = canonical_run_toml(
+        new_name,
+        &integration_params_typed,
+        source_run.target.as_ref(),
+        &cloned_tasks,
+    )?;
+    let provenance = serde_json::to_value(RunProvenance::capture(None, run_toml.clone()))
+        .map_err(|err| ApiError::Internal(format!("failed to serialize run provenance: {err}")))?;
     let run_id = store
         .create_run(
             new_name,
-            &canonical_run_toml(
-                new_name,
-                &integration_params_typed,
-                source_run.target.as_ref(),
-                &cloned_tasks,
-            )?,
+            &run_toml,
+            &provenance,
             &integration_params,
             source_run.target.as_ref(),
             &domain,
@@ -360,6 +378,7 @@ fn canonical_run_toml(
 ) -> Result<String, ApiError> {
     toml::to_string(&RunReproToml {
         name: name.to_string(),
+        gammaboard: serde_json::json!({}),
         integration_params: integration_params.clone(),
         target: target.cloned().filter(|value| !value.is_null()),
         task_queue: task_queue.to_vec(),
@@ -479,6 +498,7 @@ pub async fn export_run_repro_toml(
 
     toml::to_string(&RunReproToml {
         name: run.run_name,
+        gammaboard: run.provenance,
         integration_params,
         target: run.target.filter(|value| !value.is_null()),
         task_queue: completed_tasks,

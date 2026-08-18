@@ -10,7 +10,7 @@ The shortest supported setup uses Nix on Linux. From a fresh clone:
 
 ```bash
 nix develop
-./gammaboard deploy run
+./gammaboard deploy
 ```
 
 This builds GammaBoard and the dashboard, starts the managed PostgreSQL
@@ -21,9 +21,9 @@ installation smoke test:
 
 ```bash
 nix develop
-./gammaboard run add resources/templates/runs/installation-smoke.toml
-./gammaboard node auto-run 2
-./gammaboard auto-assign installation-smoke
+./gammaboard run create resources/templates/runs/installation-smoke.toml
+./gammaboard node start-local 2
+./gammaboard node auto-assign installation-smoke
 ```
 
 Open the `installation-smoke` run in the dashboard. It integrates
@@ -42,6 +42,7 @@ For setup without Nix, shared-machine use, and physics integrations, continue
 with:
 
 - [docs/quickstart.md](docs/quickstart.md)
+- [docs/requirements.md](docs/requirements.md)
 - [docs/README.md](docs/README.md)
 - [integrations/README.md](integrations/README.md)
 
@@ -54,7 +55,7 @@ For ITPhlies:
 
 ```bash
 GAMMABOARD_PROFILE=release ./gammaboard \
-  deploy run \
+  deploy \
   --server-config ops/itphlies/config/server.toml
 ```
 
@@ -63,7 +64,7 @@ For UBELIX Slurm/Apptainer operation, use
 
 ## Core Commands
 
-- `gammaboard deploy run`: supervise local Postgres, backend API, and nginx/frontend in one foreground process.
+- `gammaboard deploy`: supervise local Postgres, backend API, and nginx/frontend in one foreground process.
 - `gammaboard run`: create, list, pause, clone, remove, and append tasks to runs.
 - `gammaboard node`: run workers, list nodes, assign roles, unassign, and request shutdown.
 - `gammaboard db`: manage the local PostgreSQL instance used by the active runtime config.
@@ -71,7 +72,7 @@ For UBELIX Slurm/Apptainer operation, use
 
 The repo-root `./gammaboard` helper builds the current CLI before forwarding
 arguments to it. It uses `dev-optim` by default, `GAMMABOARD_PROFILE=release`
-for release builds, and also builds the dashboard frontend for `deploy run`.
+for release builds, and also builds the dashboard frontend for `deploy`.
 Set `GAMMABOARD_FRONTEND_BASE=/board/` when building the dashboard for a
 reverse-proxy mount below a URL path instead of at `/`.
 
@@ -134,7 +135,7 @@ responses from stdout; stderr is used for logs. See
 For Python runtimes, install the small helper package:
 
 ```bash
-pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
+pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@fdd59328814019a524a7838783efde8b42af3d50#subdirectory=process_api/python"
 ```
 
 Minimal evaluator:
@@ -262,10 +263,11 @@ cargo build --no-default-features
 
 Gammaboard is intended to be distributed under the MIT License.
 
-GammaLoop support depends on GammaLoop and Symbolica. GammaLoop has no usage
-restrictions, but Symbolica has its own license terms:
-https://symbolica.io/license.html
+Normal GammaBoard builds include OEM-licensed Symbolica activation, so users do
+not need to obtain or configure a separate Symbolica license. Symbolica remains
+subject to its own license terms: https://symbolica.io/license.html
 
 Builds without the default `gammaloop` feature do not link GammaLoop, but
 Gammaboard still depends directly on Symbolica for built-in Symbolica
-evaluators.
+evaluators. Developers who explicitly compile with
+`NO_SYMBOLICA_OEM_LICENSE=1` must provide `SYMBOLICA_LICENSE` at runtime.

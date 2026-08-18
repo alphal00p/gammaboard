@@ -13,12 +13,12 @@ From repo root:
 
 ```bash
 GAMMABOARD_PROFILE=release ./gammaboard \
-  deploy run \
+  deploy \
   --server-config ops/itphlies/config/server.toml
 
 GAMMABOARD_PROFILE=release ./gammaboard \
   --port-offset 1 \
-  deploy run \
+  deploy \
   --server-config ops/itphlies/config/server.toml
 ```
 

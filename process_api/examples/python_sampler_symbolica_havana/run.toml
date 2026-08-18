@@ -1,7 +1,7 @@
 # Python Havana process sampler driving the scalar sine process evaluator.
 # Requires: both Python example virtualenvs documented in this directory's README.
 # Scale: short training and inference stages; normally under a minute.
-# Run: ./gammaboard run add process_api/examples/python_sampler_symbolica_havana/run.toml
+# Run: ./gammaboard run create process_api/examples/python_sampler_symbolica_havana/run.toml
 
 name = "python-sampler-symbolica-havana-demo"
 

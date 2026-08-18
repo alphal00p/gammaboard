@@ -53,7 +53,7 @@
 #
 # Then run with the replacement, for example:
 #
-#   gammaboard run add integrations/madgraph/examples/pp_eej_madspace.toml \
+#   gammaboard run create integrations/madgraph/examples/pp_eej_madspace.toml \
 #     --replace continuous_dims=<random_dim>
 #
 # For the pinned MG7 revision and pp_eej process, the value is 7.

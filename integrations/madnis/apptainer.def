@@ -30,9 +30,9 @@ From: python:3.12-bookworm
         --index-url https://download.pytorch.org/whl/cu124 \
         torch
     python -m pip install --root-user-action=ignore --no-cache-dir --no-build-isolation \
-        "madnis @ git+https://github.com/madgraph-ml/madnis.git@main"
+        "madnis @ git+https://github.com/madgraph-ml/madnis.git@f16fb71d41271e3078b8ffc9db072a4241c12498"
     python -m pip install --root-user-action=ignore --no-cache-dir --no-build-isolation \
-        "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
+        "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@fdd59328814019a524a7838783efde8b42af3d50#subdirectory=process_api/python"
     python -m pip install --root-user-action=ignore --no-cache-dir --no-build-isolation "${WRAPPER_DIR}"
     python - <<'PY'
 import madnis

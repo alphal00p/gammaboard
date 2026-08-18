@@ -14,7 +14,7 @@ cargo install sqlx-cli --no-default-features --features postgres
 ```
 
 - Node.js and npm for building the dashboard frontend
-- nginx for `gammaboard deploy run`
+- nginx for `gammaboard deploy`
 
 Optional Nix users can enter the repository flake dev shell to get these
 operator tools from one environment:
@@ -33,7 +33,7 @@ images.
 Local development:
 
 ```bash
-./gammaboard deploy run
+./gammaboard deploy
 ```
 
 This builds the current Rust CLI, rebuilds the dashboard frontend, starts local
@@ -44,7 +44,7 @@ ITPhlies release deployment:
 
 ```bash
 GAMMABOARD_PROFILE=release ./gammaboard \
-  deploy run \
+  deploy \
   --server-config ops/itphlies/config/server.toml
 ```
 
@@ -67,7 +67,7 @@ GAMMABOARD_PROFILE=release ./gammaboard --help
 GAMMABOARD_PROFILE=debug ./gammaboard --help
 ```
 
-When the forwarded command is `deploy run`, the helper also builds the
+When the forwarded command is `deploy`, the helper also builds the
 dashboard frontend.
 
 ## Isolated Instances
@@ -77,7 +77,7 @@ Use a port offset for a second local or ITPhlies instance:
 ```bash
 ./gammaboard \
   --port-offset 1 \
-  deploy run
+  deploy
 ```
 
 `--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to
@@ -88,13 +88,13 @@ Use a port offset for a second local or ITPhlies instance:
 Create a run from a template:
 
 ```bash
-./gammaboard run add resources/templates/runs/gammaloop.toml
+./gammaboard run create resources/templates/runs/gammaloop.toml
 ```
 
 Start local workers and assign them:
 
 ```bash
-./gammaboard node auto-run 2
+./gammaboard node start-local 2
 ./gammaboard node assign w-1 sampler-aggregator gammaloop_tth
 ./gammaboard node assign w-2 evaluator gammaloop_tth
 ```
@@ -121,7 +121,7 @@ Run commands:
 ./gammaboard run list [RUN_NAME]
 ./gammaboard run pause <RUN>
 ./gammaboard run clone <SOURCE_RUN> <FROM_SNAPSHOT_ID> <NEW_NAME>
-./gammaboard run task add <RUN> <TASK_FILE.toml>
+./gammaboard run task append <RUN> <TASK_FILE.toml>
 ./gammaboard run task remove <RUN> <TASK_ID>
 ./gammaboard run remove <RUN>
 ```
@@ -131,7 +131,7 @@ Node commands:
 ```bash
 ./gammaboard node list
 ./gammaboard node run --name <NODE_NAME>
-./gammaboard node auto-run <COUNT>
+./gammaboard node start-local <COUNT>
 ./gammaboard node assign <NODE_NAME> <ROLE> <RUN>
 ./gammaboard node unassign <NODE_NAME>
 ./gammaboard node stop <NODE_NAME>
@@ -158,7 +158,7 @@ npm run build
 cd ..
 cargo build --profile dev-optim
 ./target/dev-optim/gammaboard \
-  deploy run
+  deploy
 ```
 
 ITPhlies release profile:
@@ -170,7 +170,7 @@ npm run build
 cd ..
 cargo build --release
 ./target/release/gammaboard \
-  deploy run \
+  deploy \
   --server-config ops/itphlies/config/server.toml
 ```
 

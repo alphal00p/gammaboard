@@ -1,7 +1,7 @@
 # Symbolica + Havana training, 2D PDF adaptation, and a complex phase image.
 # Requires: a working Symbolica runtime license.
 # Scale: 200k training samples plus two 128x128 images; typically minutes.
-# Run: ./gammaboard run add resources/templates/runs/ghost_bump.toml
+# Run: ./gammaboard run create resources/templates/runs/ghost_bump.toml
 
 replacements = { run_name = "ghost_bump", train_samples = 200000, havana_bins = 64, samples_for_update = 16384, image_bins = 128, phase_center_x = "1/2", phase_center_y = "1/2" }
 

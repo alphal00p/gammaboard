@@ -5,6 +5,7 @@ organization wiki.
 
 Start with [quickstart.md](quickstart.md), then use the topic pages as needed:
 
+- [requirements.md](requirements.md): supported environment and reproducibility metadata.
 - [config.md](config.md): runtime, server, deploy, run, task, and node config.
 - [deployment.md](deployment.md): shared deploy model, profiles, paths, images, and ports.
 - [operations.md](operations.md): auth, node/run lifecycle, logs, and recovery.

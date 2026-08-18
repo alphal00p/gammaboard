@@ -93,11 +93,6 @@ fi
 export APPTAINER_TMPDIR="${TMP_BASE}"
 export APPTAINER_CACHEDIR="${CACHE_BASE}"
 export CARGO_INCREMENTAL
-export SYMBOLICA_OEM_LICENSE="${SYMBOLICA_OEM_LICENSE:-SYMBOLICA_OEM_GAMMALOOP}"
-if [[ ! "${SYMBOLICA_OEM_LICENSE}" == SYMBOLICA_OEM_* ]]; then
-  echo "SYMBOLICA_OEM_LICENSE must start with SYMBOLICA_OEM_; got '${SYMBOLICA_OEM_LICENSE}'" >&2
-  exit 1
-fi
 
 GAMMALOOP_SHA="$(git_head_sha "${GAMMALOOP_REPO}")"
 OUT_IMAGE="${IMAGE_DIR}/gammaloop.sif"
@@ -119,7 +114,7 @@ echo "out_image: ${OUT_IMAGE}"
 echo "APPTAINER_TMPDIR: ${APPTAINER_TMPDIR}"
 echo "APPTAINER_CACHEDIR: ${APPTAINER_CACHEDIR}"
 echo "CARGO_INCREMENTAL: ${CARGO_INCREMENTAL}"
-echo "SYMBOLICA_OEM_LICENSE: ${SYMBOLICA_OEM_LICENSE}"
+echo "symbolica_license_mode: bundled-oem"
 
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
   git clone "${GAMMALOOP_REPO}" "${SRC_DIR}"

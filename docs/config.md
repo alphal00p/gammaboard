@@ -38,7 +38,7 @@ Relative evaluator resources, such as GammaLoop `state_folder`, resolve through 
 ## Server Config
 
 Server config owns both the backend API settings and the foreground deploy
-settings used by `gammaboard deploy run`:
+settings used by `gammaboard deploy`:
 
 ```toml
 api_host = "127.0.0.1"
@@ -61,7 +61,7 @@ admin_password_hash = "..."
 session_secret = "..."
 ```
 
-`gammaboard deploy run` validates the frontend build, optionally starts local Postgres, starts `gammaboard server` as a supervised child, generates nginx config, runs nginx in the foreground, and on `Ctrl-C`/`SIGTERM` requests graceful node shutdown before stopping nginx, backend, and local Postgres.
+`gammaboard deploy` validates the frontend build, optionally starts local Postgres, starts `gammaboard server` as a supervised child, generates nginx config, runs nginx in the foreground, and on `Ctrl-C`/`SIGTERM` requests graceful node shutdown before stopping nginx, backend, and local Postgres.
 
 ## Runtime Config
 
@@ -79,7 +79,7 @@ Runtime config owns the database URL, resource roots, tracing, and local Postgre
 Generate the password hash with:
 
 ```bash
-gammaboard auth --password 'your-password'
+gammaboard auth hash-password
 ```
 
 `auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
@@ -238,7 +238,7 @@ Raster geometry `discrete` selects the domain branch to scan. The selected branc
 
 `set_accumulator` is the explicit no-work task for changing accumulator state. Sample tasks may omit `accumulator`, but only if a prior task in the run already established an effective accumulator state.
 
-Task files used with `gammaboard run task add` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
+Task files used with `gammaboard run task append` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
 
 Sample task config example:
 

@@ -94,6 +94,7 @@ pub trait ControlPlaneStore: Send + Sync {
         &self,
         name: &str,
         run_toml: &str,
+        provenance: &serde_json::Value,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
         domain: &Domain,

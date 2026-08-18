@@ -10,6 +10,7 @@ pub mod evaluation;
 pub mod preprocess;
 mod process_runtime;
 mod process_worker;
+pub mod provenance;
 pub mod resources;
 pub mod runners;
 pub mod runtime_context;

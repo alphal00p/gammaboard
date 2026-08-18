@@ -1,6 +1,6 @@
 # Deployment
 
-`gammaboard deploy run` is the normal dashboard stack supervisor. It starts the
+`gammaboard deploy` is the normal dashboard stack supervisor. It starts the
 backend API, nginx/frontend exposure, local or managed Postgres, and optional
 local node runners according to the selected deploy/runtime/server configs.
 
@@ -59,19 +59,17 @@ retained.
 
 ## Symbolica OEM License
 
-GammaBoard and GammaLoop use Symbolica's OEM activation path on UBELIX. This is
-a build-time setting, not a runtime secret:
+GammaBoard and GammaLoop use their bundled Symbolica OEM activation by default.
+Users do not need to set a Symbolica environment variable or provide their own
+license:
 
-- Build jobs set `SYMBOLICA_OEM_LICENSE=SYMBOLICA_OEM_GAMMALOOP` while compiling
-  the Rust binaries.
 - The binaries call `symbolica::activate_oem_license!(...)` at startup.
 - Runtime Slurm jobs do not need `SYMBOLICA_LICENSE`.
 
-`SYMBOLICA_OEM_LICENSE` is the OEM license name compiled into the binary and
-must match the `SYMBOLICA_OEM_KEY_...` literal used by the binary. To opt out of
-OEM activation for a local/custom build, set `NO_SYMBOLICA_OEM_LICENSE=1` while
-building and provide a regular Symbolica license through Symbolica's normal
-runtime mechanism instead.
+To opt out of OEM activation for a local/custom build, set
+`NO_SYMBOLICA_OEM_LICENSE=1` while compiling and provide a regular license with
+`SYMBOLICA_LICENSE` at runtime. `NO_SYMBOLICA_OEM_LICENSE` is a compile-time
+switch; setting it only when launching an already-built binary has no effect.
 
 ## Nested Runtimes
 

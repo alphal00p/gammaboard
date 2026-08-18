@@ -232,7 +232,7 @@ Return either an array of `f64 | null` values or `null` when unsupported:
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v1",
+  "protocol": "gammaboard-jsonrpc-v2",
   "role": "batch_transform",
   "domain": { "continuous": { "dims": 2 } },
   "args": {}
@@ -282,7 +282,7 @@ evaluation.
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v1",
+  "protocol": "gammaboard-jsonrpc-v2",
   "role": "materializer",
   "domain": { "continuous": { "dims": 2 } },
   "args": {}
@@ -392,7 +392,7 @@ Nix, Apptainer, virtualenvs, and system packages are all just ways to make this 
 The Python helpers live in `process_api/python` and can be installed into a runtime:
 
 ```bash
-pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@main#subdirectory=process_api/python"
+pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@fdd59328814019a524a7838783efde8b42af3d50#subdirectory=process_api/python"
 ```
 
 Worker modules are ordinary Python entrypoints:

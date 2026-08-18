@@ -65,4 +65,4 @@ APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --resource-root "${WORKSPACE_ROOT}/resources" \
   --port-offset "${PORT_OFFSET}" \
-  deploy run --server-config "${SERVER_CFG}"
+  deploy --server-config "${SERVER_CFG}"

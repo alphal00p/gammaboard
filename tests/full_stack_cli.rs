@@ -1051,7 +1051,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
     // Use auto-assign to let the system pick appropriate nodes.
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -3947,7 +3947,7 @@ source_task = "sample"
 
     harness
         .cli()
-        .args(["auto-assign", &parent_run_id.to_string()])
+        .args(["node", "auto-assign", &parent_run_id.to_string()])
         .assert()
         .success();
 
@@ -5167,7 +5167,7 @@ source_task = "sample"
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -5334,7 +5334,7 @@ source_task = "sample"
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -5494,7 +5494,7 @@ source_task = "sample"
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -5801,7 +5801,7 @@ values = ["auto", "none"]
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -5942,7 +5942,7 @@ max = 4
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -6094,7 +6094,7 @@ values = ["auto", "none"]
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -6200,7 +6200,7 @@ max = 1.0
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 
@@ -6315,7 +6315,7 @@ max = 1
 
     harness
         .cli()
-        .args(["auto-assign", &run_id.to_string()])
+        .args(["node", "auto-assign", &run_id.to_string()])
         .assert()
         .success();
 

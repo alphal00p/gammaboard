@@ -7,11 +7,11 @@
 
     # Prefer pinning this to a commit once it works.
     madnis-src = {
-      url = "github:madgraph-ml/madnis/main";
+      url = "github:madgraph-ml/madnis/f16fb71d41271e3078b8ffc9db072a4241c12498";
       flake = false;
     };
     gammaboard-src = {
-      url = "github:alphal00p/gammaboard/main";
+      url = "github:alphal00p/gammaboard/fdd59328814019a524a7838783efde8b42af3d50";
       flake = false;
     };
   };

@@ -2,7 +2,7 @@
 # process-evaluator protocol and GammaLoop observable bundle.
 # Requires: the pinned MG7/MadSpace environment and generated pp_eej state below.
 # Scale: controlled by Cards/run_card.toml; native event generation may be long.
-# Run: ./gammaboard run add integrations/madgraph/examples/pp_eej_generate_events.toml
+# Run: ./gammaboard run create integrations/madgraph/examples/pp_eej_generate_events.toml
 #
 # This reuses the state generated for pp_eej_madspace.toml. Native generation
 # settings remain in:

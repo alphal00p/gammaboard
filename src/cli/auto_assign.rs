@@ -7,6 +7,7 @@ use gammaboard::config::RuntimeConfig;
 #[derive(Debug, Args)]
 pub struct AutoAssignArgs {
     pub run: String,
+    #[arg(long)]
     pub max_evaluators: Option<usize>,
 }
 

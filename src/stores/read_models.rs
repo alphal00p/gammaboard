@@ -10,6 +10,7 @@ pub struct RunProgress {
     pub run_id: i32,
     pub run_name: String,
     pub run_toml: Option<String>,
+    pub provenance: serde_json::Value,
     pub parent_run_id: Option<i32>,
     pub parent_task_id: Option<String>,
     pub spawn_kind: Option<String>,

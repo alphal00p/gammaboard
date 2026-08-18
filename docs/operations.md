@@ -12,7 +12,7 @@ cookie. If `[auth]` is omitted, local control is passwordless.
 Generate an admin password hash:
 
 ```bash
-gammaboard auth --password '<password>'
+gammaboard auth hash-password
 ```
 
 Relevant server config keys:
@@ -35,7 +35,7 @@ Common commands:
 
 ```bash
 gammaboard node run --name w-1
-gammaboard node auto-run --prefix w --count 2
+gammaboard node start-local 2
 ```
 
 Dashboard node-start requests go through a generic launch-request queue. Local
@@ -55,7 +55,7 @@ being claimed for that run.
 
 Runtime logs are persisted to Postgres and exposed in the dashboard Logs tab.
 Process worker stderr is normal log output. Process worker stdout is reserved
-for framed `gammaboard-jsonrpc-v1`; wrappers should redirect accidental prints
+for framed `gammaboard-jsonrpc-v2`; wrappers should redirect accidental prints
 to stderr. See [process-runtime.md](process-runtime.md).
 
 Useful locations:
