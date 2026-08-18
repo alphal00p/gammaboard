@@ -1,6 +1,6 @@
 use super::shared::{
-    RunSelection, json_output_enabled, list_runs_by_name, print_json, resolve_run_ref,
-    resolve_run_selection, with_control_store,
+    RunRemovalSelection, RunSelection, json_output_enabled, list_runs_by_name, print_json,
+    resolve_run_ref, resolve_run_selection, with_control_store,
 };
 use anyhow::{Result, anyhow};
 use clap::{Args, Subcommand};
@@ -45,7 +45,7 @@ pub enum RunCommand {
         max_evaluators: Option<usize>,
     },
     /// Delete one run or all runs
-    Remove(RunSelection),
+    Remove(RunRemovalSelection),
     /// Append, list, or remove queued run tasks
     Task(TaskArgs),
 }
@@ -63,7 +63,12 @@ pub enum TaskCommand {
     /// List queued and historical tasks for a run
     List { run: String },
     /// Remove a pending task
-    Remove { run: String, task_id: i64 },
+    Remove {
+        run: String,
+        task_id: i64,
+        #[arg(long, help = "Confirm pending task removal in non-interactive use")]
+        yes: bool,
+    },
 }
 
 pub async fn run_run_commands(
@@ -244,15 +249,16 @@ async fn pause_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
     Ok(())
 }
 
-async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
-    if !selection.dry_run && !selection.yes && !std::io::stdin().is_terminal() {
+async fn remove_runs(store: &PgStore, selection: RunRemovalSelection) -> Result<()> {
+    let RunRemovalSelection { runs, yes, dry_run } = selection;
+    if !dry_run && !yes && !std::io::stdin().is_terminal() {
         return Err(anyhow!("run remove requires --yes in non-interactive mode"));
     }
-    if selection.dry_run {
-        let runs = if selection.all {
+    if dry_run {
+        let runs = if runs.all {
             store.get_all_runs().await?
         } else {
-            resolve_run_selection(store, selection).await?
+            resolve_run_selection(store, runs).await?
         };
         if json_output_enabled() {
             print_json(&serde_json::json!({"dry_run": true, "runs": runs}));
@@ -263,7 +269,7 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
         }
         return Ok(());
     }
-    if selection.all {
+    if runs.all {
         let runs = store.get_all_runs().await?;
         let mut removed = 0u64;
         for run in runs {
@@ -281,7 +287,7 @@ async fn remove_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
     }
 
     let mut removed = Vec::new();
-    for run in resolve_run_selection(store, selection).await? {
+    for run in resolve_run_selection(store, runs).await? {
         let result = run_api::remove_run(store, run.run_id)
             .await
             .map_err(api_to_anyhow)?;
@@ -353,7 +359,12 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                 );
             }
         }
-        TaskCommand::Remove { run, task_id } => {
+        TaskCommand::Remove { run, task_id, yes } => {
+            if !yes && !std::io::stdin().is_terminal() {
+                return Err(anyhow!(
+                    "run task remove requires --yes in non-interactive mode"
+                ));
+            }
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;
             run_api::remove_pending_task(store, run_id, task_id)

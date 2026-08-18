@@ -1564,10 +1564,6 @@ impl Linspace {
         Ok(())
     }
 
-    pub fn reduce_for_preflight(&mut self, count: usize) {
-        self.count = self.count.min(count).max(1);
-    }
-
     pub fn value_at(&self, index: usize) -> f64 {
         if self.count <= 1 {
             return self.start;
@@ -1638,11 +1634,6 @@ impl PlaneRasterGeometry {
             .map(|((offset, basis_u), basis_v)| offset + u * basis_u + v * basis_v)
             .collect()
     }
-
-    pub fn reduce_for_preflight(&mut self, u_count: usize, v_count: usize) {
-        self.u_linspace.reduce_for_preflight(u_count);
-        self.v_linspace.reduce_for_preflight(v_count);
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1688,10 +1679,6 @@ impl LineRasterGeometry {
             .zip(self.direction.iter())
             .map(|(offset, direction)| offset + t * direction)
             .collect()
-    }
-
-    pub fn reduce_for_preflight(&mut self, count: usize) {
-        self.linspace.reduce_for_preflight(count);
     }
 }
 

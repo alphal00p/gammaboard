@@ -1,7 +1,10 @@
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::process::{Child, ChildStdin, ChildStdout};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -12,6 +15,7 @@ const MAX_STDERR_TAIL_LINES: usize = 40;
 const MAX_FRAME_HEADER_LINE_BYTES: usize = 8 * 1024;
 const MAX_JSON_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BINARY_FRAME_BYTES: usize = 256 * 1024 * 1024;
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) type ProcessStderrTail = Arc<Mutex<VecDeque<String>>>;
 
@@ -23,6 +27,7 @@ pub(crate) struct ProcessWorker {
     next_id: u64,
     stdout_log_bytes_before_frame: usize,
     stderr_tail: ProcessStderrTail,
+    request_timeout: Duration,
 }
 
 impl ProcessWorker {
@@ -33,6 +38,24 @@ impl ProcessWorker {
         stdout: ChildStdout,
         stderr_tail: ProcessStderrTail,
     ) -> Self {
+        Self::with_request_timeout(
+            label,
+            child,
+            stdin,
+            stdout,
+            stderr_tail,
+            DEFAULT_REQUEST_TIMEOUT,
+        )
+    }
+
+    fn with_request_timeout(
+        label: impl Into<String>,
+        child: Child,
+        stdin: ChildStdin,
+        stdout: ChildStdout,
+        stderr_tail: ProcessStderrTail,
+        request_timeout: Duration,
+    ) -> Self {
         Self {
             label: label.into(),
             child,
@@ -41,6 +64,7 @@ impl ProcessWorker {
             next_id: 1,
             stdout_log_bytes_before_frame: 0,
             stderr_tail,
+            request_timeout,
         }
     }
 
@@ -65,7 +89,8 @@ impl ProcessWorker {
             "params": params,
         });
         self.write_frame(&request, binary)?;
-        let (response, response_binary) = self.read_response(id)?;
+        let deadline = Instant::now() + self.request_timeout;
+        let (response, response_binary) = self.read_response(id, deadline)?;
         if let Some(error) = response.get("error") {
             return Err(format_json_rpc_error(error));
         }
@@ -101,27 +126,19 @@ impl ProcessWorker {
             .map_err(|error| format!("failed flushing {} request: {error}", self.label))
     }
 
-    fn read_response(&mut self, expected_id: u64) -> Result<(Value, Vec<u8>), String> {
-        let Some((content_len, binary_len)) = self.read_frame_header()? else {
+    fn read_response(
+        &mut self,
+        expected_id: u64,
+        deadline: Instant,
+    ) -> Result<(Value, Vec<u8>), String> {
+        let Some((content_len, binary_len)) = self.read_frame_header(deadline)? else {
             return Err(self.worker_terminated_message(&format!(
                 "{} worker terminated before responding",
                 self.label
             )));
         };
-        let mut payload = vec![0_u8; content_len];
-        self.stdout.read_exact(&mut payload).map_err(|error| {
-            self.worker_terminated_message(&format!(
-                "failed reading {} frame payload: {error}",
-                self.label
-            ))
-        })?;
-        let mut binary = vec![0_u8; binary_len];
-        self.stdout.read_exact(&mut binary).map_err(|error| {
-            self.worker_terminated_message(&format!(
-                "failed reading {} binary payload: {error}",
-                self.label
-            ))
-        })?;
+        let payload = self.read_frame_bytes(content_len, "frame payload", deadline)?;
+        let binary = self.read_frame_bytes(binary_len, "binary payload", deadline)?;
         let response = serde_json::from_slice::<Value>(&payload).map_err(|error| {
             format!(
                 "failed to parse {} response frame as JSON: {error}; payload='{}'",
@@ -135,9 +152,9 @@ impl ProcessWorker {
 
     /// Reads a frame header block, returning `(content_length, binary_length)`.
     /// `Binary-Length` is optional (absent means 0).
-    fn read_frame_header(&mut self) -> Result<Option<(usize, usize)>, String> {
+    fn read_frame_header(&mut self, deadline: Instant) -> Result<Option<(usize, usize)>, String> {
         loop {
-            let Some(line) = self.read_header_line("frame header")? else {
+            let Some(line) = self.read_header_line("frame header", deadline)? else {
                 return Ok(None);
             };
             let trimmed = line.trim_end_matches(['\r', '\n']);
@@ -155,7 +172,9 @@ impl ProcessWorker {
             let content_len = self.parse_header_len("Content-Length", value)?;
             let mut binary_len = 0usize;
             loop {
-                let Some(header_line) = self.read_header_line("frame header continuation")? else {
+                let Some(header_line) =
+                    self.read_header_line("frame header continuation", deadline)?
+                else {
                     return Err(self.worker_terminated_message(&format!(
                         "{} worker terminated inside frame header",
                         self.label
@@ -197,9 +216,14 @@ impl ProcessWorker {
         Ok(parsed)
     }
 
-    fn read_header_line(&mut self, context: &str) -> Result<Option<String>, String> {
+    fn read_header_line(
+        &mut self,
+        context: &str,
+        deadline: Instant,
+    ) -> Result<Option<String>, String> {
         let mut bytes = Vec::with_capacity(MAX_FRAME_HEADER_LINE_BYTES.min(256));
         loop {
+            self.wait_for_stdout(deadline)?;
             let available = self
                 .stdout
                 .fill_buf()
@@ -232,6 +256,94 @@ impl ProcessWorker {
         String::from_utf8(bytes)
             .map(Some)
             .map_err(|error| format!("{} {context} is not valid UTF-8: {error}", self.label))
+    }
+
+    fn read_frame_bytes(
+        &mut self,
+        len: usize,
+        context: &str,
+        deadline: Instant,
+    ) -> Result<Vec<u8>, String> {
+        let mut bytes = vec![0_u8; len];
+        let mut offset = 0;
+        while offset < len {
+            self.wait_for_stdout(deadline)?;
+            let available = self
+                .stdout
+                .fill_buf()
+                .map_err(|error| format!("failed reading {} {context}: {error}", self.label))?;
+            if available.is_empty() {
+                return Err(self.worker_terminated_message(&format!(
+                    "{} worker terminated inside {context}",
+                    self.label
+                )));
+            }
+            let count = available.len().min(len - offset);
+            bytes[offset..offset + count].copy_from_slice(&available[..count]);
+            self.stdout.consume(count);
+            offset += count;
+        }
+        Ok(bytes)
+    }
+
+    fn wait_for_stdout(&mut self, deadline: Instant) -> Result<(), String> {
+        if !self.stdout.buffer().is_empty() {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(self.request_timeout_message());
+                }
+                let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+                let mut descriptor = libc::pollfd {
+                    fd: self.stdout.get_ref().as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // `descriptor` points to a valid ChildStdout file descriptor for this call.
+                let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+                if result > 0 {
+                    return Ok(());
+                }
+                if result == 0 {
+                    return Err(self.request_timeout_message());
+                }
+                if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                    return Err(self.worker_terminated_message(&format!(
+                        "failed waiting for {} worker response",
+                        self.label
+                    )));
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = deadline;
+            Ok(())
+        }
+    }
+
+    fn request_timeout_message(&mut self) -> String {
+        let _ = self.child.kill();
+        let status = self
+            .child
+            .wait()
+            .map(|status| status.to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        let stderr_tail = self.stderr_tail();
+        let mut message = format!(
+            "{} worker request timed out after {} seconds; status={status}",
+            self.label,
+            self.request_timeout.as_secs_f64(),
+        );
+        if !stderr_tail.is_empty() {
+            message.push_str("; recent stderr:\n");
+            message.push_str(&stderr_tail);
+        }
+        message
     }
 
     fn log_stdout_text(&mut self, line: &str) -> Result<(), String> {
@@ -447,10 +559,12 @@ fn validate_response_envelope(
 #[cfg(test)]
 mod tests {
     use super::{
-        JSON_RPC_VERSION, emit_worker_stderr_line, format_json_rpc_error, read_le_f64, read_le_i64,
-        validate_response_envelope,
+        JSON_RPC_VERSION, ProcessWorker, emit_worker_stderr_line, format_json_rpc_error,
+        pipe_process_stderr, read_le_f64, read_le_i64, validate_response_envelope,
     };
     use serde_json::json;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
 
     #[test]
     fn structured_worker_log_is_unwrapped_for_tail() {
@@ -522,6 +636,36 @@ mod tests {
             read_le_i64(&[], 0, usize::MAX)
                 .expect_err("overflow must fail")
                 .contains("count")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stalled_worker_request_times_out_and_is_terminated() {
+        let mut child = Command::new("sh")
+            .args(["-c", "read _; sleep 5"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn test worker");
+        let stdin = child.stdin.take().expect("worker stdin");
+        let stdout = child.stdout.take().expect("worker stdout");
+        let stderr = child.stderr.take().expect("worker stderr");
+        let mut worker = ProcessWorker::with_request_timeout(
+            "test worker",
+            child,
+            stdin,
+            stdout,
+            pipe_process_stderr("test worker", stderr),
+            Duration::from_millis(20),
+        );
+
+        assert!(
+            worker
+                .request("initialize", json!({}))
+                .expect_err("stalled request must fail")
+                .contains("timed out")
         );
     }
 }

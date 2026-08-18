@@ -9,6 +9,9 @@ const RunScopedWorkspace = ({
   setSelectedRun,
   showChildRuns = false,
   setShowChildRuns = null,
+  hasMoreRuns = false,
+  loadMoreRuns = null,
+  isLoadingMoreRuns = false,
   isConnected,
   serverName,
   noRunsMessage,
@@ -37,6 +40,9 @@ const RunScopedWorkspace = ({
         onRunChange={setSelectedRun}
         showChildRuns={showChildRuns}
         onShowChildRunsChange={setShowChildRuns}
+        hasMoreRuns={hasMoreRuns}
+        onLoadMoreRuns={loadMoreRuns}
+        isLoadingMoreRuns={isLoadingMoreRuns}
       />
       {!selectedRun ? <EmptyStateCard title="Select a run" message={noSelectionMessage} /> : children}
     </>

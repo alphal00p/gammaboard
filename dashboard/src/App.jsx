@@ -521,6 +521,9 @@ const RunsWorkspace = ({
   serverName,
   onRunCreated,
   onSelectRun,
+  hasMoreRuns,
+  loadMoreRuns,
+  isLoadingMoreRuns,
 }) => {
   const { authenticated } = useAuth();
   const [createRunOpen, setCreateRunOpen] = useState(false);
@@ -591,6 +594,9 @@ const RunsWorkspace = ({
         setSelectedRun={setSelectedRun}
         showChildRuns={showChildRuns}
         setShowChildRuns={setShowChildRuns}
+        hasMoreRuns={hasMoreRuns}
+        loadMoreRuns={loadMoreRuns}
+        isLoadingMoreRuns={isLoadingMoreRuns}
         isConnected={isConnected}
         serverName={serverName}
         noRunsMessage="Create a run to start monitoring task output and engine configuration."
@@ -731,7 +737,7 @@ const RunsWorkspace = ({
 
 function AppContent() {
   const [showChildRuns, setShowChildRuns] = useState(false);
-  const { runs } = useRuns({ includeChildren: showChildRuns });
+  const { runs, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns } = useRuns({ includeChildren: showChildRuns });
   const serverStatus = useServerStatus(3000);
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
@@ -788,6 +794,9 @@ function AppContent() {
             serverName={serverStatus.serverName}
             onRunCreated={setPendingRunSelection}
             onSelectRun={selectRunIncludingChildren}
+            hasMoreRuns={hasMoreRuns}
+            loadMoreRuns={loadMoreRuns}
+            isLoadingMoreRuns={isLoadingMoreRuns}
           />
         ) : mode === "workers" ? (
           <WorkersWorkspace
@@ -808,6 +817,9 @@ function AppContent() {
             setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}
             serverName={serverStatus.serverName}
+            hasMoreRuns={hasMoreRuns}
+            loadMoreRuns={loadMoreRuns}
+            isLoadingMoreRuns={isLoadingMoreRuns}
           />
         ) : mode === "logs" ? (
           <LogsWorkspace

@@ -497,6 +497,12 @@ struct RunsQuery {
     offset: Option<usize>,
 }
 
+#[derive(Serialize)]
+struct RunPage<T> {
+    items: Vec<T>,
+    next_offset: Option<usize>,
+}
+
 #[derive(Deserialize)]
 struct WorkersQuery {
     run_id: Option<i32>,
@@ -882,7 +888,11 @@ async fn get_runs(
         .store
         .get_runs_page(limit, offset, params.include_children)
         .await?;
-    json_response(runs)
+    let next_offset = (runs.len() == limit).then_some(offset + runs.len());
+    json_response(RunPage {
+        items: runs,
+        next_offset,
+    })
 }
 
 async fn get_nodes(
@@ -902,10 +912,8 @@ async fn get_node_panels(
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let worker = state
         .store
-        .get_registered_workers(None)
+        .get_registered_worker(&node_name)
         .await?
-        .into_iter()
-        .find(|worker| worker.node_name == node_name)
         .ok_or_else(|| ApiError::NotFound(format!("node {node_name} not found")))?;
     json_response(build_worker_panel_response(&worker))
 }

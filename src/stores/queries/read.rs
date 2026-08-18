@@ -954,6 +954,51 @@ pub(crate) async fn get_registered_workers(
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
+pub(crate) async fn get_registered_worker(
+    pool: &PgPool,
+    node_name: &str,
+) -> Result<Option<RegisteredWorkerEntry>, sqlx::Error> {
+    sqlx::query_as::<_, RegisteredWorkerRow>(
+        r#"
+        SELECT
+            n.name AS node_name,
+            n.uuid AS node_uuid,
+            n.capabilities,
+            n.desired_run_id,
+            dr.name AS desired_run_name,
+            n.desired_role,
+            n.active_run_id AS current_run_id,
+            cr.name AS current_run_name,
+            n.active_role AS current_role,
+            COALESCE(n.active_role, n.desired_role, 'none') AS role,
+            'run_node' AS implementation,
+            'node' AS version,
+            CASE WHEN n.active_role IS NOT NULL THEN 'active' ELSE 'inactive' END AS status,
+            n.last_seen,
+            e.metrics AS evaluator_metrics,
+            e.rss_bytes AS evaluator_rss_bytes,
+            p.metrics AS sampler_metrics,
+            p.runtime_metrics AS sampler_runtime_metrics,
+            p.engine_diagnostics AS sampler_engine_diagnostics,
+            p.rss_bytes AS sampler_rss_bytes
+        FROM nodes n
+        LEFT JOIN sampler_aggregator_performance_latest p
+            ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
+           AND p.worker_id = n.name
+        LEFT JOIN evaluator_performance_latest e
+            ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
+           AND e.worker_id = n.name
+        LEFT JOIN runs dr ON dr.id = n.desired_run_id
+        LEFT JOIN runs cr ON cr.id = n.active_run_id
+        WHERE n.name = $1 AND n.lease_expires_at > now()
+        "#,
+    )
+    .bind(node_name)
+    .fetch_optional(pool)
+    .await
+    .map(|row| row.map(Into::into))
+}
+
 pub(crate) async fn get_registered_worker_summaries(
     pool: &PgPool,
     run_id: Option<i32>,

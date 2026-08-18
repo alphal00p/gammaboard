@@ -45,12 +45,18 @@ impl From<RoleArg> for WorkerRole {
 pub struct RunSelection {
     #[arg(short = 'a', long = "all", conflicts_with = "run_refs")]
     pub all: bool,
+    #[arg(value_name = "RUN", required_unless_present = "all")]
+    pub run_refs: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RunRemovalSelection {
+    #[command(flatten)]
+    pub runs: RunSelection,
     #[arg(long, help = "Confirm destructive run removal in non-interactive use")]
     pub yes: bool,
     #[arg(long, help = "Show selected runs without changing them")]
     pub dry_run: bool,
-    #[arg(value_name = "RUN", required_unless_present = "all")]
-    pub run_refs: Vec<String>,
 }
 
 #[derive(Debug, Args)]

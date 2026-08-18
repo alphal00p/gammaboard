@@ -31,6 +31,9 @@ const PerformanceWorkspace = ({
   setShowChildRuns,
   isConnected,
   serverName,
+  hasMoreRuns,
+  loadMoreRuns,
+  isLoadingMoreRuns,
 }) => {
   const { authenticated } = useAuth();
   const [nodeRunFilter, setNodeRunFilter] = useState("selected_run");
@@ -241,6 +244,9 @@ const PerformanceWorkspace = ({
       setSelectedRun={setSelectedRun}
       showChildRuns={showChildRuns}
       setShowChildRuns={setShowChildRuns}
+      hasMoreRuns={hasMoreRuns}
+      loadMoreRuns={loadMoreRuns}
+      isLoadingMoreRuns={isLoadingMoreRuns}
       isConnected={isConnected}
       noRunsMessage="Create a run to inspect persisted performance history."
       noSelectionMessage="Pick a run to inspect performance panels."

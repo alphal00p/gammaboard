@@ -53,6 +53,13 @@ impl PgStore {
         Ok(queries::get_registered_worker_summaries(&self.pool, run_id).await?)
     }
 
+    pub async fn get_registered_worker(
+        &self,
+        node_name: &str,
+    ) -> Result<Option<crate::stores::RegisteredWorkerEntry>, StoreError> {
+        Ok(queries::get_registered_worker(&self.pool, node_name).await?)
+    }
+
     pub async fn fetch_pending_claimed_batches_json(
         &self,
         run_id: i32,

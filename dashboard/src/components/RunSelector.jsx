@@ -1,7 +1,16 @@
-import { Box, FormControl, FormControlLabel, InputLabel, MenuItem, Select, Switch, Typography } from "@mui/material";
+import { Box, Button, FormControl, FormControlLabel, InputLabel, MenuItem, Select, Switch, Typography } from "@mui/material";
 import { formatRunLabel, formatRunSecondaryLabel, orderRunsForSelector } from "../utils/runs";
 
-const RunSelector = ({ runs, selectedRun, onRunChange, showChildRuns = false, onShowChildRunsChange = null }) => {
+const RunSelector = ({
+  runs,
+  selectedRun,
+  onRunChange,
+  showChildRuns = false,
+  onShowChildRunsChange = null,
+  hasMoreRuns = false,
+  onLoadMoreRuns = null,
+  isLoadingMoreRuns = false,
+}) => {
   if (runs.length === 0) return null;
   const orderedRuns = orderRunsForSelector(runs);
 
@@ -41,6 +50,13 @@ const RunSelector = ({ runs, selectedRun, onRunChange, showChildRuns = false, on
           ))}
         </Select>
       </FormControl>
+      {hasMoreRuns && (
+        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
+          <Button size="small" onClick={onLoadMoreRuns} disabled={isLoadingMoreRuns}>
+            {isLoadingMoreRuns ? "Loading" : "Load more runs"}
+          </Button>
+        </Box>
+      )}
     </Box>
   );
 };

@@ -43,6 +43,22 @@ pub struct Cli {
     command: Command,
 }
 
+impl Cli {
+    pub fn json_output_requested(&self) -> bool {
+        self.json
+    }
+}
+
+pub fn format_error_json(code: &str, message: impl std::fmt::Display) -> String {
+    serde_json::json!({
+        "error": {
+            "code": code,
+            "message": message.to_string(),
+        }
+    })
+    .to_string()
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run lifecycle commands
@@ -64,7 +80,7 @@ enum Command {
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
     shared::set_json_output(cli.json);
-    if cli.postgres_public {
+    if cli.postgres_public && !cli.json {
         eprintln!(
             "WARNING: --postgres-public exposes PostgreSQL on 0.0.0.0/0 with trust authentication; any host that can reach the port can connect without a password"
         );
@@ -92,8 +108,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
-    use clap::CommandFactory;
+    use super::{Cli, format_error_json};
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn public_command_tree_uses_release_names() {
@@ -115,5 +131,24 @@ mod tests {
         assert!(auth.find_subcommand("hash-password").is_some());
         let deploy = command.find_subcommand("deploy").expect("deploy command");
         assert!(deploy.find_subcommand("run").is_none());
+    }
+
+    #[test]
+    fn destructive_flags_are_limited_to_destructive_commands() {
+        assert!(Cli::try_parse_from(["gammaboard", "run", "pause", "--dry-run", "demo"]).is_err());
+        assert!(Cli::try_parse_from(["gammaboard", "run", "remove", "--dry-run", "demo"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["gammaboard", "run", "task", "remove", "demo", "1", "--yes",])
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn json_errors_have_a_stable_shape() {
+        let payload: serde_json::Value =
+            serde_json::from_str(&format_error_json("command_failed", "missing run"))
+                .expect("error JSON");
+        assert_eq!(payload["error"]["code"], "command_failed");
+        assert_eq!(payload["error"]["message"], "missing run");
     }
 }

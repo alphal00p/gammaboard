@@ -205,13 +205,20 @@ const normalizeRunTaskEntry = (entry) => {
   };
 };
 
-export const fetchRuns = async ({ includeChildren = false } = {}, signal) => {
+export const fetchRuns = async ({ includeChildren = false, limit = 100, offset = 0 } = {}, signal) => {
   const data = await apiGet(
-    `/runs${buildQueryString([["include_children", includeChildren ? "true" : null]])}`,
+    `/runs${buildQueryString([
+      ["include_children", includeChildren ? "true" : null],
+      ["limit", limit],
+      ["offset", offset],
+    ])}`,
     "Failed to fetch runs",
     signal,
   );
-  return asArray(data).map(normalizeRunEntry).filter(Boolean);
+  return {
+    items: asArray(data?.items ?? data).map(normalizeRunEntry).filter(Boolean),
+    nextOffset: Number.isInteger(data?.next_offset) ? data.next_offset : null,
+  };
 };
 
 export const fetchServerStatus = async (signal) => apiGet("/health", "Failed to fetch server status", signal);
