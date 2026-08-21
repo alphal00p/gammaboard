@@ -4168,8 +4168,11 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         .start_server_with_auth((&password_hash, "test-session-secret"))
         .await?;
 
-    let runs = http_get(&server_url, "/api/runs").await?;
-    assert!(runs.contains("\"run_name\":\"auth-e2e\""));
+    let unauthenticated_read = reqwest::get(format!("{server_url}/api/runs")).await?;
+    assert_eq!(
+        unauthenticated_read.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
 
     let unauthorized = http_post_json(
         &server_url,
@@ -4194,6 +4197,9 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         .and_then(|value| value.to_str().ok())
         .map(|value| value.split(';').next().unwrap_or("").to_string())
         .ok_or_else(|| anyhow::anyhow!("missing session cookie"))?;
+
+    let authenticated_read = http_get_with_cookie(&server_url, "/api/runs", &cookie).await?;
+    assert!(authenticated_read.contains("\"run_name\":\"auth-e2e\""));
 
     let pause = http_post_json(
         &server_url,

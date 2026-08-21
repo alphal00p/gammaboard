@@ -61,7 +61,7 @@ admin_password_hash = "..."
 session_secret = "..."
 ```
 
-`gammaboard deploy` validates the frontend build, optionally starts local Postgres, starts `gammaboard server` as a supervised child, generates nginx config, runs nginx in the foreground, and on `Ctrl-C`/`SIGTERM` requests graceful node shutdown before stopping nginx, backend, and local Postgres.
+`gammaboard deploy` validates the frontend build, optionally starts local Postgres, starts the backend, waits for its health endpoint, starts nginx, and verifies the proxied health endpoint before reporting success. It runs nginx in the foreground and on `Ctrl-C`/`SIGTERM` requests graceful node shutdown before stopping nginx, backend, and local Postgres.
 
 ## Runtime Config
 
@@ -69,12 +69,18 @@ Runtime config owns the database URL, resource roots, tracing, and local Postgre
 
 ## Auth And Templates
 
-- Read-only dashboard endpoints stay open.
-- Steering actions require admin login only when `[auth]` is configured.
-- Omit `[auth]` for passwordless local control.
+- When `[auth]` is configured, every dashboard API endpoint except health and
+  session/login/logout requires an admin session.
+- Omit `[auth]` for passwordless trusted-network control.
 - Put `auth.admin_password_hash` and `auth.session_secret` in your server config to enable dashboard auth.
 - Set `allowed_origins` in your server config if the frontend is served from origins other than `http://localhost:3000`.
 - Deploy this behind HTTPS for real use and set `secure_cookie = true` in your server config.
+- An open or HTTP dashboard is appropriate only on a trusted network; otherwise
+  the server prints a startup warning. Keep authentication secrets in an
+  untracked private config.
+
+Authentication sessions include expiry, issued-at, issuer, audience, and a
+`session_version`. Increase `session_version` to invalidate existing sessions.
 
 Generate the password hash with:
 

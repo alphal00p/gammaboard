@@ -86,9 +86,8 @@ the server and occasional CLI commands. The default local PostgreSQL limit is
 commands before choosing a worker count.
 
 Performance snapshots default to every two seconds. One evaluator therefore
-creates 43,200 history rows per day. Runtime logs and performance history are
-retained until the operator's retention policy is applied, so monitor database
-size during multi-day campaigns.
+creates 43,200 history rows per day. Monitor database size for multi-day
+campaigns and use normal PostgreSQL operations when history must be managed.
 
 Before increasing a deployment, measure its intended configuration rather than
 extrapolating from a smoke test:

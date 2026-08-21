@@ -431,24 +431,19 @@ BEGIN
         new_samples := NEW.batch_size;
     END IF;
 
-    INSERT INTO run_batch_queue_counters (
-        run_id, total_batches, total_samples, pending_batches, claimed_batches, completed_batches, failed_batches
-    ) VALUES (
-        target_run_id,
-        CASE WHEN TG_OP = 'INSERT' THEN 1 WHEN TG_OP = 'DELETE' THEN -1 ELSE 0 END,
-        new_samples - old_samples,
-        new_pending - old_pending,
-        new_claimed - old_claimed,
-        new_completed - old_completed,
-        new_failed - old_failed
-    )
-    ON CONFLICT (run_id) DO UPDATE SET
-        total_batches = run_batch_queue_counters.total_batches + EXCLUDED.total_batches,
-        total_samples = run_batch_queue_counters.total_samples + EXCLUDED.total_samples,
-        pending_batches = run_batch_queue_counters.pending_batches + EXCLUDED.pending_batches,
-        claimed_batches = run_batch_queue_counters.claimed_batches + EXCLUDED.claimed_batches,
-        completed_batches = run_batch_queue_counters.completed_batches + EXCLUDED.completed_batches,
-        failed_batches = run_batch_queue_counters.failed_batches + EXCLUDED.failed_batches;
+    INSERT INTO run_batch_queue_counters (run_id)
+    VALUES (target_run_id)
+    ON CONFLICT (run_id) DO NOTHING;
+
+    UPDATE run_batch_queue_counters
+    SET
+        total_batches = total_batches + CASE WHEN TG_OP = 'INSERT' THEN 1 WHEN TG_OP = 'DELETE' THEN -1 ELSE 0 END,
+        total_samples = total_samples + new_samples - old_samples,
+        pending_batches = pending_batches + new_pending - old_pending,
+        claimed_batches = claimed_batches + new_claimed - old_claimed,
+        completed_batches = completed_batches + new_completed - old_completed,
+        failed_batches = failed_batches + new_failed - old_failed
+    WHERE run_id = target_run_id;
 
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;

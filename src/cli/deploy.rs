@@ -12,6 +12,7 @@ use std::{
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 
 use super::db;
@@ -57,8 +58,43 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
     prepare_runtime_dirs(&deploy_paths)?;
     write_nginx_config(&server_config, frontend_port, &deploy_paths)?;
 
+    let api_host = server_config.api_host.to_string();
     let mut backend = start_backend(&server_config, runtime)?;
-    let mut nginx = start_nginx(&deploy_paths)?;
+    if let Err(err) = wait_for_health(
+        &mut backend,
+        "backend",
+        probe_host(&api_host),
+        server_config.api_port,
+    )
+    .await
+    {
+        cleanup_failed_start(&server_config, runtime_config, &mut backend, None);
+        return Err(err);
+    }
+
+    let mut nginx = match start_nginx(&deploy_paths) {
+        Ok(nginx) => nginx,
+        Err(err) => {
+            cleanup_failed_start(&server_config, runtime_config, &mut backend, None);
+            return Err(err);
+        }
+    };
+    if let Err(err) = wait_for_health(
+        &mut nginx,
+        "nginx",
+        probe_host(&server_config.frontend.host),
+        frontend_port,
+    )
+    .await
+    {
+        cleanup_failed_start(
+            &server_config,
+            runtime_config,
+            &mut backend,
+            Some(&mut nginx),
+        );
+        return Err(err);
+    }
 
     println!("deploy running");
     println!("server_config: {}", args.server_config.display());
@@ -72,7 +108,7 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
     }
 
     let result = supervise_children(&mut backend, &mut nginx).await;
-    let cleanup_result = cleanup_deploy(&server_config, &runtime_config, &mut backend, &mut nginx)
+    let cleanup_result = cleanup_deploy(&server_config, runtime_config, &mut backend, &mut nginx)
         .await
         .context("deploy cleanup failed");
 
@@ -80,6 +116,78 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
         (Err(err), _) => Err(err),
         (Ok(()), Err(err)) => Err(err),
         (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn probe_host(host: &str) -> &str {
+    match host {
+        "0.0.0.0" => "127.0.0.1",
+        "::" => "::1",
+        _ => host,
+    }
+}
+
+async fn wait_for_health(child: &mut Child, label: &str, host: &str, port: u16) -> Result<()> {
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("failed checking {label} process during startup"))?
+        {
+            bail!("{label} exited during startup with status {status}");
+        }
+        if health_endpoint_responds(host, port).await {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for {label} health at http://{host}:{port}/api/health");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn health_endpoint_responds(host: &str, port: u16) -> bool {
+    let Ok(Ok(mut stream)) = tokio::time::timeout(
+        Duration::from_secs(1),
+        tokio::net::TcpStream::connect((host, port)),
+    )
+    .await
+    else {
+        return false;
+    };
+    let request = format!("GET /api/health HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).await.is_err() {
+        return false;
+    }
+    let mut response = [0_u8; 128];
+    let Ok(Ok(read)) =
+        tokio::time::timeout(Duration::from_secs(1), stream.read(&mut response)).await
+    else {
+        return false;
+    };
+    read > 0 && response[..read].starts_with(b"HTTP/1.1 200")
+}
+
+fn cleanup_failed_start(
+    server_config: &ServerConfig,
+    runtime_config: &RuntimeConfig,
+    backend: &mut Child,
+    nginx: Option<&mut Child>,
+) {
+    if let Some(nginx) = nginx
+        && let Err(err) = terminate_child(nginx, "nginx")
+    {
+        eprintln!("failed stopping nginx after unsuccessful startup: {err:#}");
+    }
+    if let Err(err) = terminate_child(backend, "backend") {
+        eprintln!("failed stopping backend after unsuccessful startup: {err:#}");
+    }
+    if server_config.database.ensure_started
+        && let Err(err) = db::stop_db(&runtime_config.local_postgres)
+    {
+        eprintln!("failed stopping local Postgres after unsuccessful startup: {err:#}");
     }
 }
 
@@ -609,5 +717,12 @@ LISTEN 0      128        127.0.0.1:4000      0.0.0.0:*    users:(("gammaboard",p
         assert!(message.contains("nginx (pid 419163)"));
         assert!(message.contains("stop it with: kill -TERM 419163"));
         assert!(message.contains("force it if needed: kill -KILL 419163"));
+    }
+
+    #[test]
+    fn probes_unspecified_bind_addresses_through_loopback() {
+        assert_eq!(probe_host("0.0.0.0"), "127.0.0.1");
+        assert_eq!(probe_host("::"), "::1");
+        assert_eq!(probe_host("192.0.2.10"), "192.0.2.10");
     }
 }

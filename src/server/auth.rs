@@ -20,12 +20,15 @@ use super::{ApiError, AppState, ServerAuthConfig};
 
 const COOKIE_NAME: &str = "gammaboard_admin_session";
 const SESSION_TTL_SECS: u64 = 12 * 60 * 60;
+const SESSION_AUDIENCE: &str = "gammaboard-dashboard";
 
 #[derive(Clone)]
 pub struct AuthConfig {
     password_hash: String,
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
+    issuer: String,
+    session_version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,14 +45,20 @@ pub struct LoginRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionClaims {
     exp: u64,
+    iat: u64,
+    iss: String,
+    aud: String,
+    session_version: String,
 }
 
 impl AuthConfig {
-    pub fn from_server_config(config: &ServerAuthConfig) -> Self {
+    pub fn from_server_config(config: &ServerAuthConfig, server_name: &str) -> Self {
         Self {
             password_hash: config.admin_password_hash.trim().to_string(),
             encoding_key: EncodingKey::from_secret(config.session_secret.as_bytes()),
             decoding_key: DecodingKey::from_secret(config.session_secret.as_bytes()),
+            issuer: server_name.to_string(),
+            session_version: config.session_version.clone(),
         }
     }
 }
@@ -145,10 +154,15 @@ fn verify_password_hash(encoded: &str, password: &str) -> bool {
 }
 
 fn sign_session_token(auth: &AuthConfig) -> Result<String, ApiError> {
+    let now = now_unix_secs();
     encode(
         &Header::new(Algorithm::HS256),
         &SessionClaims {
-            exp: now_unix_secs() + SESSION_TTL_SECS,
+            exp: now + SESSION_TTL_SECS,
+            iat: now,
+            iss: auth.issuer.clone(),
+            aud: SESSION_AUDIENCE.to_string(),
+            session_version: auth.session_version.clone(),
         },
         &auth.encoding_key,
     )
@@ -158,9 +172,12 @@ fn sign_session_token(auth: &AuthConfig) -> Result<String, ApiError> {
 fn verify_session_token(auth: &AuthConfig, token: &str) -> Option<SessionClaims> {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
+    validation.set_issuer(&[auth.issuer.as_str()]);
+    validation.set_audience(&[SESSION_AUDIENCE]);
     decode::<SessionClaims>(token, &auth.decoding_key, &validation)
         .ok()
         .map(|value| value.claims)
+        .filter(|claims| claims.session_version == auth.session_version)
 }
 
 fn response_with_cookie<T: Serialize>(cookie: String, payload: T) -> Response {
@@ -211,4 +228,42 @@ fn now_unix_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn auth_config(session_version: &str) -> AuthConfig {
+        AuthConfig::from_server_config(
+            &ServerAuthConfig {
+                admin_password_hash: "unused".to_string(),
+                session_secret: "test-session-secret-with-enough-entropy".to_string(),
+                session_version: session_version.to_string(),
+            },
+            "test-server",
+        )
+    }
+
+    #[test]
+    fn session_tokens_require_matching_issuer_audience_and_session_version() {
+        let auth = auth_config("1");
+        let token = sign_session_token(&auth).expect("sign token");
+        assert!(verify_session_token(&auth, &token).is_some());
+        assert!(verify_session_token(&auth_config("2"), &token).is_none());
+        assert!(
+            verify_session_token(
+                &AuthConfig::from_server_config(
+                    &ServerAuthConfig {
+                        admin_password_hash: "unused".to_string(),
+                        session_secret: "test-session-secret-with-enough-entropy".to_string(),
+                        session_version: "1".to_string(),
+                    },
+                    "other-server",
+                ),
+                &token
+            )
+            .is_none()
+        );
+    }
 }

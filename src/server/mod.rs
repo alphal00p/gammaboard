@@ -3,6 +3,7 @@ mod config_panels;
 mod panels;
 mod performance_panels;
 mod run_panels;
+mod settings;
 mod task_panels;
 mod worker_panels;
 
@@ -29,7 +30,7 @@ use crate::stores::PgStore;
 use anyhow::Context;
 use axum::{
     Router,
-    extract::{Json as AxumJson, Path as AxumPath, Query, State},
+    extract::{DefaultBodyLimit, Json as AxumJson, Path as AxumPath, Query, State},
     http::Request,
     http::StatusCode,
     middleware::{self, Next},
@@ -149,6 +150,12 @@ fn default_frontend_port() -> u16 {
 pub struct ServerAuthConfig {
     pub admin_password_hash: String,
     pub session_secret: String,
+    #[serde(default = "default_session_version")]
+    pub session_version: String,
+}
+
+fn default_session_version() -> String {
+    "1".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -298,6 +305,22 @@ impl ServerConfig {
                     .to_string(),
             );
         }
+        if let Some(auth) = &self.auth {
+            if auth.session_secret.len() < 32 {
+                warnings.push(
+                    "auth.session_secret is shorter than 32 bytes; use a high-entropy secret kept outside version control"
+                        .to_string(),
+                );
+            }
+            if auth.session_secret.contains("replace-me")
+                || auth.session_secret.contains("placeholder")
+            {
+                warnings.push(
+                    "auth.session_secret appears to be a placeholder; configured authentication can be forged until it is replaced"
+                        .to_string(),
+                );
+            }
+        }
         warnings
     }
 }
@@ -345,8 +368,11 @@ pub async fn serve(
         anyhow::bail!("server.allowed_origins must not be empty");
     }
     let state = AppState {
-        store,
-        auth: config.auth.as_ref().map(AuthConfig::from_server_config),
+        store: store.clone(),
+        auth: config
+            .auth
+            .as_ref()
+            .map(|auth| AuthConfig::from_server_config(auth, &config.name)),
         server_name: config.name.clone(),
         allowed_origins,
         secure_cookie: config.secure_cookie,
@@ -437,6 +463,8 @@ fn default_perf_history_limit() -> i64 {
 fn clamp_limit(limit: i64) -> i64 {
     limit.clamp(1, 10_000)
 }
+
+const MAX_DEBUG_BATCH_LIMIT: usize = 100;
 
 fn json_response<T: Serialize>(value: T) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(
@@ -652,10 +680,12 @@ struct HistogramBundleExportResponse {
 fn build_app(state: AppState) -> Router {
     let public_api_routes = Router::new()
         .route("/health", get(health_check))
-        .route("/settings", get(get_settings_overview))
         .route("/auth/session", get(get_session_status))
         .route("/auth/login", post(login))
-        .route("/auth/logout", post(logout))
+        .route("/auth/logout", post(logout));
+
+    let protected_api_routes = Router::new()
+        .route("/settings", get(settings::get_settings_overview))
         .route("/runs", get(get_runs))
         .route("/nodes", get(get_nodes))
         .route("/nodes/:id/panels", get(get_node_panels))
@@ -694,9 +724,7 @@ fn build_app(state: AppState) -> Router {
             "/nodes/:id/performance/sampler-aggregator",
             get(get_node_sampler_performance_history),
         )
-        .route("/histogram-bundle/export", post(export_histogram_bundle));
-
-    let protected_api_routes = Router::new()
+        .route("/histogram-bundle/export", post(export_histogram_bundle))
         .route("/runs", post(create_run))
         .route("/runs/clone", post(clone_run))
         .route("/runs/:id", delete(delete_run))
@@ -742,6 +770,7 @@ fn build_app(state: AppState) -> Router {
 
     Router::new()
         .nest("/api", public_api_routes.merge(protected_api_routes))
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(build_cors_layer(state.allowed_origins.clone()))
         .layer(middleware::from_fn(request_context_middleware))
         .with_state(state)
@@ -794,81 +823,6 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
         )
             .into_response(),
     }
-}
-
-async fn get_settings_overview(
-    State(state): State<AppState>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let runtime_config = state.runtime.runtime_config();
-    json_response(serde_json::json!({
-        "repository": {
-            "url": REPOSITORY_URL,
-        },
-        "paths": {
-            "runtime_config": display_absolute_path(state.runtime.runtime_config_path()),
-            "server_config": display_absolute_path(&state.server_config_path),
-            "resources_root": display_absolute_path(state.runtime.primary_resource_root()),
-            "run_templates_dir": display_absolute_path(&state.run_templates_dir),
-            "task_templates_dir": display_absolute_path(&state.task_templates_dir),
-            "node_templates_dir": display_absolute_path(&state.node_templates_dir),
-            "postgres_data_dir": display_absolute_path(Path::new(&runtime_config.local_postgres.data_dir)),
-            "postgres_socket_dir": display_absolute_path(Path::new(&runtime_config.local_postgres.socket_dir)),
-            "postgres_log_file": display_absolute_path(Path::new(&runtime_config.local_postgres.log_file)),
-        },
-        "runtime": {
-            "database_url": redact_database_url(&runtime_config.database.url),
-            "resource_roots": runtime_config.resources.roots,
-            "tracing": {
-                "persist_runtime_logs": runtime_config.tracing.persist_runtime_logs,
-                "db_gammaboard_level": runtime_config.tracing.db_gammaboard_level,
-                "db_external_level": runtime_config.tracing.db_external_level,
-            },
-            "local_postgres": {
-                "max_connections": runtime_config.local_postgres.max_connections,
-                "listen_addresses": runtime_config.local_postgres.listen_addresses,
-                "host_auth_cidr": runtime_config.local_postgres.host_auth_cidr,
-                "shared_buffers": runtime_config.local_postgres.shared_buffers,
-                "effective_cache_size": runtime_config.local_postgres.effective_cache_size,
-                "work_mem": runtime_config.local_postgres.work_mem,
-                "checkpoint_timeout": runtime_config.local_postgres.checkpoint_timeout,
-                "max_wal_size": runtime_config.local_postgres.max_wal_size,
-                "wal_compression": runtime_config.local_postgres.wal_compression,
-                "synchronous_commit": runtime_config.local_postgres.synchronous_commit,
-            },
-        },
-        "server": {
-            "name": state.server_name,
-            "api_bind": state.api_bind,
-            "secure_cookie": state.secure_cookie,
-            "auth_enabled": state.auth.is_some(),
-            "allow_local_node_spawn": state.allow_local_node_spawn,
-            "allowed_origins": state
-                .allowed_origins
-                .iter()
-                .filter_map(|origin| origin.to_str().ok())
-                .collect::<Vec<_>>(),
-        },
-    }))
-}
-
-fn display_absolute_path(path: &Path) -> String {
-    if path.is_absolute() {
-        path.display().to_string()
-    } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(path).display().to_string())
-            .unwrap_or_else(|_| path.display().to_string())
-    }
-}
-
-fn redact_database_url(raw: &str) -> String {
-    let Ok(mut parsed) = url::Url::parse(raw) else {
-        return raw.to_string();
-    };
-    if parsed.password().is_some() {
-        let _ = parsed.set_password(Some("*****"));
-    }
-    parsed.to_string()
 }
 
 async fn get_session_status(
@@ -946,7 +900,8 @@ async fn get_run_debug_batches(
     let limit = params
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1000);
+        .unwrap_or(MAX_DEBUG_BATCH_LIMIT)
+        .clamp(1, MAX_DEBUG_BATCH_LIMIT);
     let status_param = params
         .get("status")
         .map(|s| s.to_lowercase())
@@ -1304,7 +1259,7 @@ async fn get_run_task_output(
     let full_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_none() {
         state
             .store
-            .get_task_output_snapshots(run_id, task.id, None, i64::MAX)
+            .get_task_output_snapshots(run_id, task.id, None, limit)
             .await?
     } else {
         Vec::new()
@@ -2225,16 +2180,33 @@ mod tests {
         config.frontend.host = "0.0.0.0".to_string();
 
         let warnings = config.security_warnings();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("authentication is disabled"));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("authentication is disabled"))
+        );
 
         config.auth = Some(ServerAuthConfig {
             admin_password_hash: "public-development-placeholder".to_string(),
             session_secret: "public-development-placeholder".to_string(),
+            session_version: "1".to_string(),
         });
         let warnings = config.security_warnings();
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("non-secure session cookie"));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("non-secure session cookie"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("shorter than 32 bytes"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("appears to be a placeholder"))
+        );
     }
 
     #[test]
