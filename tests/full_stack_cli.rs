@@ -1629,6 +1629,12 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
 #[tokio::test]
 #[ignore = "requires local postgres, a local MadNIS Python runtime, and the bundled GammaLoop state"]
 async fn full_stack_cli_gammaloop_madnis_metadata_and_batch_fuzz_e2e() -> anyhow::Result<()> {
+    if std::env::var_os("GAMMABOARD_RUN_MADNIS_E2E").is_none() {
+        eprintln!(
+            "skipping GammaLoop/MadNIS E2E; set GAMMABOARD_RUN_MADNIS_E2E=1 after preparing a compatible generated state"
+        );
+        return Ok(());
+    }
     let mut harness = FullStackHarness::new().await?;
 
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -2339,6 +2345,23 @@ async fn http_get_with_cookie(base_url: &str, path: &str, cookie: &str) -> anyho
         .text()
         .await?;
     Ok(body)
+}
+
+async fn login_cookie(base_url: &str) -> anyhow::Result<String> {
+    let response = http_post_json(
+        base_url,
+        "/api/auth/login",
+        json!({"password": "test-password"}),
+        None,
+    )
+    .await?;
+    anyhow::ensure!(response.status().is_success(), "test login failed");
+    response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or("").to_string())
+        .ok_or_else(|| anyhow::anyhow!("missing session cookie"))
 }
 
 async fn http_post_json(
@@ -3122,7 +3145,7 @@ name = "full-stack-e2e"
 
     harness
         .cli()
-        .args(["run", "remove", "full-stack-e2e"])
+        .args(["run", "remove", "--yes", "full-stack-e2e"])
         .assert()
         .success();
 
@@ -3449,6 +3472,7 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
     let mut harness = FullStackHarness::new().await?;
 
     let server_url = harness.start_server().await?;
+    let session_cookie = login_cookie(&server_url).await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
     harness
@@ -3457,8 +3481,10 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
             Duration::from_secs(10),
             || {
                 let server_url = server_url.clone();
+                let session_cookie = session_cookie.clone();
                 async move {
-                    let body = http_get(&server_url, "/api/nodes").await?;
+                    let body =
+                        http_get_with_cookie(&server_url, "/api/nodes", &session_cookie).await?;
                     Ok(body.contains("\"node_name\":\"w-1\"")
                         && body.contains("\"node_name\":\"w-2\""))
                 }
@@ -3472,15 +3498,18 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
         .await?;
 
     let restarted_server_url = harness.start_server().await?;
+    let restarted_session_cookie = login_cookie(&restarted_server_url).await?;
     harness
         .wait_for(
             "nodes visible after server restart",
             Duration::from_secs(10),
             || {
                 let server_url = restarted_server_url.clone();
+                let session_cookie = restarted_session_cookie.clone();
                 async move {
                     let health = http_get(&server_url, "/api/health").await?;
-                    let nodes = http_get(&server_url, "/api/nodes").await?;
+                    let nodes =
+                        http_get_with_cookie(&server_url, "/api/nodes", &session_cookie).await?;
                     Ok(health.contains("\"status\":\"ok\"")
                         && nodes.contains("\"node_name\":\"w-1\"")
                         && nodes.contains("\"node_name\":\"w-2\""))
@@ -3876,7 +3905,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
     harness
         .cli()
-        .args(["run", "remove", "delete-assigned-run-e2e"])
+        .args(["run", "remove", "--yes", "delete-assigned-run-e2e"])
         .assert()
         .success();
 
@@ -4000,7 +4029,7 @@ source_task = "sample"
 
     harness
         .cli()
-        .args(["run", "remove", &parent_run_id.to_string()])
+        .args(["run", "remove", "--yes", &parent_run_id.to_string()])
         .assert()
         .success();
 

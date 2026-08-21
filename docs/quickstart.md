@@ -214,10 +214,21 @@ cargo test -q
 just test-e2e
 ```
 
-`just test-e2e` runs the ignored full-stack CLI tests. For serial debugging:
+`just test-e2e` starts the managed local PostgreSQL cluster, then runs the
+ignored full-stack CLI tests with four test threads. The tests create and
+migrate their own temporary databases, so an existing local `gammaboard_db`
+does not affect them. Set
+`GAMMABOARD_E2E_TEST_THREADS` to tune concurrency. For serial debugging:
 
 ```bash
 cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
+```
+
+The GammaLoop/MadNIS E2E test requires a generated state compatible with the
+pinned GammaLoop revision and is separate:
+
+```bash
+just test-e2e-madnis
 ```
 
 The process protocol benchmark is ignored by default:

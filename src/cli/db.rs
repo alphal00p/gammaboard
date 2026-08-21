@@ -23,7 +23,11 @@ pub enum DbCommand {
     /// Show local Postgres cluster status
     Status,
     /// Start local Postgres and run migrations
-    Start,
+    Start {
+        /// Start PostgreSQL without creating or migrating the configured database
+        #[arg(long)]
+        skip_migrations: bool,
+    },
     /// Stop local Postgres
     Stop,
     /// Delete the local Postgres data directory
@@ -44,7 +48,13 @@ pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
     let local = &config.local_postgres;
     match args.command {
         DbCommand::Status => status_db(local, &config.database.url),
-        DbCommand::Start => start_db(local, &config.database.url),
+        DbCommand::Start { skip_migrations } => {
+            if skip_migrations {
+                start_postgres_cluster(local, &config.database.url)
+            } else {
+                start_db(local, &config.database.url)
+            }
+        }
         DbCommand::Stop => stop_db(local),
         DbCommand::Delete { yes } => delete_db(local, yes),
         DbCommand::DumpSql => dump_db_sql(local, &config.database.url),
@@ -214,6 +224,12 @@ fn resolve_migrations_dir() -> String {
 
 pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     require_commands(&["initdb", "pg_ctl", "createdb", "psql", "sqlx"])?;
+    start_postgres_cluster(local, database_url)?;
+    ensure_database_and_migrations(local, database_url)
+}
+
+fn start_postgres_cluster(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+    require_commands(&["initdb", "pg_ctl"])?;
     ensure_postgres_data_dir_permissions(local)?;
     if !is_cluster_initialized(local) {
         println!("postgres cluster not initialized; creating new cluster");
@@ -230,7 +246,7 @@ pub(crate) fn start_db(local: &LocalPostgresConfig, database_url: &str) -> Resul
         println!("postgres already running");
     }
 
-    ensure_database_and_migrations(local, database_url)
+    Ok(())
 }
 
 pub(crate) fn require_commands(commands: &[&str]) -> Result<()> {
