@@ -5,6 +5,9 @@ Nix development shell. Nix is recommended because it provides the exact Rust,
 Node.js, PostgreSQL, nginx, compiler, and scientific build tools used by the
 checked-in workflows.
 
+Install from a Git checkout. `cargo package` and crates.io installation are not
+supported because GammaLoop remains a Git dependency.
+
 Without Nix, install the following before using `gammaboard deploy`:
 
 - Current stable Rust with Cargo and a C/C++ toolchain.

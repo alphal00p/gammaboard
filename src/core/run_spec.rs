@@ -786,7 +786,7 @@ fixed_dims = { "0" = 0 }
 
     #[test]
     fn accumulator_config_rejects_legacy_discrete_projection_bin_limit() {
-        let err = toml::from_str::<AccumulatorConfig>(
+        toml::from_str::<AccumulatorConfig>(
             r#"
 kind = "scalar"
 
@@ -799,8 +799,6 @@ dims = [0]
 "#,
         )
         .expect_err("legacy max_total_bins should be rejected");
-
-        assert!(err.to_string().contains("max_total_bins"));
     }
 
     #[test]

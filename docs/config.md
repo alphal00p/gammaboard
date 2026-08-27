@@ -70,8 +70,11 @@ Runtime config owns the database URL, resource roots, tracing, and local Postgre
 ## Auth And Templates
 
 - When `[auth]` is configured, every dashboard API endpoint except health and
-  session/login/logout requires an admin session.
-- Omit `[auth]` for passwordless trusted-network control.
+  session/login/logout requires the single admin session. There are no user
+  accounts or roles.
+- Omit `[auth]` only for passwordless trusted-network control. Anyone who can
+  access the deployment can create runs and launch their configured process
+  commands.
 - Put `auth.admin_password_hash` and `auth.session_secret` in your server config to enable dashboard auth.
 - Set `allowed_origins` in your server config if the frontend is served from origins other than `http://localhost:3000`.
 - Deploy this behind HTTPS for real use and set `secure_cookie = true` in your server config.
@@ -257,7 +260,6 @@ kind = "set_accumulator"
 kind = "scalar"
 
 [task_queue.accumulator.discrete_projections]
-max_total_bins = 4096
 normalization = "contribution" # default; use "conditional_mean" for per-bin means
 
 [[task_queue.accumulator.discrete_projections.items]]
@@ -316,24 +318,3 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 - Refill hysteresis is controlled with `pending_refill_low_ratio` and `pending_refill_high_ratio`.
 - Total open batches (`pending + claimed + completed`) are capped by `max_queue_size`.
 - Pause/unassign drains the local queue fully before the sampler checkpoint is persisted.
-
-## Templates
-
-Curated run templates:
-
-- `resources/templates/runs/ghost_bump.toml`: Symbolica + Havana training on a 2D `(x, y)` domain plus `pdf_adaptation_image`.
-- `resources/templates/runs/symbolica-havana-pdf-1d2d.toml`: Symbolica + Havana training + both PDF adaptation task kinds.
-- `resources/templates/runs/process-rust-apptainer-evaluator-demo.toml`: Apptainer-packaged Rust process evaluator integration.
-- `resources/templates/runs/process-evaluator-process-sampler-demo.toml`: Process evaluator and sampler integration using a `.venv` evaluator and Nix sampler.
-- `resources/templates/runs/gammaloop.toml`: GammaLoop TTH evaluator config.
-
-Curated task bundles:
-
-- `resources/templates/tasks/sample_monte_carlo_real.toml`: minimal scalar sample task with naive Monte Carlo.
-- `resources/templates/tasks/pdf_adaptation_image.toml`: Havana training followed by PDF adaptation image rasterization.
-- `resources/templates/tasks/train_sample.toml`: GammaLoop TTH train+sample queue with queue tuning and inference stop target.
-
-Curated node launch templates:
-
-- `resources/templates/nodes/local-two-workers.toml`: two local workers for local/ITPhlies development.
-- UBELIX-specific node launch templates live under `ops/ubelix/resources/templates/nodes`; use `config.cores` to request Slurm `--cpus-per-task` for each worker.

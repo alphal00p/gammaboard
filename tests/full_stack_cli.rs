@@ -3194,6 +3194,75 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_installation_smoke_produces_unit_estimate() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let config = temp_run_add_config(include_str!(
+        "../resources/templates/runs/installation-smoke.toml"
+    ));
+    harness.add_run(&config);
+
+    let run_id = harness.run_id("installation-smoke").await?;
+    harness.start_nodes(&["w-1", "w-2"]).await?;
+    harness.assign_node("w-1", "sampler-aggregator", "installation-smoke");
+    harness.assign_node("w-2", "evaluator", "installation-smoke");
+
+    harness
+        .wait_for(
+            "installation smoke task completes",
+            Duration::from_secs(60),
+            || {
+                let pool = harness.pool.clone();
+                async move {
+                    let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
+                        "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'integrate-one'",
+                    )
+                    .bind(run_id)
+                    .fetch_one(&pool)
+                    .await?;
+                    anyhow::ensure!(
+                        state != "failed",
+                        "installation smoke failed: {}",
+                        failure_reason.unwrap_or_else(|| "no failure_reason".to_string())
+                    );
+                    Ok(state == "completed")
+                }
+            },
+        )
+        .await?;
+
+    let completed_samples: i64 =
+        sqlx::query_scalar("SELECT nr_completed_samples FROM runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert_eq!(completed_samples, 10_000);
+
+    let observable = harness
+        .run_current_accumulator(run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("installation smoke has no observable"))?;
+    let state = observable
+        .pointer("/components/0/state")
+        .ok_or_else(|| anyhow::anyhow!("missing scalar accumulator state: {observable}"))?;
+    let sum = state
+        .get("sum_weighted_value")
+        .and_then(JsonValue::as_f64)
+        .ok_or_else(|| anyhow::anyhow!("missing scalar sum: {observable}"))?;
+    let count = state
+        .get("count")
+        .and_then(JsonValue::as_i64)
+        .ok_or_else(|| anyhow::anyhow!("missing scalar count: {observable}"))?;
+    let estimate = sum / count as f64;
+    assert!(
+        (estimate - 1.0).abs() < 1e-12,
+        "expected unit estimate, got {estimate}; observable={observable}"
+    );
+
+    harness.cleanup().await
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_set_accumulator_enables_following_sample() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
     let config = temp_run_add_config(

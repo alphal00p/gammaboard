@@ -5,9 +5,15 @@ wrappers live in `ops/*/README.md`.
 
 ## Authentication
 
-Read-only dashboard/API endpoints are open. If `[auth]` is configured in the
-server config, steering actions require admin login and use a signed session
-cookie. If `[auth]` is omitted, local control is passwordless.
+If `[auth]` is configured in the server config, the dashboard/API requires the
+single admin password and uses a signed session cookie. If `[auth]` is omitted,
+the dashboard/API is passwordless. There are no users or roles: anyone with
+access is an administrator.
+
+Run TOML can launch configured child-process commands. Treat dashboard access,
+the API, and CLI access as trusted-operator access; do not give them to
+untrusted users, public web clients, or autonomous agents without an external
+approval boundary.
 
 Generate an admin password hash:
 
@@ -90,15 +96,16 @@ creates 43,200 history rows per day. Monitor database size for multi-day
 campaigns and use normal PostgreSQL operations when history must be managed.
 
 Before increasing a deployment, measure its intended configuration rather than
-extrapolating from a smoke test:
+extrapolating from a smoke test. This self-cleaning local benchmark starts an
+isolated stack, runs one sampler plus the requested evaluators, and reports the
+relevant rates and maxima. Its dependency-free workload deliberately throttles
+worker ticks to keep the default ten-minute run small enough for a local
+PostgreSQL instance:
 
 ```bash
-cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
-./gammaboard run create resources/templates/runs/installation-smoke.toml
-./gammaboard node start-local <worker-count>
-./gammaboard node auto-assign installation-smoke
+nix develop --command scripts/benchmark_campaign.sh --workers 4 --duration-seconds 600
 ```
 
-Record evaluator count, samples/second, queue depth, active PostgreSQL
-connections, and telemetry growth over at least ten minutes. Increase workers
-only while the queue stays bounded and database latency remains stable.
+Set `GAMMABOARD_BENCHMARK_DATABASE_URL` for a non-default local database URL.
+Increase workers only while the queue stays bounded and database latency
+remains stable.

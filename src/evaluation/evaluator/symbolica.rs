@@ -544,7 +544,6 @@ mod tests {
     use symbolica::atom::Atom;
     use symbolica::evaluate::FunctionMap;
     use symbolica::parser::ParseSettings;
-    use symbolica::wrap_input;
 
     #[test]
     fn symbolica_manual_eval_has_two_expected_peaks_with_decimal_centers() {

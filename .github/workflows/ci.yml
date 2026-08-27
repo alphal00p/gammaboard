@@ -48,6 +48,8 @@ jobs:
           cargo test --locked --test pg_store_integration -- --ignored
       - name: Run authenticated API integration test
         run: cargo test --locked --test full_stack_cli full_stack_server_auth_protects_pause_endpoint -- --ignored
+      - name: Run installation smoke integration test
+        run: cargo test --locked --test full_stack_cli full_stack_cli_installation_smoke_produces_unit_estimate -- --ignored
 
   frontend:
     runs-on: ubuntu-latest
