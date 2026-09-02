@@ -11,6 +11,7 @@ pub(crate) fn build_havana_grid(
     domain: &Domain,
     params: &HavanaSamplerParams,
 ) -> Result<Grid<f64>, BuildError> {
+    crate::activate_symbolica_oem_license().map_err(|err| BuildError::build(err.to_string()))?;
     match domain {
         Domain::Continuous { dims } => {
             if *dims == 0 {

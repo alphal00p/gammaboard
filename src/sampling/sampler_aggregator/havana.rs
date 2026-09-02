@@ -225,6 +225,8 @@ impl HavanaSampler {
         snapshot: HavanaSamplerSnapshot,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
+        crate::activate_symbolica_oem_license()
+            .map_err(|err| BuildError::build(err.to_string()))?;
         validate_havana_grid_domain(&snapshot.grid, domain, "havana snapshot")?;
 
         Ok(Self {
@@ -321,6 +323,8 @@ impl HavanaInferenceSampler {
         snapshot: HavanaInferenceSamplerSnapshot,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
+        crate::activate_symbolica_oem_license()
+            .map_err(|err| BuildError::build(err.to_string()))?;
         validate_havana_grid_domain(&snapshot.grid, domain, "havana inference snapshot")?;
         Ok(Self {
             batches_produced: snapshot.batches_produced,

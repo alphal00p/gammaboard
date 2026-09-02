@@ -13,6 +13,8 @@ pub struct HavanaInferenceMaterializer {
 
 impl HavanaInferenceMaterializer {
     pub fn new(handoff: Option<StageHandoff<'_>>) -> Result<Self, BuildError> {
+        crate::activate_symbolica_oem_license()
+            .map_err(|err| BuildError::build(err.to_string()))?;
         let handoff = handoff.unwrap_or_default();
 
         // Accept either a HavanaTraining snapshot (which contains the grid) or a

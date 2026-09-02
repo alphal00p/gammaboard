@@ -102,6 +102,8 @@ enum SymbolicaInputSlot {
 
 impl SymbolicaEngine {
     pub fn from_params(params: SymbolicaParams) -> Result<Self, crate::BuildError> {
+        crate::activate_symbolica_oem_license()
+            .map_err(|err| BuildError::build(err.to_string()))?;
         let settings = ParseSettings::symbolica();
 
         let mut args = Vec::with_capacity(params.args.len());
