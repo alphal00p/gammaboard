@@ -9,7 +9,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  NO_SYMBOLICA_OEM_LICENSE: "1"
+  SYMBOLICA_OEM_LICENSE: SYMBOLICA_OEM_GAMMALOOP
 
 jobs:
   rust:
