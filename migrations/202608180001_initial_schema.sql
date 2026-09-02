@@ -432,7 +432,9 @@ BEGIN
     END IF;
 
     INSERT INTO run_batch_queue_counters (run_id)
-    VALUES (target_run_id)
+    SELECT target_run_id
+    FROM runs
+    WHERE id = target_run_id
     ON CONFLICT (run_id) DO NOTHING;
 
     UPDATE run_batch_queue_counters
