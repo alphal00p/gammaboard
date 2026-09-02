@@ -214,11 +214,7 @@ fn run_spec_from_integration_params(
     Ok(RunSpec {
         run_id,
         domain,
-        evaluator: params.evaluator,
-        evaluator_requirements: params.evaluator_requirements,
-        sampler_requirements: params.sampler_requirements,
-        evaluator_runner_params: params.evaluator_runner_params,
-        sampler_aggregator_runner_params: params.sampler_aggregator_runner_params,
+        integration_params: params,
     })
 }
 
@@ -1238,7 +1234,7 @@ impl RunTaskStore for PgStore {
     async fn persist_task_controller_output(
         &self,
         task_id: i64,
-        output: &JsonValue,
+        output: &crate::core::ControllerTaskOutput,
     ) -> Result<(), StoreError> {
         queries::persist_task_controller_output(&self.pool, task_id, output)
             .await
@@ -1306,7 +1302,11 @@ mod tests {
         .expect("decode");
         assert_eq!(spec.run_id, 7);
         assert_eq!(spec.domain, Domain::continuous(1));
-        let evaluator = spec.evaluator.as_ref().expect("evaluator");
+        let evaluator = spec
+            .integration_params
+            .evaluator
+            .as_ref()
+            .expect("evaluator");
         assert_eq!(evaluator.kind_str(), "unit");
         assert!(matches!(
             evaluator,
@@ -1315,7 +1315,7 @@ mod tests {
                 && params.discrete_dims == 0
         ));
         assert_eq!(
-            spec.evaluator_runner_params,
+            spec.integration_params.evaluator_runner_params,
             EvaluatorRunnerParams::deserialize(json!({
                 "performance_snapshot_interval_ms": 5000,
                 "min_tick_time_ms": 50,
@@ -1324,7 +1324,7 @@ mod tests {
             .unwrap()
         );
         assert_eq!(
-            spec.sampler_aggregator_runner_params,
+            spec.integration_params.sampler_aggregator_runner_params,
             SamplerAggregatorRunnerParams::deserialize(json!({
                 "performance_snapshot_interval_ms": 5000,
                 "min_tick_time_ms": 10,
@@ -1406,7 +1406,7 @@ mod tests {
             }),
         )
         .expect("missing root evaluator should be valid");
-        assert!(spec.evaluator.is_none());
+        assert!(spec.integration_params.evaluator.is_none());
     }
 
     #[test]

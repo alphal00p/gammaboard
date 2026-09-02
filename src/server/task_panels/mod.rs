@@ -1,5 +1,7 @@
+mod controller;
 mod full_accumulator;
 mod hyperparameter_tuning;
+mod integration_campaign;
 mod parameter_scan;
 mod pdf_adaptation;
 mod sample;
@@ -245,6 +247,7 @@ impl RunTaskSpec {
             } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
             Self::ParameterScan { .. } => parameter_scan::projectors(),
             Self::HyperparameterTuning { .. } => hyperparameter_tuning::projectors(),
+            Self::IntegrationCampaign { .. } => integration_campaign::projectors(),
         });
         Ok(projectors)
     }
@@ -467,6 +470,27 @@ fn build_task_summary_entries(
                 "Concurrency",
                 *max_concurrent_trials,
             ));
+        }
+        RunTaskSpec::IntegrationCampaign {
+            children,
+            allocation,
+            stop_condition,
+            ..
+        } => {
+            entries.push(key_value("children", "Sub-runs", children.len()));
+            entries.push(key_value(
+                "max_active_runs",
+                "Concurrency",
+                allocation.max_active_runs,
+            ));
+            entries.push(key_value(
+                "allocation_window_samples",
+                "Allocation Window",
+                allocation.allocation_window_samples,
+            ));
+            if let Some(maximum) = stop_condition.max_total_samples {
+                entries.push(key_value("max_total_samples", "Sample Budget", maximum));
+            }
         }
     }
 

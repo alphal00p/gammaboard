@@ -65,14 +65,23 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   only plan parameter candidates. `optimizer.algorithm` selects the adapter and
   all algorithm-specific knobs, including seeds and budgets, live in
   `optimizer.params`.
+- `integration_campaign` is a control-plane controller for weighted collections
+  of independent child-run integrals. Each child keeps its own domain, evaluator,
+  sampler, accumulator, and snapshots. The controller combines independent
+  uncertainties in quadrature and reallocates persisted worker assignments in
+  bounded sample windows using variance-based policies.
+- Controller progress is persisted as typed `ControllerTaskOutput`; scan points, tuning
+  trials, and campaign entries flatten the shared `ControllerChildOutput` lifecycle,
+  measurement, and failure fields into the JSONB wire shape.
 - Run, task-append, and node-launch TOML may use a top-level `replacements`
   table plus placeholders `$(name:default)`. Exact full-string placeholders are
   typed TOML replacements; embedded placeholders interpolate as strings. Server
   and runtime configs are not templated.
-- Evaluator config is stage state. The run-global evaluator is optional and,
-  when present, is the root/default; sample/image/plot-line tasks may set `evaluator = "latest"`,
-  `{ from_name = "..." }`, or `{ config = ... }`. Task-level evaluators must
-  resolve to the run root domain.
+- Evaluator config is stage state. A top-level evaluator is optional initial-stage
+  shorthand; otherwise the first explicit compute-task evaluator establishes the immutable
+  run domain. Sample/image/plot-line tasks may use `evaluator = "latest"`,
+  `{ from_name = "..." }`, or `{ config = ... }`. All evaluator stages must match
+  the run domain. Controller tasks never resolve or inherit a parent evaluator.
 - Evaluators may expose JSON-safe metadata after initialization. Sampler
   activation instantiates the effective evaluator first, reads this metadata,
   and passes it into sampler construction; process samplers receive it as
@@ -80,7 +89,9 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 
 ## Design Rules
 - Keep adapters thin; put reusable behavior in `src/api` or lower layers.
-- Keep `RunSpec` run-global and immutable. Task-varying sampler/materializer/transform/accumulator choices belong on tasks or persisted stage defaults.
+- Keep `RunSpec` run-global and immutable; its runtime settings are grouped in
+  `IntegrationParams`. Task-varying sampler/materializer/transform/accumulator choices
+  belong on tasks or persisted stage defaults.
 - Restore task transitions from persisted snapshots/checkpoints, not in-memory handoff.
 - Run task activation and controller tasks are control-plane work. The node
   supervisor leader advances tasks and runs controller tasks without consuming a

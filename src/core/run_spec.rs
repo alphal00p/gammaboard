@@ -36,11 +36,7 @@ pub struct IntegrationParams {
 pub struct RunSpec {
     pub run_id: i32,
     pub domain: Domain,
-    pub evaluator: Option<EvaluatorConfig>,
-    pub evaluator_requirements: CapabilityRequirements,
-    pub sampler_requirements: CapabilityRequirements,
-    pub evaluator_runner_params: EvaluatorRunnerParams,
-    pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
+    pub integration_params: IntegrationParams,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

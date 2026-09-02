@@ -2,7 +2,7 @@ use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelState, PanelWidth, key_value, key_value_panel,
     replace_panel, sized_panel_spec,
 };
-use crate::stores::RegisteredWorkerEntry;
+use crate::{core::WorkerRole, stores::RegisteredWorkerEntry};
 use serde_json::Value as JsonValue;
 
 pub fn build_worker_panel_response(worker: &RegisteredWorkerEntry) -> PanelResponse {
@@ -32,8 +32,8 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
         PanelWidth::Half,
     )];
 
-    match worker.current_role.as_deref() {
-        Some("sampler_aggregator") => {
+    match worker.current_role {
+        Some(WorkerRole::SamplerAggregator) => {
             if json_has_object_fields(worker.sampler_engine_diagnostics.as_ref()) {
                 panels.push(sized_panel_spec(
                     "sampler_diagnostics",
@@ -67,9 +67,9 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
 }
 
 fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
-    let memory_usage = match worker.current_role.as_deref() {
-        Some("evaluator") => worker.evaluator_rss_bytes,
-        Some("sampler_aggregator") => worker.sampler_rss_bytes,
+    let memory_usage = match worker.current_role {
+        Some(WorkerRole::Evaluator) => worker.evaluator_rss_bytes,
+        Some(WorkerRole::SamplerAggregator) => worker.sampler_rss_bytes,
         _ => None,
     };
     let mut panels = vec![key_value_panel(
@@ -80,22 +80,22 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
             key_value(
                 "current_role",
                 "Current Role",
-                worker.current_role.as_deref().unwrap_or("none"),
+                worker
+                    .current_role
+                    .map(WorkerRole::as_str)
+                    .unwrap_or("none"),
             ),
             key_value("status", "Status", worker.status.as_str()),
             key_value("current_run_id", "Current Run ID", worker.current_run_id),
             key_value(
                 "desired_role",
                 "Desired Role",
-                worker.desired_role.as_deref().unwrap_or("none"),
+                worker
+                    .desired_role
+                    .map(WorkerRole::as_str)
+                    .unwrap_or("none"),
             ),
             key_value("desired_run_id", "Desired Run ID", worker.desired_run_id),
-            key_value(
-                "implementation",
-                "Implementation",
-                worker.implementation.as_str(),
-            ),
-            key_value("version", "Version", worker.version.as_str()),
             key_value("last_seen", "Last Seen", worker.last_seen),
             key_value(
                 "memory_usage",
@@ -105,9 +105,9 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
         ],
     )];
 
-    match worker.current_role.as_deref() {
-        Some("evaluator") => {}
-        Some("sampler_aggregator") => {
+    match worker.current_role {
+        Some(WorkerRole::Evaluator) => {}
+        Some(WorkerRole::SamplerAggregator) => {
             if let Some(diagnostics) = diagnostics_panel(worker.sampler_engine_diagnostics.as_ref())
             {
                 panels.push(diagnostics);

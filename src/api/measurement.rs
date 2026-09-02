@@ -483,7 +483,7 @@ mod tests {
         async fn persist_task_controller_output(
             &self,
             _task_id: i64,
-            _output: &JsonValue,
+            _output: &crate::core::ControllerTaskOutput,
         ) -> Result<(), crate::core::StoreError> {
             unreachable!("unused")
         }

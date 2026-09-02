@@ -85,10 +85,11 @@ reverse-proxy mount below a URL path instead of at `/`.
 Gammaboard separates integration into a persisted control plane and stateless-ish
 workers that can come and go.
 
-- A run is the immutable top-level problem definition: domain, root evaluator,
-  default runner settings, and the task queue.
+- A run is the immutable top-level problem definition: domain, initial evaluator
+  stage, default runner settings, and the task queue.
 - A task is one step on the run timeline, such as sampling, plotting, setting an
-  accumulator, parameter scanning, or hyperparameter tuning.
+  accumulator, parameter scanning, hyperparameter tuning, or steering an integration
+  campaign across independent sub-runs.
 - A snapshot records the stage state after a task: accumulator state, sampler
   state, evaluator config, and batch transform config. Later tasks restore from
   these snapshots instead of relying on in-memory handoff.
@@ -126,6 +127,14 @@ External evaluators, samplers, transforms, and materializers speak framed
 JSON-RPC over stdin/stdout. The protocol is in
 [docs/process-runtime.md](docs/process-runtime.md); the Python helpers and
 working runtimes are in [process_api](process_api).
+
+## Integration campaigns
+
+`integration_campaign` tasks combine weighted measurements from independent child
+runs and move the parent run's workers between them in persisted allocation windows.
+Each child remains a normal inspectable run with its own domain and adaptive state.
+A dependency-free steering example is available at
+`resources/templates/runs/integration-campaign-unit.toml`.
 
 ## Development
 

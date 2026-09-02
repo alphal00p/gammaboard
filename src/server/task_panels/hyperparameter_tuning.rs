@@ -1,12 +1,11 @@
+use super::controller::{child_table_payload, progress_projector};
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel,
-    min_max_row_tones, multi_timeseries_panel, panel_spec, progress_panel, row_tone_labels,
-    sized_panel_spec, table_panel_with_payload_and_options,
+    multi_timeseries_panel, panel_spec, sized_panel_spec, table_panel_with_payload_and_options,
 };
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use std::collections::BTreeSet;
-
 const TUNING_PROGRESS_PANEL_ID: &str = "tuning_progress";
 const TUNING_BEST_PANEL_ID: &str = "tuning_best";
 const TUNING_OBJECTIVE_PANEL_ID: &str = "tuning_objective";
@@ -22,28 +21,21 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
 }
 
 fn tuning_progress_projector() -> TaskPanelProjector {
-    panel_projector(
-        panel_spec(
-            TUNING_PROGRESS_PANEL_ID,
-            "Tuning Progress",
-            PanelKind::Progress,
-            PanelHistoryMode::None,
-        ),
-        |ctx| {
-            Ok(Some(progress_panel(
-                TUNING_PROGRESS_PANEL_ID,
-                ctx.task
-                    .controller_output
-                    .as_ref()
-                    .and_then(|output| output.get("completed_trials"))
-                    .and_then(JsonValue::as_u64)
-                    .unwrap_or(0) as f64,
-                tuning_total_trials(ctx).map(|value| value as f64),
-                Some("trials"),
-                None,
-            )))
+    progress_projector(
+        TUNING_PROGRESS_PANEL_ID,
+        "Tuning Progress",
+        |output| {
+            output
+                .hyperparameter_tuning()
+                .map(|output| output.completed_trials as f64)
         },
-        |_ctx| Ok(None),
+        |output| {
+            output
+                .hyperparameter_tuning()
+                .map(|output| output.total_trials as f64)
+        },
+        "trials",
+        |ctx| tuning_total_trials(ctx).map(|value| value as f64),
     )
 }
 
@@ -117,7 +109,7 @@ fn tuning_objective_projector() -> TaskPanelProjector {
         |ctx| {
             let objective_points = tuning_trials(ctx)
                 .into_iter()
-                .filter_map(trial_to_plot_point)
+                .filter_map(|trial| trial_to_plot_point(&trial))
                 .collect::<Vec<_>>();
             let best_points = best_so_far_points(&objective_points, tuning_mode(ctx));
             Ok(Some(multi_timeseries_panel(
@@ -175,21 +167,16 @@ fn tuning_trials_projector() -> TaskPanelProjector {
             }
             let rows = trials
                 .into_iter()
-                .map(|trial| trial_to_table_row(trial, &parameter_names, show_failure))
+                .map(|trial| trial_to_table_row(&trial, &parameter_names, show_failure))
                 .collect::<Vec<_>>();
-            let row_tones = min_max_row_tones(&rows, tuning_table_objective_column());
+            let payload =
+                child_table_payload(&rows, tuning_table_objective_column(), Default::default());
+
             Ok(Some(table_panel_with_payload_and_options(
                 TUNING_TRIALS_PANEL_ID,
                 columns,
                 rows,
-                Some(json!({
-                    "row_action": {
-                        "kind": "select_run",
-                        "column": "run",
-                    },
-                    "row_tones": row_tones,
-                    "row_tone_labels": row_tone_labels(),
-                })),
+                Some(payload),
                 Default::default(),
             )))
         },
@@ -205,8 +192,8 @@ fn tuning_total_trials(ctx: &TaskPanelContext<'_>) -> Option<u64> {
     ctx.task
         .controller_output
         .as_ref()
-        .and_then(|output| output.get("total_trials"))
-        .and_then(JsonValue::as_u64)
+        .and_then(crate::core::ControllerTaskOutput::hyperparameter_tuning)
+        .map(|output| output.total_trials as u64)
         .or_else(|| {
             ctx.task
                 .task
@@ -222,17 +209,22 @@ fn tuning_mode(ctx: &TaskPanelContext<'_>) -> crate::core::MeasurementMode {
     }
 }
 
-fn tuning_trials<'a>(ctx: &'a TaskPanelContext<'_>) -> Vec<&'a JsonValue> {
+fn tuning_trials(ctx: &TaskPanelContext<'_>) -> Vec<JsonValue> {
     ctx.task
         .controller_output
         .as_ref()
-        .and_then(|output| output.get("trials"))
-        .and_then(JsonValue::as_array)
-        .map(|trials| trials.iter().collect())
+        .and_then(crate::core::ControllerTaskOutput::hyperparameter_tuning)
+        .map(|output| {
+            output
+                .trials
+                .iter()
+                .filter_map(|trial| serde_json::to_value(trial).ok())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-fn tuning_parameter_names(ctx: &TaskPanelContext<'_>, trials: &[&JsonValue]) -> Vec<String> {
+fn tuning_parameter_names(ctx: &TaskPanelContext<'_>, trials: &[JsonValue]) -> Vec<String> {
     let mut names = match &ctx.task.task {
         crate::core::RunTaskSpec::HyperparameterTuning { parameters, .. } => {
             parameters.keys().cloned().collect::<BTreeSet<_>>()
@@ -248,7 +240,7 @@ fn tuning_parameter_names(ctx: &TaskPanelContext<'_>, trials: &[&JsonValue]) -> 
 }
 
 fn best_trial<'a>(
-    trials: &[&'a JsonValue],
+    trials: &'a [JsonValue],
     mode: crate::core::MeasurementMode,
 ) -> Option<&'a JsonValue> {
     trials
@@ -257,7 +249,7 @@ fn best_trial<'a>(
             trial
                 .get("objective_value")
                 .and_then(JsonValue::as_f64)
-                .map(|value| (*trial, value))
+                .map(|value| (trial, value))
         })
         .min_by(|(_, left), (_, right)| {
             let ordering = left.total_cmp(right);
@@ -369,10 +361,9 @@ mod tests {
     use super::*;
     use crate::core::{
         HyperparameterTuningAlgorithm, HyperparameterTuningCategoricalDomain,
-        HyperparameterTuningFloatDomain, HyperparameterTuningObjectiveSpec,
-        HyperparameterTuningOptimizerSpec, HyperparameterTuningParameterDomain, MeasurementMode,
-        MeasurementQuantitySpec, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-        canonical_task_toml,
+        HyperparameterTuningFloatDomain, HyperparameterTuningOptimizerSpec,
+        HyperparameterTuningParameterDomain, MeasurementMode, MeasurementSpec, RunTask,
+        RunTaskInput, RunTaskSpec, RunTaskState, canonical_task_toml,
     };
     use crate::server::panels::PanelState;
     use chrono::Utc;
@@ -385,11 +376,9 @@ mod tests {
                 algorithm: HyperparameterTuningAlgorithm::RandomSearch,
                 params: json!({ "max_trials": 3, "seed": 1 }),
             },
-            objective: HyperparameterTuningObjectiveSpec {
-                source_task: "sample".to_string(),
-                quantity: MeasurementQuantitySpec::default(),
-                metric: None,
+            objective: MeasurementSpec {
                 mode: MeasurementMode::Minimize,
+                ..MeasurementSpec::default()
             },
             parameters: BTreeMap::from([
                 (
@@ -437,7 +426,9 @@ mod tests {
             })
             .expect("task toml"),
             measurement_output: None,
-            controller_output,
+            controller_output: controller_output.map(|output| {
+                serde_json::from_value(output).expect("typed tuning controller output")
+            }),
         }
     }
 

@@ -1,39 +1,17 @@
 use crate::api::runs::{ChildRunRequest, create_child_run};
 use crate::core::StoreResultExt;
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
-    RunTaskStore, StoreError, TaskMeasurementOutput,
+    AggregationStore, ControlPlaneStore, ControllerChildOutput, ControllerChildState,
+    ControllerTaskOutput, ParameterScanOutput, ParameterScanPointOutput, RunReadStore,
+    RunSpecStore, RunTask, RunTaskSpec, RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    load_child_task_measurement, redistribute_parent_assignments_to_children,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_measurement,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
 const PARAMETER_SCAN_SPAWN_KIND: &str = "parameter_scan";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParameterScanPointOutput {
-    pub index: usize,
-    pub parameter_values: JsonValue,
-    pub child_run_id: Option<i32>,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub measurement: Option<TaskMeasurementOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParameterScanOutput {
-    pub parameters: Vec<String>,
-    pub completed_points: usize,
-    pub running_points: usize,
-    pub total_points: usize,
-    pub points: Vec<ParameterScanPointOutput>,
-}
 
 pub struct ParameterScanRunner<S> {
     store: S,
@@ -99,10 +77,12 @@ where
                 points.push(ParameterScanPointOutput {
                     index,
                     parameter_values,
-                    child_run_id: None,
-                    status: "pending".to_string(),
-                    measurement: None,
-                    failure_reason: None,
+                    child: ControllerChildOutput {
+                        child_run_id: None,
+                        status: ControllerChildState::Pending,
+                        measurement: None,
+                        failure_reason: None,
+                    },
                 });
                 continue;
             };
@@ -116,10 +96,12 @@ where
                     points.push(ParameterScanPointOutput {
                         index,
                         parameter_values,
-                        child_run_id: Some(child.run_id),
-                        status: "completed".to_string(),
-                        measurement: Some(TaskMeasurementOutput::Completed { results }),
-                        failure_reason: None,
+                        child: ControllerChildOutput {
+                            child_run_id: Some(child.run_id),
+                            status: ControllerChildState::Completed,
+                            measurement: Some(TaskMeasurementOutput::Completed { results }),
+                            failure_reason: None,
+                        },
                     });
                 }
                 Some(TaskMeasurementOutput::Failed { reason }) => {
@@ -130,12 +112,14 @@ where
                     points.push(ParameterScanPointOutput {
                         index,
                         parameter_values,
-                        child_run_id: Some(child.run_id),
-                        status: "failed".to_string(),
-                        measurement: Some(TaskMeasurementOutput::Failed {
-                            reason: reason.clone(),
-                        }),
-                        failure_reason: Some(reason),
+                        child: ControllerChildOutput {
+                            child_run_id: Some(child.run_id),
+                            status: ControllerChildState::Failed,
+                            measurement: Some(TaskMeasurementOutput::Failed {
+                                reason: reason.clone(),
+                            }),
+                            failure_reason: Some(reason),
+                        },
                     });
                 }
                 None => {
@@ -145,10 +129,12 @@ where
                     points.push(ParameterScanPointOutput {
                         index,
                         parameter_values,
-                        child_run_id: Some(child.run_id),
-                        status: measurement_output.task_state.as_str().to_string(),
-                        measurement: None,
-                        failure_reason: None,
+                        child: ControllerChildOutput {
+                            child_run_id: Some(child.run_id),
+                            status: measurement_output.task_state.into(),
+                            measurement: None,
+                            failure_reason: None,
+                        },
                     });
                 }
             }
@@ -162,7 +148,11 @@ where
                 points,
             )
             .await?;
-            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
+            apply_controller_assignment_plan(
+                &self.store,
+                ControllerAssignmentPlan::preserving(self.run_id, Vec::new()),
+            )
+            .await?;
             self.store.fail_run_task(self.task.id, &reason).await?;
             return Ok(true);
         }
@@ -175,7 +165,11 @@ where
                 points,
             )
             .await?;
-            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
+            apply_controller_assignment_plan(
+                &self.store,
+                ControllerAssignmentPlan::preserving(self.run_id, Vec::new()),
+            )
+            .await?;
             self.store.complete_run_task(self.task.id).await?;
             return Ok(true);
         }
@@ -212,14 +206,18 @@ where
 
         let mut runnable_child_run_ids = points
             .iter()
-            .filter(|point| point.status != "completed" && point.status != "failed")
-            .filter_map(|point| point.child_run_id)
+            .filter(|point| {
+                !matches!(
+                    point.child.status,
+                    ControllerChildState::Completed | ControllerChildState::Failed
+                )
+            })
+            .filter_map(|point| point.child.child_run_id)
             .collect::<Vec<_>>();
         runnable_child_run_ids.extend(created_child_run_ids);
-        redistribute_parent_assignments_to_children(
+        apply_controller_assignment_plan(
             &self.store,
-            self.run_id,
-            runnable_child_run_ids,
+            ControllerAssignmentPlan::preserving(self.run_id, runnable_child_run_ids),
         )
         .await?;
 
@@ -241,14 +239,13 @@ where
         running_points: usize,
         points: Vec<ParameterScanPointOutput>,
     ) -> Result<(), StoreError> {
-        let output = serde_json::to_value(ParameterScanOutput {
+        let output = ControllerTaskOutput::ParameterScan(ParameterScanOutput {
             total_points: points.len(),
             parameters,
             completed_points,
             running_points,
             points,
-        })
-        .map_err(|err| StoreError::store(format!("failed to serialize scan output: {err}")))?;
+        });
         self.store
             .persist_task_controller_output(self.task.id, &output)
             .await

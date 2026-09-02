@@ -237,7 +237,7 @@ Sample tasks use direct source specs:
 
 Task names are unique per run and can be referenced by `from_name`.
 
-Task-level evaluator configs must resolve to the same domain as the run root evaluator. This keeps batches, materializers, and accumulator state compatible while still allowing evaluator parameters, expressions, process commands, and implementation kind to vary per task.
+The top-level `[evaluator]` is shorthand for the initial evaluator stage. If it is omitted, the first explicit compute-task evaluator establishes the immutable run domain. Every later evaluator stage must resolve to that domain. Controller tasks (`parameter_scan`, `hyperparameter_tuning`, and `integration_campaign`) never resolve or inherit the parent evaluator; their child-run TOML owns each child evaluator. This keeps batches, materializers, and accumulator state compatible while allowing implementation and parameters to vary between compute stages.
 
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
 
@@ -304,6 +304,25 @@ offset = [0.0, 0.0]
 direction = [1.0, 0.0]
 linspace = { start = -2.0, stop = 2.0, count = 512 }
 ```
+
+## Integration Campaigns
+
+`integration_campaign` is a control-plane task that owns independent child runs.
+Each `[[task_queue.children]]` entry supplies a stable name, a finite coefficient,
+and a complete child `run_toml`. The common `measurement` selects the child task
+whose live or completed measurement is combined. Child estimates are assumed
+independent, so uncertainties are combined in quadrature after applying the
+coefficients.
+
+`allocation.algorithm` is `variance_reduction_rate` by default and ranks the
+weighted variance reduction proxy per second. `largest_variance` ignores measured
+throughput. `min_samples_per_child` provides pilot coverage,
+`allocation_window_samples` limits reassignment churn, and `max_active_runs`
+controls child concurrency. The campaign stops on its combined absolute or
+relative error after `min_total_samples`, or at `max_total_samples`.
+
+See `resources/templates/runs/integration-campaign-unit.toml` for a complete,
+dependency-free example.
 
 ## Queue Tuning
 

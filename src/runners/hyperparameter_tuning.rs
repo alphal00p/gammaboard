@@ -1,20 +1,20 @@
 use crate::api::runs::{ChildRunRequest, create_child_run};
 use crate::core::{
-    AccumulatorMetricName, AggregationStore, ControlPlaneStore, EgoboxInfillStrategy,
-    EgoboxQeiStrategy, HyperparameterTuningAlgorithm, HyperparameterTuningObjectiveSpec,
+    AccumulatorMetricName, AggregationStore, ControlPlaneStore, ControllerChildOutput,
+    ControllerChildState, ControllerTaskOutput, EgoboxInfillStrategy, EgoboxQeiStrategy,
+    HyperparameterTrialOutput, HyperparameterTuningAlgorithm, HyperparameterTuningOutput,
     HyperparameterTuningParameterDomain, MeasurementMode, MeasurementQuantityName,
-    MeasurementQuantitySpec, RunReadStore, RunSpecStore, RunTask, RunTaskSpec, RunTaskState,
-    RunTaskStore, StoreError, TaskMeasurementOutput,
+    MeasurementQuantitySpec, MeasurementSpec, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
+    RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    load_child_task_measurement, redistribute_parent_assignments_to_children,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_measurement,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use egobox_ego::{EgorServiceBuilder, InfillStrategy, QEiStrategy, XType};
 use ndarray::Array2;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,35 +23,6 @@ use std::{
 use tracing::warn;
 
 const HYPERPARAMETER_TUNING_SPAWN_KIND: &str = "hyperparameter_tuning";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HyperparameterTrialOutput {
-    pub index: usize,
-    pub parameters: JsonValue,
-    pub child_run_id: Option<i32>,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub objective_value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub objective_uncertainty: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub measurement: Option<TaskMeasurementOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HyperparameterTuningOutput {
-    pub completed_trials: usize,
-    pub running_trials: usize,
-    pub failed_trials: usize,
-    pub total_trials: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub best_trial: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub best_objective_value: Option<f64>,
-    pub trials: Vec<HyperparameterTrialOutput>,
-}
 
 #[derive(Debug, Clone)]
 struct OptimizerTrialCandidate {
@@ -68,7 +39,7 @@ struct OptimizerObservation {
 #[derive(Debug, Clone)]
 struct PreviousTrial {
     index: usize,
-    status: String,
+    status: ControllerChildState,
     parameters: BTreeMap<String, toml::Value>,
     objective_value: Option<f64>,
 }
@@ -139,8 +110,8 @@ where
             .iter()
             .filter(|(_, trial)| {
                 child_runs_by_label.contains_key(trial.index.to_string().as_str())
-                    && trial.status != "completed"
-                    && trial.status != "failed"
+                    && trial.status != ControllerChildState::Completed
+                    && trial.status != ControllerChildState::Failed
             })
             .count();
         let candidate_capacity = max_concurrent_trials.saturating_sub(previous_running_count);
@@ -178,12 +149,14 @@ where
                 trials.push(HyperparameterTrialOutput {
                     index,
                     parameters: parameters_json,
-                    child_run_id: None,
-                    status: "planned".to_string(),
                     objective_value: None,
                     objective_uncertainty: None,
-                    measurement: None,
-                    failure_reason: None,
+                    child: ControllerChildOutput {
+                        child_run_id: None,
+                        status: ControllerChildState::Planned,
+                        measurement: None,
+                        failure_reason: None,
+                    },
                 });
                 continue;
             };
@@ -199,12 +172,14 @@ where
                             trials.push(HyperparameterTrialOutput {
                                 index,
                                 parameters: parameters_json,
-                                child_run_id: Some(child.run_id),
-                                status: "completed".to_string(),
                                 objective_value: Some(result.value),
                                 objective_uncertainty: result.uncertainty,
-                                measurement: Some(TaskMeasurementOutput::Completed { results }),
-                                failure_reason: None,
+                                child: ControllerChildOutput {
+                                    child_run_id: Some(child.run_id),
+                                    status: ControllerChildState::Completed,
+                                    measurement: Some(TaskMeasurementOutput::Completed { results }),
+                                    failure_reason: None,
+                                },
                             });
                         }
                         Err(reason) => {
@@ -219,12 +194,14 @@ where
                             trials.push(HyperparameterTrialOutput {
                                 index,
                                 parameters: parameters_json,
-                                child_run_id: Some(child.run_id),
-                                status: "failed".to_string(),
                                 objective_value: None,
                                 objective_uncertainty: None,
-                                measurement: Some(TaskMeasurementOutput::Completed { results }),
-                                failure_reason: Some(failure_reason),
+                                child: ControllerChildOutput {
+                                    child_run_id: Some(child.run_id),
+                                    status: ControllerChildState::Failed,
+                                    measurement: Some(TaskMeasurementOutput::Completed { results }),
+                                    failure_reason: Some(failure_reason),
+                                },
                             });
                         }
                     }
@@ -240,14 +217,16 @@ where
                     trials.push(HyperparameterTrialOutput {
                         index,
                         parameters: parameters_json,
-                        child_run_id: Some(child.run_id),
-                        status: "failed".to_string(),
                         objective_value: None,
                         objective_uncertainty: None,
-                        measurement: Some(TaskMeasurementOutput::Failed {
-                            reason: reason.clone(),
-                        }),
-                        failure_reason: Some(failure_reason),
+                        child: ControllerChildOutput {
+                            child_run_id: Some(child.run_id),
+                            status: ControllerChildState::Failed,
+                            measurement: Some(TaskMeasurementOutput::Failed {
+                                reason: reason.clone(),
+                            }),
+                            failure_reason: Some(failure_reason),
+                        },
                     });
                 }
                 None => {
@@ -258,24 +237,28 @@ where
                         trials.push(HyperparameterTrialOutput {
                             index,
                             parameters: parameters_json,
-                            child_run_id: Some(child.run_id),
-                            status: "failed".to_string(),
                             objective_value: None,
                             objective_uncertainty: None,
-                            measurement: None,
-                            failure_reason: Some(failure_reason),
+                            child: ControllerChildOutput {
+                                child_run_id: Some(child.run_id),
+                                status: ControllerChildState::Failed,
+                                measurement: None,
+                                failure_reason: Some(failure_reason),
+                            },
                         });
                     } else {
                         running_count += 1;
                         trials.push(HyperparameterTrialOutput {
                             index,
                             parameters: parameters_json,
-                            child_run_id: Some(child.run_id),
-                            status: measurement_output.task_state.as_str().to_string(),
                             objective_value: None,
                             objective_uncertainty: None,
-                            measurement: None,
-                            failure_reason: None,
+                            child: ControllerChildOutput {
+                                child_run_id: Some(child.run_id),
+                                status: measurement_output.task_state.into(),
+                                measurement: None,
+                                failure_reason: None,
+                            },
                         });
                     }
                 }
@@ -291,7 +274,11 @@ where
                 trials,
             )
             .await?;
-            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
+            apply_controller_assignment_plan(
+                &self.store,
+                ControllerAssignmentPlan::preserving(self.run_id, Vec::new()),
+            )
+            .await?;
             self.store
                 .fail_run_task(
                     self.task.id,
@@ -313,7 +300,11 @@ where
             self.store
                 .update_run_task_progress(self.task.id, total_trials as i64, completed_count as i64)
                 .await?;
-            redistribute_parent_assignments_to_children(&self.store, self.run_id, []).await?;
+            apply_controller_assignment_plan(
+                &self.store,
+                ControllerAssignmentPlan::preserving(self.run_id, Vec::new()),
+            )
+            .await?;
             self.store.complete_run_task(self.task.id).await?;
             return Ok(true);
         }
@@ -371,14 +362,16 @@ where
 
         let mut runnable_child_run_ids = trials
             .iter()
-            .filter(|trial| trial.status != "completed" && trial.status != "failed")
-            .filter_map(|trial| trial.child_run_id)
+            .filter(|trial| {
+                trial.child.status != ControllerChildState::Completed
+                    && trial.child.status != ControllerChildState::Failed
+            })
+            .filter_map(|trial| trial.child.child_run_id)
             .collect::<Vec<_>>();
         runnable_child_run_ids.extend(created_child_run_ids);
-        redistribute_parent_assignments_to_children(
+        apply_controller_assignment_plan(
             &self.store,
-            self.run_id,
-            runnable_child_run_ids,
+            ControllerAssignmentPlan::preserving(self.run_id, runnable_child_run_ids),
         )
         .await?;
 
@@ -406,7 +399,7 @@ where
     ) -> Result<(), StoreError> {
         let (best_trial, best_objective_value) =
             best_trial(&trials, objective_mode(&self.task.task));
-        let output = serde_json::to_value(HyperparameterTuningOutput {
+        let output = ControllerTaskOutput::HyperparameterTuning(HyperparameterTuningOutput {
             total_trials,
             completed_trials,
             running_trials,
@@ -414,8 +407,7 @@ where
             best_trial,
             best_objective_value,
             trials,
-        })
-        .map_err(|err| StoreError::store(format!("failed to serialize tuning output: {err}")))?;
+        });
         self.store
             .persist_task_controller_output(self.task.id, &output)
             .await
@@ -430,7 +422,7 @@ fn objective_mode(task: &RunTaskSpec) -> MeasurementMode {
 }
 
 fn objective_result<'a>(
-    objective: &HyperparameterTuningObjectiveSpec,
+    objective: &MeasurementSpec,
     results: &'a [crate::core::MeasurementResult],
 ) -> Result<&'a crate::core::MeasurementResult, String> {
     let selector = objective_selector(objective);
@@ -466,7 +458,7 @@ fn objective_result<'a>(
 fn objective_failure_reason(
     trial_index: usize,
     child_run_id: i32,
-    objective: &HyperparameterTuningObjectiveSpec,
+    objective: &MeasurementSpec,
     results: &[crate::core::MeasurementResult],
     reason: &str,
 ) -> String {
@@ -481,7 +473,7 @@ fn objective_failure_reason(
 fn objective_measurement_failure_reason(
     trial_index: usize,
     child_run_id: i32,
-    objective: &HyperparameterTuningObjectiveSpec,
+    objective: &MeasurementSpec,
     reason: &str,
 ) -> String {
     format!(
@@ -494,7 +486,7 @@ fn objective_measurement_failure_reason(
 fn objective_missing_measurement_reason(
     trial_index: usize,
     child_run_id: i32,
-    objective: &HyperparameterTuningObjectiveSpec,
+    objective: &MeasurementSpec,
 ) -> String {
     format!(
         "trial {trial_index} child_run_id={child_run_id} objective source_task={} requested={} failed: source task completed without measurement output",
@@ -503,7 +495,7 @@ fn objective_missing_measurement_reason(
     )
 }
 
-fn objective_selector_label(objective: &HyperparameterTuningObjectiveSpec) -> String {
+fn objective_selector_label(objective: &MeasurementSpec) -> String {
     let (name, component) = objective_selector(objective);
     metric_selector_label(name, component.as_deref())
 }
@@ -526,9 +518,7 @@ fn metric_selector_label(name: AccumulatorMetricName, component: Option<&str>) -
     }
 }
 
-fn objective_selector(
-    objective: &HyperparameterTuningObjectiveSpec,
-) -> (AccumulatorMetricName, Option<String>) {
+fn objective_selector(objective: &MeasurementSpec) -> (AccumulatorMetricName, Option<String>) {
     if let Some(metric) = objective.metric.as_ref() {
         let selector = metric.selector();
         return (selector.name, selector.component);
@@ -1293,43 +1283,37 @@ fn contains_encoded(existing: &[Vec<f64>], candidate: &[f64]) -> bool {
 }
 
 fn previous_trial_parameters(
-    output: Option<&JsonValue>,
+    output: Option<&ControllerTaskOutput>,
 ) -> Result<BTreeMap<usize, PreviousTrial>, StoreError> {
-    let Some(trials) = output
-        .and_then(|output| output.get("trials"))
-        .and_then(JsonValue::as_array)
-    else {
+    let Some(output) = output.and_then(ControllerTaskOutput::hyperparameter_tuning) else {
         return Ok(BTreeMap::new());
     };
-    trials
+    output
+        .trials
         .iter()
-        .filter_map(|trial| {
-            let index = trial.get("index").and_then(JsonValue::as_u64)? as usize;
-            let status = trial
-                .get("status")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("planned")
-                .to_string();
-            let parameters = trial.get("parameters")?.as_object()?;
-            let parameters = parameters
+        .map(|trial| {
+            let parameters = trial
+                .parameters
+                .as_object()
+                .ok_or_else(|| StoreError::store("tuning trial parameters must be an object"))?
                 .iter()
                 .map(|(name, value)| Ok((name.clone(), json_to_toml(value)?)))
-                .collect::<Result<BTreeMap<_, _>, StoreError>>();
-            Some(parameters.map(|parameters| {
-                let previous = PreviousTrial {
-                    index,
-                    status,
+                .collect::<Result<BTreeMap<_, _>, StoreError>>()?;
+            Ok((
+                trial.index,
+                PreviousTrial {
+                    index: trial.index,
+                    status: trial.child.status,
                     parameters,
-                    objective_value: trial.get("objective_value").and_then(JsonValue::as_f64),
-                };
-                (index, previous)
-            }))
+                    objective_value: trial.objective_value,
+                },
+            ))
         })
         .collect()
 }
 
 fn previous_trial_observations(
-    output: Option<&JsonValue>,
+    output: Option<&ControllerTaskOutput>,
 ) -> Result<Vec<OptimizerObservation>, StoreError> {
     Ok(previous_trial_parameters(output)?
         .into_values()
@@ -1641,7 +1625,7 @@ mod tests {
                 0,
                 PreviousTrial {
                     index: 0,
-                    status: "completed".to_string(),
+                    status: ControllerChildState::Completed,
                     parameters: BTreeMap::from([("x".to_string(), toml::Value::Float(0.0))]),
                     objective_value: Some(1.0),
                 },
@@ -1650,7 +1634,7 @@ mod tests {
                 1,
                 PreviousTrial {
                     index: 1,
-                    status: "completed".to_string(),
+                    status: ControllerChildState::Completed,
                     parameters: BTreeMap::from([("x".to_string(), toml::Value::Float(1.0))]),
                     objective_value: Some(0.0),
                 },
@@ -1708,7 +1692,11 @@ mod tests {
                 "parallel_candidates": 1
             }),
         };
-        let previous_trials = previous_trial_parameters(Some(&json!({
+        let previous_output: ControllerTaskOutput = serde_json::from_value(json!({
+            "completed_trials": 1,
+            "running_trials": 0,
+            "failed_trials": 0,
+            "total_trials": 1,
             "trials": [
                 {
                     "index": 0,
@@ -1717,19 +1705,12 @@ mod tests {
                     "objective_value": 1.0
                 }
             ]
-        })))
-        .expect("previous trials");
-        let observations = previous_trial_observations(Some(&json!({
-            "trials": [
-                {
-                    "index": 0,
-                    "status": "completed",
-                    "parameters": { "x": 0.25 },
-                    "objective_value": 1.0
-                }
-            ]
-        })))
-        .expect("previous observations");
+        }))
+        .expect("typed previous controller output");
+        let previous_trials =
+            previous_trial_parameters(Some(&previous_output)).expect("previous trials");
+        let observations =
+            previous_trial_observations(Some(&previous_output)).expect("previous observations");
 
         let plan = plan_optimizer_trials(
             &optimizer,
@@ -1823,7 +1804,7 @@ mod tests {
                     index,
                     PreviousTrial {
                         index,
-                        status: "completed".to_string(),
+                        status: ControllerChildState::Completed,
                         parameters,
                         objective_value: Some((index + 1) as f64),
                     },
@@ -1877,7 +1858,7 @@ mod tests {
 
     #[test]
     fn objective_result_selects_requested_component() {
-        let objective = HyperparameterTuningObjectiveSpec {
+        let objective = MeasurementSpec {
             source_task: "sample".to_string(),
             quantity: MeasurementQuantitySpec::Metric(MeasurementMetricQuantity {
                 metric: AccumulatorMetricName::Mean,
@@ -1911,7 +1892,7 @@ mod tests {
 
     #[test]
     fn objective_result_rejects_ambiguous_metric() {
-        let objective = HyperparameterTuningObjectiveSpec {
+        let objective = MeasurementSpec {
             source_task: "sample".to_string(),
             quantity: MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue),
             metric: Some(MeasurementMetricSpec::Name(AccumulatorMetricName::Mean)),
@@ -1942,7 +1923,7 @@ mod tests {
 
     #[test]
     fn objective_failure_reason_includes_context_and_available_results() {
-        let objective = HyperparameterTuningObjectiveSpec {
+        let objective = MeasurementSpec {
             source_task: "sample".to_string(),
             quantity: MeasurementQuantitySpec::Metric(MeasurementMetricQuantity {
                 metric: AccumulatorMetricName::Mean,

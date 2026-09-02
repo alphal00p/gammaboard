@@ -1,8 +1,44 @@
 //! Read models for API/dashboard responses.
 
-use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics};
+use crate::core::{
+    BatchStatus, EvaluatorPerformanceMetrics, SamplerPerformanceMetrics, WorkerRole,
+};
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunLifecycleState {
+    Running,
+    Pausing,
+    Paused,
+}
+
+impl RunLifecycleState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Pausing => "pausing",
+            Self::Paused => "paused",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerStatus {
+    Active,
+    Inactive,
+}
+
+impl WorkerStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Inactive => "inactive",
+        }
+    }
+}
 
 /// Run progress information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,7 +52,7 @@ pub struct RunProgress {
     pub spawn_kind: Option<String>,
     pub spawn_label: Option<String>,
     pub root_stage_snapshot_id: Option<String>,
-    pub lifecycle_state: String,
+    pub lifecycle_state: RunLifecycleState,
     pub desired_assignment_count: i64,
     pub active_worker_count: i64,
     pub integration_params: Option<serde_json::Value>,
@@ -44,7 +80,7 @@ pub struct RunProgress {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkQueueStats {
     pub run_id: i32,
-    pub status: String,
+    pub status: BatchStatus,
     pub batch_count: i64,
     pub total_samples: i64,
     pub avg_batch_time_ms: Option<f64>,
@@ -101,14 +137,11 @@ pub struct RegisteredWorkerEntry {
     pub capabilities: serde_json::Value,
     pub desired_run_id: Option<i32>,
     pub desired_run_name: Option<String>,
-    pub desired_role: Option<String>,
+    pub desired_role: Option<WorkerRole>,
     pub current_run_id: Option<i32>,
     pub current_run_name: Option<String>,
-    pub current_role: Option<String>,
-    pub role: String,
-    pub implementation: String,
-    pub version: String,
-    pub status: String,
+    pub current_role: Option<WorkerRole>,
+    pub status: WorkerStatus,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
     pub evaluator_metrics: Option<EvaluatorPerformanceMetrics>,
     pub evaluator_rss_bytes: Option<i64>,

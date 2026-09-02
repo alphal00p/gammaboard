@@ -402,7 +402,7 @@ fn print_run_table(runs: Vec<gammaboard::stores::RunProgress>) {
         table.add_row(vec![
             run.run_id.to_string(),
             run.run_name,
-            run.lifecycle_state,
+            run.lifecycle_state.as_str().to_string(),
             run.nr_produced_samples.to_string(),
             run.nr_completed_samples_including_children.to_string(),
         ]);

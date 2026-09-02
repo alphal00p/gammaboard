@@ -1,9 +1,9 @@
 use crate::core::SamplerPerformanceMetrics;
 use crate::evaluation::AccumulatorState;
 use crate::stores::{
-    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogEntry,
-    RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
-    WorkQueueStats,
+    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunLifecycleState, RunProgress,
+    RuntimeLogEntry, RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot,
+    TaskStageSnapshot, WorkQueueStats, WorkerStatus,
 };
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -89,13 +89,12 @@ impl RunProgressBaseRow {
         };
         let lifecycle_state = if self.desired_assignment_count > 0 || self.active_task_id.is_some()
         {
-            "running"
+            RunLifecycleState::Running
         } else if batch_stats.claimed_batches > 0 || self.active_worker_count > 0 {
-            "pausing"
+            RunLifecycleState::Pausing
         } else {
-            "paused"
-        }
-        .to_string();
+            RunLifecycleState::Paused
+        };
         RunProgress {
             run_id: self.run_id,
             run_name: self.run_name,
@@ -225,9 +224,6 @@ struct RegisteredWorkerRow {
     current_run_id: Option<i32>,
     current_run_name: Option<String>,
     current_role: Option<String>,
-    role: String,
-    implementation: String,
-    version: String,
     status: String,
     last_seen: Option<DateTime<Utc>>,
     evaluator_metrics: Option<JsonValue>,
@@ -246,14 +242,20 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             capabilities: value.capabilities,
             desired_run_id: value.desired_run_id,
             desired_run_name: value.desired_run_name,
-            desired_role: value.desired_role,
+            desired_role: value
+                .desired_role
+                .as_deref()
+                .and_then(|role| role.parse().ok()),
             current_run_id: value.current_run_id,
             current_run_name: value.current_run_name,
-            current_role: value.current_role,
-            role: value.role,
-            implementation: value.implementation,
-            version: value.version,
-            status: value.status,
+            current_role: value
+                .current_role
+                .as_deref()
+                .and_then(|role| role.parse().ok()),
+            status: match value.status.as_str() {
+                "active" => WorkerStatus::Active,
+                _ => WorkerStatus::Inactive,
+            },
             last_seen: value.last_seen,
             evaluator_metrics: decode_optional_json(value.evaluator_metrics),
             evaluator_rss_bytes: value.evaluator_rss_bytes,
@@ -549,7 +551,7 @@ pub(crate) async fn get_control_plane_run_ids(pool: &PgPool) -> Result<Vec<i32>,
           ON active_task.run_id = r.id
          AND active_task.state = 'active'
         WHERE n.uuid IS NOT NULL
-           OR active_task.task->>'kind' IN ('parameter_scan', 'hyperparameter_tuning', 'set_accumulator')
+           OR active_task.task->>'kind' IN ('parameter_scan', 'hyperparameter_tuning', 'integration_campaign', 'set_accumulator')
         ORDER BY r.id
         "#,
     )
@@ -672,6 +674,17 @@ pub(crate) async fn get_work_queue_stats(
     let mut stats = Vec::new();
     for (run_id, status, batch_count, total_samples, avg_batch_time_ms, avg_sample_time_ms) in rows
     {
+        let status = match status.as_str() {
+            "pending" => crate::core::BatchStatus::Pending,
+            "claimed" => crate::core::BatchStatus::Claimed,
+            "completed" => crate::core::BatchStatus::Completed,
+            "failed" => crate::core::BatchStatus::Failed,
+            other => {
+                return Err(sqlx::Error::Protocol(format!(
+                    "unknown batch status: {other}"
+                )));
+            }
+        };
         stats.push(WorkQueueStats {
             run_id,
             status,
@@ -862,9 +875,6 @@ pub(crate) async fn get_registered_workers(
                     n.active_run_id AS current_run_id,
                     cr.name AS current_run_name,
                     n.active_role AS current_role,
-                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
-                    'run_node' AS implementation,
-                    'node' AS version,
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 'active'
                         ELSE 'inactive'
@@ -913,9 +923,6 @@ pub(crate) async fn get_registered_workers(
                     n.active_run_id AS current_run_id,
                     cr.name AS current_run_name,
                     n.active_role AS current_role,
-                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
-                    'run_node' AS implementation,
-                    'node' AS version,
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 'active'
                         ELSE 'inactive'
@@ -970,9 +977,6 @@ pub(crate) async fn get_registered_worker(
             n.active_run_id AS current_run_id,
             cr.name AS current_run_name,
             n.active_role AS current_role,
-            COALESCE(n.active_role, n.desired_role, 'none') AS role,
-            'run_node' AS implementation,
-            'node' AS version,
             CASE WHEN n.active_role IS NOT NULL THEN 'active' ELSE 'inactive' END AS status,
             n.last_seen,
             e.metrics AS evaluator_metrics,
@@ -1017,9 +1021,6 @@ pub(crate) async fn get_registered_worker_summaries(
                     n.active_run_id AS current_run_id,
                     cr.name AS current_run_name,
                     n.active_role AS current_role,
-                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
-                    'run_node' AS implementation,
-                    'node' AS version,
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 'active'
                         ELSE 'inactive'
@@ -1062,9 +1063,6 @@ pub(crate) async fn get_registered_worker_summaries(
                     n.active_run_id AS current_run_id,
                     cr.name AS current_run_name,
                     n.active_role AS current_role,
-                    COALESCE(n.active_role, n.desired_role, 'none') AS role,
-                    'run_node' AS implementation,
-                    'node' AS version,
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 'active'
                         ELSE 'inactive'

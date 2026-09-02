@@ -317,7 +317,10 @@ pub async fn auto_assign_run(
     let mut assigned_evaluators = Vec::new();
 
     if !sampler_already_assigned
-        && let Some(node) = take_best_node(&mut free_nodes, &run_spec.sampler_requirements)
+        && let Some(node) = take_best_node(
+            &mut free_nodes,
+            &run_spec.integration_params.sampler_requirements,
+        )
     {
         store
             .upsert_desired_assignment(&node.name, WorkerRole::SamplerAggregator, run_id)
@@ -327,7 +330,7 @@ pub async fn auto_assign_run(
 
     for node in take_best_nodes(
         &mut free_nodes,
-        &run_spec.evaluator_requirements,
+        &run_spec.integration_params.evaluator_requirements,
         evaluator_limit,
     ) {
         store

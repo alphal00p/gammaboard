@@ -1,6 +1,7 @@
 pub mod controller_child;
 pub mod evaluator;
 pub mod hyperparameter_tuning;
+pub mod integration_campaign;
 pub mod node_runner;
 pub mod parameter_grid;
 pub mod parameter_scan;

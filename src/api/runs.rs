@@ -12,6 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use crate::utils::domain::Domain;
+
 const DEFAULT_RUN_CONFIG_TOML: &str = include_str!("../config_defaults/run.toml");
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,6 +215,7 @@ pub async fn create_run(
         initial_stage_snapshot.run_id,
         &initial_tasks,
         resolved_integration_params.evaluator.clone(),
+        domain.clone(),
     )
     .await?;
 
@@ -404,7 +407,10 @@ pub async fn append_tasks(
                 "run {run_id} has invalid integration_params payload: {err}"
             ))
         })?;
-    preflight_task_batch(store, run_id, &tasks, integration_params.evaluator).await?;
+    let domain = run
+        .domain
+        .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing domain")))?;
+    preflight_task_batch(store, run_id, &tasks, integration_params.evaluator, domain).await?;
     let tasks = store.append_run_tasks(run_id, &tasks).await?;
     Ok(AppendedTasks { tasks })
 }
@@ -511,13 +517,15 @@ async fn preflight_task_batch(
     run_id: i32,
     tasks: &[RunTaskInput],
     evaluator: Option<EvaluatorConfig>,
+    domain: Domain,
 ) -> Result<(), ApiError> {
     let existing_tasks = if run_id > 0 {
         store.list_run_tasks(run_id).await?
     } else {
         Vec::new()
     };
-    let mut context = TaskPreflightContext::from_existing_tasks(&existing_tasks, evaluator)?;
+    let mut context =
+        TaskPreflightContext::from_existing_tasks(&existing_tasks, evaluator, domain)?;
     context.validate_batch(tasks)
 }
 
@@ -529,13 +537,14 @@ struct TaskPreflightContext {
     current_accumulator: Option<AccumulatorConfig>,
     current_evaluator: Option<EvaluatorConfig>,
     next_sequence: i32,
-    root_evaluator: Option<EvaluatorConfig>,
+    run_domain: Domain,
 }
 
 impl TaskPreflightContext {
     fn from_existing_tasks(
         existing_tasks: &[RunTask],
         evaluator: Option<EvaluatorConfig>,
+        run_domain: Domain,
     ) -> Result<Self, ApiError> {
         let known_names = existing_tasks
             .iter()
@@ -560,7 +569,7 @@ impl TaskPreflightContext {
             current_accumulator: None,
             current_evaluator: evaluator.clone(),
             next_sequence,
-            root_evaluator: evaluator,
+            run_domain,
         };
         let mut ordered_tasks = existing_tasks.iter().collect::<Vec<_>>();
         ordered_tasks.sort_by_key(|task| (task.sequence_nr, task.id));
@@ -599,16 +608,20 @@ impl TaskPreflightContext {
             )));
         }
         let effective_accumulator = self.resolve_effective_accumulator(task)?;
-        let effective_evaluator = if task.task.runs_in_control_plane() {
-            None
-        } else {
+        // Only compute tasks consume evaluator stage state. Controller tasks
+        // orchestrate child runs and never inherit the parent evaluator.
+        let effective_evaluator = if task.task.runs_on_sampler_worker() {
             Some(self.resolve_effective_evaluator(task)?)
+        } else {
+            None
         };
         if let Some(effective_evaluator) = effective_evaluator.as_ref() {
             self.validate_evaluator_domain(effective_evaluator)?;
         }
         if let Some(config) = effective_accumulator.as_ref() {
-            if task.task.runs_in_control_plane() {
+            if task.task.is_controller() {
+                // Controllers own no evaluator or accumulator stage state.
+            } else if task.task.runs_in_control_plane() {
                 if let Some(effective_evaluator) = self.current_evaluator.as_ref() {
                     self.validate_accumulator_against_evaluator(effective_evaluator, config)?;
                 }
@@ -735,19 +748,13 @@ impl TaskPreflightContext {
     }
 
     fn validate_evaluator_domain(&self, evaluator: &EvaluatorConfig) -> Result<(), ApiError> {
-        let Some(root_evaluator) = self.root_evaluator.as_ref() else {
-            return Ok(());
-        };
-        let root_domain = root_evaluator
-            .resolve_domain()
-            .map_err(|err| ApiError::BadRequest(err.to_string()))?;
         let evaluator_domain = evaluator
             .resolve_domain()
             .map_err(|err| ApiError::BadRequest(err.to_string()))?;
-        if evaluator_domain != root_domain {
+        if evaluator_domain != self.run_domain {
             return Err(ApiError::BadRequest(format!(
                 "task evaluator domain {:?} does not match run domain {:?}",
-                evaluator_domain, root_domain
+                evaluator_domain, self.run_domain
             )));
         }
         Ok(())
@@ -1170,6 +1177,7 @@ accumulator = { config = "scalar" }
         let mut context = TaskPreflightContext::from_existing_tasks(
             &[],
             config.integration_params.evaluator.clone(),
+            Domain::continuous(1),
         )
         .expect("context");
         let err = context
@@ -1353,9 +1361,12 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 
     #[test]
     fn preflight_rejects_first_sample_without_accumulator_state() {
-        let mut context =
-            TaskPreflightContext::from_existing_tasks(&[], Some(scalar_unit_evaluator()))
-                .expect("context");
+        let mut context = TaskPreflightContext::from_existing_tasks(
+            &[],
+            Some(scalar_unit_evaluator()),
+            Domain::rectangular(1, 0),
+        )
+        .expect("context");
         let error = context
             .validate_batch(&[sample_task(None)])
             .expect_err("missing accumulator should fail");
@@ -1364,6 +1375,42 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
                 .to_string()
                 .contains("sample task has no effective accumulator configuration")
         );
+    }
+
+    #[test]
+    fn parse_run_add_accepts_integration_campaign_task() {
+        let config = parse_run_add_config_toml(include_str!(
+            "../../resources/templates/runs/integration-campaign-unit.toml"
+        ))
+        .expect("integration campaign config");
+        assert!(matches!(
+            config.task_queue.as_deref(),
+            Some([RunTaskInput {
+                task: RunTaskSpec::IntegrationCampaign { .. },
+                ..
+            }])
+        ));
+    }
+
+    #[test]
+    fn task_local_evaluator_establishes_run_domain_without_top_level_evaluator() {
+        let config = parse_run_add_config_toml(
+            r#"
+name = "task-local-domain"
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 8 }
+evaluator = { config = { kind = "unit", continuous_dims = 2, discrete_dims = 0 } }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+accumulator = { config = "scalar" }
+"#,
+        )
+        .expect("task-local evaluator config");
+        assert!(config.integration_params.evaluator.is_none());
+        let processed = preprocess_run_add(config).expect("preprocessing");
+        assert_eq!(processed.domain, Some(Domain::rectangular(2, 0)));
     }
 
     #[test]
@@ -1392,7 +1439,9 @@ source_task = "sample"
 
     #[test]
     fn preflight_rejects_compute_task_without_effective_evaluator() {
-        let mut context = TaskPreflightContext::from_existing_tasks(&[], None).expect("context");
+        let mut context =
+            TaskPreflightContext::from_existing_tasks(&[], None, Domain::continuous(0))
+                .expect("context");
         let error = context
             .validate_batch(&[RunTaskInput {
                 name: Some("sample".to_string()),
@@ -1426,9 +1475,12 @@ source_task = "sample"
 
     #[test]
     fn preflight_accepts_sample_after_set_accumulator() {
-        let mut context =
-            TaskPreflightContext::from_existing_tasks(&[], Some(scalar_unit_evaluator()))
-                .expect("context");
+        let mut context = TaskPreflightContext::from_existing_tasks(
+            &[],
+            Some(scalar_unit_evaluator()),
+            Domain::rectangular(1, 0),
+        )
+        .expect("context");
         context
             .validate_batch(&[
                 RunTaskInput {
@@ -1444,9 +1496,12 @@ source_task = "sample"
 
     #[test]
     fn preflight_rejects_incompatible_gammaloop_accumulator_for_scalar_evaluator() {
-        let mut context =
-            TaskPreflightContext::from_existing_tasks(&[], Some(scalar_unit_evaluator()))
-                .expect("context");
+        let mut context = TaskPreflightContext::from_existing_tasks(
+            &[],
+            Some(scalar_unit_evaluator()),
+            Domain::rectangular(1, 0),
+        )
+        .expect("context");
         let error = context
             .validate_batch(&[RunTaskInput {
                 name: Some("prep".to_string()),

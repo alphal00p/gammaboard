@@ -179,7 +179,9 @@ fn format_ambiguous_runs(run_ref: &str, runs: &[RunProgress]) -> String {
     for run in runs {
         let line = format!(
             "  id={} name={} state={}",
-            run.run_id, run.run_name, run.lifecycle_state
+            run.run_id,
+            run.run_name,
+            run.lifecycle_state.as_str()
         );
         message.push_str(&line);
         message.push('\n');

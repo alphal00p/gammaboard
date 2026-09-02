@@ -271,7 +271,7 @@ pub trait RunTaskStore: Send + Sync {
     async fn persist_task_controller_output(
         &self,
         task_id: i64,
-        output: &JsonValue,
+        output: &crate::core::ControllerTaskOutput,
     ) -> Result<(), StoreError>;
     async fn fail_run_task(&self, task_id: i64, reason: &str) -> Result<(), StoreError>;
 }

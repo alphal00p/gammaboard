@@ -55,7 +55,14 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
             .clone(),
     };
 
-    let domain = match config.integration_params.evaluator.as_ref() {
+    // The top-level evaluator is initial-stage shorthand. If it is absent, the
+    // first task-local evaluator establishes the immutable run domain.
+    let initial_evaluator = config.integration_params.evaluator.clone().or_else(|| {
+        resolved_task_queue
+            .as_ref()
+            .and_then(|tasks| tasks.iter().find_map(|task| task.task.evaluator_config()))
+    });
+    let domain = match initial_evaluator.as_ref() {
         Some(evaluator) => {
             let evaluator_kind = evaluator.kind_str();
             evaluator.resolve_domain().map_err(|err| {

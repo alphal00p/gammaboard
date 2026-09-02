@@ -1086,7 +1086,7 @@ async fn get_run_evaluator_config(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let Some(evaluator) = run_spec.evaluator.as_ref() else {
+    let Some(evaluator) = run_spec.integration_params.evaluator.as_ref() else {
         return Err(ApiError::NotFound(format!(
             "run {run_id} has no root evaluator config"
         )));
@@ -1096,7 +1096,7 @@ async fn get_run_evaluator_config(
             format!("run:{run_id}:config:evaluator"),
             &EvaluatorPanelContext {
                 domain: &run_spec.domain,
-                runner_params: &run_spec.evaluator_runner_params,
+                runner_params: &run_spec.integration_params.evaluator_runner_params,
             },
         )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
@@ -1139,7 +1139,7 @@ async fn get_run_sampler_aggregator_config(
             format!("run:{run_id}:config:sampler_aggregator"),
             &SamplerAggregatorPanelContext {
                 domain: &run_spec.domain,
-                runner_params: &run_spec.sampler_aggregator_runner_params,
+                runner_params: &run_spec.integration_params.sampler_aggregator_runner_params,
             },
         )
         .map_err(|err: crate::core::BuildError| ApiError::Internal(err.to_string()))?;

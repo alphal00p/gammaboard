@@ -1,6 +1,6 @@
 use crate::core::{
-    RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SamplerQueueTuning, TaskMeasurementOutput,
-    canonical_task_toml, generated_task_name,
+    ControllerTaskOutput, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SamplerQueueTuning,
+    TaskMeasurementOutput, canonical_task_toml, generated_task_name,
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
@@ -89,7 +89,11 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
             .map(serde_json::from_value)
             .transpose()
             .map_err(|err| sqlx::Error::Decode(Box::new(err)))?,
-        controller_output: row.controller_output,
+        controller_output: row
+            .controller_output
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|err| sqlx::Error::Decode(Box::new(err)))?,
     })
 }
 
@@ -458,8 +462,11 @@ pub(crate) async fn persist_task_measurement_output(
 pub(crate) async fn persist_task_controller_output(
     pool: &PgPool,
     task_id: i64,
-    output: &JsonValue,
+    output: &ControllerTaskOutput,
 ) -> Result<(), sqlx::Error> {
+    let output = serde_json::to_value(output).map_err(|err| {
+        sqlx::Error::Protocol(format!("failed to serialize controller output: {err}"))
+    })?;
     sqlx::query(
         r#"
         UPDATE run_tasks
@@ -487,7 +494,7 @@ pub(crate) async fn fail_run_task(
             failure_reason = $2,
             failed_at = now()
         WHERE id = $1
-          AND state = 'active'
+          AND state IN ('pending', 'active')
         "#,
     )
     .bind(task_id)

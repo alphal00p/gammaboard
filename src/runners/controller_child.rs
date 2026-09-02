@@ -12,78 +12,123 @@ pub struct ChildTaskMeasurement {
     pub output: Option<TaskMeasurementOutput>,
 }
 
-pub async fn redistribute_parent_assignments_to_children(
+#[derive(Debug, Clone)]
+pub struct ControllerAssignmentPlan {
+    pub parent_run_id: i32,
+    pub managed_child_run_ids: Vec<i32>,
+    pub selected_child_run_ids: Vec<i32>,
+    pub preserve_selected_assignments: bool,
+}
+
+impl ControllerAssignmentPlan {
+    pub fn preserving(parent_run_id: i32, selected_child_run_ids: Vec<i32>) -> Self {
+        Self {
+            parent_run_id,
+            managed_child_run_ids: selected_child_run_ids.clone(),
+            selected_child_run_ids,
+            preserve_selected_assignments: true,
+        }
+    }
+
+    pub fn replacing(
+        parent_run_id: i32,
+        managed_child_run_ids: Vec<i32>,
+        selected_child_run_ids: Vec<i32>,
+    ) -> Self {
+        Self {
+            parent_run_id,
+            managed_child_run_ids,
+            selected_child_run_ids,
+            preserve_selected_assignments: false,
+        }
+    }
+}
+
+pub async fn apply_controller_assignment_plan(
     store: &impl ControlPlaneStore,
-    parent_run_id: i32,
-    child_run_ids: impl IntoIterator<Item = i32>,
+    plan: ControllerAssignmentPlan,
 ) -> Result<(), StoreError> {
-    let parent_assignments = store
-        .list_desired_assignments(None)
-        .await?
+    let managed = plan
+        .managed_child_run_ids
         .into_iter()
-        .filter(|assignment| assignment.run_id == parent_run_id)
+        .collect::<BTreeSet<_>>();
+    let mut selected_seen = BTreeSet::new();
+    let selected = plan
+        .selected_child_run_ids
+        .into_iter()
+        .filter(|run_id| managed.contains(run_id) && selected_seen.insert(*run_id))
         .collect::<Vec<_>>();
-    let mut seen_child_run_ids = BTreeSet::new();
-    let child_run_ids = child_run_ids
+    let all_assignments = store.list_desired_assignments(None).await?;
+    let reusable_assignments = all_assignments
         .into_iter()
-        .filter(|run_id| seen_child_run_ids.insert(*run_id))
+        .filter(|assignment| {
+            assignment.run_id == plan.parent_run_id
+                || (!plan.preserve_selected_assignments && managed.contains(&assignment.run_id))
+        })
         .collect::<Vec<_>>();
 
     store
-        .clear_desired_assignments_for_run(parent_run_id)
+        .clear_desired_assignments_for_run(plan.parent_run_id)
         .await?;
-    if child_run_ids.is_empty() {
-        return Ok(());
+    if !plan.preserve_selected_assignments {
+        for run_id in &managed {
+            store.clear_desired_assignments_for_run(*run_id).await?;
+        }
     }
-    let nodes = store.list_nodes(None).await?;
-    let child_run_id_set = child_run_ids.iter().copied().collect::<BTreeSet<_>>();
-    let mut sampler_child_run_ids = child_sampler_run_ids(&nodes, &child_run_id_set);
-    let parent_assignments = if parent_assignments.is_empty() {
-        idle_node_assignments_from_nodes(&nodes)
-    } else {
-        parent_assignments
-    };
-    if parent_assignments.is_empty() {
+    if selected.is_empty() {
         return Ok(());
     }
 
-    let mut sampler_nodes = parent_assignments
+    let nodes = store.list_nodes(None).await?;
+    let selected_set = selected.iter().copied().collect::<BTreeSet<_>>();
+    let mut activated = if plan.preserve_selected_assignments {
+        child_sampler_run_ids(&nodes, &selected_set)
+    } else {
+        BTreeSet::new()
+    };
+    let reusable_assignments = if reusable_assignments.is_empty() {
+        idle_node_assignments_from_nodes(&nodes)
+    } else {
+        reusable_assignments
+    };
+    let mut sampler_nodes = reusable_assignments
         .iter()
         .filter(|assignment| assignment.role == WorkerRole::SamplerAggregator)
         .map(|assignment| assignment.node_name.as_str())
         .collect::<Vec<_>>();
-    let evaluator_nodes = parent_assignments
+    let evaluator_nodes = reusable_assignments
         .iter()
         .filter(|assignment| assignment.role == WorkerRole::Evaluator)
         .map(|assignment| assignment.node_name.as_str())
         .collect::<Vec<_>>();
-
     sampler_nodes.sort_unstable();
-    let children_needing_sampler = child_run_ids
-        .iter()
-        .copied()
-        .filter(|run_id| !sampler_child_run_ids.contains(run_id))
-        .collect::<Vec<_>>();
-    for (child_run_id, node_name) in children_needing_sampler.into_iter().zip(sampler_nodes) {
-        store
-            .upsert_desired_assignment(node_name, WorkerRole::SamplerAggregator, child_run_id)
-            .await?;
-        sampler_child_run_ids.insert(child_run_id);
-    }
 
-    let sampler_child_run_ids = child_run_ids
+    let children_needing_sampler = selected
         .iter()
         .copied()
-        .filter(|run_id| sampler_child_run_ids.contains(run_id))
+        .filter(|run_id| !activated.contains(run_id))
         .collect::<Vec<_>>();
-    if sampler_child_run_ids.is_empty() {
+    for (run_id, node_name) in children_needing_sampler.into_iter().zip(sampler_nodes) {
+        store
+            .upsert_desired_assignment(node_name, WorkerRole::SamplerAggregator, run_id)
+            .await?;
+        activated.insert(run_id);
+    }
+    let activated = selected
+        .iter()
+        .copied()
+        .filter(|run_id| activated.contains(run_id))
+        .collect::<Vec<_>>();
+    if activated.is_empty() {
         return Ok(());
     }
-
     for (index, node_name) in evaluator_nodes.into_iter().enumerate() {
-        let child_run_id = sampler_child_run_ids[index % sampler_child_run_ids.len()];
         store
-            .upsert_desired_assignment(node_name, WorkerRole::Evaluator, child_run_id)
+            .upsert_desired_assignment(
+                node_name,
+                WorkerRole::Evaluator,
+                activated[index % activated.len()],
+            )
             .await?;
     }
     Ok(())

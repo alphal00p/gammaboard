@@ -22,18 +22,20 @@ pub mod tracing;
 pub mod utils;
 
 pub use core::{
-    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, EgoboxInfillStrategy,
-    EgoboxOptimizerParams, EgoboxQeiStrategy, HyperparameterTuningAlgorithm,
+    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, ControllerChildOutput,
+    ControllerChildState, ControllerTaskOutput, EgoboxInfillStrategy, EgoboxOptimizerParams,
+    EgoboxQeiStrategy, HyperparameterTrialOutput, HyperparameterTuningAlgorithm,
     HyperparameterTuningCategoricalDomain, HyperparameterTuningFloatDomain,
-    HyperparameterTuningIntegerDomain, HyperparameterTuningObjectiveSpec,
-    HyperparameterTuningOptimizerSpec, HyperparameterTuningParameterDomain, ImageDisplayMode,
-    LineDisplayMode, LineRasterGeometry, Linspace, MeasurementMetricQuantity,
-    MeasurementMetricSpec, MeasurementMode, MeasurementQuantityName, MeasurementQuantitySpec,
-    MeasurementResult, MeasurementSpec, ParameterIntegerRangeSpec, ParameterLinspaceSpec,
-    ParameterScanMeasurementSpec, ParameterScanParameterSpec, ParameterValueSourceSpec,
+    HyperparameterTuningIntegerDomain, HyperparameterTuningOptimizerSpec,
+    HyperparameterTuningOutput, HyperparameterTuningParameterDomain, ImageDisplayMode,
+    IntegrationCampaignChildOutput, IntegrationCampaignOutput, LineDisplayMode, LineRasterGeometry,
+    Linspace, MeasurementMetricQuantity, MeasurementMetricSpec, MeasurementMode,
+    MeasurementQuantityName, MeasurementQuantitySpec, MeasurementResult, MeasurementSpec,
+    ParameterIntegerRangeSpec, ParameterLinspaceSpec, ParameterScanOutput,
+    ParameterScanParameterSpec, ParameterScanPointOutput, ParameterValueSourceSpec,
     PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-    SampleErrorProjection, SampleStopCondition, SampleTaskConfig, SamplerAggregatorSourceSpec,
-    SourceRefSpec, TaskMeasurementOutput, TaskMeasurementSpec, canonical_task_toml,
+    SampleErrorProjection, SampleStopCondition, SamplerAggregatorSourceSpec, SourceRefSpec,
+    TaskMeasurementOutput, TaskMeasurementSpec, canonical_task_toml,
 };
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};
@@ -50,7 +52,10 @@ pub use sampling::{
     SamplerAggregatorSnapshot, StageHandoff,
 };
 pub use stores::PgStore;
-pub use stores::{RunProgress, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats};
+pub use stores::{
+    RunLifecycleState, RunProgress, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
+    WorkerStatus,
+};
 pub use stores::{get_pg_pool, init_pg_store};
 pub use symbolica_license::activate_symbolica_oem_license;
 pub use utils::domain::{Domain, DomainBranch};

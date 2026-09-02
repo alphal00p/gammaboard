@@ -300,14 +300,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             warn!("run has no RunSpec; evaluator not started");
             return Ok(None);
         };
-        let Some(evaluator_config) = spec.evaluator.clone() else {
+        let Some(evaluator_config) = spec.integration_params.evaluator.clone() else {
             debug!(
                 "run has no root evaluator config; evaluator assignment remains idle until reassigned"
             );
             return Ok(None);
         };
         let role_store = self
-            .init_role_store(spec.evaluator_runner_params.db_pool_size)
+            .init_role_store(spec.integration_params.evaluator_runner_params.db_pool_size)
             .await?;
         let evaluator = evaluator_config
             .build()
@@ -322,8 +322,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             evaluator_config,
             evaluator,
             spec.domain.clone(),
-            spec.evaluator_runner_params.clone(),
-            spec.sampler_aggregator_runner_params
+            spec.integration_params.evaluator_runner_params.clone(),
+            spec.integration_params
+                .sampler_aggregator_runner_params
                 .queue
                 .max_batch_retries,
         );
@@ -355,7 +356,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
         let role_store = self
-            .init_role_store(spec.sampler_aggregator_runner_params.db_pool_size)
+            .init_role_store(
+                spec.integration_params
+                    .sampler_aggregator_runner_params
+                    .db_pool_size,
+            )
             .await?;
         let worker = ActiveWorker::new(
             self.store.clone(),
@@ -378,7 +383,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .filter(|snapshot| snapshot.task_id != task.id)
             .map(|snapshot| {
                 snapshot.reduced_carryover_batch_size(
-                    spec.sampler_aggregator_runner_params.queue.max_batch_size,
+                    spec.integration_params
+                        .sampler_aggregator_runner_params
+                        .queue
+                        .max_batch_size,
                 )
             });
         let restored_snapshot = latest_snapshot
@@ -471,15 +479,26 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             new_accumulator_config,
         )?;
 
-        let initial_batch_size = initial_batch_size_hint
-            .unwrap_or(spec.sampler_aggregator_runner_params.queue.max_batch_size);
+        let initial_batch_size = initial_batch_size_hint.unwrap_or(
+            spec.integration_params
+                .sampler_aggregator_runner_params
+                .queue
+                .max_batch_size,
+        );
         let run_progress = role_store
             .load_run_sample_progress(worker.run_id)
             .await?
             .unwrap_or_default();
 
-        let base_queue_config = spec.sampler_aggregator_runner_params.queue.clone();
-        let mut effective_sampler_runner_params = spec.sampler_aggregator_runner_params.clone();
+        let base_queue_config = spec
+            .integration_params
+            .sampler_aggregator_runner_params
+            .queue
+            .clone();
+        let mut effective_sampler_runner_params = spec
+            .integration_params
+            .sampler_aggregator_runner_params
+            .clone();
         if let Some(queue_tuning) = task.task.sample_queue_tuning() {
             effective_sampler_runner_params
                 .queue

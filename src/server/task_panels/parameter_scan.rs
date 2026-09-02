@@ -1,12 +1,12 @@
+use super::controller::{child_table_payload, progress_projector};
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState, PanelWidth,
-    PlotPoint, PlotSeries, min_max_row_tones, multi_timeseries_panel, panel_spec, progress_panel,
-    row_tone_labels, sized_panel_spec, table_panel_with_payload_and_options,
+    PlotPoint, PlotSeries, multi_timeseries_panel, sized_panel_spec,
+    table_panel_with_payload_and_options,
 };
-use serde_json::{Value as JsonValue, json};
+use serde_json::{Map, Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
-
 const SCAN_PROGRESS_PANEL_ID: &str = "scan_progress";
 const SCAN_MEAN_PANEL_ID: &str = "scan_mean";
 const SCAN_MEAN_REAL_PANEL_ID: &str = "scan_mean_real";
@@ -34,38 +34,21 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
 }
 
 fn scan_progress_projector() -> TaskPanelProjector {
-    panel_projector(
-        panel_spec(
-            SCAN_PROGRESS_PANEL_ID,
-            "Scan Progress",
-            PanelKind::Progress,
-            PanelHistoryMode::None,
-        ),
-        |ctx| {
-            let Some(output) = ctx.task.controller_output.as_ref() else {
-                return Ok(Some(progress_panel(
-                    SCAN_PROGRESS_PANEL_ID,
-                    0.0,
-                    total_points_from_task(ctx).map(|value| value as f64),
-                    Some("points"),
-                    None,
-                )));
-            };
-            Ok(Some(progress_panel(
-                SCAN_PROGRESS_PANEL_ID,
-                output
-                    .get("completed_points")
-                    .and_then(JsonValue::as_u64)
-                    .unwrap_or(0) as f64,
-                output
-                    .get("total_points")
-                    .and_then(JsonValue::as_u64)
-                    .map(|value| value as f64),
-                Some("points"),
-                None,
-            )))
+    progress_projector(
+        SCAN_PROGRESS_PANEL_ID,
+        "Scan Progress",
+        |output| {
+            output
+                .parameter_scan()
+                .map(|output| output.completed_points as f64)
         },
-        |_ctx| Ok(None),
+        |output| {
+            output
+                .parameter_scan()
+                .map(|output| output.total_points as f64)
+        },
+        "points",
+        |ctx| total_points_from_task(ctx).map(|value| value as f64),
     )
 }
 
@@ -83,7 +66,7 @@ fn scan_measurements_projector() -> TaskPanelProjector {
             let series = scan_points(ctx)
                 .map(|points| {
                     if parameter_names.len() == 1 {
-                        build_measurement_series(points, &parameter_names[0], |result| {
+                        build_measurement_series(&points, &parameter_names[0], |result| {
                             result.get("name").and_then(JsonValue::as_str) == Some("mean")
                                 && result
                                     .get("component")
@@ -122,7 +105,7 @@ fn scan_component_measurements_projector(
             let series = scan_points(ctx)
                 .map(|points| {
                     if parameter_names.len() == 1 {
-                        build_measurement_series(points, &parameter_names[0], |result| {
+                        build_measurement_series(&points, &parameter_names[0], |result| {
                             result.get("name").and_then(JsonValue::as_str) == Some("mean")
                                 && result.get("component").and_then(JsonValue::as_str)
                                     == Some(component)
@@ -155,7 +138,7 @@ fn scan_heatmap_projector() -> TaskPanelProjector {
             let Some(points) = scan_points(ctx) else {
                 return Ok(None);
             };
-            Ok(scan_mean_heatmap_panel(points, &parameter_names))
+            Ok(scan_mean_heatmap_panel(&points, &parameter_names))
         },
         |_ctx| Ok(None),
     )
@@ -181,7 +164,6 @@ fn scan_points_projector() -> TaskPanelProjector {
                 })
                 .unwrap_or_default();
             let value_column = scan_table_value_column(parameter_names.len());
-            let row_tones = min_max_row_tones(&rows, value_column);
             let mut columns = vec!["index".to_string()];
             columns.extend(parameter_names.iter().cloned());
             columns.extend([
@@ -193,21 +175,17 @@ fn scan_points_projector() -> TaskPanelProjector {
                 "uncertainty".to_string(),
                 "samples".to_string(),
             ]);
+            let payload = child_table_payload(
+                &rows,
+                value_column,
+                Map::from_iter([("parameters".to_string(), json!(scan_parameter_names(ctx)))]),
+            );
+
             Ok(Some(table_panel_with_payload_and_options(
                 SCAN_POINTS_PANEL_ID,
                 columns,
                 rows,
-                ctx.task.controller_output.as_ref().map(|output| {
-                    json!({
-                        "parameters": output.get("parameters").cloned().unwrap_or(JsonValue::Null),
-                        "row_action": {
-                            "kind": "select_run",
-                            "column": "run",
-                        },
-                        "row_tones": row_tones,
-                        "row_tone_labels": row_tone_labels(),
-                    })
-                }),
+                Some(payload),
                 Default::default(),
             )))
         },
@@ -292,12 +270,18 @@ fn scan_mean_heatmap_panel(points: &[JsonValue], parameter_names: &[String]) -> 
     })
 }
 
-fn scan_points<'a>(ctx: &'a TaskPanelContext<'_>) -> Option<&'a Vec<JsonValue>> {
+fn scan_points(ctx: &TaskPanelContext<'_>) -> Option<Vec<JsonValue>> {
     ctx.task
         .controller_output
         .as_ref()
-        .and_then(|output| output.get("points"))
-        .and_then(JsonValue::as_array)
+        .and_then(crate::core::ControllerTaskOutput::parameter_scan)
+        .map(|output| {
+            output
+                .points
+                .iter()
+                .filter_map(|point| serde_json::to_value(point).ok())
+                .collect()
+        })
 }
 
 fn scan_table_value_column(parameter_count: usize) -> usize {
@@ -451,27 +435,13 @@ fn total_points_from_task(ctx: &TaskPanelContext<'_>) -> Option<usize> {
 }
 
 fn scan_parameter_names(ctx: &TaskPanelContext<'_>) -> Vec<String> {
-    if let Some(names) = ctx
+    if let Some(output) = ctx
         .task
         .controller_output
         .as_ref()
-        .and_then(|output| output.get("parameters"))
-        .and_then(JsonValue::as_array)
+        .and_then(crate::core::ControllerTaskOutput::parameter_scan)
     {
-        return names
-            .iter()
-            .filter_map(JsonValue::as_str)
-            .map(str::to_string)
-            .collect();
-    }
-    if let Some(name) = ctx
-        .task
-        .controller_output
-        .as_ref()
-        .and_then(|output| output.get("parameter_name"))
-        .and_then(JsonValue::as_str)
-    {
-        return vec![name.to_string()];
+        return output.parameters.clone();
     }
     match &ctx.task.task {
         crate::core::RunTaskSpec::ParameterScan { parameters, .. } => parameters
@@ -511,8 +481,8 @@ impl Ord for OrderedF64 {
 mod tests {
     use super::*;
     use crate::core::{
-        ParameterScanMeasurementSpec, ParameterScanParameterSpec, RunTask, RunTaskInput,
-        RunTaskSpec, RunTaskState, canonical_task_toml,
+        MeasurementSpec, ParameterScanParameterSpec, RunTask, RunTaskInput, RunTaskSpec,
+        RunTaskState, canonical_task_toml,
     };
     use crate::server::panels::PanelState;
     use chrono::Utc;
@@ -530,9 +500,7 @@ mod tests {
                     ..Default::default()
                 },
             }],
-            measurement: ParameterScanMeasurementSpec {
-                source_task: "sample".to_string(),
-            },
+            measurement: MeasurementSpec::default(),
             trial_run_toml: "name = \"trial\"".to_string(),
             max_concurrent_runs: 1,
         };
@@ -559,7 +527,9 @@ mod tests {
             })
             .expect("task toml"),
             measurement_output: None,
-            controller_output,
+            controller_output: controller_output.map(|output| {
+                serde_json::from_value(output).expect("typed scan controller output")
+            }),
         }
     }
 
@@ -578,13 +548,14 @@ mod tests {
     #[test]
     fn scan_mean_plot_uses_numeric_parameter_values_and_mean_results() {
         let task = scan_task(Some(json!({
-            "parameter_name": "scale",
+            "parameters": ["scale"],
             "completed_points": 2,
+            "running_points": 0,
             "total_points": 3,
             "points": [
                 {
                     "index": 0,
-                    "parameter_value": 0.0,
+                    "parameter_values": {"scale": 0.0},
                     "child_run_id": 11,
                     "status": "completed",
                     "measurement": {
@@ -596,7 +567,7 @@ mod tests {
                 },
                 {
                     "index": 1,
-                    "parameter_value": 1.0,
+                    "parameter_values": {"scale": 1.0},
                     "child_run_id": 12,
                     "status": "completed",
                     "measurement": {
@@ -608,7 +579,7 @@ mod tests {
                 },
                 {
                     "index": 2,
-                    "parameter_value": 2.0,
+                    "parameter_values": {"scale": 2.0},
                     "child_run_id": null,
                     "status": "pending"
                 }
@@ -634,13 +605,14 @@ mod tests {
     #[test]
     fn scan_mean_component_plots_are_separate_and_include_error_bars() {
         let task = scan_task(Some(json!({
-            "parameter_name": "scale",
+            "parameters": ["scale"],
             "completed_points": 1,
+            "running_points": 0,
             "total_points": 1,
             "points": [
                 {
                     "index": 0,
-                    "parameter_value": 2.0,
+                    "parameter_values": {"scale": 2.0},
                     "child_run_id": 11,
                     "status": "completed",
                     "measurement": {
@@ -694,31 +666,32 @@ mod tests {
         let task = scan_task(Some(json!({
             "parameters": ["scale", "offset"],
             "completed_points": 4,
+            "running_points": 0,
             "total_points": 4,
             "points": [
                 {
                     "index": 0,
                     "parameter_values": {"scale": 0.0, "offset": 1.0},
                     "status": "completed",
-                    "measurement": {"results": [{"name": "mean", "value": 1.0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 1.0, "sample_count": 0}]}
                 },
                 {
                     "index": 1,
                     "parameter_values": {"scale": 1.0, "offset": 1.0},
                     "status": "completed",
-                    "measurement": {"results": [{"name": "mean", "value": 1.5}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 1.5, "sample_count": 0}]}
                 },
                 {
                     "index": 2,
                     "parameter_values": {"scale": 0.0, "offset": 2.0},
                     "status": "completed",
-                    "measurement": {"results": [{"name": "mean", "value": 2.0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 2.0, "sample_count": 0}]}
                 },
                 {
                     "index": 3,
                     "parameter_values": {"scale": 1.0, "offset": 2.0},
                     "status": "completed",
-                    "measurement": {"results": [{"name": "mean", "value": 2.5}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 2.5, "sample_count": 0}]}
                 }
             ]
         })));
@@ -747,23 +720,24 @@ mod tests {
     #[test]
     fn scan_table_marks_min_and_max_values() {
         let task = scan_task(Some(json!({
-            "parameter_name": "scale",
+            "parameters": ["scale"],
             "completed_points": 2,
+            "running_points": 0,
             "total_points": 2,
             "points": [
                 {
                     "index": 0,
-                    "parameter_value": 0.0,
+                    "parameter_values": {"scale": 0.0},
                     "child_run_id": 11,
                     "status": "completed",
-                    "measurement": {"results": [{"name": "mean", "value": 3.0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 3.0, "sample_count": 0}]}
                 },
                 {
                     "index": 1,
-                    "parameter_value": 1.0,
+                    "parameter_values": {"scale": 1.0},
                     "child_run_id": 12,
                     "status": "completed",
-                    "measurement": {"results": [{"name": "mean", "value": 2.0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 2.0, "sample_count": 0}]}
                 }
             ]
         })));

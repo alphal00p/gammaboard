@@ -11,7 +11,7 @@ use crate::core::{
     AccumulatorMetricSelector, BatchTransformConfig, EngineError, EvaluatorConfig,
     RunSampleProgress, RunStageSnapshot, RunTask, SampleErrorProjection, SamplerAggregatorConfig,
     SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
-    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError,
+    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError, WorkerRole,
 };
 use crate::evaluation::{
     AccumulatorState, extract_accumulator_metric_with_runtime, relative_error,
@@ -1643,7 +1643,7 @@ where
         let mut rss_count = 0usize;
         for worker in workers {
             if worker.current_run_id != Some(self.run_id)
-                || worker.current_role.as_deref() != Some("evaluator")
+                || worker.current_role != Some(WorkerRole::Evaluator)
             {
                 continue;
             }

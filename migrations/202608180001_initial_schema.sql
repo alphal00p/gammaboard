@@ -69,9 +69,9 @@ CREATE TABLE IF NOT EXISTS run_tasks (
         AND nr_completed_samples >= 0
         AND nr_completed_samples <= nr_produced_samples
     ),
-    CONSTRAINT run_tasks_sample_stop_condition_shape CHECK (
+    CONSTRAINT run_tasks_stop_condition_shape CHECK (
         CASE
-            WHEN task->>'kind' = 'sample' THEN
+            WHEN task->>'kind' IN ('sample', 'integration_campaign') THEN
                 jsonb_typeof(task->'stop_condition') = 'object'
                 AND NOT (task ? 'nr_samples')
             ELSE

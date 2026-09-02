@@ -1,4 +1,4 @@
-use crate::core::{EngineError, RunSpec, RunTask};
+use crate::core::{EngineError, RunSpec, RunTask, WorkerRole};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
     key_value_panel, replace_panel, sized_panel_spec, text_panel,
@@ -92,7 +92,7 @@ fn panel_states(
     let current_task = tasks.iter().find(|task| task.state.as_str() == "active");
     let active_sampler = workers.iter().find(|worker| {
         worker.current_run_id == Some(run.run_id)
-            && worker.current_role.as_deref() == Some("sampler_aggregator")
+            && worker.current_role == Some(WorkerRole::SamplerAggregator)
     });
     let active_evaluator_count = active_sampler
         .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
@@ -179,7 +179,11 @@ fn panel_states(
                 key_value(
                     "queue_buffer",
                     "Target Pending Batches / Evaluator",
-                    run_spec.sampler_aggregator_runner_params.queue.queue_buffer,
+                    run_spec
+                        .integration_params
+                        .sampler_aggregator_runner_params
+                        .queue
+                        .queue_buffer,
                 ),
                 key_value(
                     "active_evaluator_count",
@@ -235,6 +239,7 @@ fn panel_states(
                     "max_batch_size",
                     "Max Batch Size",
                     run_spec
+                        .integration_params
                         .sampler_aggregator_runner_params
                         .queue
                         .max_batch_size,
@@ -248,6 +253,7 @@ fn panel_states(
                     "target_batch_eval_ms",
                     "Target Batch Eval (ms)",
                     run_spec
+                        .integration_params
                         .sampler_aggregator_runner_params
                         .queue
                         .target_batch_eval_ms,
@@ -261,6 +267,7 @@ fn panel_states(
                     "evaluator",
                     "Evaluator",
                     run_spec
+                        .integration_params
                         .evaluator
                         .as_ref()
                         .map(kind_of)

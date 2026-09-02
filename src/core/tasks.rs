@@ -28,12 +28,6 @@ impl RunTaskState {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SampleTaskConfig {
-    pub batch_transforms: Option<Vec<BatchTransformConfig>>,
-}
-
 pub const DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -472,26 +466,6 @@ impl ParameterScanParameterSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct ParameterScanMeasurementSpec {
-    pub source_task: String,
-}
-
-impl Default for ParameterScanMeasurementSpec {
-    fn default() -> Self {
-        Self {
-            source_task: "sample".to_string(),
-        }
-    }
-}
-
-impl ParameterScanMeasurementSpec {
-    pub fn validate(&self) -> Result<(), String> {
-        validate_source_name("measurement.source_task", &self.source_task)
-    }
-}
-
 pub fn parameter_scan_grid_len(parameters: &[ParameterScanParameterSpec]) -> Option<usize> {
     if parameters.is_empty() {
         return None;
@@ -698,7 +672,132 @@ impl HyperparameterTuningOptimizerSpec {
     }
 }
 
-pub type HyperparameterTuningObjectiveSpec = MeasurementSpec;
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationCampaignChildSpec {
+    pub name: String,
+    #[serde(default = "default_integration_campaign_coefficient")]
+    pub coefficient: f64,
+    pub run_toml: String,
+}
+
+fn default_integration_campaign_coefficient() -> f64 {
+    1.0
+}
+
+impl IntegrationCampaignChildSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_source_name("integration_campaign.children", &self.name)?;
+        if !self.coefficient.is_finite() {
+            return Err(format!(
+                "integration_campaign child '{}' coefficient must be finite",
+                self.name
+            ));
+        }
+        if self.run_toml.trim().is_empty() {
+            return Err(format!(
+                "integration_campaign child '{}' run_toml must be non-empty",
+                self.name
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationCampaignAllocationAlgorithm {
+    LargestVariance,
+    #[default]
+    VarianceReductionRate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct IntegrationCampaignAllocationSpec {
+    pub algorithm: IntegrationCampaignAllocationAlgorithm,
+    pub max_active_runs: usize,
+    pub allocation_window_samples: i64,
+    pub min_samples_per_child: i64,
+}
+
+impl Default for IntegrationCampaignAllocationSpec {
+    fn default() -> Self {
+        Self {
+            algorithm: IntegrationCampaignAllocationAlgorithm::VarianceReductionRate,
+            max_active_runs: 1,
+            allocation_window_samples: 10_000,
+            min_samples_per_child: 1_000,
+        }
+    }
+}
+
+impl IntegrationCampaignAllocationSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_active_runs == 0 {
+            return Err("integration_campaign.allocation.max_active_runs must be > 0".to_string());
+        }
+        if self.allocation_window_samples <= 0 {
+            return Err(
+                "integration_campaign.allocation.allocation_window_samples must be > 0".to_string(),
+            );
+        }
+        if self.min_samples_per_child < 0 {
+            return Err(
+                "integration_campaign.allocation.min_samples_per_child must be >= 0".to_string(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct IntegrationCampaignStopCondition {
+    pub min_total_samples: i64,
+    pub max_total_samples: Option<i64>,
+    pub absolute_error: Option<f64>,
+    pub relative_error: Option<f64>,
+}
+
+impl IntegrationCampaignStopCondition {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.min_total_samples < 0 {
+            return Err(
+                "integration_campaign.stop_condition.min_total_samples must be >= 0".to_string(),
+            );
+        }
+        if self.max_total_samples.is_some_and(|value| value <= 0) {
+            return Err(
+                "integration_campaign.stop_condition.max_total_samples must be > 0 when set"
+                    .to_string(),
+            );
+        }
+        if self
+            .max_total_samples
+            .is_some_and(|value| value < self.min_total_samples)
+        {
+            return Err("integration_campaign.stop_condition.max_total_samples must be >= min_total_samples".to_string());
+        }
+        for (name, value) in [
+            ("absolute_error", self.absolute_error),
+            ("relative_error", self.relative_error),
+        ] {
+            if value.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+                return Err(format!(
+                    "integration_campaign.stop_condition.{name} must be finite and > 0 when set"
+                ));
+            }
+        }
+        if self.max_total_samples.is_none()
+            && self.absolute_error.is_none()
+            && self.relative_error.is_none()
+        {
+            return Err("integration_campaign.stop_condition must set at least one of: max_total_samples, absolute_error, relative_error".to_string());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -961,18 +1060,26 @@ pub enum RunTaskSpec {
     ParameterScan {
         parameters: Vec<ParameterScanParameterSpec>,
         #[serde(default)]
-        measurement: ParameterScanMeasurementSpec,
+        measurement: MeasurementSpec,
         trial_run_toml: String,
         #[serde(default = "default_parameter_scan_max_concurrent_runs")]
         max_concurrent_runs: usize,
     },
     HyperparameterTuning {
         optimizer: HyperparameterTuningOptimizerSpec,
-        objective: HyperparameterTuningObjectiveSpec,
+        objective: MeasurementSpec,
         parameters: BTreeMap<String, HyperparameterTuningParameterDomain>,
         trial_run_toml: String,
         #[serde(default = "default_hyperparameter_tuning_max_concurrent_trials")]
         max_concurrent_trials: usize,
+    },
+    IntegrationCampaign {
+        children: Vec<IntegrationCampaignChildSpec>,
+        #[serde(default)]
+        measurement: MeasurementSpec,
+        stop_condition: IntegrationCampaignStopCondition,
+        #[serde(default)]
+        allocation: IntegrationCampaignAllocationSpec,
     },
 }
 
@@ -1135,6 +1242,26 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
+            Self::IntegrationCampaign {
+                children,
+                measurement,
+                stop_condition,
+                allocation,
+            } => {
+                if children.is_empty() {
+                    return Err("integration_campaign.children must not be empty".to_string());
+                }
+                let mut names = std::collections::BTreeSet::new();
+                for child in children {
+                    child.validate()?;
+                    if !names.insert(child.name.as_str()) {
+                        return Err(format!("integration_campaign child name '{}' is duplicated", child.name));
+                    }
+                }
+                measurement.validate()?;
+                stop_condition.validate()?;
+                allocation.validate()
+            }
         }
     }
 
@@ -1148,16 +1275,21 @@ impl RunTaskSpec {
             Self::PlotLine { .. } => "plot_line",
             Self::ParameterScan { .. } => "parameter_scan",
             Self::HyperparameterTuning { .. } => "hyperparameter_tuning",
+            Self::IntegrationCampaign { .. } => "integration_campaign",
         }
     }
 
-    pub fn runs_in_control_plane(&self) -> bool {
+    pub fn is_controller(&self) -> bool {
         matches!(
             self,
-            Self::SetAccumulator { .. }
-                | Self::ParameterScan { .. }
+            Self::ParameterScan { .. }
                 | Self::HyperparameterTuning { .. }
+                | Self::IntegrationCampaign { .. }
         )
+    }
+
+    pub fn runs_in_control_plane(&self) -> bool {
+        matches!(self, Self::SetAccumulator { .. }) || self.is_controller()
     }
 
     pub fn runs_on_sampler_worker(&self) -> bool {
@@ -1203,7 +1335,9 @@ impl RunTaskSpec {
                 },
                 materializer: None,
             }),
-            Self::ParameterScan { .. } | Self::HyperparameterTuning { .. } => None,
+            Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1240,7 +1374,8 @@ impl RunTaskSpec {
             Self::Image { .. }
             | Self::PlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1257,7 +1392,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1267,7 +1403,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationImage { .. }
             | Self::PdfAdaptationPlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
             Self::Sample { evaluator, .. }
             | Self::Image { evaluator, .. }
             | Self::PlotLine { evaluator, .. } => match evaluator {
@@ -1316,7 +1453,9 @@ impl RunTaskSpec {
             | Self::PlotLine {
                 batch_transforms, ..
             } => batch_transforms.clone(),
-            Self::ParameterScan { .. } | Self::HyperparameterTuning { .. } => None,
+            Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1335,7 +1474,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1371,7 +1511,9 @@ impl RunTaskSpec {
             Self::Image { accumulator, .. } | Self::PlotLine { accumulator, .. } => {
                 Ok(Some(accumulator.full_config()))
             }
-            Self::ParameterScan { .. } | Self::HyperparameterTuning { .. } => Ok(None),
+            Self::ParameterScan { .. }
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => Ok(None),
         }
     }
 
@@ -1391,6 +1533,7 @@ impl RunTaskSpec {
                 parameters,
                 ..
             } => hyperparameter_tuning_trial_count(optimizer, parameters).map(|count| count as i64),
+            Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1403,7 +1546,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1416,7 +1560,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1429,7 +1574,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1442,7 +1588,8 @@ impl RunTaskSpec {
             | Self::PdfAdaptationPlotLine { .. }
             | Self::PlotLine { .. }
             | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. } => None,
+            | Self::HyperparameterTuning { .. }
+            | Self::IntegrationCampaign { .. } => None,
         }
     }
 
@@ -1701,6 +1848,132 @@ fn vectors_are_independent(left: &[f64], right: &[f64]) -> bool {
     (1.0 - cosine.abs()) > 1e-9
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControllerChildState {
+    Planned,
+    Pending,
+    Active,
+    Completed,
+    Failed,
+}
+
+impl From<RunTaskState> for ControllerChildState {
+    fn from(state: RunTaskState) -> Self {
+        match state {
+            RunTaskState::Pending => Self::Pending,
+            RunTaskState::Active => Self::Active,
+            RunTaskState::Completed => Self::Completed,
+            RunTaskState::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControllerChildOutput {
+    pub child_run_id: Option<i32>,
+    pub status: ControllerChildState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measurement: Option<TaskMeasurementOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParameterScanPointOutput {
+    pub index: usize,
+    pub parameter_values: serde_json::Value,
+    #[serde(flatten)]
+    pub child: ControllerChildOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParameterScanOutput {
+    pub parameters: Vec<String>,
+    pub completed_points: usize,
+    pub running_points: usize,
+    pub total_points: usize,
+    pub points: Vec<ParameterScanPointOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HyperparameterTrialOutput {
+    pub index: usize,
+    pub parameters: serde_json::Value,
+    #[serde(flatten)]
+    pub child: ControllerChildOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective_uncertainty: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HyperparameterTuningOutput {
+    pub completed_trials: usize,
+    pub running_trials: usize,
+    pub failed_trials: usize,
+    pub total_trials: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_trial: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_objective_value: Option<f64>,
+    pub trials: Vec<HyperparameterTrialOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationCampaignChildOutput {
+    pub name: String,
+    pub coefficient: f64,
+    #[serde(flatten)]
+    pub child: ControllerChildOutput,
+    pub selected: bool,
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationCampaignOutput {
+    pub completed_children: usize,
+    pub running_children: usize,
+    pub total_children: usize,
+    pub total_samples: i64,
+    pub selected_child_run_ids: Vec<i32>,
+    pub allocation_started_total_samples: i64,
+    pub combined_measurement: Option<TaskMeasurementOutput>,
+    pub children: Vec<IntegrationCampaignChildOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ControllerTaskOutput {
+    ParameterScan(ParameterScanOutput),
+    HyperparameterTuning(HyperparameterTuningOutput),
+    IntegrationCampaign(IntegrationCampaignOutput),
+}
+
+impl ControllerTaskOutput {
+    pub fn parameter_scan(&self) -> Option<&ParameterScanOutput> {
+        match self {
+            Self::ParameterScan(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn hyperparameter_tuning(&self) -> Option<&HyperparameterTuningOutput> {
+        match self {
+            Self::HyperparameterTuning(output) => Some(output),
+            _ => None,
+        }
+    }
+
+    pub fn integration_campaign(&self) -> Option<&IntegrationCampaignOutput> {
+        match self {
+            Self::IntegrationCampaign(output) => Some(output),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTask {
     #[serde(serialize_with = "crate::utils::serde_bigint::serialize_i64_as_string")]
@@ -1725,7 +1998,7 @@ pub struct RunTask {
     pub created_at: DateTime<Utc>,
     pub task_toml: String,
     pub measurement_output: Option<TaskMeasurementOutput>,
-    pub controller_output: Option<serde_json::Value>,
+    pub controller_output: Option<ControllerTaskOutput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
