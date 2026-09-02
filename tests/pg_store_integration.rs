@@ -7,6 +7,9 @@ use gammaboard::core::{
 use gammaboard::{Batch, LatentBatchSpec, MeasurementResult, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
+
+static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 fn unique_id(prefix: &str) -> String {
     let nanos = SystemTime::now()
@@ -29,9 +32,25 @@ async fn test_store() -> Option<PgStore> {
     Some(PgStore::new(pool))
 }
 
+async fn insert_completed_pause_task(store: &PgStore, run_id: i32) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO run_tasks (run_id, name, sequence_nr, task, task_toml, state)
+        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, $2, 'completed')
+        RETURNING id
+        "#,
+    )
+    .bind(run_id)
+    .bind("kind = \"pause\"\n")
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run task")
+}
+
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_requires_active_assignment() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -65,17 +84,7 @@ async fn claim_batch_requires_active_assignment() {
         .await
         .expect("set current evaluator assignment");
 
-    let task_id: i64 = sqlx::query_scalar(
-        r#"
-        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
-        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
-        RETURNING id
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(store.pool())
-    .await
-    .expect("insert run task");
+    let task_id = insert_completed_pause_task(&store, run_id).await;
 
     let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
@@ -100,16 +109,13 @@ async fn claim_batch_requires_active_assignment() {
         "assigned evaluator should be able to claim"
     );
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn task_measurement_output_round_trips() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -184,16 +190,13 @@ async fn task_measurement_output_round_trips() {
     assert_eq!(results[0].name, AccumulatorMetricName::Mean);
     assert_eq!(results[0].value, 1.25);
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -223,17 +226,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         .await
         .expect("announce node");
 
-    let task_id: i64 = sqlx::query_scalar(
-        r#"
-        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
-        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
-        RETURNING id
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(store.pool())
-    .await
-    .expect("insert run task");
+    let task_id = insert_completed_pause_task(&store, run_id).await;
 
     let batch = Batch::from_points([Point::new(vec![2.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
@@ -276,16 +269,13 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         "inactive assignment should not be able to claim"
     );
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_claims_exactly_one_pending_batch() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -319,17 +309,7 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
         .await
         .expect("set current evaluator assignment");
 
-    let task_id: i64 = sqlx::query_scalar(
-        r#"
-        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
-        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
-        RETURNING id
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(store.pool())
-    .await
-    .expect("insert run task");
+    let task_id = insert_completed_pause_task(&store, run_id).await;
 
     let batch = Batch::from_points([Point::new(vec![3.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
@@ -387,16 +367,13 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
     .expect("count pending batches");
     assert_eq!(pending_count, 3, "remaining batches should stay pending");
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -452,16 +429,13 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
         other => panic!("expected invalid input, got {other}"),
     }
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -484,17 +458,7 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
     .await
     .expect("insert run");
 
-    let task_id: i64 = sqlx::query_scalar(
-        r#"
-        INSERT INTO run_tasks (run_id, name, sequence_nr, task, state)
-        VALUES ($1, 'sample-0', 0, '{"kind":"pause"}'::jsonb, 'completed')
-        RETURNING id
-        "#,
-    )
-    .bind(run_id)
-    .fetch_one(store.pool())
-    .await
-    .expect("insert run task");
+    let task_id = insert_completed_pause_task(&store, run_id).await;
 
     let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
     let latent_batch = LatentBatchSpec::from_batch(&batch).build();
@@ -536,16 +500,13 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
     .expect("count failed batches");
     assert_eq!(failed_count, 1, "failed batch must remain persisted");
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -613,16 +574,13 @@ async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
         "stale expired sampler assignment should be cleared"
     );
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -718,17 +676,14 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
         "node desired assignment should be cleared"
     );
 
-    sqlx::query("DELETE FROM runs WHERE id = $1 OR id = $2")
-        .bind(run_a)
-        .bind(run_b)
-        .execute(store.pool())
-        .await
-        .expect("cleanup runs");
+    store.remove_run(run_a).await.expect("cleanup run a");
+    store.remove_run(run_b).await.expect("cleanup run b");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn assigning_dead_node_returns_not_found() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -777,16 +732,13 @@ async fn assigning_dead_node_returns_not_found() {
         other => panic!("expected not found, got {other}"),
     }
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expiring_node_lease_clears_desired_assignment() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -834,16 +786,13 @@ async fn expiring_node_lease_clears_desired_assignment() {
         "desired assignment should be cleared on lease expiry"
     );
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -915,16 +864,13 @@ async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment
     assert_eq!(row.3.as_deref(), Some("sampler_aggregator"));
     assert!(row.4);
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expired_shutdown_request_does_not_affect_replacement_node() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -959,6 +905,7 @@ async fn expired_shutdown_request_does_not_affect_replacement_node() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn shutdown_all_nodes_clears_desired_assignments() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -1002,11 +949,21 @@ async fn shutdown_all_nodes_clears_desired_assignments() {
         .await
         .expect("assign desired evaluator");
 
+    let live_nodes: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM nodes
+        WHERE lease_expires_at > now()
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("count live nodes");
     let rows_updated = store
         .request_all_nodes_shutdown()
         .await
         .expect("request all node shutdown");
-    assert_eq!(rows_updated, 2);
+    assert_eq!(rows_updated, live_nodes as u64);
 
     let desired_count: i64 = sqlx::query_scalar(
         r#"
@@ -1022,16 +979,13 @@ async fn shutdown_all_nodes_clears_desired_assignments() {
     .expect("count desired assignments");
     assert_eq!(desired_count, 0);
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_current_assignment_is_unique_per_run() {
+    let _test_guard = TEST_LOCK.lock().await;
     let Some(store) = test_store().await else {
         return;
     };
@@ -1087,9 +1041,5 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
         other => panic!("expected invalid input, got {other}"),
     }
 
-    sqlx::query("DELETE FROM runs WHERE id = $1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .expect("cleanup run");
+    store.remove_run(run_id).await.expect("cleanup run");
 }
