@@ -30,7 +30,7 @@ use crate::server::performance_panels::{
 use crate::server::run_panels::build_run_panel_response;
 use crate::server::task_panels::{TaskPanelSource, parse_cursor as parse_task_panel_cursor};
 use crate::server::worker_panels::build_worker_panel_response;
-use crate::stores::PgStore;
+use crate::stores::{PgStore, RunLifecycleState, RunProgress};
 use anyhow::Context;
 use axum::{
     Router,
@@ -533,6 +533,38 @@ struct RunPage<T> {
     next_offset: Option<usize>,
 }
 
+#[derive(Serialize)]
+struct RunSummaryResponse {
+    run_id: i32,
+    run_name: String,
+    parent_run_id: Option<i32>,
+    spawn_label: Option<String>,
+    root_stage_snapshot_id: Option<String>,
+    lifecycle_state: RunLifecycleState,
+    nr_completed_samples_including_children: i64,
+    queue_tuning_defaults: Option<JsonValue>,
+}
+
+impl From<RunProgress> for RunSummaryResponse {
+    fn from(run: RunProgress) -> Self {
+        let queue_tuning_defaults = run.integration_params.as_ref().and_then(|params| {
+            params
+                .pointer("/sampler_aggregator_runner_params/queue")
+                .cloned()
+        });
+        Self {
+            run_id: run.run_id,
+            run_name: run.run_name,
+            parent_run_id: run.parent_run_id,
+            spawn_label: run.spawn_label,
+            root_stage_snapshot_id: run.root_stage_snapshot_id,
+            lifecycle_state: run.lifecycle_state,
+            nr_completed_samples_including_children: run.nr_completed_samples_including_children,
+            queue_tuning_defaults,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct WorkersQuery {
     run_id: Option<i32>,
@@ -830,7 +862,7 @@ async fn get_runs(
         .await?;
     let next_offset = (runs.len() == limit).then_some(offset + runs.len());
     json_response(RunPage {
-        items: runs,
+        items: runs.into_iter().map(RunSummaryResponse::from).collect(),
         next_offset,
     })
 }

@@ -42,7 +42,7 @@ const QueueTuningPanel = ({
   const isSampleTask = task?.task?.kind === "sample";
 
   const initialForm = useMemo(() => {
-    const defaults = run?.integration_params?.sampler_aggregator_runner_params?.queue ?? {};
+    const defaults = run?.queue_tuning_defaults ?? {};
     const override = isSampleTask ? task?.task?.queue_tuning ?? null : null;
     const next = {};
     for (const field of QUEUE_TUNING_FIELDS) {

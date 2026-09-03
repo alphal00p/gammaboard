@@ -4298,6 +4298,16 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 
     let authenticated_read = http_get_with_cookie(&server_url, "/api/runs", &cookie).await?;
     assert!(authenticated_read.contains("\"run_name\":\"auth-e2e\""));
+    assert!(authenticated_read.contains("\"queue_tuning_defaults\":"));
+    for omitted_field in [
+        "run_toml",
+        "provenance",
+        "integration_params",
+        "domain",
+        "target",
+    ] {
+        assert!(!authenticated_read.contains(&format!("\"{omitted_field}\":")));
+    }
 
     let pause = http_post_json(
         &server_url,

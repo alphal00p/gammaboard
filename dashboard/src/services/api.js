@@ -158,27 +158,16 @@ const normalizeRunEntry = (entry) => {
   const runId = Number(entry.run_id);
   const rootStageSnapshotId = entry.root_stage_snapshot_id == null ? null : String(entry.root_stage_snapshot_id);
   return {
-    ...entry,
     run_id: Number.isFinite(runId) ? runId : entry.run_id,
+    run_name: typeof entry.run_name === "string" ? entry.run_name : String(entry.run_name ?? ""),
     parent_run_id: entry.parent_run_id == null ? null : Number(entry.parent_run_id),
-    parent_task_id: entry.parent_task_id == null ? null : String(entry.parent_task_id),
-    spawn_kind: entry.spawn_kind ?? null,
     spawn_label: entry.spawn_label ?? null,
     root_stage_snapshot_id: rootStageSnapshotId,
-    nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
-    nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
-    nr_produced_samples_including_children: Number.isFinite(Number(entry.nr_produced_samples_including_children))
-      ? Number(entry.nr_produced_samples_including_children)
-      : Number(entry.nr_produced_samples || 0),
+    lifecycle_state: typeof entry.lifecycle_state === "string" ? entry.lifecycle_state : "unknown",
     nr_completed_samples_including_children: Number.isFinite(Number(entry.nr_completed_samples_including_children))
       ? Number(entry.nr_completed_samples_including_children)
-      : Number(entry.nr_completed_samples || 0),
-    sampler_runner_uptime_ms: Number.isFinite(Number(entry.sampler_runner_uptime_ms))
-      ? Number(entry.sampler_runner_uptime_ms)
       : 0,
-    integration_params: entry.integration_params ?? {},
-    point_spec: entry.point_spec ?? null,
-    target: entry.target ?? null,
+    queue_tuning_defaults: entry.queue_tuning_defaults ?? {},
   };
 };
 

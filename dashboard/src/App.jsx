@@ -365,20 +365,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
           ) : null
         }
       />
-      {currentRun || selectedTask ? (
-        <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 1, mb: 2 }}>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            {currentRun ? (
-              <SelectedTomlPanel kind="Run" name={currentRun.run_name} toml={currentRun.run_toml} />
-            ) : null}
-          </Box>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            {selectedTask ? (
-              <SelectedTomlPanel kind="Task" name={selectedTask.name} toml={selectedTask.task_toml} />
-            ) : null}
-          </Box>
-        </Stack>
-      ) : null}
+      {selectedTask ? <SelectedTomlPanel kind="Task" name={selectedTask.name} toml={selectedTask.task_toml} /> : null}
       <TaskOutputPanel
         key={selectedTask?.id ?? "no-task"}
         runId={selectedRun}
