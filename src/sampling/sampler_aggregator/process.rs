@@ -20,7 +20,6 @@ use crate::utils::domain::Domain;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessSamplerParams {
     pub command: Vec<String>,
-    #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
     pub requires_training_values: bool,

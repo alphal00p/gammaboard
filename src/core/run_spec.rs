@@ -512,13 +512,10 @@ enum HumanAccumulatorConfig {
 #[serde(deny_unknown_fields)]
 struct RichAccumulatorConfig {
     kind: String,
-    #[serde(default)]
     discrete_projections: Option<DiscreteProjectionConfig>,
     #[serde(default)]
     moments: AccumulatorMomentConfig,
-    #[serde(default)]
     components: Option<Vec<String>>,
-    #[serde(default)]
     training_projection: Option<TrainingProjection>,
 }
 

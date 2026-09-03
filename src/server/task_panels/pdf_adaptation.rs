@@ -167,6 +167,18 @@ enum ImageKind {
     Oversampling,
 }
 
+impl ImageKind {
+    fn metric_metadata(self, metric: OversamplingMetric) -> (&'static str, &'static str) {
+        match self {
+            Self::Oversampling => (metric.label(), metric.as_str()),
+            Self::LogReferenceNormalizedIntegrand => {
+                ("log10(normalized integrand)", "log10_integrand")
+            }
+            Self::LogPlaneNormalizedPdf => ("log10(normalized PDF)", "log10_pdf"),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum OversamplingMetric {
     RelativeMismatch,
@@ -254,29 +266,12 @@ fn line_projector(
     geometry: LineRasterGeometry,
     image_kind: ImageKind,
 ) -> TaskPanelProjector {
-    panel_projector_with_source(
-        sized_panel_spec(
-            panel_id,
-            label,
-            PanelKind::ScalarTimeseries,
-            PanelHistoryMode::None,
-            width,
-        ),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| {
-            let Some(derived) = current_derived(ctx)? else {
-                return Ok(None);
-            };
-            build_line_panel(
-                panel_id,
-                &geometry,
-                &derived,
-                image_kind,
-                selected_oversampling_metric(ctx),
-            )
-            .map(Some)
-        },
-        |_ctx| Ok(None),
+    derived_projector(
+        panel_id,
+        label,
+        width,
+        PanelKind::ScalarTimeseries,
+        move |derived, metric| build_line_panel(panel_id, &geometry, derived, image_kind, metric),
     )
 }
 
@@ -287,29 +282,12 @@ fn image_projector(
     geometry: PlaneRasterGeometry,
     image_kind: ImageKind,
 ) -> TaskPanelProjector {
-    panel_projector_with_source(
-        sized_panel_spec(
-            panel_id,
-            label,
-            PanelKind::Image2d,
-            PanelHistoryMode::None,
-            width,
-        ),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| {
-            let Some(derived) = current_derived(ctx)? else {
-                return Ok(None);
-            };
-            build_image_panel(
-                panel_id,
-                &geometry,
-                &derived,
-                image_kind,
-                selected_oversampling_metric(ctx),
-            )
-            .map(Some)
-        },
-        |_ctx| Ok(None),
+    derived_projector(
+        panel_id,
+        label,
+        width,
+        PanelKind::Image2d,
+        move |derived, metric| build_image_panel(panel_id, &geometry, derived, image_kind, metric),
     )
 }
 
@@ -319,25 +297,33 @@ fn histogram_projector(
     width: PanelWidth,
     image_kind: ImageKind,
 ) -> TaskPanelProjector {
+    derived_projector(
+        panel_id,
+        label,
+        width,
+        PanelKind::Histogram,
+        move |derived, metric| Ok(histogram_panel(panel_id, derived, image_kind, metric)),
+    )
+}
+
+fn derived_projector(
+    panel_id: &'static str,
+    label: &'static str,
+    width: PanelWidth,
+    panel_kind: PanelKind,
+    project: impl Fn(&DerivedValues, OversamplingMetric) -> Result<PanelState, EngineError>
+    + Send
+    + Sync
+    + 'static,
+) -> TaskPanelProjector {
     panel_projector_with_source(
-        sized_panel_spec(
-            panel_id,
-            label,
-            PanelKind::Histogram,
-            PanelHistoryMode::None,
-            width,
-        ),
+        sized_panel_spec(panel_id, label, panel_kind, PanelHistoryMode::None, width),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
             let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
             };
-            Ok(Some(histogram_panel(
-                panel_id,
-                &derived,
-                image_kind,
-                selected_oversampling_metric(ctx),
-            )))
+            project(&derived, selected_oversampling_metric(ctx)).map(Some)
         },
         |_ctx| Ok(None),
     )
@@ -417,16 +403,20 @@ struct DerivedValues {
 
 impl DerivedValues {
     fn from_output(
-        output: PdfAdaptationImagePersistedOutput,
+        mut output: PdfAdaptationImagePersistedOutput,
         target_abs_integrand_norm: Option<f64>,
     ) -> Self {
-        let mean_abs_integrand = finite_mean(output.abs_integrand_values.iter().flatten().copied());
+        output
+            .integrand_values
+            .iter_mut()
+            .for_each(|value| *value = value.map(f64::abs));
+        let mean_abs_integrand = finite_mean(output.integrand_values.iter().flatten().copied());
         let mean_pdf = finite_mean(output.pdf_values.iter().flatten().copied());
         let reference_abs_integrand_norm = target_abs_integrand_norm
             .or(output.global_abs_integrand_norm)
             .or(mean_abs_integrand);
         let log_reference_normalized_integrand = output
-            .abs_integrand_values
+            .integrand_values
             .iter()
             .map(|value| log10_ratio(*value, reference_abs_integrand_norm))
             .collect::<Vec<_>>();
@@ -438,7 +428,7 @@ impl DerivedValues {
         let oversampling_ratio = output
             .pdf_values
             .iter()
-            .zip(output.abs_integrand_values.iter())
+            .zip(output.integrand_values.iter())
             .map(|(pdf, abs_integrand)| {
                 pdf_over_integrand_global_norm_ratio(
                     *pdf,
@@ -480,7 +470,7 @@ impl DerivedValues {
             .output
             .pdf_values
             .iter()
-            .zip(self.output.abs_integrand_values.iter())
+            .zip(self.output.integrand_values.iter())
         {
             let (Some(pdf), Some(abs_integrand)) = (pdf, abs_integrand) else {
                 continue;
@@ -516,6 +506,7 @@ fn build_image_panel(
 ) -> Result<PanelState, EngineError> {
     validate_output_length(geometry.nr_points(), &derived.output)?;
     let (values, invalid_indices) = option_values_to_image(&derived.values(image_kind, metric));
+    let (metric_label, metric_mode) = image_kind.metric_metadata(metric);
     Ok(PanelState::Image2d {
         panel_id: panel_id.to_string(),
         width: geometry.u_linspace.count,
@@ -527,8 +518,8 @@ fn build_image_panel(
         y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
         color_mode: ImageColorMode::ScalarHeatmap,
         normalization_mode: ImageNormalizationMode::Symmetric,
-        metric_label: metric_label(image_kind, metric).map(str::to_string),
-        metric_mode: metric_mode(image_kind, metric).map(str::to_string),
+        metric_label: Some(metric_label.to_string()),
+        metric_mode: Some(metric_mode.to_string()),
         x_label: Some("t".to_string()),
         y_label: Some("s".to_string()),
     })
@@ -578,22 +569,6 @@ fn histogram_panel(
     }
 }
 
-fn metric_label(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
-    match image_kind {
-        ImageKind::Oversampling => Some(metric.label()),
-        ImageKind::LogReferenceNormalizedIntegrand => Some("log10(normalized integrand)"),
-        ImageKind::LogPlaneNormalizedPdf => Some("log10(normalized PDF)"),
-    }
-}
-
-fn metric_mode(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
-    match image_kind {
-        ImageKind::Oversampling => Some(metric.as_str()),
-        ImageKind::LogReferenceNormalizedIntegrand => Some("log10_integrand"),
-        ImageKind::LogPlaneNormalizedPdf => Some("log10_pdf"),
-    }
-}
-
 fn pdf_adaptation_histogram_controls() -> serde_json::Value {
     json!({
         "scale": true,
@@ -612,15 +587,11 @@ fn validate_output_length(
     total: usize,
     output: &PdfAdaptationImagePersistedOutput,
 ) -> Result<(), EngineError> {
-    if output.signed_integrand_values.len() != total
-        || output.abs_integrand_values.len() != total
-        || output.pdf_values.len() != total
-    {
+    if output.integrand_values.len() != total || output.pdf_values.len() != total {
         return Err(EngineError::build(format!(
-            "pdf adaptation payload length mismatch: expected {}, got signed={} integrand={} pdf={}",
+            "pdf adaptation payload length mismatch: expected {}, got integrand={} pdf={}",
             total,
-            output.signed_integrand_values.len(),
-            output.abs_integrand_values.len(),
+            output.integrand_values.len(),
             output.pdf_values.len(),
         )));
     }
@@ -667,12 +638,7 @@ fn option_values_to_image(values: &[Option<f64>]) -> (Vec<f32>, Option<Vec<usize
 }
 
 fn histogram_bins(values: &[Option<f64>]) -> Vec<HistogramBin> {
-    let finite = values
-        .iter()
-        .flatten()
-        .copied()
-        .filter(|value| value.is_finite())
-        .collect::<Vec<_>>();
+    let finite = finite_values(values);
     if finite.is_empty() {
         return Vec::new();
     }
@@ -686,62 +652,15 @@ fn histogram_bins(values: &[Option<f64>]) -> Vec<HistogramBin> {
             error: 0.0,
         }];
     }
-    let width = (max - min) / HISTOGRAM_BIN_COUNT as f64;
-    let mut counts = vec![0usize; HISTOGRAM_BIN_COUNT];
-    for value in finite.iter().copied() {
-        let mut index = ((value - min) / width).floor() as usize;
-        if index >= HISTOGRAM_BIN_COUNT {
-            index = HISTOGRAM_BIN_COUNT - 1;
-        }
-        counts[index] += 1;
-    }
-    let total = finite.len() as f64;
-    counts
-        .into_iter()
-        .enumerate()
-        .map(|(index, count)| {
-            let start = min + index as f64 * width;
-            let stop = if index + 1 == HISTOGRAM_BIN_COUNT {
-                max
-            } else {
-                start + width
-            };
-            let value = if width > 0.0 {
-                count as f64 / (total * width)
-            } else {
-                0.0
-            };
-            let error = if width > 0.0 {
-                (count as f64).sqrt() / (total * width)
-            } else {
-                0.0
-            };
-            HistogramBin {
-                start,
-                stop,
-                value,
-                error,
-            }
-        })
-        .collect()
+    histogram_bins_with_fixed_edges(&finite, min, max, HISTOGRAM_BIN_COUNT)
 }
 
 fn histogram_bins_on_shared_edges(
     left: &[Option<f64>],
     right: &[Option<f64>],
 ) -> (Vec<HistogramBin>, Vec<HistogramBin>) {
-    let left_finite = left
-        .iter()
-        .flatten()
-        .copied()
-        .filter(|value| value.is_finite())
-        .collect::<Vec<_>>();
-    let right_finite = right
-        .iter()
-        .flatten()
-        .copied()
-        .filter(|value| value.is_finite())
-        .collect::<Vec<_>>();
+    let left_finite = finite_values(left);
+    let right_finite = finite_values(right);
     if left_finite.is_empty() || right_finite.is_empty() {
         return (histogram_bins(left), histogram_bins(right));
     }
@@ -765,6 +684,15 @@ fn histogram_bins_on_shared_edges(
     let left_bins = histogram_bins_with_fixed_edges(&left_finite, min, max, HISTOGRAM_BIN_COUNT);
     let right_bins = histogram_bins_with_fixed_edges(&right_finite, min, max, HISTOGRAM_BIN_COUNT);
     (left_bins, right_bins)
+}
+
+fn finite_values(values: &[Option<f64>]) -> Vec<f64> {
+    values
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect()
 }
 
 fn histogram_bins_with_fixed_edges(
@@ -901,8 +829,7 @@ mod tests {
             processed: 2,
             global_abs_integrand_norm: Some(5.0),
             global_pdf_norm: 1.0,
-            signed_integrand_values: vec![Some(-2.0), Some(4.0)],
-            abs_integrand_values: vec![Some(2.0), Some(4.0)],
+            integrand_values: vec![Some(-2.0), Some(4.0)],
             pdf_values: vec![Some(1.0), Some(2.0)],
         }
     }

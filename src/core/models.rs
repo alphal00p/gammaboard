@@ -162,13 +162,10 @@ pub struct RuntimeLogEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeasurementResult {
     pub name: AccumulatorMetricName,
-    #[serde(default)]
     pub component: Option<String>,
     pub value: f64,
-    #[serde(default)]
     pub uncertainty: Option<f64>,
     pub sample_count: i64,
-    #[serde(default)]
     pub completed_samples_per_second: Option<f64>,
 }
 
@@ -228,9 +225,7 @@ pub struct RollingMetricSnapshot {
     #[serde(default)]
     pub count: u64,
     pub mean: Option<f64>,
-    #[serde(default)]
     pub total: Option<f64>,
-    #[serde(default)]
     pub max: Option<f64>,
     pub std_dev: f64,
 }
@@ -322,17 +317,12 @@ pub struct SamplerRuntimeMetrics {
     pub completed_samples_per_second: f64,
     #[serde(default)]
     pub eta_completed_samples_per_second: f64,
-    #[serde(default)]
     pub eta_seconds_smoothed: Option<f64>,
     pub batch_size_current: usize,
     pub sampler_tick_busy_ratio: Option<f64>,
-    #[serde(default)]
     pub avg_evaluator_utilization: Option<f64>,
-    #[serde(default)]
     pub active_evaluator_count: Option<usize>,
-    #[serde(default)]
     pub avg_evaluator_rss_bytes: Option<i64>,
-    #[serde(default)]
     pub total_evaluator_rss_bytes: Option<i64>,
     pub sampler: SamplerWorkRollingAverages,
     pub queue: SamplerQueueRuntimeMetrics,

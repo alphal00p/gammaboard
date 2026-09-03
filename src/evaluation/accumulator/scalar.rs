@@ -8,7 +8,6 @@ use super::discrete_bins::{DiscreteProjectionBinState, upsert_scalar_discrete_bi
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ScalarAccumulatorState {
-    #[serde(default)]
     pub discrete_projections: Option<DiscreteProjectionConfig>,
     #[serde(default)]
     pub moments: AccumulatorMomentConfig,
@@ -26,9 +25,7 @@ pub struct ScalarAccumulatorState {
     pub max_weighted_positive: f64,
     #[serde(default)]
     pub max_weighted_negative: f64,
-    #[serde(default)]
     pub max_weighted_positive_point: Option<Point>,
-    #[serde(default)]
     pub max_weighted_negative_point: Option<Point>,
     #[serde(default)]
     pub discrete_bins: BTreeMap<String, DiscreteProjectionBinState>,

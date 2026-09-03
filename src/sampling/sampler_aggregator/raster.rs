@@ -70,20 +70,17 @@ pub struct PdfAdaptationRasterLineSamplerSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PdfAdaptationImageOutputState {
-    pub signed_integrand_values: Vec<Option<f64>>,
-    pub abs_integrand_values: Vec<Option<f64>>,
+    pub integrand_values: Vec<Option<f64>>,
     pub pdf_values: Vec<Option<f64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PdfAdaptationImagePersistedOutput {
     pub processed: usize,
-    #[serde(default)]
     pub global_abs_integrand_norm: Option<f64>,
     #[serde(default = "default_pdf_global_norm")]
     pub global_pdf_norm: f64,
-    pub signed_integrand_values: Vec<Option<f64>>,
-    pub abs_integrand_values: Vec<Option<f64>>,
+    pub integrand_values: Vec<Option<f64>>,
     pub pdf_values: Vec<Option<f64>>,
 }
 
@@ -152,18 +149,6 @@ impl RasterPlaneSampler {
             ..sampler
         })
     }
-
-    fn total_samples(&self) -> usize {
-        self.params.geometry.nr_points()
-    }
-
-    fn point_at(&self, index: usize) -> Vec<f64> {
-        self.params.geometry.point_at(index)
-    }
-
-    fn permuted_index(&self, index: usize) -> usize {
-        permuted_raster_index(index, self.total_samples(), self.stride)
-    }
 }
 
 impl RasterLineSampler {
@@ -190,18 +175,6 @@ impl RasterLineSampler {
             stride: snapshot.stride,
             ..sampler
         })
-    }
-
-    fn total_samples(&self) -> usize {
-        self.params.geometry.nr_points()
-    }
-
-    fn point_at(&self, index: usize) -> Vec<f64> {
-        self.params.geometry.point_at(index)
-    }
-
-    fn permuted_index(&self, index: usize) -> usize {
-        permuted_raster_index(index, self.total_samples(), self.stride)
     }
 }
 
@@ -254,67 +227,6 @@ impl PdfAdaptationRasterPlaneSampler {
             ..sampler
         })
     }
-
-    fn total_samples(&self) -> usize {
-        self.params.geometry.nr_points()
-    }
-
-    fn point_at(&self, index: usize) -> Vec<f64> {
-        self.params.geometry.point_at(index)
-    }
-
-    fn permuted_index(&self, index: usize) -> usize {
-        permuted_raster_index(index, self.total_samples(), self.stride)
-    }
-
-    fn output_for_frontend(&self) -> PdfAdaptationImagePersistedOutput {
-        PdfAdaptationImagePersistedOutput {
-            processed: self.ingested_samples,
-            global_abs_integrand_norm: self.global_abs_integrand_norm,
-            global_pdf_norm: self.global_pdf_norm,
-            signed_integrand_values: self.output_state.signed_integrand_values.clone(),
-            abs_integrand_values: self.output_state.abs_integrand_values.clone(),
-            pdf_values: self.output_state.pdf_values.clone(),
-        }
-    }
-
-    fn record_training_values(
-        &mut self,
-        canonical_indices: &[usize],
-        training_values: &[f64],
-    ) -> Result<(), EngineError> {
-        let mut pdf_points = Vec::new();
-        let mut pdf_indices = Vec::new();
-        for (&canonical_index, &training_value) in
-            canonical_indices.iter().zip(training_values.iter())
-        {
-            if !training_value.is_finite() {
-                self.output_state.signed_integrand_values[canonical_index] = None;
-                self.output_state.abs_integrand_values[canonical_index] = None;
-                self.output_state.pdf_values[canonical_index] = None;
-                continue;
-            }
-            self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
-            self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
-            pdf_indices.push(canonical_index);
-            pdf_points.push((
-                self.params.geometry.discrete.clone(),
-                self.point_at(canonical_index),
-            ));
-        }
-        let pdf_values = self.source_sampler.pdf_batch(&pdf_points)?;
-        if pdf_values.len() != pdf_indices.len() {
-            return Err(EngineError::engine(format!(
-                "pdf adaptation raster plane sampler pdf output size mismatch: expected {}, got {}",
-                pdf_indices.len(),
-                pdf_values.len()
-            )));
-        }
-        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values) {
-            self.output_state.pdf_values[canonical_index] = pdf.filter(|pdf| pdf.is_finite());
-        }
-        Ok(())
-    }
 }
 
 impl PdfAdaptationRasterLineSampler {
@@ -366,77 +278,135 @@ impl PdfAdaptationRasterLineSampler {
             ..sampler
         })
     }
-
-    fn total_samples(&self) -> usize {
-        self.params.geometry.nr_points()
-    }
-
-    fn point_at(&self, index: usize) -> Vec<f64> {
-        self.params.geometry.point_at(index)
-    }
-
-    fn permuted_index(&self, index: usize) -> usize {
-        permuted_raster_index(index, self.total_samples(), self.stride)
-    }
-
-    fn output_for_frontend(&self) -> PdfAdaptationImagePersistedOutput {
-        PdfAdaptationImagePersistedOutput {
-            processed: self.ingested_samples,
-            global_abs_integrand_norm: self.global_abs_integrand_norm,
-            global_pdf_norm: self.global_pdf_norm,
-            signed_integrand_values: self.output_state.signed_integrand_values.clone(),
-            abs_integrand_values: self.output_state.abs_integrand_values.clone(),
-            pdf_values: self.output_state.pdf_values.clone(),
-        }
-    }
-
-    fn record_training_values(
-        &mut self,
-        canonical_indices: &[usize],
-        training_values: &[f64],
-    ) -> Result<(), EngineError> {
-        let mut pdf_points = Vec::new();
-        let mut pdf_indices = Vec::new();
-        for (&canonical_index, &training_value) in
-            canonical_indices.iter().zip(training_values.iter())
-        {
-            if !training_value.is_finite() {
-                self.output_state.signed_integrand_values[canonical_index] = None;
-                self.output_state.abs_integrand_values[canonical_index] = None;
-                self.output_state.pdf_values[canonical_index] = None;
-                continue;
-            }
-            self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
-            self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
-            pdf_indices.push(canonical_index);
-            pdf_points.push((
-                self.params.geometry.discrete.clone(),
-                self.point_at(canonical_index),
-            ));
-        }
-        let pdf_values = self.source_sampler.pdf_batch(&pdf_points)?;
-        if pdf_values.len() != pdf_indices.len() {
-            return Err(EngineError::engine(format!(
-                "pdf adaptation raster line sampler pdf output size mismatch: expected {}, got {}",
-                pdf_indices.len(),
-                pdf_values.len()
-            )));
-        }
-        for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values) {
-            self.output_state.pdf_values[canonical_index] = pdf.filter(|pdf| pdf.is_finite());
-        }
-        Ok(())
-    }
 }
 
 impl PdfAdaptationImageOutputState {
     fn new(total_samples: usize) -> Self {
         Self {
-            signed_integrand_values: vec![None; total_samples],
-            abs_integrand_values: vec![None; total_samples],
+            integrand_values: vec![None; total_samples],
             pdf_values: vec![None; total_samples],
         }
     }
+
+    fn persisted_output(
+        &self,
+        processed: usize,
+        global_abs_integrand_norm: Option<f64>,
+        global_pdf_norm: f64,
+    ) -> PdfAdaptationImagePersistedOutput {
+        PdfAdaptationImagePersistedOutput {
+            processed,
+            global_abs_integrand_norm,
+            global_pdf_norm,
+            integrand_values: self.integrand_values.clone(),
+            pdf_values: self.pdf_values.clone(),
+        }
+    }
+}
+
+fn record_pdf_adaptation_values(
+    output_state: &mut PdfAdaptationImageOutputState,
+    source_sampler: &mut dyn SamplerAggregator,
+    canonical_indices: &[usize],
+    training_values: &[f64],
+    point_at: impl Fn(usize) -> PdfPoint,
+    geometry: &str,
+) -> Result<(), EngineError> {
+    let mut pdf_points = Vec::new();
+    let mut pdf_indices = Vec::new();
+    for (&canonical_index, &training_value) in canonical_indices.iter().zip(training_values) {
+        if !training_value.is_finite() {
+            output_state.integrand_values[canonical_index] = None;
+            output_state.pdf_values[canonical_index] = None;
+            continue;
+        }
+        output_state.integrand_values[canonical_index] = Some(training_value);
+        pdf_indices.push(canonical_index);
+        pdf_points.push(point_at(canonical_index));
+    }
+    let pdf_values = source_sampler.pdf_batch(&pdf_points)?;
+    if pdf_values.len() != pdf_indices.len() {
+        return Err(EngineError::engine(format!(
+            "pdf adaptation raster {geometry} sampler pdf output size mismatch: expected {}, got {}",
+            pdf_indices.len(),
+            pdf_values.len()
+        )));
+    }
+    for (canonical_index, pdf) in pdf_indices.into_iter().zip(pdf_values) {
+        output_state.pdf_values[canonical_index] = pdf.filter(|pdf| pdf.is_finite());
+    }
+    Ok(())
+}
+
+fn ingest_pdf_adaptation_values(
+    ingested_samples: &mut usize,
+    output_state: &mut PdfAdaptationImageOutputState,
+    source_sampler: &mut dyn SamplerAggregator,
+    total_samples: usize,
+    stride: usize,
+    training_values: &[f64],
+    point_at: impl Fn(usize) -> PdfPoint,
+    geometry: &str,
+) -> Result<(), EngineError> {
+    if *ingested_samples + training_values.len() > total_samples {
+        return Err(EngineError::engine(format!(
+            "pdf adaptation raster {geometry} sampler ingest overflow: {} + {} exceeds {}",
+            *ingested_samples,
+            training_values.len(),
+            total_samples,
+        )));
+    }
+    let canonical_indices = (0..training_values.len())
+        .map(|offset| permuted_raster_index(*ingested_samples + offset, total_samples, stride))
+        .collect::<Vec<_>>();
+    record_pdf_adaptation_values(
+        output_state,
+        source_sampler,
+        &canonical_indices,
+        training_values,
+        point_at,
+        geometry,
+    )?;
+    *ingested_samples += training_values.len();
+    Ok(())
+}
+
+fn raster_sample_plan(next_index: usize, total_samples: usize) -> Result<SamplePlan, EngineError> {
+    match total_samples.saturating_sub(next_index) {
+        0 => Ok(SamplePlan::Pause),
+        nr_samples => Ok(SamplePlan::Produce { nr_samples }),
+    }
+}
+
+fn produce_raster_batch(
+    next_index: &mut usize,
+    total_samples: usize,
+    stride: usize,
+    discrete: &[i64],
+    point_at: impl Fn(usize) -> Vec<f64>,
+    requested_samples: usize,
+    sampler_name: &str,
+) -> Result<LatentBatchSpec, EngineError> {
+    let nr_samples = requested_samples.min(total_samples.saturating_sub(*next_index));
+    if nr_samples == 0 {
+        return Err(EngineError::engine(format!(
+            "{sampler_name} cannot produce an empty batch"
+        )));
+    }
+    let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
+        Point::new(
+            point_at(permuted_raster_index(
+                *next_index + row_idx,
+                total_samples,
+                stride,
+            )),
+            discrete.to_vec(),
+            1.0,
+        )
+    }))
+    .engine_err()?;
+    *next_index += nr_samples;
+    Ok(LatentBatchSpec::from_batch(&batch))
 }
 
 impl SamplerAggregator for RasterPlaneSampler {
@@ -445,34 +415,20 @@ impl SamplerAggregator for RasterPlaneSampler {
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        if remaining == 0 {
-            Ok(SamplePlan::Pause)
-        } else {
-            Ok(SamplePlan::Produce {
-                nr_samples: remaining,
-            })
-        }
+        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        let nr_samples = nr_samples.min(remaining);
-        if nr_samples == 0 {
-            return Err(EngineError::engine(
-                "raster plane sampler cannot produce an empty batch",
-            ));
-        }
-        let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
-            Point::new(
-                self.point_at(self.permuted_index(self.next_index + row_idx)),
-                self.params.geometry.discrete.clone(),
-                1.0,
-            )
-        }))
-        .engine_err()?;
-        self.next_index += nr_samples;
-        Ok(LatentBatchSpec::from_batch(&batch))
+        let geometry = &self.params.geometry;
+        produce_raster_batch(
+            &mut self.next_index,
+            geometry.nr_points(),
+            self.stride,
+            &geometry.discrete,
+            |index| geometry.point_at(index),
+            nr_samples,
+            "raster plane sampler",
+        )
     }
 
     fn ingest_training_values(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
@@ -497,34 +453,20 @@ impl SamplerAggregator for RasterLineSampler {
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        if remaining == 0 {
-            Ok(SamplePlan::Pause)
-        } else {
-            Ok(SamplePlan::Produce {
-                nr_samples: remaining,
-            })
-        }
+        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        let nr_samples = nr_samples.min(remaining);
-        if nr_samples == 0 {
-            return Err(EngineError::engine(
-                "raster line sampler cannot produce an empty batch",
-            ));
-        }
-        let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
-            Point::new(
-                self.point_at(self.permuted_index(self.next_index + row_idx)),
-                self.params.geometry.discrete.clone(),
-                1.0,
-            )
-        }))
-        .engine_err()?;
-        self.next_index += nr_samples;
-        Ok(LatentBatchSpec::from_batch(&batch))
+        let geometry = &self.params.geometry;
+        produce_raster_batch(
+            &mut self.next_index,
+            geometry.nr_points(),
+            self.stride,
+            &geometry.discrete,
+            |index| geometry.point_at(index),
+            nr_samples,
+            "raster line sampler",
+        )
     }
 
     fn ingest_training_values(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
@@ -549,57 +491,34 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        if remaining == 0 {
-            Ok(SamplePlan::Pause)
-        } else {
-            Ok(SamplePlan::Produce {
-                nr_samples: remaining,
-            })
-        }
+        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        let nr_samples = nr_samples.min(remaining);
-        if nr_samples == 0 {
-            return Err(EngineError::engine(
-                "pdf adaptation raster plane sampler cannot produce an empty batch",
-            ));
-        }
-        let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
-            Point::new(
-                self.point_at(self.permuted_index(self.next_index + row_idx)),
-                self.params.geometry.discrete.clone(),
-                1.0,
-            )
-        }))
-        .engine_err()?;
-        self.next_index += nr_samples;
-        Ok(LatentBatchSpec::from_batch(&batch))
+        let geometry = &self.params.geometry;
+        produce_raster_batch(
+            &mut self.next_index,
+            geometry.nr_points(),
+            self.stride,
+            &geometry.discrete,
+            |index| geometry.point_at(index),
+            nr_samples,
+            "pdf adaptation raster plane sampler",
+        )
     }
 
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let total_samples = self.total_samples();
-        if self.ingested_samples + training_values.len() > total_samples {
-            return Err(EngineError::engine(format!(
-                "pdf adaptation raster plane sampler ingest overflow: {} + {} exceeds {}",
-                self.ingested_samples,
-                training_values.len(),
-                total_samples,
-            )));
-        }
-        let canonical_indices = training_values
-            .iter()
-            .enumerate()
-            .map(|(offset, _)| {
-                let shuffled_index = self.ingested_samples + offset;
-                self.permuted_index(shuffled_index)
-            })
-            .collect::<Vec<_>>();
-        self.record_training_values(&canonical_indices, training_values)?;
-        self.ingested_samples += training_values.len();
-        Ok(())
+        let geometry = &self.params.geometry;
+        ingest_pdf_adaptation_values(
+            &mut self.ingested_samples,
+            &mut self.output_state,
+            self.source_sampler.as_mut(),
+            geometry.nr_points(),
+            self.stride,
+            training_values,
+            |index| (geometry.discrete.clone(), geometry.point_at(index)),
+            "plane",
+        )
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
@@ -614,9 +533,13 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
     }
 
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
-        serde_json::to_value(self.output_for_frontend())
-            .map(Some)
-            .engine_err()
+        serde_json::to_value(self.output_state.persisted_output(
+            self.ingested_samples,
+            self.global_abs_integrand_norm,
+            self.global_pdf_norm,
+        ))
+        .map(Some)
+        .engine_err()
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -642,57 +565,34 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        if remaining == 0 {
-            Ok(SamplePlan::Pause)
-        } else {
-            Ok(SamplePlan::Produce {
-                nr_samples: remaining,
-            })
-        }
+        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let remaining = self.total_samples().saturating_sub(self.next_index);
-        let nr_samples = nr_samples.min(remaining);
-        if nr_samples == 0 {
-            return Err(EngineError::engine(
-                "pdf adaptation raster line sampler cannot produce an empty batch",
-            ));
-        }
-        let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
-            Point::new(
-                self.point_at(self.permuted_index(self.next_index + row_idx)),
-                self.params.geometry.discrete.clone(),
-                1.0,
-            )
-        }))
-        .engine_err()?;
-        self.next_index += nr_samples;
-        Ok(LatentBatchSpec::from_batch(&batch))
+        let geometry = &self.params.geometry;
+        produce_raster_batch(
+            &mut self.next_index,
+            geometry.nr_points(),
+            self.stride,
+            &geometry.discrete,
+            |index| geometry.point_at(index),
+            nr_samples,
+            "pdf adaptation raster line sampler",
+        )
     }
 
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let total_samples = self.total_samples();
-        if self.ingested_samples + training_values.len() > total_samples {
-            return Err(EngineError::engine(format!(
-                "pdf adaptation raster line sampler ingest overflow: {} + {} exceeds {}",
-                self.ingested_samples,
-                training_values.len(),
-                total_samples,
-            )));
-        }
-        let canonical_indices = training_values
-            .iter()
-            .enumerate()
-            .map(|(offset, _)| {
-                let shuffled_index = self.ingested_samples + offset;
-                self.permuted_index(shuffled_index)
-            })
-            .collect::<Vec<_>>();
-        self.record_training_values(&canonical_indices, training_values)?;
-        self.ingested_samples += training_values.len();
-        Ok(())
+        let geometry = &self.params.geometry;
+        ingest_pdf_adaptation_values(
+            &mut self.ingested_samples,
+            &mut self.output_state,
+            self.source_sampler.as_mut(),
+            geometry.nr_points(),
+            self.stride,
+            training_values,
+            |index| (geometry.discrete.clone(), geometry.point_at(index)),
+            "line",
+        )
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
@@ -707,9 +607,13 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
     }
 
     fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
-        serde_json::to_value(self.output_for_frontend())
-            .map(Some)
-            .engine_err()
+        serde_json::to_value(self.output_state.persisted_output(
+            self.ingested_samples,
+            self.global_abs_integrand_norm,
+            self.global_pdf_norm,
+        ))
+        .map(Some)
+        .engine_err()
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
@@ -1063,8 +967,7 @@ mod tests {
             serde_json::from_value(output).expect("decode payload");
 
         assert_eq!(output.processed, 2);
-        assert_eq!(output.signed_integrand_values, vec![Some(2.0), Some(4.0)]);
-        assert_eq!(output.abs_integrand_values, vec![Some(2.0), Some(4.0)]);
+        assert_eq!(output.integrand_values, vec![Some(2.0), Some(4.0)]);
         assert_eq!(output.pdf_values, vec![Some(1.0), Some(1.0)]);
     }
 
@@ -1116,8 +1019,7 @@ mod tests {
             serde_json::from_value(output).expect("decode payload");
 
         assert_eq!(output.processed, 2);
-        assert_eq!(output.signed_integrand_values, vec![None, Some(4.0)]);
-        assert_eq!(output.abs_integrand_values, vec![None, Some(4.0)]);
+        assert_eq!(output.integrand_values, vec![None, Some(4.0)]);
         assert_eq!(output.pdf_values, vec![None, Some(1.0)]);
     }
 

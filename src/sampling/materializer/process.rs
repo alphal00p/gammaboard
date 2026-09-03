@@ -14,7 +14,6 @@ use crate::utils::domain::Domain;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessMaterializerParams {
     pub command: Vec<String>,
-    #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default = "default_args")]
     pub args: Value,

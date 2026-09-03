@@ -93,9 +93,7 @@ fn apply_option<T>(destination: &mut T, value: Option<T>) {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SamplerQueueCheckpoint {
-    #[serde(default)]
     pub last_completed_batch_id: Option<i64>,
-    #[serde(default)]
     pub batch_size_current: Option<usize>,
 }
 

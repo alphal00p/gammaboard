@@ -183,7 +183,6 @@ pub enum AccumulatorMetricName {
 #[serde(deny_unknown_fields)]
 pub struct AccumulatorMetricSelector {
     pub name: AccumulatorMetricName,
-    #[serde(default)]
     pub component: Option<String>,
 }
 
@@ -217,7 +216,6 @@ pub enum MeasurementQuantityName {
 #[serde(deny_unknown_fields)]
 pub struct MeasurementMetricQuantity {
     pub metric: AccumulatorMetricName,
-    #[serde(default)]
     pub component: Option<String>,
 }
 
@@ -344,9 +342,7 @@ impl MeasurementSpec {
 pub struct ParameterValueSourceSpec {
     #[serde(default)]
     pub values: Vec<toml::Value>,
-    #[serde(default)]
     pub linspace: Option<ParameterLinspaceSpec>,
-    #[serde(default)]
     pub range: Option<ParameterIntegerRangeSpec>,
 }
 
@@ -363,7 +359,6 @@ pub struct ParameterLinspaceSpec {
 pub struct ParameterIntegerRangeSpec {
     pub min: i64,
     pub max: i64,
-    #[serde(default)]
     pub step: Option<i64>,
 }
 
@@ -487,7 +482,6 @@ pub struct HyperparameterTuningFloatDomain {
 pub struct HyperparameterTuningIntegerDomain {
     pub min: i64,
     pub max: i64,
-    #[serde(default)]
     pub step: Option<i64>,
 }
 
@@ -563,7 +557,6 @@ pub struct HyperparameterTuningOptimizerSpec {
 #[serde(deny_unknown_fields)]
 pub struct RandomSearchOptimizerParams {
     pub max_trials: usize,
-    #[serde(default)]
     pub seed: Option<u64>,
 }
 
@@ -571,19 +564,14 @@ pub struct RandomSearchOptimizerParams {
 #[serde(deny_unknown_fields)]
 pub struct EgoboxOptimizerParams {
     pub max_trials: usize,
-    #[serde(default)]
     pub seed: Option<u64>,
     #[serde(default = "default_egobox_initial_design")]
     pub initial_design: usize,
     #[serde(default = "default_egobox_parallel_candidates")]
     pub parallel_candidates: usize,
-    #[serde(default)]
     pub infill: Option<EgoboxInfillStrategy>,
-    #[serde(default)]
     pub qei_strategy: Option<EgoboxQeiStrategy>,
-    #[serde(default)]
     pub qei_optmod: Option<usize>,
-    #[serde(default)]
     pub n_start: Option<usize>,
 }
 
@@ -1010,51 +998,37 @@ pub enum RunTaskSpec {
     },
     Sample {
         stop_condition: SampleStopCondition,
-        #[serde(default)]
         measurement: Option<TaskMeasurementSpec>,
-        #[serde(default)]
         evaluator: Option<EvaluatorSourceSpec>,
-        #[serde(default)]
         sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
-        #[serde(default)]
         accumulator: Option<AccumulatorSourceSpec>,
-        #[serde(default)]
         queue_tuning: Option<SamplerQueueTuning>,
-        #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     Image {
         geometry: PlaneRasterGeometry,
         accumulator: PlotAccumulatorKind,
-        #[serde(default)]
         evaluator: Option<EvaluatorSourceSpec>,
         #[serde(default)]
         display: ImageDisplayMode,
-        #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PdfAdaptationImage {
         geometry: PlaneRasterGeometry,
-        #[serde(default)]
         sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
-        #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PdfAdaptationPlotLine {
         geometry: LineRasterGeometry,
-        #[serde(default)]
         sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
-        #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PlotLine {
         geometry: LineRasterGeometry,
         accumulator: PlotAccumulatorKind,
-        #[serde(default)]
         evaluator: Option<EvaluatorSourceSpec>,
         #[serde(default)]
         display: LineDisplayMode,
-        #[serde(default)]
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     ParameterScan {
@@ -2010,7 +1984,6 @@ pub enum TaskMeasurementOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTaskInput {
-    #[serde(default)]
     pub name: Option<String>,
     #[serde(flatten)]
     pub task: RunTaskSpec,

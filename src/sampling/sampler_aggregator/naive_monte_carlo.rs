@@ -53,9 +53,7 @@ impl NaiveMonteCarloSamplerAggregator {
 pub struct NaiveMonteCarloSamplerParams {
     pub training_target_samples: usize,
     pub training_delay_per_sample_ms: u64,
-    #[serde(default)]
     pub fail_on_produce_batch_nr: Option<usize>,
-    #[serde(default)]
     pub fail_on_materialize_batch_nr: Option<usize>,
 }
 

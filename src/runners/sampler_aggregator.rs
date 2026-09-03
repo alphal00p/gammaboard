@@ -107,7 +107,6 @@ struct SamplerRuntimeState {
     completed_samples_per_second: f64,
     #[serde(default)]
     eta_completed_samples_per_second: f64,
-    #[serde(default)]
     eta_seconds_smoothed: Option<f64>,
     #[serde(default)]
     sampler_uptime_ms_accumulated: f64,
@@ -115,7 +114,6 @@ struct SamplerRuntimeState {
     initial_round_trip_snapshot_pending: bool,
     pending_persisted_completed_batches: i32,
     batch_size_current: usize,
-    #[serde(default)]
     sampler_tick_busy_ratio: Option<f64>,
     accumulator_checkpoint_state: AccumulatorCheckpointState,
     rolling: SamplerRollingState,
@@ -238,26 +236,23 @@ fn collect_discrete_pdf_subspaces(
     bin_limit: usize,
 ) -> Result<Vec<(String, Vec<i64>, DiscreteSubspace)>, EngineError> {
     let mut out = Vec::new();
-    match state {
-        AccumulatorState::Vector(state) => {
-            for component in state
-                .components
-                .iter()
-                .chain(std::iter::once(&state.projection))
-            {
-                if !discrete_projection_includes_stream(config, &component.name) {
-                    continue;
-                }
-                collect_discrete_pdf_subspaces_from_bins(
-                    &component.state.discrete_bins,
-                    config,
-                    bin_limit,
-                    Some(&component.name),
-                    &mut out,
-                )?;
+    if let AccumulatorState::Vector(state) = state {
+        for component in state
+            .components
+            .iter()
+            .chain(std::iter::once(&state.projection))
+        {
+            if !discrete_projection_includes_stream(config, &component.name) {
+                continue;
             }
+            collect_discrete_pdf_subspaces_from_bins(
+                &component.state.discrete_bins,
+                config,
+                bin_limit,
+                Some(&component.name),
+                &mut out,
+            )?;
         }
-        _ => {}
     }
     Ok(out)
 }

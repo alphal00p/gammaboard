@@ -98,7 +98,6 @@ pub struct ServerConfig {
     pub database: ServerDatabaseConfig,
     #[serde(default)]
     pub cleanup: ServerCleanupConfig,
-    #[serde(default)]
     pub auth: Option<ServerAuthConfig>,
 }
 
@@ -583,15 +582,11 @@ struct AutoAssignRequest {
 
 #[derive(Deserialize)]
 struct AutoRunNodesRequest {
-    #[serde(default)]
     toml: Option<String>,
-    #[serde(default)]
     count: Option<usize>,
-    #[serde(default)]
     max_start_failures: Option<u32>,
     #[serde(default = "empty_json_object")]
     args: JsonValue,
-    #[serde(default)]
     name_prefix: Option<String>,
 }
 
@@ -605,7 +600,6 @@ struct NodeLaunchToml {
 #[serde(deny_unknown_fields)]
 struct NodeLaunchTomlGroup {
     count: usize,
-    #[serde(default)]
     name_prefix: Option<String>,
     #[serde(default = "default_node_launch_max_start_failures")]
     max_start_failures: u32,
@@ -636,7 +630,6 @@ struct NodeLaunchRequestProgressRequest {
     started_count: usize,
     #[serde(default)]
     result: JsonValue,
-    #[serde(default)]
     error: Option<String>,
 }
 
@@ -662,7 +655,6 @@ struct AddTasksRequest {
 
 #[derive(Deserialize)]
 struct UpdateTaskQueueTuningRequest {
-    #[serde(default)]
     queue_tuning: Option<SamplerQueueTuning>,
 }
 

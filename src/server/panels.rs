@@ -94,7 +94,6 @@ pub enum PanelActionKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PanelRequest {
-    #[serde(default)]
     pub cursor: Option<String>,
     #[serde(default = "default_panel_state")]
     pub panel_state: JsonValue,

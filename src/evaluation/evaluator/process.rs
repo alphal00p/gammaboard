@@ -23,7 +23,6 @@ pub enum ProcessAccumulatorKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProcessEvaluatorParams {
     pub command: Vec<String>,
-    #[serde(default)]
     pub cwd: Option<String>,
     pub domain: Domain,
     #[serde(default = "default_components")]
@@ -351,13 +350,13 @@ impl ProcessRuntimeWorker {
                     .collect::<Result<Vec<f64>, EvalError>>()
             })
             .transpose()?;
-        if let Some(ref tv) = training_values {
-            if tv.len() != nr_samples {
-                return Err(EvalError::eval(format!(
-                    "training_values length {} does not match nr_samples {nr_samples}",
-                    tv.len()
-                )));
-            }
+        if let Some(ref tv) = training_values
+            && tv.len() != nr_samples
+        {
+            return Err(EvalError::eval(format!(
+                "training_values length {} does not match nr_samples {nr_samples}",
+                tv.len()
+            )));
         }
         Ok((state, training_values))
     }

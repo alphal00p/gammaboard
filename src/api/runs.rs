@@ -86,9 +86,7 @@ struct RunReproToml {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskQueueFile {
-    #[serde(default)]
     pub task: Option<RunTaskInput>,
-    #[serde(default)]
     pub task_queue: Option<Vec<RunTaskInput>>,
 }
 

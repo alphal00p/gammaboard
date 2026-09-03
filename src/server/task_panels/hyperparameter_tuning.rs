@@ -239,10 +239,7 @@ fn tuning_parameter_names(ctx: &TaskPanelContext<'_>, trials: &[JsonValue]) -> V
     names.into_iter().collect()
 }
 
-fn best_trial<'a>(
-    trials: &'a [JsonValue],
-    mode: crate::core::MeasurementMode,
-) -> Option<&'a JsonValue> {
+fn best_trial(trials: &[JsonValue], mode: crate::core::MeasurementMode) -> Option<&JsonValue> {
     trials
         .iter()
         .filter_map(|trial| {

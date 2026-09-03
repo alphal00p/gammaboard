@@ -136,10 +136,10 @@ where
 }
 
 pub async fn resolve_run_ref(store: &impl RunReadStore, run_ref: &str) -> Result<RunProgress> {
-    if let Ok(run_id) = run_ref.parse::<i32>() {
-        if let Some(run) = store.get_run_progress(run_id).await? {
-            return Ok(run);
-        }
+    if let Ok(run_id) = run_ref.parse::<i32>()
+        && let Some(run) = store.get_run_progress(run_id).await?
+    {
+        return Ok(run);
     }
 
     let matches = store.get_runs_by_name(run_ref).await?;

@@ -65,9 +65,8 @@ fn resolve_bin_path() -> anyhow::Result<PathBuf> {
     static BUILT_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     BUILT_BIN
         .get_or_init(build_test_binary)
-        .as_ref()
-        .map(PathBuf::clone)
-        .map_err(|err| anyhow::anyhow!(err))
+        .clone()
+        .map_err(anyhow::Error::msg)
 }
 
 fn build_test_binary() -> Result<PathBuf, String> {
@@ -209,8 +208,7 @@ impl FullStackHarness {
         let cli_config = temp_cli_config(&db.database_url, true);
         let runtime_config_path = cli_config.path().to_path_buf();
 
-        let mut temp_files = Vec::new();
-        temp_files.push(cli_config);
+        let temp_files = vec![cli_config];
 
         Ok(Self {
             db,
@@ -1368,10 +1366,11 @@ count = 128
 
     let width = expected_width;
     let height = expected_height;
-    assert_eq!(output.abs_integrand_values.len(), width * height);
+    assert_eq!(output.integrand_values.len(), width * height);
 
     let value_at = |u: usize, v: usize| -> f64 {
-        output.abs_integrand_values[v * width + u]
+        output.integrand_values[v * width + u]
+            .map(f64::abs)
             .filter(|value| value.is_finite())
             .unwrap_or(f64::NEG_INFINITY)
     };

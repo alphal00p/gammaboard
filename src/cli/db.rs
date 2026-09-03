@@ -210,10 +210,10 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
 }
 
 fn resolve_migrations_dir() -> String {
-    if let Ok(path) = std::env::var("GAMMABOARD_MIGRATIONS_DIR") {
-        if !path.trim().is_empty() {
-            return path;
-        }
+    if let Ok(path) = std::env::var("GAMMABOARD_MIGRATIONS_DIR")
+        && !path.trim().is_empty()
+    {
+        return path;
     }
     let embedded = "/usr/local/share/gammaboard/migrations";
     if Path::new(embedded).exists() {

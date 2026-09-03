@@ -8,7 +8,6 @@ use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddIntegrationParams {
-    #[serde(default)]
     pub evaluator: Option<EvaluatorConfig>,
     #[serde(default)]
     pub evaluator_requirements: crate::core::CapabilityRequirements,

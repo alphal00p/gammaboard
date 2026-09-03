@@ -135,7 +135,7 @@ where
         let mut running_count = 0usize;
         let mut failed_count = 0usize;
 
-        for index in candidates_by_index.keys().copied().collect::<Vec<_>>() {
+        for index in candidates_by_index.keys().copied() {
             let label = index.to_string();
             let values = candidates_by_index
                 .get(&index)
@@ -312,7 +312,7 @@ where
         let mut created_child_run_ids = Vec::new();
         let mut capacity = max_concurrent_trials.saturating_sub(running_count);
         if capacity > 0 {
-            for index in candidates_by_index.keys().copied().collect::<Vec<_>>() {
+            for &index in candidates_by_index.keys() {
                 if capacity == 0 {
                     break;
                 }

@@ -28,9 +28,7 @@ pub struct InitializeParams {
 #[derive(Debug, Deserialize)]
 pub struct EvalBatchParams {
     pub nr_samples: usize,
-    #[serde(default)]
     pub xs_discrete_offsets: Option<Vec<usize>>,
-    #[serde(default)]
     pub xs_continuous_offsets: Option<Vec<usize>>,
 }
 
