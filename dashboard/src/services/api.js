@@ -2,7 +2,7 @@ import { asArray } from "../utils/collections";
 
 const APP_BASE_URL = import.meta.env.BASE_URL || "/";
 const normalizedAppBase = APP_BASE_URL.endsWith("/") ? APP_BASE_URL : `${APP_BASE_URL}/`;
-export const API_BASE_URL = `${normalizedAppBase}api`;
+const API_BASE_URL = `${normalizedAppBase}api`;
 export const apiUrl = (path = "") => `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 
 const stripHtml = (value) =>
@@ -98,25 +98,23 @@ const apiDelete = async (path, message, signal) => {
   return parseJsonOrThrow(response, message);
 };
 
+const numberOr = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+
 const normalizeWorkerEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   return {
     node_name: entry.node_name ?? "",
     node_uuid: entry.node_uuid ?? "",
     capabilities: entry.capabilities && typeof entry.capabilities === "object" ? entry.capabilities : {},
-    desired_run_id: Number.isFinite(Number(entry.desired_run_id)) ? Number(entry.desired_run_id) : null,
+    desired_run_id: numberOr(entry.desired_run_id, null),
     desired_run_name: entry.desired_run_name ?? null,
     desired_role: entry.desired_role ?? null,
-    current_run_id: Number.isFinite(Number(entry.current_run_id)) ? Number(entry.current_run_id) : null,
+    current_run_id: numberOr(entry.current_run_id, null),
     current_run_name: entry.current_run_name ?? null,
     current_role: entry.current_role ?? null,
     role: entry.current_role ?? entry.desired_role ?? "none",
     status: entry.status ?? "unknown",
     last_seen: entry.last_seen ?? null,
-    evaluator_metrics: entry.evaluator_metrics ?? null,
-    sampler_metrics: entry.sampler_metrics ?? null,
-    sampler_runtime_metrics: entry.sampler_runtime_metrics ?? null,
-    sampler_engine_diagnostics: entry.sampler_engine_diagnostics ?? null,
   };
 };
 
@@ -164,9 +162,7 @@ const normalizeRunEntry = (entry) => {
     spawn_label: entry.spawn_label ?? null,
     root_stage_snapshot_id: rootStageSnapshotId,
     lifecycle_state: typeof entry.lifecycle_state === "string" ? entry.lifecycle_state : "unknown",
-    nr_completed_samples_including_children: Number.isFinite(Number(entry.nr_completed_samples_including_children))
-      ? Number(entry.nr_completed_samples_including_children)
-      : 0,
+    nr_completed_samples_including_children: numberOr(entry.nr_completed_samples_including_children, 0),
     queue_tuning_defaults: entry.queue_tuning_defaults ?? {},
   };
 };
@@ -175,10 +171,10 @@ const normalizeRunTaskEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   if (entry.id == null) return null;
   return {
-    id: entry.id == null ? null : String(entry.id),
-    run_id: Number.isFinite(Number(entry.run_id)) ? Number(entry.run_id) : entry.run_id,
+    id: String(entry.id),
+    run_id: numberOr(entry.run_id, entry.run_id),
     name: typeof entry.name === "string" ? entry.name : String(entry.name ?? ""),
-    sequence_nr: Number.isFinite(Number(entry.sequence_nr)) ? Number(entry.sequence_nr) : 0,
+    sequence_nr: numberOr(entry.sequence_nr, 0),
     task_kind: typeof entry.task_kind === "string" ? entry.task_kind : "unknown",
     goal_label: typeof entry.goal_label === "string" ? entry.goal_label : "unbounded",
     is_sample: entry.is_sample === true,
@@ -187,9 +183,7 @@ const normalizeRunTaskEntry = (entry) => {
     failure_reason: entry.failure_reason ?? null,
     latest_stage_snapshot_id: entry.latest_stage_snapshot_id == null ? null : String(entry.latest_stage_snapshot_id),
     root_stage_snapshot_id: entry.root_stage_snapshot_id == null ? null : String(entry.root_stage_snapshot_id),
-    nr_completed_samples_including_children: Number.isFinite(Number(entry.nr_completed_samples_including_children))
-      ? Number(entry.nr_completed_samples_including_children)
-      : 0,
+    nr_completed_samples_including_children: numberOr(entry.nr_completed_samples_including_children, 0),
   };
 };
 
@@ -287,8 +281,8 @@ export const fetchNodeLaunchRequests = async (signal) => {
   return asArray(data?.items).map((entry) => ({
     ...entry,
     id: entry?.id == null ? "" : String(entry.id),
-    requested_count: Number.isFinite(Number(entry?.requested_count)) ? Number(entry.requested_count) : 0,
-    started_count: Number.isFinite(Number(entry?.started_count)) ? Number(entry.started_count) : 0,
+    requested_count: numberOr(entry?.requested_count, 0),
+    started_count: numberOr(entry?.started_count, 0),
     args: entry?.args ?? {},
     result: entry?.result ?? {},
   }));

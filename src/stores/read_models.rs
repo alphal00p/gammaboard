@@ -138,6 +138,22 @@ pub struct RegisteredWorkerEntry {
     pub sampler_rss_bytes: Option<i64>,
 }
 
+/// Compact registered node snapshot used by the `/nodes` list endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredWorkerSummary {
+    pub node_name: String,
+    pub node_uuid: String,
+    pub capabilities: serde_json::Value,
+    pub desired_run_id: Option<i32>,
+    pub desired_run_name: Option<String>,
+    pub desired_role: Option<WorkerRole>,
+    pub current_run_id: Option<i32>,
+    pub current_run_name: Option<String>,
+    pub current_role: Option<WorkerRole>,
+    pub status: WorkerStatus,
+    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Evaluator performance history row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluatorPerformanceHistoryEntry {

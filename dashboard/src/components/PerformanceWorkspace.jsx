@@ -20,7 +20,7 @@ import { useRunTasks } from "../hooks/useRunTasks";
 import { updateRunTaskQueueTuning } from "../services/api";
 import { asArray } from "../utils/collections";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
-import { asTaskList, getCurrentTask } from "../utils/tasks";
+import { getCurrentTask } from "../utils/tasks";
 
 const PerformanceWorkspace = ({
   runs,
@@ -88,7 +88,7 @@ const PerformanceWorkspace = ({
   );
   const { tasks } = useRunTasks(selectedRun, 2000);
   const sampleTask = useMemo(() => {
-    const taskList = asTaskList(tasks);
+    const taskList = asArray(tasks);
     const currentTask = getCurrentTask(taskList);
     if (currentTask?.is_sample) return currentTask;
     return (

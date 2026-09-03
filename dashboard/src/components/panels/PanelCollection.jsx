@@ -327,28 +327,6 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
     );
   }
 
-  const histogramOversamplingPanel = renderablePanels.find(
-    ({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_oversampling_histogram",
-  );
-  const histogramOversamplingNormalizedPanel = renderablePanels.find(
-    ({ descriptor }) => descriptor?.panel_id === "pdf_adaptation_oversampling_plane_normalized_histogram",
-  );
-  if (histogramOversamplingPanel?.state && histogramOversamplingNormalizedPanel?.state) {
-    renderablePanels = replacePanelPairWithOverlay(
-      renderablePanels,
-      "pdf_adaptation_oversampling_histogram",
-      "pdf_adaptation_oversampling_plane_normalized_histogram",
-      buildPdfHistogramOverlayPanel({
-        panelId: "pdf_adaptation_oversampling_histogram_overlay",
-        label: "Histogram: Sampling Accuracy (Plane) vs Sampling Accuracy (Global)",
-        primaryPanel: histogramOversamplingPanel,
-        overlayPanel: histogramOversamplingNormalizedPanel,
-        overlayName: "Sampling accuracy (global)",
-        overlayColor: "#6a994e",
-      }),
-    );
-  }
-
   return sortRenderablePanels(renderablePanels);
 };
 

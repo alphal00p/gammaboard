@@ -4,7 +4,7 @@ export const formatRunLabel = (run) => {
   return run.parent_run_id != null ? `- ${label}` : label;
 };
 
-export const deriveRunLifecycle = (run) => {
+const deriveRunLifecycle = (run) => {
   if (!run || typeof run !== "object") return "unknown";
   if (typeof run.lifecycle_state === "string" && run.lifecycle_state.trim()) return run.lifecycle_state;
   return "unknown";
@@ -14,7 +14,7 @@ export const formatRunSecondaryLabel = (run) =>
   [
     run?.parent_run_id != null ? `child of #${run.parent_run_id}` : null,
     deriveRunLifecycle(run),
-    `completed samples ${Number(run?.nr_completed_samples_including_children ?? run?.nr_completed_samples ?? 0).toLocaleString()}`,
+    `completed samples ${Number(run?.nr_completed_samples_including_children ?? 0).toLocaleString()}`,
   ]
     .filter(Boolean)
     .join(" | ");

@@ -153,6 +153,9 @@ where
             .clone()
             .map(|results| TaskMeasurementOutput::Completed { results });
         let total_samples = states.iter().map(ChildState::sample_count).sum::<i64>();
+        let pilots_complete = states
+            .iter()
+            .all(|child| child.sample_count() >= allocation.min_samples_per_child);
 
         if let Some(reason) = failure {
             let output = build_output(
@@ -177,10 +180,9 @@ where
             return Ok(true);
         }
 
-        if combined_results
-            .as_deref()
-            .is_some_and(|results| campaign_should_stop(results, total_samples, stop_condition))
-        {
+        if combined_results.as_deref().is_some_and(|results| {
+            campaign_should_stop(results, total_samples, pilots_complete, stop_condition)
+        }) {
             let output = build_output(
                 &states,
                 &[],
@@ -405,6 +407,7 @@ fn combine_measurements(states: &[ChildState]) -> Option<Vec<MeasurementResult>>
 fn campaign_should_stop(
     results: &[MeasurementResult],
     total_samples: i64,
+    pilots_complete: bool,
     stop: &IntegrationCampaignStopCondition,
 ) -> bool {
     if total_samples < stop.min_total_samples {
@@ -415,6 +418,9 @@ fn campaign_should_stop(
         .is_some_and(|maximum| total_samples >= maximum)
     {
         return true;
+    }
+    if !pilots_complete {
+        return false;
     }
     let error_targets_met = results.iter().all(|result| {
         let Some(error) = result.uncertainty else {
@@ -528,5 +534,27 @@ mod tests {
             1,
         );
         assert_eq!(selected, vec![2]);
+    }
+
+    #[test]
+    fn error_target_waits_for_every_child_pilot() {
+        let results = [MeasurementResult {
+            name: AccumulatorMetricName::Mean,
+            component: None,
+            value: 1.5,
+            uncertainty: Some(0.0),
+            sample_count: 2_012,
+            completed_samples_per_second: None,
+        }];
+        let stop = IntegrationCampaignStopCondition {
+            min_total_samples: 1_500,
+            max_total_samples: Some(4_000),
+            absolute_error: Some(1e-12),
+            relative_error: None,
+        };
+
+        assert!(!campaign_should_stop(&results, 2_012, false, &stop));
+        assert!(campaign_should_stop(&results, 2_012, true, &stop));
+        assert!(campaign_should_stop(&results, 4_000, false, &stop));
     }
 }

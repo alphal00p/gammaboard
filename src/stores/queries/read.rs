@@ -1,9 +1,9 @@
-use crate::core::SamplerPerformanceMetrics;
+use crate::core::{SamplerPerformanceMetrics, WorkerRole};
 use crate::evaluation::AccumulatorState;
 use crate::stores::{
-    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunLifecycleState, RunProgress,
-    RuntimeLogEntry, RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot,
-    TaskStageSnapshot, WorkerStatus,
+    EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RegisteredWorkerSummary,
+    RunLifecycleState, RunProgress, RuntimeLogEntry, RuntimeLogPage,
+    SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkerStatus,
 };
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -24,6 +24,10 @@ fn decode_optional_json<T: DeserializeOwned>(value: Option<JsonValue>) -> Option
 
 fn decode_json_or_default<T: DeserializeOwned + Default>(value: JsonValue) -> T {
     serde_json::from_value(value).unwrap_or_default()
+}
+
+fn parse_worker_role(role: Option<String>) -> Option<WorkerRole> {
+    role.and_then(|role| role.parse().ok())
 }
 
 fn default_sampler_performance_metrics() -> SamplerPerformanceMetrics {
@@ -224,7 +228,6 @@ struct RegisteredWorkerRow {
     current_run_id: Option<i32>,
     current_run_name: Option<String>,
     current_role: Option<String>,
-    status: String,
     last_seen: Option<DateTime<Utc>>,
     evaluator_metrics: Option<JsonValue>,
     evaluator_rss_bytes: Option<i64>,
@@ -236,26 +239,22 @@ struct RegisteredWorkerRow {
 
 impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
     fn from(value: RegisteredWorkerRow) -> Self {
+        let status = if value.current_role.is_some() {
+            WorkerStatus::Active
+        } else {
+            WorkerStatus::Inactive
+        };
         Self {
             node_name: value.node_name,
             node_uuid: value.node_uuid,
             capabilities: value.capabilities,
             desired_run_id: value.desired_run_id,
             desired_run_name: value.desired_run_name,
-            desired_role: value
-                .desired_role
-                .as_deref()
-                .and_then(|role| role.parse().ok()),
+            desired_role: parse_worker_role(value.desired_role),
             current_run_id: value.current_run_id,
             current_run_name: value.current_run_name,
-            current_role: value
-                .current_role
-                .as_deref()
-                .and_then(|role| role.parse().ok()),
-            status: match value.status.as_str() {
-                "active" => WorkerStatus::Active,
-                _ => WorkerStatus::Inactive,
-            },
+            current_role: parse_worker_role(value.current_role),
+            status,
             last_seen: value.last_seen,
             evaluator_metrics: decode_optional_json(value.evaluator_metrics),
             evaluator_rss_bytes: value.evaluator_rss_bytes,
@@ -263,6 +262,43 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             sampler_runtime_metrics: value.sampler_runtime_metrics,
             sampler_engine_diagnostics: value.sampler_engine_diagnostics,
             sampler_rss_bytes: value.sampler_rss_bytes,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct RegisteredWorkerSummaryRow {
+    node_name: String,
+    node_uuid: String,
+    capabilities: JsonValue,
+    desired_run_id: Option<i32>,
+    desired_run_name: Option<String>,
+    desired_role: Option<String>,
+    current_run_id: Option<i32>,
+    current_run_name: Option<String>,
+    current_role: Option<String>,
+    last_seen: Option<DateTime<Utc>>,
+}
+
+impl From<RegisteredWorkerSummaryRow> for RegisteredWorkerSummary {
+    fn from(value: RegisteredWorkerSummaryRow) -> Self {
+        let status = if value.current_role.is_some() {
+            WorkerStatus::Active
+        } else {
+            WorkerStatus::Inactive
+        };
+        Self {
+            node_name: value.node_name,
+            node_uuid: value.node_uuid,
+            capabilities: value.capabilities,
+            desired_run_id: value.desired_run_id,
+            desired_run_name: value.desired_run_name,
+            desired_role: parse_worker_role(value.desired_role),
+            current_run_id: value.current_run_id,
+            current_run_name: value.current_run_name,
+            current_role: parse_worker_role(value.current_role),
+            status,
+            last_seen: value.last_seen,
         }
     }
 }
@@ -813,10 +849,8 @@ pub(crate) async fn get_registered_workers(
     pool: &PgPool,
     run_id: Option<i32>,
 ) -> Result<Vec<RegisteredWorkerEntry>, sqlx::Error> {
-    let rows = match run_id {
-        Some(run_id) => {
-            sqlx::query_as::<_, RegisteredWorkerRow>(
-                r#"
+    let rows = sqlx::query_as::<_, RegisteredWorkerRow>(
+        r#"
                 SELECT
                     n.name AS node_name,
                     n.uuid AS node_uuid,
@@ -827,10 +861,6 @@ pub(crate) async fn get_registered_workers(
                     n.active_run_id AS current_run_id,
                     cr.name AS current_run_name,
                     n.active_role AS current_role,
-                    CASE
-                        WHEN n.active_role IS NOT NULL THEN 'active'
-                        ELSE 'inactive'
-                    END AS status,
                     n.last_seen,
                     e.metrics AS evaluator_metrics,
                     e.rss_bytes AS evaluator_rss_bytes,
@@ -840,15 +870,15 @@ pub(crate) async fn get_registered_workers(
                     p.rss_bytes AS sampler_rss_bytes
                 FROM nodes n
                 LEFT JOIN sampler_aggregator_performance_latest p
-                    ON p.run_id = $1
+                    ON p.run_id = COALESCE($1::integer, n.active_run_id, n.desired_run_id)
                    AND p.worker_id = n.name
                 LEFT JOIN evaluator_performance_latest e
-                    ON e.run_id = $1
+                    ON e.run_id = COALESCE($1::integer, n.active_run_id, n.desired_run_id)
                    AND e.worker_id = n.name
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
                 WHERE n.lease_expires_at > now()
-                  AND (n.desired_run_id = $1 OR n.active_run_id = $1)
+                  AND ($1::integer IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
                 ORDER BY
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 0
@@ -856,59 +886,11 @@ pub(crate) async fn get_registered_workers(
                     END,
                     n.last_seen DESC NULLS LAST,
                     n.name ASC
-                "#,
-            )
-            .bind(run_id)
-            .fetch_all(pool)
-            .await?
-        }
-        None => {
-            sqlx::query_as::<_, RegisteredWorkerRow>(
-                r#"
-                SELECT
-                    n.name AS node_name,
-                    n.uuid AS node_uuid,
-                    n.capabilities,
-                    n.desired_run_id,
-                    dr.name AS desired_run_name,
-                    n.desired_role,
-                    n.active_run_id AS current_run_id,
-                    cr.name AS current_run_name,
-                    n.active_role AS current_role,
-                    CASE
-                        WHEN n.active_role IS NOT NULL THEN 'active'
-                        ELSE 'inactive'
-                    END AS status,
-                    n.last_seen,
-                    e.metrics AS evaluator_metrics,
-                    e.rss_bytes AS evaluator_rss_bytes,
-                    p.metrics AS sampler_metrics,
-                    p.runtime_metrics AS sampler_runtime_metrics,
-                    p.engine_diagnostics AS sampler_engine_diagnostics,
-                    p.rss_bytes AS sampler_rss_bytes
-                FROM nodes n
-                LEFT JOIN sampler_aggregator_performance_latest p
-                    ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
-                   AND p.worker_id = n.name
-                LEFT JOIN evaluator_performance_latest e
-                    ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
-                   AND e.worker_id = n.name
-                LEFT JOIN runs dr ON dr.id = n.desired_run_id
-                LEFT JOIN runs cr ON cr.id = n.active_run_id
-                WHERE n.lease_expires_at > now()
-                ORDER BY
-                    CASE
-                        WHEN n.active_role IS NOT NULL THEN 0
-                        ELSE 1
-                    END,
-                    n.last_seen DESC NULLS LAST,
-                    n.name ASC
-                "#,
-            )
-            .fetch_all(pool)
-            .await?
-        }
-    };
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await?;
 
     Ok(rows.into_iter().map(Into::into).collect())
 }
@@ -929,7 +911,6 @@ pub(crate) async fn get_registered_worker(
             n.active_run_id AS current_run_id,
             cr.name AS current_run_name,
             n.active_role AS current_role,
-            CASE WHEN n.active_role IS NOT NULL THEN 'active' ELSE 'inactive' END AS status,
             n.last_seen,
             e.metrics AS evaluator_metrics,
             e.rss_bytes AS evaluator_rss_bytes,
@@ -958,11 +939,9 @@ pub(crate) async fn get_registered_worker(
 pub(crate) async fn get_registered_worker_summaries(
     pool: &PgPool,
     run_id: Option<i32>,
-) -> Result<Vec<RegisteredWorkerEntry>, sqlx::Error> {
-    let rows = match run_id {
-        Some(run_id) => {
-            sqlx::query_as::<_, RegisteredWorkerRow>(
-                r#"
+) -> Result<Vec<RegisteredWorkerSummary>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, RegisteredWorkerSummaryRow>(
+        r#"
                 SELECT
                     n.name AS node_name,
                     n.uuid AS node_uuid,
@@ -973,22 +952,12 @@ pub(crate) async fn get_registered_worker_summaries(
                     n.active_run_id AS current_run_id,
                     cr.name AS current_run_name,
                     n.active_role AS current_role,
-                    CASE
-                        WHEN n.active_role IS NOT NULL THEN 'active'
-                        ELSE 'inactive'
-                    END AS status,
-                    n.last_seen,
-                    NULL::jsonb AS evaluator_metrics,
-                    NULL::bigint AS evaluator_rss_bytes,
-                    NULL::jsonb AS sampler_metrics,
-                    NULL::jsonb AS sampler_runtime_metrics,
-                    NULL::jsonb AS sampler_engine_diagnostics,
-                    NULL::bigint AS sampler_rss_bytes
+                    n.last_seen
                 FROM nodes n
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
                 WHERE n.lease_expires_at > now()
-                  AND (n.desired_run_id = $1 OR n.active_run_id = $1)
+                  AND ($1::integer IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
                 ORDER BY
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 0
@@ -996,53 +965,11 @@ pub(crate) async fn get_registered_worker_summaries(
                     END,
                     n.last_seen DESC NULLS LAST,
                     n.name ASC
-                "#,
-            )
-            .bind(run_id)
-            .fetch_all(pool)
-            .await?
-        }
-        None => {
-            sqlx::query_as::<_, RegisteredWorkerRow>(
-                r#"
-                SELECT
-                    n.name AS node_name,
-                    n.uuid AS node_uuid,
-                    n.capabilities,
-                    n.desired_run_id,
-                    dr.name AS desired_run_name,
-                    n.desired_role,
-                    n.active_run_id AS current_run_id,
-                    cr.name AS current_run_name,
-                    n.active_role AS current_role,
-                    CASE
-                        WHEN n.active_role IS NOT NULL THEN 'active'
-                        ELSE 'inactive'
-                    END AS status,
-                    n.last_seen,
-                    NULL::jsonb AS evaluator_metrics,
-                    NULL::bigint AS evaluator_rss_bytes,
-                    NULL::jsonb AS sampler_metrics,
-                    NULL::jsonb AS sampler_runtime_metrics,
-                    NULL::jsonb AS sampler_engine_diagnostics,
-                    NULL::bigint AS sampler_rss_bytes
-                FROM nodes n
-                LEFT JOIN runs dr ON dr.id = n.desired_run_id
-                LEFT JOIN runs cr ON cr.id = n.active_run_id
-                WHERE n.lease_expires_at > now()
-                ORDER BY
-                    CASE
-                        WHEN n.active_role IS NOT NULL THEN 0
-                        ELSE 1
-                    END,
-                    n.last_seen DESC NULLS LAST,
-                    n.name ASC
-                "#,
-            )
-            .fetch_all(pool)
-            .await?
-        }
-    };
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await?;
 
     Ok(rows.into_iter().map(Into::into).collect())
 }

@@ -34,7 +34,7 @@ import {
 } from "./services/api";
 import { copyToClipboard } from "./utils/clipboard";
 import { asArray } from "./utils/collections";
-import { asTaskList, getCurrentTask } from "./utils/tasks";
+import { getCurrentTask } from "./utils/tasks";
 
 const CloneRunDialog = lazy(() => import("./components/runs/CloneRunDialog"));
 const LogsWorkspace = lazy(() => import("./components/LogsWorkspace"));
@@ -128,7 +128,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
   }, [evaluatorCount]);
 
   useEffect(() => {
-    const taskList = asTaskList(tasks);
+    const taskList = asArray(tasks);
     if (taskList.length === 0) {
       setSelectedTaskId(null);
       return;
@@ -139,7 +139,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
     setSelectedTaskId(getCurrentTask(taskList)?.id ?? taskList[0].id ?? null);
   }, [selectedTaskId, tasks]);
 
-  const taskList = asTaskList(tasks);
+  const taskList = asArray(tasks);
   const selectedTask = taskList.find((task) => task.id === selectedTaskId) ?? getCurrentTask(taskList) ?? null;
   const cloneInitialName = useMemo(() => {
     if (!currentRun?.run_name) return "cloned-run";

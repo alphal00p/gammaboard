@@ -49,29 +49,16 @@ pub(super) fn projectors(
         oversampling_metric_projector(),
         image_projector(
             "pdf_adaptation_oversampling",
-            "Sampling Accuracy (Plane-Normalized)",
-            PanelWidth::Half,
-            geometry.clone(),
-            ImageKind::OversamplingLegacy,
-        ),
-        image_projector(
-            "pdf_adaptation_oversampling_plane_normalized",
-            "Sampling Accuracy (Global-Normalized)",
+            "Sampling Accuracy",
             PanelWidth::Half,
             geometry,
-            ImageKind::OversamplingPlaneNormalized,
+            ImageKind::Oversampling,
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Sampling Accuracy (Plane-Normalized)",
+            "Histogram: Sampling Accuracy",
             PanelWidth::Half,
-            ImageKind::OversamplingLegacy,
-        ),
-        histogram_projector(
-            "pdf_adaptation_oversampling_plane_normalized_histogram",
-            "Histogram: Sampling Accuracy (Global-Normalized)",
-            PanelWidth::Half,
-            ImageKind::OversamplingPlaneNormalized,
+            ImageKind::Oversampling,
         ),
         plane_oversampling_scalar_projector(),
     ]
@@ -147,17 +134,10 @@ pub(super) fn line_projectors(
         oversampling_metric_projector(),
         line_projector(
             "pdf_adaptation_oversampling_line",
-            "Sampling Accuracy (Plane-Normalized, 1D)",
-            PanelWidth::Half,
-            geometry.clone(),
-            ImageKind::OversamplingLegacy,
-        ),
-        line_projector(
-            "pdf_adaptation_oversampling_plane_normalized_line",
-            "Sampling Accuracy (Global-Normalized, 1D)",
+            "Sampling Accuracy (1D)",
             PanelWidth::Half,
             geometry,
-            ImageKind::OversamplingPlaneNormalized,
+            ImageKind::Oversampling,
         ),
         histogram_projector(
             "pdf_adaptation_log_integrand_histogram",
@@ -173,15 +153,9 @@ pub(super) fn line_projectors(
         ),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
-            "Histogram: Sampling Accuracy (Plane-Normalized)",
+            "Histogram: Sampling Accuracy",
             PanelWidth::Half,
-            ImageKind::OversamplingLegacy,
-        ),
-        histogram_projector(
-            "pdf_adaptation_oversampling_plane_normalized_histogram",
-            "Histogram: Sampling Accuracy (Global-Normalized)",
-            PanelWidth::Half,
-            ImageKind::OversamplingPlaneNormalized,
+            ImageKind::Oversampling,
         ),
     ]
 }
@@ -190,8 +164,7 @@ pub(super) fn line_projectors(
 enum ImageKind {
     LogPlaneNormalizedIntegrand,
     LogPlaneNormalizedPdf,
-    OversamplingLegacy,
-    OversamplingPlaneNormalized,
+    Oversampling,
 }
 
 #[derive(Clone, Copy)]
@@ -440,8 +413,7 @@ struct DerivedValues {
     log_plane_normalized_integrand: Vec<Option<f64>>,
     log_reference_normalized_integrand: Vec<Option<f64>>,
     log_plane_normalized_pdf: Vec<Option<f64>>,
-    oversampling_legacy_ratio: Vec<Option<f64>>,
-    oversampling_plane_normalized_ratio: Vec<Option<f64>>,
+    oversampling_ratio: Vec<Option<f64>>,
 }
 
 impl DerivedValues {
@@ -469,20 +441,7 @@ impl DerivedValues {
             .iter()
             .map(|value| log10_ratio(*value, mean_pdf))
             .collect::<Vec<_>>();
-        let oversampling_legacy_ratio = output
-            .pdf_values
-            .iter()
-            .zip(output.abs_integrand_values.iter())
-            .map(|(pdf, abs_integrand)| {
-                plane_normalized_pdf_over_integrand_ratio(
-                    *pdf,
-                    *abs_integrand,
-                    mean_abs_integrand,
-                    mean_pdf,
-                )
-            })
-            .collect::<Vec<_>>();
-        let oversampling_plane_normalized_ratio = output
+        let oversampling_ratio = output
             .pdf_values
             .iter()
             .zip(output.abs_integrand_values.iter())
@@ -501,8 +460,7 @@ impl DerivedValues {
             log_plane_normalized_integrand,
             log_reference_normalized_integrand,
             log_plane_normalized_pdf,
-            oversampling_legacy_ratio,
-            oversampling_plane_normalized_ratio,
+            oversampling_ratio,
         }
     }
 
@@ -512,12 +470,7 @@ impl DerivedValues {
                 self.log_reference_normalized_integrand.clone()
             }
             ImageKind::LogPlaneNormalizedPdf => self.log_plane_normalized_pdf.clone(),
-            ImageKind::OversamplingLegacy => {
-                oversampling_values(&self.oversampling_legacy_ratio, metric)
-            }
-            ImageKind::OversamplingPlaneNormalized => {
-                oversampling_values(&self.oversampling_plane_normalized_ratio, metric)
-            }
+            ImageKind::Oversampling => oversampling_values(&self.oversampling_ratio, metric),
         }
     }
 
@@ -608,9 +561,6 @@ fn histogram_panel(
     image_kind: ImageKind,
     metric: OversamplingMetric,
 ) -> PanelState {
-    let oversampling_legacy = derived.values(ImageKind::OversamplingLegacy, metric);
-    let oversampling_plane_normalized =
-        derived.values(ImageKind::OversamplingPlaneNormalized, metric);
     let bins = match image_kind {
         ImageKind::LogPlaneNormalizedIntegrand => {
             histogram_bins_on_shared_edges(
@@ -626,12 +576,7 @@ fn histogram_panel(
             )
             .1
         }
-        ImageKind::OversamplingLegacy => {
-            histogram_bins_on_shared_edges(&oversampling_legacy, &oversampling_plane_normalized).0
-        }
-        ImageKind::OversamplingPlaneNormalized => {
-            histogram_bins_on_shared_edges(&oversampling_legacy, &oversampling_plane_normalized).1
-        }
+        ImageKind::Oversampling => histogram_bins(&derived.values(image_kind, metric)),
     };
     PanelState::Histogram {
         panel_id: panel_id.to_string(),
@@ -642,9 +587,7 @@ fn histogram_panel(
 
 fn metric_label(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
     match image_kind {
-        ImageKind::OversamplingLegacy | ImageKind::OversamplingPlaneNormalized => {
-            Some(metric.label())
-        }
+        ImageKind::Oversampling => Some(metric.label()),
         ImageKind::LogPlaneNormalizedIntegrand => Some("log10(normalized integrand)"),
         ImageKind::LogPlaneNormalizedPdf => Some("log10(normalized PDF)"),
     }
@@ -652,9 +595,7 @@ fn metric_label(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'s
 
 fn metric_mode(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
     match image_kind {
-        ImageKind::OversamplingLegacy | ImageKind::OversamplingPlaneNormalized => {
-            Some(metric.as_str())
-        }
+        ImageKind::Oversampling => Some(metric.as_str()),
         ImageKind::LogPlaneNormalizedIntegrand => Some("log10_integrand"),
         ImageKind::LogPlaneNormalizedPdf => Some("log10_pdf"),
     }
@@ -899,29 +840,6 @@ fn oversampling_values(ratios: &[Option<f64>], metric: OversamplingMetric) -> Ve
         .collect()
 }
 
-fn plane_normalized_pdf_over_integrand_ratio(
-    pdf: Option<f64>,
-    abs_integrand: Option<f64>,
-    mean_abs_integrand: Option<f64>,
-    mean_pdf: Option<f64>,
-) -> Option<f64> {
-    match (pdf, abs_integrand, mean_abs_integrand, mean_pdf) {
-        (Some(pdf), Some(abs_integrand), Some(i), Some(z))
-            if pdf.is_finite()
-                && abs_integrand.is_finite()
-                && i.is_finite()
-                && z.is_finite()
-                && abs_integrand > 0.0
-                && i > 0.0
-                && z > 0.0 =>
-        {
-            let ratio = (pdf / z) / (abs_integrand / i);
-            ratio.is_finite().then_some(ratio)
-        }
-        _ => None,
-    }
-}
-
 fn pdf_over_integrand_global_norm_ratio(
     pdf: Option<f64>,
     abs_integrand: Option<f64>,
@@ -1032,26 +950,16 @@ mod tests {
             derived.log_plane_normalized_pdf,
             vec![Some((1.0_f64 / 1.5).log10()), Some((2.0_f64 / 1.5).log10())]
         );
-        assert_eq!(
-            derived.oversampling_legacy_ratio,
-            vec![Some(1.0), Some(1.0)]
-        );
-        assert_eq!(
-            derived.oversampling_plane_normalized_ratio,
-            vec![Some(2.5), Some(2.5)]
-        );
+        assert_eq!(derived.oversampling_ratio, vec![Some(2.5), Some(2.5)]);
         assert_eq!(
             oversampling_values(
-                &derived.oversampling_plane_normalized_ratio,
+                &derived.oversampling_ratio,
                 OversamplingMetric::RelativeMismatch,
             ),
             vec![Some(1.5), Some(1.5)]
         );
         assert_eq!(
-            oversampling_values(
-                &derived.oversampling_plane_normalized_ratio,
-                OversamplingMetric::Log10Ratio,
-            ),
+            oversampling_values(&derived.oversampling_ratio, OversamplingMetric::Log10Ratio,),
             vec![Some(2.5_f64.log10()), Some(2.5_f64.log10())]
         );
     }
@@ -1084,7 +992,7 @@ mod tests {
             "oversampling",
             &geometry(),
             &DerivedValues::from_output(output(), None),
-            ImageKind::OversamplingLegacy,
+            ImageKind::Oversampling,
             OversamplingMetric::RelativeMismatch,
         )
         .expect("build oversampling panel");

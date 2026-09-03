@@ -30,6 +30,14 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
 }
 
 fn campaign_max_samples(ctx: &TaskPanelContext<'_>) -> Option<f64> {
+    if ctx.task.state == crate::core::RunTaskState::Completed {
+        return ctx
+            .task
+            .controller_output
+            .as_ref()
+            .and_then(crate::core::ControllerTaskOutput::integration_campaign)
+            .map(|output| output.total_samples as f64);
+    }
     match &ctx.task.task {
         crate::core::RunTaskSpec::IntegrationCampaign { stop_condition, .. } => {
             stop_condition.max_total_samples.map(|value| value as f64)
@@ -100,12 +108,22 @@ fn children_projector() -> TaskPanelProjector {
             PanelWidth::Full,
         ),
         |ctx| {
+            let campaign_stopped = matches!(
+                ctx.task.state,
+                crate::core::RunTaskState::Completed | crate::core::RunTaskState::Failed
+            );
             let rows = ctx
                 .task
                 .controller_output
                 .as_ref()
                 .and_then(crate::core::ControllerTaskOutput::integration_campaign)
-                .map(|output| output.children.iter().map(child_row).collect::<Vec<_>>())
+                .map(|output| {
+                    output
+                        .children
+                        .iter()
+                        .map(|child| child_row(child, campaign_stopped))
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
             let payload = child_table_payload(&rows, 7, Default::default());
             Ok(Some(table_panel_with_payload_and_options(
@@ -131,7 +149,10 @@ fn children_projector() -> TaskPanelProjector {
     )
 }
 
-fn child_row(child: &crate::core::IntegrationCampaignChildOutput) -> Vec<JsonValue> {
+fn child_row(
+    child: &crate::core::IntegrationCampaignChildOutput,
+    campaign_stopped: bool,
+) -> Vec<JsonValue> {
     let result = child
         .child
         .measurement
@@ -143,7 +164,18 @@ fn child_row(child: &crate::core::IntegrationCampaignChildOutput) -> Vec<JsonVal
     let uncertainty = result.and_then(|result| result.uncertainty);
     vec![
         json!(child.name),
-        json!(child.child.status),
+        if campaign_stopped
+            && matches!(
+                child.child.status,
+                crate::core::ControllerChildState::Planned
+                    | crate::core::ControllerChildState::Pending
+                    | crate::core::ControllerChildState::Active
+            )
+        {
+            json!("stopped")
+        } else {
+            json!(child.child.status)
+        },
         json!(child.selected),
         json!(child.child.child_run_id),
         json!(child.coefficient),
@@ -159,4 +191,31 @@ fn child_row(child: &crate::core::IntegrationCampaignChildOutput) -> Vec<JsonVal
             .unwrap_or(JsonValue::Null),
         json!(child.score),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        ControllerChildOutput, ControllerChildState, IntegrationCampaignChildOutput,
+    };
+
+    #[test]
+    fn stopped_campaign_does_not_show_active_child() {
+        let child = IntegrationCampaignChildOutput {
+            name: "graph".to_string(),
+            coefficient: 1.0,
+            child: ControllerChildOutput {
+                child_run_id: Some(2),
+                status: ControllerChildState::Active,
+                measurement: None,
+                failure_reason: None,
+            },
+            selected: false,
+            score: None,
+        };
+
+        assert_eq!(child_row(&child, false)[1], json!("active"));
+        assert_eq!(child_row(&child, true)[1], json!("stopped"));
+    }
 }

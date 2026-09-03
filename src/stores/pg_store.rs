@@ -49,7 +49,7 @@ impl PgStore {
     pub async fn get_registered_worker_summaries(
         &self,
         run_id: Option<i32>,
-    ) -> Result<Vec<crate::stores::RegisteredWorkerEntry>, StoreError> {
+    ) -> Result<Vec<crate::stores::RegisteredWorkerSummary>, StoreError> {
         Ok(queries::get_registered_worker_summaries(&self.pool, run_id).await?)
     }
 

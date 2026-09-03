@@ -1,6 +1,6 @@
 export const nodeNameOf = (node) => node?.node_name ?? null;
 
-export const compareNodeNames = (left, right) =>
+const compareNodeNames = (left, right) =>
   String(left || "").localeCompare(String(right || ""), undefined, {
     numeric: true,
     sensitivity: "base",

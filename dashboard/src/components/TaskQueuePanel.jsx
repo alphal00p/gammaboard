@@ -56,9 +56,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                           : task.goal_label}
                       </TableCell>
                       <TableCell align="right">
-                        {Number(
-                          task.nr_completed_samples_including_children ?? task.nr_completed_samples ?? 0,
-                        ).toLocaleString()}
+                        {Number(task.nr_completed_samples_including_children ?? 0).toLocaleString()}
                       </TableCell>
                     </TableRow>
                   );

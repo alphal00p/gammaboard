@@ -1,8 +1,3 @@
-export const toFiniteNumber = (value, fallback = 0) => {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-};
-
 export const formatScientific = (value, digits = 6, fallback = "n/a") => {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;

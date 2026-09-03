@@ -488,8 +488,24 @@ fn build_task_summary_entries(
                 "Allocation Window",
                 allocation.allocation_window_samples,
             ));
+            entries.push(key_value(
+                "min_samples_per_child",
+                "Pilot Minimum / Sub-run",
+                allocation.min_samples_per_child,
+            ));
+            entries.push(key_value(
+                "min_total_samples",
+                "Minimum Total Samples",
+                stop_condition.min_total_samples,
+            ));
             if let Some(maximum) = stop_condition.max_total_samples {
-                entries.push(key_value("max_total_samples", "Sample Budget", maximum));
+                entries.push(key_value("max_total_samples", "Sample Cap", maximum));
+            }
+            if let Some(target) = stop_condition.absolute_error {
+                entries.push(key_value("absolute_error", "Absolute Error Target", target));
+            }
+            if let Some(target) = stop_condition.relative_error {
+                entries.push(key_value("relative_error", "Relative Error Target", target));
             }
         }
     }

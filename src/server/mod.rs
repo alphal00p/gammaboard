@@ -1342,16 +1342,11 @@ async fn create_run(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<CreateRunRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let config = run_api::parse_run_add_config_toml(&payload.toml).map_err(|err| {
-        log_control_api_error("run_create", &err);
-        err
-    })?;
+    let config = run_api::parse_run_add_config_toml(&payload.toml)
+        .inspect_err(|err| log_control_api_error("run_create", err))?;
     let run = run_api::create_run(&state.store, config)
         .await
-        .map_err(|err| {
-            log_control_api_error("run_create", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("run_create", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1378,10 +1373,7 @@ async fn clone_run(
         &payload.new_name,
     )
     .await
-    .map_err(|err| {
-        log_control_api_error("run_clone", &err);
-        err
-    })?;
+    .inspect_err(|err| log_control_api_error("run_clone", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1404,16 +1396,11 @@ async fn add_run_tasks(
     AxumPath(run_id): AxumPath<i32>,
     AxumJson(payload): AxumJson<AddTasksRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let tasks = run_api::parse_task_queue_toml(payload.toml.trim()).map_err(|err| {
-        log_control_api_error("run_add_tasks", &err);
-        err
-    })?;
+    let tasks = run_api::parse_task_queue_toml(payload.toml.trim())
+        .inspect_err(|err| log_control_api_error("run_add_tasks", err))?;
     let result = run_api::append_tasks(&state.store, run_id, tasks)
         .await
-        .map_err(|err| {
-            log_control_api_error("run_add_tasks", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("run_add_tasks", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1431,10 +1418,7 @@ async fn pause_run(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = run_api::pause_run(&state.store, run_id)
         .await
-        .map_err(|err| {
-            log_control_api_error("run_pause", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("run_pause", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1456,10 +1440,7 @@ async fn delete_run(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = run_api::remove_run(&state.store, run_id)
         .await
-        .map_err(|err| {
-            log_control_api_error("run_remove", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("run_remove", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1480,10 +1461,7 @@ async fn delete_run_task(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = run_api::remove_pending_task(&state.store, run_id, task_id)
         .await
-        .map_err(|err| {
-            log_control_api_error("run_task_remove", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("run_task_remove", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1506,10 +1484,7 @@ async fn update_run_task_queue_tuning(
     let result =
         run_api::update_task_queue_tuning(&state.store, run_id, task_id, payload.queue_tuning)
             .await
-            .map_err(|err| {
-                log_control_api_error("run_task_update_queue_tuning", &err);
-                err
-            })?;
+            .inspect_err(|err| log_control_api_error("run_task_update_queue_tuning", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1536,10 +1511,7 @@ async fn assign_node(
             .map_err(|err: String| ApiError::BadRequest(err))?,
     )
     .await
-    .map_err(|err| {
-        log_control_api_error("node_assign", &err);
-        err
-    })?;
+    .inspect_err(|err| log_control_api_error("node_assign", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1564,10 +1536,7 @@ async fn auto_assign_run(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = node_api::auto_assign_run(&state.store, run_id, payload.max_evaluators)
         .await
-        .map_err(|err| {
-            log_control_api_error("run_auto_assign", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("run_auto_assign", err))?;
 
     tracing::info!(
         source = "control",
@@ -1595,10 +1564,7 @@ async fn unassign_node(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     node_api::unassign_node(&state.store, &node_name)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_unassign", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_unassign", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1616,10 +1582,7 @@ async fn unassign_all_nodes(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let rows_updated = node_api::unassign_all_nodes(&state.store)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_unassign_all", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_unassign_all", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1638,10 +1601,7 @@ async fn stop_node(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = node_api::stop_node(&state.store, &node_name)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_stop", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_stop", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1661,10 +1621,7 @@ async fn stop_all_nodes(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let result = node_api::stop_all_nodes(&state.store)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_stop_all", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_stop_all", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1696,16 +1653,10 @@ async fn get_node_launch_requests(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     node_api::reconcile_running_node_launch_requests(&state.store)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_launch_requests_reconcile", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_launch_requests_reconcile", err))?;
     let requests = node_api::list_node_launch_requests(&state.store)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_launch_requests_list", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_launch_requests_list", err))?;
     json_response(serde_json::json!({ "items": requests }))
 }
 
@@ -1714,10 +1665,7 @@ async fn claim_external_node_launch_request(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let request = node_api::claim_external_node_launch_request(&state.store)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_launch_request_claim_external", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_launch_request_claim_external", err))?;
     json_response(serde_json::json!({ "request": request }))
 }
 
@@ -1777,10 +1725,7 @@ async fn update_node_launch_request_progress(
             "unsupported node launch request state '{other}'"
         ))),
     }
-    .map_err(|err| {
-        log_control_api_error("node_launch_request_progress", &err);
-        err
-    })?;
+    .inspect_err(|err| log_control_api_error("node_launch_request_progress", err))?;
     json_response(serde_json::json!({ "request": request }))
 }
 
@@ -1994,10 +1939,7 @@ async fn create_and_maybe_resolve_node_launch_request(
         state.allow_local_node_spawn,
     )
     .await
-    .map_err(|err| {
-        log_control_api_error("node_launch_request_create", &err);
-        err
-    })?;
+    .inspect_err(|err| log_control_api_error("node_launch_request_create", err))?;
 
     if !launch.should_resolve_locally {
         tracing::info!(
@@ -2019,10 +1961,7 @@ async fn create_and_maybe_resolve_node_launch_request(
 
     let planned_nodes = plan_group_node_names(&state.store, &groups)
         .await
-        .map_err(|err| {
-            log_control_api_error("node_auto_run", &err);
-            err
-        })?;
+        .inspect_err(|err| log_control_api_error("node_auto_run", err))?;
 
     let binary = std::env::current_exe().map_err(|err| {
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
@@ -2070,10 +2009,7 @@ async fn create_and_maybe_resolve_node_launch_request(
         &result,
     )
     .await
-    .map_err(|err| {
-        log_control_api_error("node_launch_request_starting", &err);
-        err
-    })?;
+    .inspect_err(|err| log_control_api_error("node_launch_request_starting", err))?;
 
     tracing::info!(
         source = "control",
@@ -2292,10 +2228,8 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
         ApiError::Internal(format!("failed to resolve current executable: {err}"))
     })?;
     let runtime_cli_args = state.runtime.runtime_cli_args();
-    let result = db_api::restart_local_database(&binary, &runtime_cli_args).map_err(|err| {
-        log_control_api_error("db_restart", &err);
-        err
-    })?;
+    let result = db_api::restart_local_database(&binary, &runtime_cli_args)
+        .inspect_err(|err| log_control_api_error("db_restart", err))?;
 
     tracing::info!(
         source = "control",
