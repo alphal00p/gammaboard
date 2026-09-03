@@ -665,7 +665,7 @@ impl Drop for FullStackHarness {
     }
 }
 
-fn temp_run_config(contents: &str) -> NamedTempFile {
+fn temp_config(contents: &str) -> NamedTempFile {
     let file = NamedTempFile::new().expect("create temp config");
     std::fs::write(file.path(), contents).expect("write temp config");
     file
@@ -683,7 +683,7 @@ fn temp_run_add_config(contents: &str) -> NamedTempFile {
     {
         merged.push_str("\nsampler_aggregator_runner_params.min_tick_time_ms = 10\n");
     }
-    temp_run_config(&merged)
+    temp_config(&merged)
 }
 
 async fn run_havana_training_then_inference(
@@ -711,24 +711,10 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
 "#,
     ));
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
+    harness.add_run(&config);
+    let run_id = harness.run_id(run_name).await?;
 
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = $1")
-        .bind(run_name)
-        .fetch_one(&harness.pool)
-        .await?;
-
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", run_name])
-        .assert()
-        .success();
+    harness.assign_node("w-2", "evaluator", run_name);
     harness
         .wait_for(
             format!("training evaluator becomes active for {run_name}"),
@@ -743,11 +729,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
         )
         .await?;
 
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "sampler-aggregator", run_name])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", run_name);
 
     if pause_mid_training {
         harness
@@ -791,11 +773,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
 
         let paused_progress = harness.run_sample_progress(run_id).await?;
 
-        harness
-            .cli()
-            .args(["node", "assign", "w-2", "evaluator", run_name])
-            .assert()
-            .success();
+        harness.assign_node("w-2", "evaluator", run_name);
         harness
             .wait_for(
                 format!("resumed training evaluator becomes active for {run_name}"),
@@ -809,11 +787,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
                 },
             )
             .await?;
-        harness
-            .cli()
-            .args(["node", "assign", "w-1", "sampler-aggregator", run_name])
-            .assert()
-            .success();
+        harness.assign_node("w-1", "sampler-aggregator", run_name);
 
         harness
             .wait_for(
@@ -843,7 +817,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
         )
         .await?;
 
-    let inference_task = temp_run_config(&format!(
+    let inference_task = temp_config(&format!(
         r#"
 [[task_queue]]
 name = "infer-a"
@@ -865,11 +839,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_inference" }} }}
         .assert()
         .success();
 
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", run_name])
-        .assert()
-        .success();
+    harness.assign_node("w-2", "evaluator", run_name);
     harness
         .wait_for(
             format!("inference evaluator becomes active for {run_name}"),
@@ -883,11 +853,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_inference" }} }}
             },
         )
         .await?;
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "sampler-aggregator", run_name])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", run_name);
 
     harness
         .wait_for(
@@ -986,38 +952,14 @@ count = 8
 "#,
     );
 
-    // Create the run
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'havana-alt-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("havana-alt-e2e").await?;
 
     // Start nodes and assign roles
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "havana-alt-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "havana-alt-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "havana-alt-e2e");
+    harness.assign_node("w-2", "evaluator", "havana-alt-e2e");
 
     // Wait for the first four tasks to complete (sequence_nr 1..4)
     harness
@@ -1052,7 +994,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
 "#
     .to_string();
 
-    let task_file = temp_run_config(&tasks_toml);
+    let task_file = temp_config(&tasks_toml);
 
     harness
         .cli()
@@ -1099,9 +1041,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
     .await?;
     assert_eq!(t5_sampler_source.as_deref(), Some("infer-a"));
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -1187,42 +1127,12 @@ count = 128
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'symbolica-havana-pdf-1d2d-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("symbolica-havana-pdf-1d2d-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "symbolica-havana-pdf-1d2d-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "symbolica-havana-pdf-1d2d-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "symbolica-havana-pdf-1d2d-e2e");
+    harness.assign_node("w-2", "evaluator", "symbolica-havana-pdf-1d2d-e2e");
 
     let pdf_task_id: i64 = sqlx::query_scalar(
         "SELECT id FROM run_tasks WHERE run_id = $1 AND name = 'pdf-2d' LIMIT 1",
@@ -1440,7 +1350,7 @@ count = 128
         "peak positions mismatch: first=({t1:.4},{s1:.4}) second=({t2:.4},{s2:.4})"
     );
 
-    harness.stop_children().await;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -1481,9 +1391,7 @@ async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow:
     assert_eq!(paused_training_grid, uninterrupted_training_grid);
     assert_eq!(paused_inference_grid, uninterrupted_inference_grid);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -1547,41 +1455,11 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
         evaluator_dir.join("src").display(),
     ));
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
+    harness.add_run(&config);
+    let run_id = harness.run_id("python-scalar-venv-e2e").await?;
 
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'python-scalar-venv-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
-
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "python-scalar-venv-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "python-scalar-venv-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "python-scalar-venv-e2e");
+    harness.assign_node("w-2", "evaluator", "python-scalar-venv-e2e");
 
     harness
         .wait_for(
@@ -1619,9 +1497,7 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
             .await?;
     assert!(completed_samples >= 64);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -1735,29 +1611,11 @@ training_projection = {{ kind = "component", name = "real" }}
         gammaloop_state.display()
     ));
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
+    harness.add_run(&config);
+    let run_id = harness.run_id(&run_name).await?;
 
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = $1")
-        .bind(&run_name)
-        .fetch_one(&harness.pool)
-        .await?;
-
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "sampler-aggregator", &run_name])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", &run_name])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", &run_name);
+    harness.assign_node("w-2", "evaluator", &run_name);
 
     for case_idx in 0..cases.len() {
         let task_name = format!("madnis-case-{case_idx}");
@@ -1831,9 +1689,7 @@ training_projection = {{ kind = "component", name = "real" }}
         .sum();
     assert!(completed_samples >= expected_samples);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -2034,41 +1890,15 @@ accumulator = "latest"
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
+    harness.add_run(&config);
+    let run_id = harness.run_id("task-level-evaluator-switch-e2e").await?;
 
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'task-level-evaluator-switch-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
-
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "task-level-evaluator-switch-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "task-level-evaluator-switch-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node(
+        "w-1",
+        "sampler-aggregator",
+        "task-level-evaluator-switch-e2e",
+    );
+    harness.assign_node("w-2", "evaluator", "task-level-evaluator-switch-e2e");
 
     harness
         .wait_for(
@@ -2133,9 +1963,7 @@ accumulator = "latest"
     assert_eq!(rows[1].1.get("expr").and_then(JsonValue::as_str), Some("2"));
     assert!((mean(&rows[1].2) - 2.0).abs() < 1e-12);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -2199,42 +2027,17 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
         "../process_api/examples/rust_breit_wigner_evaluator/runtime.sif"
     ));
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
+    harness.add_run(&config);
+    let run_id = harness
+        .run_id("rust-apptainer-process-evaluator-e2e")
+        .await?;
 
-    let run_id: i32 = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE name = 'rust-apptainer-process-evaluator-e2e'",
-    )
-    .fetch_one(&harness.pool)
-    .await?;
-
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "rust-apptainer-process-evaluator-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "rust-apptainer-process-evaluator-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node(
+        "w-1",
+        "sampler-aggregator",
+        "rust-apptainer-process-evaluator-e2e",
+    );
+    harness.assign_node("w-2", "evaluator", "rust-apptainer-process-evaluator-e2e");
 
     harness
         .wait_for(
@@ -2264,9 +2067,7 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
             .await?;
     assert!(completed_samples >= 64);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -2286,9 +2087,7 @@ fn temp_server_config(
     let contents = format!(
         "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_local_node_spawn = {allow_local_node_spawn}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\nnode_templates_dir = {node_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
     );
-    let file = NamedTempFile::new().expect("create temp server config");
-    std::fs::write(file.path(), contents).expect("write temp server config");
-    file
+    temp_config(&contents)
 }
 
 fn temp_deploy_server_config(
@@ -2301,9 +2100,7 @@ fn temp_deploy_server_config(
         "{contents}\n[frontend]\nbuild_dir = {:?}\nhost = \"127.0.0.1\"\nport = {frontend_port}\nadvertise_hosts = [\"localhost\"]\naccess_log = false\n\n[database]\nensure_started = false\n\n[cleanup]\nsampler_drain_timeout_seconds = 5\nnode_stop_timeout_seconds = 5\npoll_interval_ms = 100\n",
         frontend_build_dir,
     );
-    let file = NamedTempFile::new().expect("create temp deploy server config");
-    std::fs::write(file.path(), contents).expect("write temp deploy server config");
-    file
+    temp_config(&contents)
 }
 
 fn temp_frontend_build() -> TempDir {
@@ -2320,9 +2117,7 @@ fn temp_cli_config(database_url: &str, persist_runtime_logs: bool) -> NamedTempF
     let contents = format!(
         "[database]\nurl = {database_url:?}\n\n[tracing]\npersist_runtime_logs = {persist_runtime_logs}\ndb_gammaboard_level = \"info\"\ndb_external_level = \"warn\"\n\n[local_postgres]\ndata_dir = \".postgres\"\nsocket_dir = \"db/socket\"\nlog_file = \".postgres/logfile\"\nmax_connections = 512\n"
     );
-    let file = NamedTempFile::new().expect("create temp cli config");
-    std::fs::write(file.path(), contents).expect("write temp cli config");
-    file
+    temp_config(&contents)
 }
 
 async fn http_get(base_url: &str, path: &str) -> anyhow::Result<String> {
@@ -2389,9 +2184,9 @@ fn hash_password_for_tests(password: &str) -> String {
         .to_string()
 }
 
-fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Grid<f64> {
-    const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
+const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
 
+fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Grid<f64> {
     match domain {
         Domain::Continuous { dims } => Grid::Continuous(ContinuousGrid::new(
             *dims,
@@ -2423,7 +2218,6 @@ fn build_direct_rectangular_havana_grid(
     discrete_cardinalities: &[usize],
     params: &HavanaSamplerParams,
 ) -> Grid<f64> {
-    const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
     if let Some((&cardinality, tail)) = discrete_cardinalities.split_first() {
         let bins = (0..cardinality)
             .map(|_| {
@@ -2530,20 +2324,21 @@ async fn wait_for_task_failed_and_run_unassigned(
         .await
 }
 
-async fn wait_for_task_completed(
+async fn wait_for_task_state(
     harness: &FullStackHarness,
     run_id: i32,
+    expected_state: &str,
     timeout: Duration,
 ) -> anyhow::Result<()> {
     harness
-        .wait_for("task completed", timeout, || async {
+        .wait_for("task state transition", timeout, || async {
             let state: Option<String> = sqlx::query_scalar(
                 "SELECT state FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1",
             )
             .bind(run_id)
             .fetch_optional(&harness.pool)
             .await?;
-            Ok(state.as_deref() == Some("completed"))
+            Ok(state.as_deref() == Some(expected_state))
         })
         .await
 }
@@ -2642,25 +2437,13 @@ impl<'a> SamplerCheckpointProgram<'a> {
 
     async fn assign_sampler(&mut self, node_name: &str) -> anyhow::Result<()> {
         self.harness
-            .cli()
-            .args([
-                "node",
-                "assign",
-                node_name,
-                "sampler-aggregator",
-                self.run_name,
-            ])
-            .assert()
-            .success();
+            .assign_node(node_name, "sampler-aggregator", self.run_name);
         Ok(())
     }
 
     async fn assign_evaluator(&mut self, node_name: &str) -> anyhow::Result<()> {
         self.harness
-            .cli()
-            .args(["node", "assign", node_name, "evaluator", self.run_name])
-            .assert()
-            .success();
+            .assign_node(node_name, "evaluator", self.run_name);
         Ok(())
     }
 
@@ -2925,17 +2708,8 @@ name = "full-stack-e2e"
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(valid_config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'full-stack-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&valid_config);
+    let run_id = harness.run_id("full-stack-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
@@ -2953,16 +2727,8 @@ name = "full-stack-e2e"
     assert!(node_list.contains("w-2"));
     assert!(node_list.contains("N/A"));
 
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "evaluator", "full-stack-e2e"])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "full-stack-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "evaluator", "full-stack-e2e");
+    harness.assign_node("w-2", "evaluator", "full-stack-e2e");
 
     harness
         .wait_for(
@@ -2996,17 +2762,7 @@ name = "full-stack-e2e"
         .failure()
         .stderr(predicate::str::contains("node 'ghost-node' is not live"));
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "sampler-aggregator",
-            "full-stack-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node("w-2", "sampler-aggregator", "full-stack-e2e");
 
     harness
         .wait_for(
@@ -3040,16 +2796,8 @@ name = "full-stack-e2e"
         .assert()
         .failure();
 
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "evaluator", "full-stack-e2e"])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "full-stack-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "evaluator", "full-stack-e2e");
+    harness.assign_node("w-2", "evaluator", "full-stack-e2e");
 
     harness
         .wait_for(
@@ -3095,16 +2843,8 @@ name = "full-stack-e2e"
         )
         .await?;
 
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "evaluator", "full-stack-e2e"])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "full-stack-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "evaluator", "full-stack-e2e");
+    harness.assign_node("w-2", "evaluator", "full-stack-e2e");
 
     harness
         .wait_for(
@@ -3153,41 +2893,7 @@ name = "full-stack-e2e"
         .await?;
     assert_eq!(remaining_runs, 0);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires local postgres with CREATE DATABASE privilege"]
-async fn full_stack_cli_rejects_first_sample_without_accumulator_state() -> anyhow::Result<()> {
-    let harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config(
-        r#"
-name = "missing-accumulator-e2e"
-
-[[task_queue]]
-name = "sample-a"
-kind = "sample"
-stop_condition = { max_samples = 16 }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
-"#,
-    );
-
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "sample task has no effective accumulator configuration",
-        ));
-
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -3294,35 +3000,12 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'set-accumulator-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("set-accumulator-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "set-accumulator-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "set-accumulator-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "set-accumulator-e2e");
+    harness.assign_node("w-2", "evaluator", "set-accumulator-e2e");
 
     harness
         .wait_for(
@@ -3356,9 +3039,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
         )
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -3457,8 +3138,7 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
 
     harness.terminate_child("deploy-a").await?;
     harness.terminate_child("deploy-b").await?;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     second_db.cleanup().await?;
     Ok(())
 }
@@ -3486,18 +3166,8 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'sampler-checkpoint-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("sampler-checkpoint-e2e").await?;
 
     {
         let mut program =
@@ -3528,9 +3198,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             .await?;
     }
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -3586,9 +3254,7 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
         )
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -3614,24 +3280,11 @@ accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'sigterm-node-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("sigterm-node-e2e").await?;
 
     harness.start_node("w-1").await?;
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "evaluator", "sigterm-node-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "evaluator", "sigterm-node-e2e");
 
     harness
         .wait_for(
@@ -3673,9 +3326,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
     harness.start_node("w-1").await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -3720,18 +3371,8 @@ completed_batch_fetch_limit = 64
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = $1")
-        .bind("queue-tuning-live-update-e2e")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("queue-tuning-live-update-e2e").await?;
     let task_id: i64 = sqlx::query_scalar(
         "SELECT id FROM run_tasks WHERE run_id = $1 AND name = 'sample-a' LIMIT 1",
     )
@@ -3889,9 +3530,7 @@ completed_batch_fetch_limit = 64
         )
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -3918,42 +3557,12 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'delete-assigned-run-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("delete-assigned-run-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "delete-assigned-run-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "delete-assigned-run-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "delete-assigned-run-e2e");
+    harness.assign_node("w-2", "evaluator", "delete-assigned-run-e2e");
 
     harness
         .wait_for(
@@ -3992,9 +3601,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         })
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4049,18 +3656,8 @@ source_task = "sample"
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let parent_run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'delete-parent-run-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let parent_run_id = harness.run_id("delete-parent-run-e2e").await?;
 
     harness
         .cli()
@@ -4134,9 +3731,7 @@ source_task = "sample"
         )
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4162,18 +3757,8 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'graceful-node-shutdown-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("graceful-node-shutdown-e2e").await?;
 
     {
         let mut program =
@@ -4217,9 +3802,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
             .await?;
     }
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4229,24 +3812,11 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
     let mut harness = FullStackHarness::new().await?;
 
     let config = temp_run_add_config("name = \"auth-e2e\"\n");
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'auth-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("auth-e2e").await?;
 
     harness.start_node("w-1").await?;
-    harness
-        .cli()
-        .args(["node", "assign", "w-1", "evaluator", "auth-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "evaluator", "auth-e2e");
 
     harness
         .wait_for(
@@ -4414,9 +3984,7 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         )
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4550,9 +4118,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
         )
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4564,20 +4130,8 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
     let config_a = temp_run_add_config("name = \"duplicate-run\"\n");
     let config_b = temp_run_add_config("name = \"duplicate-run\"\n");
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config_a.path())
-        .assert()
-        .success();
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config_b.path())
-        .assert()
-        .success();
+    harness.add_run(&config_a);
+    harness.add_run(&config_b);
 
     let rows = sqlx::query("SELECT id FROM runs WHERE name = 'duplicate-run' ORDER BY id ASC")
         .fetch_all(&harness.pool)
@@ -4610,9 +4164,7 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
         .stderr(predicate::str::contains(&format!("id={id_a}")))
         .stderr(predicate::str::contains(&format!("id={id_b}")));
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4655,36 +4207,13 @@ strict_batch_ordering = true
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'worker-death-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("worker-death-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2", "w-3"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "worker-death-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "worker-death-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "worker-death-e2e");
+    harness.assign_node("w-2", "evaluator", "worker-death-e2e");
 
     harness
         .wait_for(
@@ -4707,11 +4236,7 @@ strict_batch_ordering = true
 
     harness.kill_child("w-2").await?;
 
-    harness
-        .cli()
-        .args(["node", "assign", "w-3", "evaluator", "worker-death-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-3", "evaluator", "worker-death-e2e");
 
     harness
         .wait_for(
@@ -4763,9 +4288,7 @@ strict_batch_ordering = true
         )
         .await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4791,42 +4314,17 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'sampler-error-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("sampler-error-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "sampler-error-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "sampler-error-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "sampler-error-e2e");
+    harness.assign_node("w-2", "evaluator", "sampler-error-e2e");
 
     wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(30)).await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4852,50 +4350,18 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'materializer-error-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("materializer-error-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "materializer-error-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "materializer-error-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "materializer-error-e2e");
+    harness.assign_node("w-2", "evaluator", "materializer-error-e2e");
 
     wait_for_batch_retry_count(&harness, run_id, 1, Duration::from_secs(30)).await?;
-    wait_for_task_completed(&harness, run_id, Duration::from_secs(40)).await?;
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(40)).await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4922,43 +4388,18 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'evaluator-error-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("evaluator-error-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "evaluator-error-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "evaluator-error-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "evaluator-error-e2e");
+    harness.assign_node("w-2", "evaluator", "evaluator-error-e2e");
 
     wait_for_batch_retry_count(&harness, run_id, 1, Duration::from_secs(30)).await?;
-    wait_for_task_completed(&harness, run_id, Duration::from_secs(40)).await?;
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(40)).await?;
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -4988,47 +4429,22 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE name = 'evaluator-retry-twice-then-recover-e2e'",
-    )
-    .fetch_one(&harness.pool)
-    .await?;
+    harness.add_run(&config);
+    let run_id = harness
+        .run_id("evaluator-retry-twice-then-recover-e2e")
+        .await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "evaluator-retry-twice-then-recover-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "evaluator-retry-twice-then-recover-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node(
+        "w-1",
+        "sampler-aggregator",
+        "evaluator-retry-twice-then-recover-e2e",
+    );
+    harness.assign_node("w-2", "evaluator", "evaluator-retry-twice-then-recover-e2e");
 
     wait_for_batch_retry_count(&harness, run_id, 2, Duration::from_secs(60)).await?;
-    wait_for_task_completed(&harness, run_id, Duration::from_secs(90)).await?;
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let failed_batches: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM batches WHERE run_id = $1 AND status = 'failed'")
@@ -5040,9 +4456,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         "task recovered, so no batch should be permanently failed"
     );
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -5072,44 +4486,19 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE name = 'evaluator-retry-three-then-fail-e2e'",
-    )
-    .fetch_one(&harness.pool)
-    .await?;
+    harness.add_run(&config);
+    let run_id = harness
+        .run_id("evaluator-retry-three-then-fail-e2e")
+        .await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "evaluator-retry-three-then-fail-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "evaluator-retry-three-then-fail-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node(
+        "w-1",
+        "sampler-aggregator",
+        "evaluator-retry-three-then-fail-e2e",
+    );
+    harness.assign_node("w-2", "evaluator", "evaluator-retry-three-then-fail-e2e");
 
     wait_for_failed_batch(&harness, run_id, Duration::from_secs(60)).await?;
     wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(90)).await?;
@@ -5137,9 +4526,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         "expected at least one permanently failed batch"
     );
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -5167,43 +4554,13 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'evaluator-build-fail-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("evaluator-build-fail-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "evaluator-build-fail-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-2",
-            "evaluator",
-            "evaluator-build-fail-e2e",
-        ])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "evaluator-build-fail-e2e");
+    harness.assign_node("w-2", "evaluator", "evaluator-build-fail-e2e");
 
     wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(30)).await?;
 
@@ -5224,9 +4581,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         "expected injected build failure message, got: {reason}"
     );
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -5286,17 +4641,8 @@ source_task = "sample"
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-e2e'")
-        .fetch_one(&harness.pool)
-        .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("parameter-scan-e2e").await?;
 
     harness
         .cli()
@@ -5387,9 +4733,7 @@ source_task = "sample"
         "server-side scan controller should release parent compute assignments"
     );
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -5452,18 +4796,8 @@ source_task = "sample"
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-grid-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("parameter-scan-grid-e2e").await?;
 
     harness
         .cli()
@@ -5471,21 +4805,7 @@ source_task = "sample"
         .assert()
         .success();
 
-    harness
-        .wait_for(
-            "multi-parameter scan completes",
-            Duration::from_secs(90),
-            || async {
-                let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
-                )
-                .bind(run_id)
-                .fetch_optional(&harness.pool)
-                .await?;
-                Ok(state.as_deref() == Some("completed"))
-            },
-        )
-        .await?;
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
         "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
@@ -5523,9 +4843,7 @@ source_task = "sample"
     .await?;
     assert_eq!(child_count, 4);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -5612,18 +4930,8 @@ source_task = "sample"
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-chain-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("parameter-scan-chain-e2e").await?;
 
     harness
         .cli()
@@ -5670,9 +4978,7 @@ source_task = "sample"
     .await?;
     assert_eq!(child_count, 4);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -5732,35 +5038,15 @@ source_task = "sample"
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'parameter-scan-redistribute-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("parameter-scan-redistribute-e2e").await?;
 
     for (node, role) in [
         ("scan-owned-s", "sampler-aggregator"),
         ("scan-owned-e1", "evaluator"),
         ("scan-owned-e2", "evaluator"),
     ] {
-        harness
-            .cli()
-            .args([
-                "node",
-                "assign",
-                node,
-                role,
-                "parameter-scan-redistribute-e2e",
-            ])
-            .assert()
-            .success();
+        harness.assign_node(node, role, "parameter-scan-redistribute-e2e");
     }
 
     harness
@@ -5817,21 +5103,7 @@ source_task = "sample"
         )
         .await?;
 
-    harness
-        .wait_for(
-            "redistribution scan completes",
-            Duration::from_secs(90),
-            || async {
-                let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
-                )
-                .bind(run_id)
-                .fetch_optional(&harness.pool)
-                .await?;
-                Ok(state.as_deref() == Some("completed"))
-            },
-        )
-        .await?;
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
         "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
@@ -5842,9 +5114,7 @@ source_task = "sample"
     assert_eq!(output["completed_points"], json!(5));
     assert_eq!(output["total_points"], json!(5));
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -5919,18 +5189,8 @@ values = ["auto", "none"]
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'hyperparameter-tuning-random-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("hyperparameter-tuning-random-e2e").await?;
 
     harness
         .cli()
@@ -5938,21 +5198,7 @@ values = ["auto", "none"]
         .assert()
         .success();
 
-    harness
-        .wait_for(
-            "random tuning completes",
-            Duration::from_secs(90),
-            || async {
-                let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
-                )
-                .bind(run_id)
-                .fetch_optional(&harness.pool)
-                .await?;
-                Ok(state.as_deref() == Some("completed"))
-            },
-        )
-        .await?;
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let child_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND spawn_kind = 'hyperparameter_tuning'",
@@ -5990,9 +5236,7 @@ values = ["auto", "none"]
     .await?;
     assert_eq!(measured_children, 4);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -6060,18 +5304,8 @@ max = 4
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'hyperparameter-tuning-egobox-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("hyperparameter-tuning-egobox-e2e").await?;
 
     harness
         .cli()
@@ -6144,9 +5378,7 @@ max = 4
     .await?;
     assert_eq!(child_count, 3);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -6212,18 +5444,8 @@ values = ["auto", "none"]
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'hyperparameter-tuning-grid-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let run_id = harness.run_id("hyperparameter-tuning-grid-e2e").await?;
 
     harness
         .cli()
@@ -6231,17 +5453,7 @@ values = ["auto", "none"]
         .assert()
         .success();
 
-    harness
-        .wait_for("grid tuning completes", Duration::from_secs(90), || async {
-            let state: Option<String> = sqlx::query_scalar(
-                "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
-            )
-            .bind(run_id)
-            .fetch_optional(&harness.pool)
-            .await?;
-            Ok(state.as_deref() == Some("completed"))
-        })
-        .await?;
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
         "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
@@ -6266,9 +5478,7 @@ values = ["auto", "none"]
     .await?;
     assert_eq!(child_count, 6);
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -6317,19 +5527,10 @@ max = 1.0
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE name = 'hyperparameter-tuning-bad-template-e2e'",
-    )
-    .fetch_one(&harness.pool)
-    .await?;
+    harness.add_run(&config);
+    let run_id = harness
+        .run_id("hyperparameter-tuning-bad-template-e2e")
+        .await?;
 
     harness
         .cli()
@@ -6337,21 +5538,7 @@ max = 1.0
         .assert()
         .success();
 
-    harness
-        .wait_for(
-            "bad template tuning fails",
-            Duration::from_secs(60),
-            || async {
-                let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
-                )
-                .bind(run_id)
-                .fetch_optional(&harness.pool)
-                .await?;
-                Ok(state.as_deref() == Some("failed"))
-            },
-        )
-        .await?;
+    wait_for_task_state(&harness, run_id, "failed", Duration::from_secs(60)).await?;
 
     let failure_reason: String = sqlx::query_scalar(
         "SELECT failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
@@ -6361,9 +5548,7 @@ max = 1.0
     .await?;
     assert!(failure_reason.contains("failed to create tuning trial 0"));
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -6432,19 +5617,10 @@ max = 1
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE name = 'hyperparameter-tuning-failed-measurement-e2e'",
-    )
-    .fetch_one(&harness.pool)
-    .await?;
+    harness.add_run(&config);
+    let run_id = harness
+        .run_id("hyperparameter-tuning-failed-measurement-e2e")
+        .await?;
 
     harness
         .cli()
@@ -6452,21 +5628,7 @@ max = 1
         .assert()
         .success();
 
-    harness
-        .wait_for(
-            "failed measurement tuning fails",
-            Duration::from_secs(60),
-            || async {
-                let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
-                )
-                .bind(run_id)
-                .fetch_optional(&harness.pool)
-                .await?;
-                Ok(state.as_deref() == Some("failed"))
-            },
-        )
-        .await?;
+    wait_for_task_state(&harness, run_id, "failed", Duration::from_secs(60)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
         "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
@@ -6495,9 +5657,7 @@ max = 1
     .await?;
     assert!(failure_reason.contains("failed_trials=1"));
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -6558,36 +5718,17 @@ max = 4
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let run_id: i32 = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE name = 'hyperparameter-tuning-redistribute-e2e'",
-    )
-    .fetch_one(&harness.pool)
-    .await?;
+    harness.add_run(&config);
+    let run_id = harness
+        .run_id("hyperparameter-tuning-redistribute-e2e")
+        .await?;
 
     for (node, role) in [
         ("tune-owned-s", "sampler-aggregator"),
         ("tune-owned-e1", "evaluator"),
         ("tune-owned-e2", "evaluator"),
     ] {
-        harness
-            .cli()
-            .args([
-                "node",
-                "assign",
-                node,
-                role,
-                "hyperparameter-tuning-redistribute-e2e",
-            ])
-            .assert()
-            .success();
+        harness.assign_node(node, role, "hyperparameter-tuning-redistribute-e2e");
     }
 
     harness
@@ -6667,9 +5808,7 @@ max = 4
     assert_eq!(output["completed_trials"], json!(4));
     assert_eq!(output["total_trials"], json!(4));
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -6699,18 +5838,8 @@ stop_condition = { max_samples = 16 }
 "#,
     );
 
-    harness
-        .cli()
-        .arg("run")
-        .arg("create")
-        .arg(config.path())
-        .assert()
-        .success();
-
-    let source_run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'clone-source-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    harness.add_run(&config);
+    let source_run_id = harness.run_id("clone-source-e2e").await?;
     let source_task_1: i64 =
         sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1")
             .bind(source_run_id)
@@ -6719,22 +5848,8 @@ stop_condition = { max_samples = 16 }
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness
-        .cli()
-        .args([
-            "node",
-            "assign",
-            "w-1",
-            "sampler-aggregator",
-            "clone-source-e2e",
-        ])
-        .assert()
-        .success();
-    harness
-        .cli()
-        .args(["node", "assign", "w-2", "evaluator", "clone-source-e2e"])
-        .assert()
-        .success();
+    harness.assign_node("w-1", "sampler-aggregator", "clone-source-e2e");
+    harness.assign_node("w-2", "evaluator", "clone-source-e2e");
 
     harness
         .wait_for("source run completes", Duration::from_secs(20), || async {
@@ -6778,10 +5893,7 @@ stop_condition = { max_samples = 16 }
         .assert()
         .success();
 
-    let cloned_run_id: i32 =
-        sqlx::query_scalar("SELECT id FROM runs WHERE name = 'clone-branch-e2e'")
-            .fetch_one(&harness.pool)
-            .await?;
+    let cloned_run_id = harness.run_id("clone-branch-e2e").await?;
     let cloned_task_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM run_tasks WHERE run_id = $1")
             .bind(cloned_run_id)
@@ -6800,8 +5912,6 @@ stop_condition = { max_samples = 16 }
         "unexpected cloned root snapshot name: {cloned_root_snapshot_name}"
     );
 
-    harness.stop_children().await;
-    harness.pool.close().await;
-    harness.db.cleanup().await?;
+    harness.cleanup().await?;
     Ok(())
 }

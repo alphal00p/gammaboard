@@ -20,12 +20,8 @@ PINNED_MADGRAPH_REVISION = "920d224232b24a3a736443986e2040369929298f"
 
 
 def test_state_rejects_missing_dir() -> None:
-    try:
+    with pytest.raises(ValueError, match="does not exist"):
         MadSpaceState.load(state_path="/nonexistent/madspace_state")
-    except ValueError as error:
-        assert "does not exist" in str(error)
-    else:
-        raise AssertionError("expected ValueError for missing state_path")
 
 
 def test_pinned_checkout_with_user_writable_lhapdf_data() -> None:
@@ -77,50 +73,25 @@ def _fake_state(random_dim: int, weights: np.ndarray) -> MagicMock:
     return state
 
 
-def test_evaluator_rejects_discrete_dims() -> None:
+@pytest.mark.parametrize(
+    ("random_dim", "kwargs", "message"),
+    [
+        (2, {"discrete_cardinalities": [2], "continuous_dims": 2}, "discrete"),
+        (4, {"discrete_cardinalities": [], "continuous_dims": 2}, "continuous_dims"),
+        (
+            2,
+            {"discrete_cardinalities": [], "continuous_dims": 2, "output": ["value"]},
+            "unsupported",
+        ),
+    ],
+)
+def test_evaluator_rejects_invalid_config(
+    random_dim: int, kwargs: dict, message: str
+) -> None:
     with patch("madgraph_gammaboard.evaluator.MadSpaceState") as mock_cls:
-        mock_cls.load.return_value = _fake_state(2, np.array([]))
-        try:
-            MadGraphEvaluator(
-                discrete_cardinalities=[2],
-                continuous_dims=2,
-                state_path="/fake",
-            )
-        except ValueError as error:
-            assert "discrete" in str(error)
-        else:
-            raise AssertionError("expected ValueError for non-empty discrete dimensions")
-
-
-def test_evaluator_rejects_wrong_continuous_dims() -> None:
-    with patch("madgraph_gammaboard.evaluator.MadSpaceState") as mock_cls:
-        mock_cls.load.return_value = _fake_state(4, np.array([]))
-        try:
-            MadGraphEvaluator(
-                discrete_cardinalities=[],
-                continuous_dims=2,
-                state_path="/fake",
-            )
-        except ValueError as error:
-            assert "continuous_dims" in str(error)
-        else:
-            raise AssertionError("expected ValueError for mismatched continuous_dims")
-
-
-def test_evaluator_rejects_unknown_output() -> None:
-    with patch("madgraph_gammaboard.evaluator.MadSpaceState") as mock_cls:
-        mock_cls.load.return_value = _fake_state(2, np.array([]))
-        try:
-            MadGraphEvaluator(
-                discrete_cardinalities=[],
-                continuous_dims=2,
-                state_path="/fake",
-                output=["value"],
-            )
-        except ValueError as error:
-            assert "unsupported" in str(error)
-        else:
-            raise AssertionError("expected ValueError for unknown output component")
+        mock_cls.load.return_value = _fake_state(random_dim, np.array([]))
+        with pytest.raises(ValueError, match=message):
+            MadGraphEvaluator(state_path="/fake", **kwargs)
 
 
 def test_evaluator_eval_returns_weight() -> None:

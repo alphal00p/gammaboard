@@ -116,19 +116,13 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
   };
 };
 
-const TIME_UNIT_SECONDS = {
-  s: 1,
-  ms: 1e-3,
-  "µs": 1e-6,
-  ns: 1e-9,
-};
-
 const TIME_UNIT_ORDER_SECONDS = [
   { unit: "s", seconds: 1 },
   { unit: "ms", seconds: 1e-3 },
   { unit: "µs", seconds: 1e-6 },
   { unit: "ns", seconds: 1e-9 },
 ];
+const TIME_UNIT_SECONDS = Object.fromEntries(TIME_UNIT_ORDER_SECONDS.map(({ unit, seconds }) => [unit, seconds]));
 
 export const normalizeTimeUnit = (unit) => {
   const text = String(unit || "").trim().replace(/μ/g, "µ");

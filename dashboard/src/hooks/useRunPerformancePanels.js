@@ -2,56 +2,40 @@ import { useCallback } from "react";
 import { fetchEvaluatorPerformanceHistory, fetchSamplerPerformanceHistory } from "../services/api";
 import { usePanelSource } from "./usePanelSource";
 
+const usePerformanceSource = ({ enabled, pollMs, runId, limit, nodeName, fetchHistory }) => {
+  const fetchPanels = useCallback(
+    (_request, signal) => fetchHistory(runId, limit, nodeName, signal),
+    [fetchHistory, limit, nodeName, runId],
+  );
+  return usePanelSource({ enabled, pollMs, fetchPanels, useCursor: false });
+};
+
 export const useRunPerformancePanels = ({ runId, evaluatorNodeName = null, limit = 200, pollMs = 5000 } = {}) => {
-  const samplerEnabled = runId != null;
-  const runEvaluatorEnabled = runId != null;
+  const runEnabled = runId != null;
   const evaluatorEnabled = evaluatorNodeName != null;
-
-  const fetchSamplerPanels = useCallback(
-    (_request, signal) => {
-      if (!samplerEnabled) return null;
-      return fetchSamplerPerformanceHistory(runId, limit, null, signal);
-    },
-    [limit, runId, samplerEnabled],
-  );
-
-  const fetchEvaluatorPanels = useCallback(
-    (_request, signal) => {
-      if (!evaluatorEnabled) return null;
-      return fetchEvaluatorPerformanceHistory(runId, limit, evaluatorNodeName, signal);
-    },
-    [evaluatorEnabled, evaluatorNodeName, limit, runId],
-  );
-  const fetchRunEvaluatorPanels = useCallback(
-    (_request, signal) => {
-      if (!runEvaluatorEnabled) return null;
-      return fetchEvaluatorPerformanceHistory(runId, limit, null, signal);
-    },
-    [limit, runEvaluatorEnabled, runId],
-  );
-
-  const sampler = usePanelSource({
-    enabled: samplerEnabled,
+  const sampler = usePerformanceSource({
+    enabled: runEnabled,
     pollMs,
-    fetchPanels: fetchSamplerPanels,
-    useCursor: false,
+    runId,
+    limit,
+    nodeName: null,
+    fetchHistory: fetchSamplerPerformanceHistory,
   });
-  const evaluator = usePanelSource({
+  const evaluator = usePerformanceSource({
     enabled: evaluatorEnabled,
     pollMs,
-    fetchPanels: fetchEvaluatorPanels,
-    useCursor: false,
+    runId,
+    limit,
+    nodeName: evaluatorNodeName,
+    fetchHistory: fetchEvaluatorPerformanceHistory,
   });
-  const runEvaluator = usePanelSource({
-    enabled: runEvaluatorEnabled,
+  const runEvaluator = usePerformanceSource({
+    enabled: runEnabled,
     pollMs,
-    fetchPanels: fetchRunEvaluatorPanels,
-    useCursor: false,
+    runId,
+    limit,
+    nodeName: null,
+    fetchHistory: fetchEvaluatorPerformanceHistory,
   });
-
-  return {
-    evaluator,
-    runEvaluator,
-    sampler,
-  };
+  return { evaluator, runEvaluator, sampler };
 };

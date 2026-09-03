@@ -1,39 +1,28 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
-import { fetchNodes, fetchRuns } from "./services/api";
 import * as api from "./services/api";
 
 vi.mock("./services/api", () => ({
-  fetchRuns: vi.fn(async () => ({ items: [], nextOffset: null })),
-  fetchNodes: vi.fn(async () => []),
-  fetchSession: vi.fn(async () => ({ authenticated: false })),
-  login: vi.fn(async () => ({ authenticated: true })),
-  logout: vi.fn(async () => ({ authenticated: false })),
-  fetchRuntimeLogPage: vi.fn(async () => ({
-    items: [],
-    next_before_id: null,
-    has_more_older: false,
-  })),
-  fetchRunTasks: vi.fn(async () => []),
-  fetchRunTaskPanels: vi.fn(async () => ({ source_id: "task", panels: [], updates: [] })),
-  fetchTemplateList: vi.fn(async () => []),
-  fetchTemplateFile: vi.fn(async () => ({ name: "template.toml", toml: "" })),
-  saveTemplateFile: vi.fn(async (_kind, { name, toml }) => ({ name, toml })),
-  deleteTemplateFile: vi.fn(async (_kind, name) => ({ deleted: true, name })),
-  fetchEvaluatorPerformanceHistory: vi.fn(async () => ({ source_id: "perf:run:evaluator", panels: [], updates: [] })),
-  fetchSamplerPerformanceHistory: vi.fn(async () => ({ source_id: "perf:sampler", panels: [], updates: [] })),
-  fetchNodeLaunchRequests: vi.fn(async () => []),
-  fetchServerStatus: vi.fn(async () => ({ status: "ok", database: "connected", server_name: "local" })),
-  shutdownControlProcess: vi.fn(async () => ({ shutdown_requested: true })),
+  fetchRuns: vi.fn(),
+  fetchNodes: vi.fn(),
+  fetchSession: vi.fn(),
+  login: vi.fn(),
+  logout: vi.fn(),
+  fetchRuntimeLogPage: vi.fn(),
+  fetchRunTasks: vi.fn(),
+  fetchRunTaskPanels: vi.fn(),
+  fetchTemplateList: vi.fn(),
+  fetchTemplateFile: vi.fn(),
+  saveTemplateFile: vi.fn(),
+  deleteTemplateFile: vi.fn(),
+  fetchEvaluatorPerformanceHistory: vi.fn(),
+  fetchSamplerPerformanceHistory: vi.fn(),
+  fetchNodeLaunchRequests: vi.fn(),
+  fetchServerStatus: vi.fn(),
+  shutdownControlProcess: vi.fn(),
 }));
 
-/**
- * Basic smoke test for the App component
- *
- * Tests that the main application renders without crashing
- * and contains expected core elements.
- */
 describe("App Component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -67,34 +56,19 @@ describe("App Component", () => {
       render(<App />);
     });
     await waitFor(() => {
-      expect(fetchRuns).toHaveBeenCalled();
-      expect(fetchNodes).toHaveBeenCalled();
+      expect(api.fetchRuns).toHaveBeenCalled();
+      expect(api.fetchNodes).toHaveBeenCalled();
     });
   };
 
-  test("renders Gammaboard logo", async () => {
+  test("renders the empty runs view and primary navigation", async () => {
     await renderApp();
-    const logoElement = screen.getByAltText(/Gammaboard/i);
-    expect(logoElement).toBeInTheDocument();
-  });
-
-  test("renders connection status component", async () => {
-    await renderApp();
-    const statusElement = screen.getByText(/Connected to local/i);
-    expect(statusElement).toBeInTheDocument();
-  });
-
-  test("renders mode tabs", async () => {
-    await renderApp();
+    expect(screen.getByAltText(/Gammaboard/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Connected to local/i)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Management/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Performance/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
-  });
-
-  test("shows no-runs empty state when run list is empty", async () => {
-    await renderApp();
-    const emptyMessage = screen.getByText(/No runs available/i);
-    expect(emptyMessage).toBeInTheDocument();
+    expect(await screen.findByText(/No runs available/i)).toBeInTheDocument();
   });
 });

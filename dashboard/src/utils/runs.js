@@ -4,11 +4,8 @@ export const formatRunLabel = (run) => {
   return run.parent_run_id != null ? `- ${label}` : label;
 };
 
-const deriveRunLifecycle = (run) => {
-  if (!run || typeof run !== "object") return "unknown";
-  if (typeof run.lifecycle_state === "string" && run.lifecycle_state.trim()) return run.lifecycle_state;
-  return "unknown";
-};
+const deriveRunLifecycle = (run) =>
+  typeof run?.lifecycle_state === "string" && run.lifecycle_state.trim() ? run.lifecycle_state : "unknown";
 
 export const formatRunSecondaryLabel = (run) =>
   [
@@ -23,14 +20,12 @@ export const orderRunsForSelector = (runs) => {
   const items = Array.isArray(runs) ? runs : [];
   const childrenByParent = new Map();
   const roots = [];
-  const childIds = new Set();
 
   for (const run of items) {
     if (run?.parent_run_id == null) {
       roots.push(run);
       continue;
     }
-    childIds.add(run.run_id);
     const key = Number(run.parent_run_id);
     const children = childrenByParent.get(key) || [];
     children.push(run);
@@ -53,7 +48,7 @@ export const orderRunsForSelector = (runs) => {
   }
 
   for (const run of items) {
-    if (run?.parent_run_id == null || !childIds.has(run.run_id)) continue;
+    if (run?.parent_run_id == null) continue;
     if (!ordered.some((candidate) => candidate?.run_id === run.run_id)) ordered.push(run);
   }
 

@@ -68,35 +68,30 @@ const buildQueryString = (entries) => {
   return query ? `?${query}` : "";
 };
 
-const apiGet = async (path, message, signal) => {
+const apiRequest = async (path, message, signal, options = {}) => {
   const response = await fetch(apiUrl(path), {
     credentials: "include",
     signal,
+    ...options,
   });
   return parseJsonOrThrow(response, message);
 };
 
-const apiPost = async (path, payload, message, signal) => {
-  const response = await fetch(apiUrl(path), {
+const apiGet = async (path, message, signal) => apiRequest(path, message, signal);
+
+const apiPost = async (path, payload, message, signal) =>
+  apiRequest(path, message, signal, {
     method: "POST",
-    credentials: "include",
     headers: {
       "content-type": "application/json",
     },
     body: JSON.stringify(payload ?? {}),
-    signal,
   });
-  return parseJsonOrThrow(response, message);
-};
 
-const apiDelete = async (path, message, signal) => {
-  const response = await fetch(apiUrl(path), {
+const apiDelete = async (path, message, signal) =>
+  apiRequest(path, message, signal, {
     method: "DELETE",
-    credentials: "include",
-    signal,
   });
-  return parseJsonOrThrow(response, message);
-};
 
 const numberOr = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 
@@ -312,8 +307,8 @@ export const fetchRunTaskPanels = async (
   taskId,
   { limit = 500, cursor = null, panelState = {}, panelActions = [] } = {},
   signal,
-) => {
-  return apiPost(
+) =>
+  apiPost(
     `/runs/${runId}/tasks/${taskId}/output`,
     {
       limit,
@@ -324,16 +319,14 @@ export const fetchRunTaskPanels = async (
     "Failed to fetch task panels",
     signal,
   );
-};
 
 export const fetchTemplateList = async (kind, signal) => {
   const data = await apiGet(`/templates/${kind}`, `Failed to fetch ${kind} templates`, signal);
   return asArray(data?.items).filter((value) => typeof value === "string" && value.trim());
 };
 
-export const fetchTemplateFile = async (kind, name, signal) => {
-  return apiGet(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to fetch template ${name}`, signal);
-};
+export const fetchTemplateFile = async (kind, name, signal) =>
+  apiGet(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to fetch template ${name}`, signal);
 
 export const saveTemplateFile = async (kind, { name, toml }, signal) =>
   apiPost(`/templates/${kind}`, { name, toml }, `Failed to save template ${name}`, signal);
@@ -373,24 +366,18 @@ export const fetchRuntimeLogPage = async (
   return normalizeRuntimeLogPage(data);
 };
 
-export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) => {
-  return apiGet(
-    `/runs/${runId}/performance/evaluator${buildQueryString([
+const fetchPerformanceHistory = (runId, kind, label, limit, nodeName, signal) =>
+  apiGet(
+    `/runs/${runId}/performance/${kind}${buildQueryString([
       ["limit", limit],
       ["node_name", nodeName],
     ])}`,
-    "Failed to fetch evaluator performance history",
+    `Failed to fetch ${label} performance history`,
     signal,
   );
-};
 
-export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) => {
-  return apiGet(
-    `/runs/${runId}/performance/sampler-aggregator${buildQueryString([
-      ["limit", limit],
-      ["node_name", nodeName],
-    ])}`,
-    "Failed to fetch sampler performance history",
-    signal,
-  );
-};
+export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) =>
+  fetchPerformanceHistory(runId, "evaluator", "evaluator", limit, nodeName, signal);
+
+export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) =>
+  fetchPerformanceHistory(runId, "sampler-aggregator", "sampler", limit, nodeName, signal);

@@ -6,9 +6,8 @@ export const useTaskOutput = ({ runId, taskId, pollMs = 3000, panelLimit = 500 }
   const enabled = runId != null && taskId != null;
 
   const fetchPanels = useCallback(
-    ({ cursor, panelState, panelActions }, signal) => {
-      if (!enabled) return null;
-      return fetchRunTaskPanels(
+    ({ cursor, panelState, panelActions }, signal) =>
+      fetchRunTaskPanels(
         runId,
         taskId,
         {
@@ -18,9 +17,8 @@ export const useTaskOutput = ({ runId, taskId, pollMs = 3000, panelLimit = 500 }
           panelActions,
         },
         signal,
-      );
-    },
-    [enabled, panelLimit, runId, taskId],
+      ),
+    [panelLimit, runId, taskId],
   );
 
   return usePanelSource({

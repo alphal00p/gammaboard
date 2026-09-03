@@ -77,14 +77,15 @@ const mergePanelState = (previous, incoming) => {
   return incoming;
 };
 
-const arraysEqual = (left, right) => {
+const arraysEqualBy = (left, right, equal) => {
   if (left === right) return true;
   if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
-    if (!Object.is(left[index], right[index])) return false;
+    if (!equal(left[index], right[index])) return false;
   }
   return true;
 };
+const arraysEqual = (left, right) => arraysEqualBy(left, right, Object.is);
 
 const panelStateEquals = (left, right) => {
   if (left === right) return true;
@@ -118,14 +119,7 @@ const panelStateEquals = (left, right) => {
   return false;
 };
 
-const panelStateArraysEqual = (left, right) => {
-  if (left === right) return true;
-  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index += 1) {
-    if (!panelStateEquals(left[index], right[index])) return false;
-  }
-  return true;
-};
+const panelStateArraysEqual = (left, right) => arraysEqualBy(left, right, panelStateEquals);
 
 const applyUpdates = (previousStates, updates, resetRequired) => {
   if (!resetRequired && asArray(updates).length === 0) return previousStates;
@@ -340,4 +334,13 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
     }),
     [invokePanelAction, setPanelValue, state],
   );
+};
+
+export const usePanelResource = ({ id, pollMs, fetchById }) => {
+  const enabled = id != null;
+  const fetchPanels = useCallback(
+    (_request, signal) => fetchById(id, signal),
+    [fetchById, id],
+  );
+  return usePanelSource({ enabled, pollMs, fetchPanels, useCursor: false });
 };
