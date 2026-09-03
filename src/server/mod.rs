@@ -637,6 +637,14 @@ struct TemplateSaveRequest {
     toml: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TemplateKind {
+    Runs,
+    Tasks,
+    Nodes,
+}
+
 #[derive(Serialize)]
 struct TemplateListResponse {
     items: Vec<String>,
@@ -691,12 +699,11 @@ fn build_app(state: AppState) -> Router {
         .route("/runs/:id/repro-toml", get(get_run_repro_toml))
         .route("/runs/:id/panels", get(get_run_panels))
         .route("/runs/:id/tasks", get(get_run_tasks))
-        .route("/templates/runs", get(list_run_templates))
-        .route("/templates/runs/:name", get(get_run_template))
-        .route("/templates/tasks", get(list_task_templates))
-        .route("/templates/tasks/:name", get(get_task_template))
-        .route("/templates/nodes", get(list_node_templates))
-        .route("/templates/nodes/:name", get(get_node_template))
+        .route("/templates/:kind", get(list_templates).post(save_template))
+        .route(
+            "/templates/:kind/:name",
+            get(get_template).delete(delete_template),
+        )
         .route("/runs/:id/config", get(get_run_config))
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route("/logs", get(get_logs))
@@ -738,12 +745,6 @@ fn build_app(state: AppState) -> Router {
             "/node-launch-requests",
             get(get_node_launch_requests).post(create_node_launch_request),
         )
-        .route("/templates/runs", post(save_run_template))
-        .route("/templates/tasks", post(save_task_template))
-        .route("/templates/nodes", post(save_node_template))
-        .route("/templates/runs/:name", delete(delete_run_template))
-        .route("/templates/tasks/:name", delete(delete_task_template))
-        .route("/templates/nodes/:name", delete(delete_node_template))
         .route("/admin/db/restart", post(restart_db))
         .route("/admin/control/shutdown", post(shutdown_control_process))
         .route_layer(middleware::from_fn_with_state(
@@ -906,120 +907,52 @@ async fn get_run_tasks(
     json_response(response)
 }
 
-async fn list_run_templates(
+fn template_dir(state: &AppState, kind: TemplateKind) -> &Path {
+    match kind {
+        TemplateKind::Runs => &state.run_templates_dir,
+        TemplateKind::Tasks => &state.task_templates_dir,
+        TemplateKind::Nodes => &state.node_templates_dir,
+    }
+}
+
+async fn list_templates(
     State(state): State<AppState>,
+    AxumPath(kind): AxumPath<TemplateKind>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     json_response(TemplateListResponse {
-        items: template_api::list_templates(&state.run_templates_dir)?,
+        items: template_api::list_templates(template_dir(&state, kind))?,
     })
 }
 
-async fn get_run_template(
+async fn get_template(
     State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
+    AxumPath((kind, name)): AxumPath<(TemplateKind, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template = template_api::load_template(&state.run_templates_dir, &name)?;
+    let template = template_api::load_template(template_dir(&state, kind), &name)?;
     json_response(TemplateFileResponse {
         name: template.name,
         toml: template.toml,
     })
 }
 
-async fn list_task_templates(
+async fn save_template(
     State(state): State<AppState>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    json_response(TemplateListResponse {
-        items: template_api::list_templates(&state.task_templates_dir)?,
-    })
-}
-
-async fn get_task_template(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template = template_api::load_template(&state.task_templates_dir, &name)?;
-    json_response(TemplateFileResponse {
-        name: template.name,
-        toml: template.toml,
-    })
-}
-
-async fn list_node_templates(
-    State(state): State<AppState>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    json_response(TemplateListResponse {
-        items: template_api::list_templates(&state.node_templates_dir)?,
-    })
-}
-
-async fn get_node_template(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template = template_api::load_template(&state.node_templates_dir, &name)?;
-    json_response(TemplateFileResponse {
-        name: template.name,
-        toml: template.toml,
-    })
-}
-
-async fn save_run_template(
-    State(state): State<AppState>,
+    AxumPath(kind): AxumPath<TemplateKind>,
     AxumJson(payload): AxumJson<TemplateSaveRequest>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let template =
-        template_api::save_template(&state.run_templates_dir, &payload.name, &payload.toml)?;
+        template_api::save_template(template_dir(&state, kind), &payload.name, &payload.toml)?;
     json_response(TemplateFileResponse {
         name: template.name,
         toml: template.toml,
     })
 }
 
-async fn save_task_template(
+async fn delete_template(
     State(state): State<AppState>,
-    AxumJson(payload): AxumJson<TemplateSaveRequest>,
+    AxumPath((kind, name)): AxumPath<(TemplateKind, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template =
-        template_api::save_template(&state.task_templates_dir, &payload.name, &payload.toml)?;
-    json_response(TemplateFileResponse {
-        name: template.name,
-        toml: template.toml,
-    })
-}
-
-async fn save_node_template(
-    State(state): State<AppState>,
-    AxumJson(payload): AxumJson<TemplateSaveRequest>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template =
-        template_api::save_template(&state.node_templates_dir, &payload.name, &payload.toml)?;
-    json_response(TemplateFileResponse {
-        name: template.name,
-        toml: template.toml,
-    })
-}
-
-async fn delete_run_template(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    template_api::delete_template(&state.run_templates_dir, &name)?;
-    json_response(serde_json::json!({ "deleted": true, "name": name }))
-}
-
-async fn delete_task_template(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    template_api::delete_template(&state.task_templates_dir, &name)?;
-    json_response(serde_json::json!({ "deleted": true, "name": name }))
-}
-
-async fn delete_node_template(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    template_api::delete_template(&state.node_templates_dir, &name)?;
+    template_api::delete_template(template_dir(&state, kind), &name)?;
     json_response(serde_json::json!({ "deleted": true, "name": name }))
 }
 
@@ -2075,6 +2008,23 @@ async fn create_and_maybe_resolve_node_launch_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_kinds_are_strictly_allowlisted() {
+        assert_eq!(
+            serde_json::from_str::<TemplateKind>(r#""runs""#).unwrap(),
+            TemplateKind::Runs
+        );
+        assert_eq!(
+            serde_json::from_str::<TemplateKind>(r#""tasks""#).unwrap(),
+            TemplateKind::Tasks
+        );
+        assert_eq!(
+            serde_json::from_str::<TemplateKind>(r#""nodes""#).unwrap(),
+            TemplateKind::Nodes
+        );
+        assert!(serde_json::from_str::<TemplateKind>(r#""other""#).is_err());
+    }
 
     #[test]
     fn security_warnings_keep_passwordless_loopback_deployments_quiet() {
