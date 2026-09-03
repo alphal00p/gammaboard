@@ -175,20 +175,18 @@ const normalizeRunTaskEntry = (entry) => {
   if (!entry || typeof entry !== "object") return null;
   if (entry.id == null) return null;
   return {
-    ...entry,
     id: entry.id == null ? null : String(entry.id),
     run_id: Number.isFinite(Number(entry.run_id)) ? Number(entry.run_id) : entry.run_id,
     name: typeof entry.name === "string" ? entry.name : String(entry.name ?? ""),
+    sequence_nr: Number.isFinite(Number(entry.sequence_nr)) ? Number(entry.sequence_nr) : 0,
+    task: entry.task ?? {},
+    state: typeof entry.state === "string" ? entry.state : "unknown",
+    failure_reason: entry.failure_reason ?? null,
     latest_stage_snapshot_id: entry.latest_stage_snapshot_id == null ? null : String(entry.latest_stage_snapshot_id),
     root_stage_snapshot_id: entry.root_stage_snapshot_id == null ? null : String(entry.root_stage_snapshot_id),
-    nr_produced_samples: Number.isFinite(Number(entry.nr_produced_samples)) ? Number(entry.nr_produced_samples) : 0,
-    nr_completed_samples: Number.isFinite(Number(entry.nr_completed_samples)) ? Number(entry.nr_completed_samples) : 0,
-    nr_produced_samples_including_children: Number.isFinite(Number(entry.nr_produced_samples_including_children))
-      ? Number(entry.nr_produced_samples_including_children)
-      : Number(entry.nr_produced_samples || 0),
     nr_completed_samples_including_children: Number.isFinite(Number(entry.nr_completed_samples_including_children))
       ? Number(entry.nr_completed_samples_including_children)
-      : Number(entry.nr_completed_samples || 0),
+      : 0,
   };
 };
 

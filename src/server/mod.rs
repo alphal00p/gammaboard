@@ -13,7 +13,7 @@ use crate::api::{
 };
 use crate::core::{
     AggregationStore, ControlPlaneStore, EngineError, RunReadStore, RunSpec, RunSpecStore, RunTask,
-    RunTaskStore, SamplerQueueTuning,
+    RunTaskSpec, RunTaskState, RunTaskStore, SamplerQueueTuning,
 };
 use crate::evaluation::AccumulatorState;
 use crate::runners::stage_context::{StageConfigProvenance, resolve_stage_context};
@@ -698,12 +698,40 @@ struct RunReproTomlResponse {
 
 #[derive(Serialize)]
 struct RunTaskResponse {
-    #[serde(flatten)]
-    task: RunTask,
+    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_i64_as_string")]
+    id: i64,
+    run_id: i32,
+    name: String,
+    sequence_nr: i32,
+    task: RunTaskSpec,
+    state: RunTaskState,
+    nr_completed_samples_including_children: i64,
+    failure_reason: Option<String>,
     #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
     latest_stage_snapshot_id: Option<i64>,
     #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
     root_stage_snapshot_id: Option<i64>,
+}
+
+impl RunTaskResponse {
+    fn new(
+        task: RunTask,
+        latest_stage_snapshot_id: Option<i64>,
+        root_stage_snapshot_id: Option<i64>,
+    ) -> Self {
+        Self {
+            id: task.id,
+            run_id: task.run_id,
+            name: task.name,
+            sequence_nr: task.sequence_nr,
+            task: task.task,
+            state: task.state,
+            nr_completed_samples_including_children: task.nr_completed_samples_including_children,
+            failure_reason: task.failure_reason,
+            latest_stage_snapshot_id,
+            root_stage_snapshot_id,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -973,10 +1001,9 @@ async fn get_run_tasks(
     let root_stage_snapshot_id = state.store.get_root_stage_snapshot_id(id).await?;
     let response = tasks
         .into_iter()
-        .map(|task| RunTaskResponse {
-            latest_stage_snapshot_id: latest_snapshot_ids.get(&task.id).copied(),
-            root_stage_snapshot_id,
-            task,
+        .map(|task| {
+            let latest_stage_snapshot_id = latest_snapshot_ids.get(&task.id).copied();
+            RunTaskResponse::new(task, latest_stage_snapshot_id, root_stage_snapshot_id)
         })
         .collect::<Vec<_>>();
     json_response(response)
@@ -2051,6 +2078,49 @@ async fn create_and_maybe_resolve_node_launch_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_list_response_omits_duplicate_and_runtime_only_fields() {
+        let task = RunTask {
+            id: 7,
+            run_id: 3,
+            name: "accumulator".to_string(),
+            sequence_nr: 1,
+            task: RunTaskSpec::SetAccumulator {
+                accumulator: crate::core::AccumulatorConfig::Empty,
+            },
+            spawned_from_snapshot_id: None,
+            state: RunTaskState::Pending,
+            nr_produced_samples: 11,
+            nr_completed_samples: 9,
+            nr_produced_samples_including_children: 11,
+            nr_completed_samples_including_children: 9,
+            failure_reason: None,
+            started_at: None,
+            completed_at: None,
+            failed_at: None,
+            created_at: chrono::Utc::now(),
+            task_toml: "kind = \"set_accumulator\"".to_string(),
+            measurement_output: None,
+            controller_output: None,
+        };
+        let value = serde_json::to_value(RunTaskResponse::new(task, Some(8), Some(2))).unwrap();
+
+        assert_eq!(value["id"], "7");
+        assert_eq!(value["task"]["kind"], "set_accumulator");
+        for omitted in [
+            "task_toml",
+            "nr_produced_samples",
+            "nr_completed_samples",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "measurement_output",
+            "controller_output",
+        ] {
+            assert!(value.get(omitted).is_none(), "unexpected field {omitted}");
+        }
+    }
 
     #[test]
     fn template_kinds_are_strictly_allowlisted() {
