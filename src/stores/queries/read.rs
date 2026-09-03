@@ -3,7 +3,7 @@ use crate::evaluation::AccumulatorState;
 use crate::stores::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunLifecycleState, RunProgress,
     RuntimeLogEntry, RuntimeLogPage, SamplerPerformanceHistoryEntry, TaskOutputSnapshot,
-    TaskStageSnapshot, WorkQueueStats, WorkerStatus,
+    TaskStageSnapshot, WorkerStatus,
 };
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -648,54 +648,6 @@ fn apply_child_run_sample_totals(runs: &mut [RunProgress]) {
         runs[index].nr_produced_samples_including_children = produced;
         runs[index].nr_completed_samples_including_children = completed;
     }
-}
-
-pub(crate) async fn get_work_queue_stats(
-    pool: &PgPool,
-    run_id: i32,
-) -> Result<Vec<WorkQueueStats>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (i32, String, i64, i64, Option<f64>, Option<f64>)>(
-        r#"
-        SELECT
-            run_id,
-            status,
-            batch_count,
-            total_samples,
-            avg_batch_time_ms,
-            avg_sample_time_ms
-        FROM work_queue_stats
-        WHERE run_id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_all(pool)
-    .await?;
-
-    let mut stats = Vec::new();
-    for (run_id, status, batch_count, total_samples, avg_batch_time_ms, avg_sample_time_ms) in rows
-    {
-        let status = match status.as_str() {
-            "pending" => crate::core::BatchStatus::Pending,
-            "claimed" => crate::core::BatchStatus::Claimed,
-            "completed" => crate::core::BatchStatus::Completed,
-            "failed" => crate::core::BatchStatus::Failed,
-            other => {
-                return Err(sqlx::Error::Protocol(format!(
-                    "unknown batch status: {other}"
-                )));
-            }
-        };
-        stats.push(WorkQueueStats {
-            run_id,
-            status,
-            batch_count,
-            total_samples,
-            avg_batch_time_ms,
-            avg_sample_time_ms,
-        });
-    }
-
-    Ok(stats)
 }
 
 pub(crate) async fn get_task_output_snapshots(

@@ -315,7 +315,7 @@ mod tests {
     use crate::evaluation::Point;
     use crate::stores::{
         EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
-        TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
+        TaskOutputSnapshot, TaskStageSnapshot,
     };
     use async_trait::async_trait;
     use chrono::Utc;
@@ -508,12 +508,6 @@ mod tests {
             &self,
             _run_id: i32,
         ) -> Result<Option<RunProgress>, crate::core::StoreError> {
-            unreachable!("unused")
-        }
-        async fn get_work_queue_stats(
-            &self,
-            _run_id: i32,
-        ) -> Result<Vec<WorkQueueStats>, crate::core::StoreError> {
             unreachable!("unused")
         }
         async fn get_task_output_snapshots(

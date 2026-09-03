@@ -63,7 +63,7 @@ queue. The frontend does not branch on local vs external spawning.
 
 ## Logs Tab
 
-The logs tab reads `GET /api/runs/:id/logs`.
+The logs tab reads `GET /api/logs` with a `run_id` filter.
 
 - Filters: `node_name`, `level`, `q`
 - Cursor pagination: `before_id`

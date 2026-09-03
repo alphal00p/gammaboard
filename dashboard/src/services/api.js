@@ -318,16 +318,6 @@ export const fetchRunReproToml = async (runId, signal) =>
 export const fetchRunPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/panels`, "Failed to fetch run panels", signal);
 
-export const fetchRunDebugBatches = async (runId, { limit = 1000, status = "claimed" } = {}, signal) =>
-  apiGet(
-    `/runs/${runId}/debug/batches${buildQueryString([
-      ["limit", limit],
-      ["status", status],
-    ])}`,
-    "Failed to fetch debug batches",
-    signal,
-  );
-
 export const fetchRunTasks = async (runId, signal) => {
   const data = await apiGet(`/runs/${runId}/tasks`, "Failed to fetch run tasks", signal);
   return asArray(data).map(normalizeRunTaskEntry).filter(Boolean);
@@ -404,35 +394,6 @@ export const fetchRuntimeLogPage = async (
   );
   return normalizeRuntimeLogPage(data);
 };
-
-export const fetchRunLogPage = async (
-  runId,
-  {
-    limit = 100,
-    source = null,
-    nodeName = null,
-    nodeUuid = null,
-    level = null,
-    search = "",
-    beforeId = null,
-    includeChildren = false,
-  } = {},
-  signal,
-) =>
-  fetchRuntimeLogPage(
-    {
-      limit,
-      source,
-      runId,
-      includeChildren,
-      nodeName,
-      nodeUuid,
-      level,
-      search,
-      beforeId,
-    },
-    signal,
-  );
 
 export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) => {
   return apiGet(

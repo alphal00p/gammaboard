@@ -17,10 +17,7 @@ export const useRuns = ({ refreshInterval = 2000, includeChildren = false } = {}
     setExtraPages([]);
   }, [includeChildren]);
 
-  const pages = useMemo(
-    () => [(Array.isArray(firstPage) ? { items: firstPage, nextOffset: null } : firstPage), ...extraPages],
-    [firstPage, extraPages],
-  );
+  const pages = useMemo(() => [firstPage, ...extraPages], [firstPage, extraPages]);
   const runs = useMemo(() => {
     const seen = new Set();
     return pages.flatMap((page) => page.items).filter((run) => {

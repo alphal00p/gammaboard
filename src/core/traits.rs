@@ -13,7 +13,7 @@ use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
-    SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
+    SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
 };
 use crate::utils::domain::Domain;
 use async_trait::async_trait;
@@ -364,7 +364,6 @@ pub trait RunReadStore: Send + Sync {
             })
             .collect())
     }
-    async fn get_work_queue_stats(&self, run_id: i32) -> Result<Vec<WorkQueueStats>, StoreError>;
     async fn get_task_output_snapshots(
         &self,
         run_id: i32,

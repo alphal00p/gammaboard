@@ -53,8 +53,7 @@ pub use sampling::{
 };
 pub use stores::PgStore;
 pub use stores::{
-    RunLifecycleState, RunProgress, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
-    WorkerStatus,
+    RunLifecycleState, RunProgress, TaskOutputSnapshot, TaskStageSnapshot, WorkerStatus,
 };
 pub use stores::{get_pg_pool, init_pg_store};
 pub use symbolica_license::activate_symbolica_oem_license;

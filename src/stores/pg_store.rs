@@ -59,75 +59,6 @@ impl PgStore {
     ) -> Result<Option<crate::stores::RegisteredWorkerEntry>, StoreError> {
         Ok(queries::get_registered_worker(&self.pool, node_name).await?)
     }
-
-    pub async fn fetch_pending_claimed_batches_json(
-        &self,
-        run_id: i32,
-        status: &str,
-        limit: usize,
-    ) -> Result<serde_json::Value, StoreError> {
-        let raw = queries::fetch_batches_by_status(&self.pool, run_id, status, limit as i64)
-            .await
-            .map_err(map_sqlx)?;
-        let mut out = Vec::with_capacity(raw.len());
-        for (
-            batch_id,
-            task_id,
-            requires_training_values,
-            batch_size,
-            status,
-            claimed_by_node_name,
-            claimed_by_node_uuid,
-            latent_bytes,
-        ) in raw
-        {
-            match LatentBatch::from_bytes(&latent_bytes) {
-                Ok(latent) => {
-                    // Attempt to materialize into a concrete Batch (points). Some latent payloads
-                    // (e.g. HavanaInference) cannot be materialized without a materializer, so
-                    // fall back to returning the latent payload if materialization fails.
-                    match latent.payload.as_batch() {
-                        Ok(batch) => {
-                            let batch_json = batch.to_json();
-                            out.push(serde_json::json!({
-                                "batch_id": batch_id,
-                                "task_id": task_id,
-                                "requires_training_values": requires_training_values,
-                                "batch_size": batch_size as usize,
-                                "status": status,
-                                "claimed_by_node_name": claimed_by_node_name,
-                                "claimed_by_node_uuid": claimed_by_node_uuid,
-                                "batch": batch_json,
-                            }));
-                        }
-                        Err(err) => {
-                            // Materialization failed; include latent payload JSON and the error.
-                            let latent_json = latent.into_json();
-                            out.push(serde_json::json!({
-                                "batch_id": batch_id,
-                                "task_id": task_id,
-                                "requires_training_values": requires_training_values,
-                                "batch_size": batch_size as usize,
-                                "status": status,
-                                "claimed_by_node_name": claimed_by_node_name,
-                                "claimed_by_node_uuid": claimed_by_node_uuid,
-                                "materialization_error": format!("{}", err),
-                                "latent_batch": latent_json,
-                            }));
-                        }
-                    }
-                }
-                Err(err) => {
-                    out.push(serde_json::json!({
-                        "batch_id": batch_id,
-                        "task_id": task_id,
-                        "error": format!("failed to decode latent batch: {}", err),
-                    }));
-                }
-            }
-        }
-        Ok(serde_json::Value::Array(out))
-    }
 }
 
 fn store_err(message: impl Into<String>) -> StoreError {
@@ -327,13 +258,6 @@ impl RunReadStore for PgStore {
             queries::get_child_runs_for_task(&self.pool, parent_run_id, parent_task_id, spawn_kind)
                 .await?,
         )
-    }
-
-    async fn get_work_queue_stats(
-        &self,
-        run_id: i32,
-    ) -> Result<Vec<crate::stores::WorkQueueStats>, StoreError> {
-        Ok(queries::get_work_queue_stats(&self.pool, run_id).await?)
     }
 
     async fn get_task_output_snapshots(

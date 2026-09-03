@@ -10,7 +10,6 @@ import {
   Tabs,
   TextField,
   Typography,
-  MenuItem,
 } from "@mui/material";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg";
@@ -37,7 +36,6 @@ import {
   pauseRun,
   saveTemplateFile,
   unassignNode,
-  fetchRunDebugBatches,
 } from "./services/api";
 import { copyToClipboard } from "./utils/clipboard";
 import { asArray } from "./utils/collections";
@@ -62,13 +60,6 @@ const DEFAULT_ADD_TASKS_TOML = "";
 const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
 const CREATE_RUN_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.create_run.selected_template";
 const ADD_TASKS_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.add_tasks.selected_template";
-const DEBUG_BATCH_STATUS_OPTIONS = [
-  { value: "claimed", label: "Claimed" },
-  { value: "pending", label: "Pending" },
-  { value: "failed", label: "Failed" },
-  { value: "all", label: "All" },
-];
-
 const LoadingPanel = ({ label = "Loading..." }) => (
   <Box sx={{ py: 4 }}>
     <Typography variant="body2" color="text.secondary">
@@ -532,9 +523,6 @@ const RunsWorkspace = ({
   const [createRunError, setCreateRunError] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [runTemplates, setRunTemplates] = useState([]);
-  const [downloadStatus, setDownloadStatus] = useState("claimed");
-  const selectedDebugBatchStatus =
-    DEBUG_BATCH_STATUS_OPTIONS.find((option) => option.value === downloadStatus) || DEBUG_BATCH_STATUS_OPTIONS[0];
 
   const reloadRunTemplates = useCallback(async () => {
     try {
@@ -558,33 +546,6 @@ const RunsWorkspace = ({
       cancelled = true;
     };
   }, []);
-
-  const handleDownloadDebugBatches = async () => {
-    if (!selectedRun) return;
-    try {
-      const payload = await fetchRunDebugBatches(selectedRun, {
-        limit: 1000,
-        status: downloadStatus,
-      });
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `run-${selectedRun}-${downloadStatus}-batches-${timestamp}.json`;
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      setSnackbar({
-        message: `Downloaded ${Array.isArray(payload) ? payload.length : "?"} ${selectedDebugBatchStatus.label.toLowerCase()} batch(es).`,
-        severity: "success",
-      });
-    } catch (err) {
-      setSnackbar({ message: err?.message || "Failed to download batches.", severity: "error" });
-    }
-  };
 
   return (
     <>
@@ -651,34 +612,6 @@ const RunsWorkspace = ({
           }}
         />
       </RunScopedWorkspace>
-      <Box sx={{ mt: 3, display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <TextField
-            select
-            size="small"
-            label="Debug batches"
-            value={downloadStatus}
-            onChange={(e) => setDownloadStatus(e.target.value)}
-            disabled={!selectedRun || !authenticated}
-            sx={{ minWidth: 160 }}
-            InputLabelProps={{ shrink: true }}
-          >
-            {DEBUG_BATCH_STATUS_OPTIONS.map((option) => (
-              <MenuItem key={option.value} value={option.value}>
-                {option.label}
-              </MenuItem>
-            ))}
-          </TextField>
-          <Button
-            variant="outlined"
-            disabled={!selectedRun || !authenticated}
-            onClick={handleDownloadDebugBatches}
-          >
-            Download JSON
-          </Button>
-        </Stack>
-      </Box>
-
       <TomlActionDialog
         open={createRunOpen}
         title="Create Run"

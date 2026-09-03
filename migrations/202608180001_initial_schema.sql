@@ -169,18 +169,6 @@ CREATE INDEX IF NOT EXISTS idx_persisted_observable_snapshots_created
 CREATE INDEX IF NOT EXISTS idx_persisted_observable_snapshots_run_task_id_id_desc
     ON persisted_observable_snapshots(run_id, task_id, id DESC);
 
-CREATE OR REPLACE VIEW work_queue_stats AS
-SELECT
-    b.run_id,
-    b.status,
-    COUNT(*) AS batch_count,
-    SUM(b.batch_size) AS total_samples,
-    AVG(r.total_eval_time_ms) AS avg_batch_time_ms,
-    AVG(r.total_eval_time_ms / NULLIF(b.batch_size, 0)) AS avg_sample_time_ms
-FROM batches b
-LEFT JOIN batch_results r ON r.batch_id = b.id
-GROUP BY b.run_id, b.status;
-
 -- Source: migrations/202605220003_stage_snapshots_checkpoints.sql
 -- Branchable stage state and sampler handoff checkpoints.
 CREATE TABLE IF NOT EXISTS run_stage_snapshots (

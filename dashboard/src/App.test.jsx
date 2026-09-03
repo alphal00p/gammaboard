@@ -5,16 +5,11 @@ import { fetchNodes, fetchRuns } from "./services/api";
 import * as api from "./services/api";
 
 vi.mock("./services/api", () => ({
-  fetchRuns: vi.fn(async () => []),
+  fetchRuns: vi.fn(async () => ({ items: [], nextOffset: null })),
   fetchNodes: vi.fn(async () => []),
   fetchSession: vi.fn(async () => ({ authenticated: false })),
   login: vi.fn(async () => ({ authenticated: true })),
   logout: vi.fn(async () => ({ authenticated: false })),
-  fetchRunLogPage: vi.fn(async () => ({
-    items: [],
-    next_before_id: null,
-    has_more_older: false,
-  })),
   fetchRuntimeLogPage: vi.fn(async () => ({
     items: [],
     next_before_id: null,
@@ -48,16 +43,11 @@ vi.mock("./services/api", () => ({
 describe("App Component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.fetchRuns.mockResolvedValue([]);
+    api.fetchRuns.mockResolvedValue({ items: [], nextOffset: null });
     api.fetchNodes.mockResolvedValue([]);
     api.fetchSession.mockResolvedValue({ authenticated: false });
     api.login.mockResolvedValue({ authenticated: true });
     api.logout.mockResolvedValue({ authenticated: false });
-    api.fetchRunLogPage.mockResolvedValue({
-      items: [],
-      next_before_id: null,
-      has_more_older: false,
-    });
     api.fetchRuntimeLogPage.mockResolvedValue({
       items: [],
       next_before_id: null,

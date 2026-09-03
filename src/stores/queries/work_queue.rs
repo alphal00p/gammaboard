@@ -226,63 +226,6 @@ pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i
     Ok(count.unwrap_or(0))
 }
 
-pub(crate) async fn fetch_batches_by_status(
-    pool: &PgPool,
-    run_id: i32,
-    status: &str,
-    limit: i64,
-) -> Result<
-    Vec<(
-        i64,
-        i64,
-        bool,
-        i32,
-        String,
-        Option<String>,
-        Option<String>,
-        Vec<u8>,
-    )>,
-    sqlx::Error,
-> {
-    let statuses: Vec<String> = match status {
-        "pending" | "claimed" | "failed" => vec![status.to_string()],
-        "all" => ["pending", "claimed", "failed"]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        _ => vec!["claimed".to_string()],
-    };
-    sqlx::query_as::<
-        _,
-        (
-            i64,
-            i64,
-            bool,
-            i32,
-            String,
-            Option<String>,
-            Option<String>,
-            Vec<u8>,
-        ),
-    >(
-        r#"
-        SELECT b.id, b.task_id, b.requires_training_values, b.batch_size,
-               b.status, b.claimed_by_node_name, b.claimed_by_node_uuid, i.latent_batch
-        FROM batches b
-        JOIN batch_inputs i ON i.batch_id = b.id
-        WHERE b.run_id = $1
-          AND b.status = ANY($2)
-        ORDER BY b.created_at, b.id
-        LIMIT $3
-        "#,
-    )
-    .bind(run_id)
-    .bind(statuses)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-}
-
 pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,

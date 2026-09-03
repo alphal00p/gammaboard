@@ -1114,7 +1114,7 @@ mod tests {
     use crate::sampling::{LatentBatchPayload, LatentBatchSpec};
     use crate::stores::{
         EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
-        SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkQueueStats,
+        SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
     };
     use crate::utils::domain::Domain;
     use async_trait::async_trait;
@@ -1603,13 +1603,6 @@ mod tests {
         }
 
         async fn get_run_progress(&self, _run_id: i32) -> Result<Option<RunProgress>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_work_queue_stats(
-            &self,
-            _run_id: i32,
-        ) -> Result<Vec<WorkQueueStats>, StoreError> {
             unreachable!("unused in test")
         }
 

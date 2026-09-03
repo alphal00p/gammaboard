@@ -42,7 +42,7 @@ use gammalooprs::observables::ObservableSnapshotBundle;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 #[cfg(feature = "gammaloop")]
 use std::fs;
 use std::{
@@ -464,8 +464,6 @@ fn clamp_limit(limit: i64) -> i64 {
     limit.clamp(1, 10_000)
 }
 
-const MAX_DEBUG_BATCH_LIMIT: usize = 100;
-
 fn json_response<T: Serialize>(value: T) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(
         serde_json::to_value(value).map_err(|err| ApiError::Internal(err.to_string()))?,
@@ -689,7 +687,6 @@ fn build_app(state: AppState) -> Router {
         .route("/runs", get(get_runs))
         .route("/nodes", get(get_nodes))
         .route("/nodes/:id/panels", get(get_node_panels))
-        .route("/runs/:id", get(get_run))
         .route("/runs/:id/repro-toml", get(get_run_repro_toml))
         .route("/runs/:id/panels", get(get_run_panels))
         .route("/runs/:id/tasks", get(get_run_tasks))
@@ -705,9 +702,7 @@ fn build_app(state: AppState) -> Router {
             get(get_run_sampler_aggregator_config),
         )
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
-        .route("/runs/:id/stats", get(get_run_stats))
         .route("/logs", get(get_logs))
-        .route("/runs/:id/logs", get(get_run_logs))
         .route(
             "/runs/:id/performance/evaluator",
             get(get_run_evaluator_performance_history),
@@ -762,7 +757,6 @@ fn build_app(state: AppState) -> Router {
         .route("/templates/nodes/:name", delete(delete_node_template))
         .route("/admin/db/restart", post(restart_db))
         .route("/admin/control/shutdown", post(shutdown_control_process))
-        .route("/runs/:id/debug/batches", get(get_run_debug_batches))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -872,49 +866,12 @@ async fn get_node_panels(
     json_response(build_worker_panel_response(&worker))
 }
 
-async fn get_run(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<i32>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let run = state
-        .store
-        .get_run_progress(id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound("Run not found".to_string()))?;
-    json_response(run)
-}
-
 async fn get_run_repro_toml(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let toml = run_api::export_run_repro_toml(&state.store, id).await?;
     json_response(RunReproTomlResponse { toml })
-}
-
-async fn get_run_debug_batches(
-    State(state): State<AppState>,
-    AxumPath(run_id): AxumPath<i32>,
-    Query(params): Query<HashMap<String, String>>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = params
-        .get("limit")
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(MAX_DEBUG_BATCH_LIMIT)
-        .clamp(1, MAX_DEBUG_BATCH_LIMIT);
-    let status_param = params
-        .get("status")
-        .map(|s| s.to_lowercase())
-        .unwrap_or_else(|| "claimed".to_string());
-    let status_param = match status_param.as_str() {
-        "pending" | "claimed" | "failed" | "all" => status_param,
-        _ => "claimed".to_string(),
-    };
-    let payload = state
-        .store
-        .fetch_pending_claimed_batches_json(run_id, status_param.as_str(), limit)
-        .await?;
-    json_response(payload)
 }
 
 async fn get_run_panels(
@@ -1341,41 +1298,6 @@ async fn load_run_task(
         .into_iter()
         .find(|task| task.id == task_id)
         .ok_or_else(|| ApiError::NotFound(format!("task {task_id} not found for run {run_id}")))
-}
-
-async fn get_run_stats(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<i32>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let stats = state.store.get_work_queue_stats(id).await?;
-    json_response(stats)
-}
-
-async fn get_run_logs(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<i32>,
-    Query(params): Query<LogQuery>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = clamp_limit(params.limit);
-    let logs = state
-        .store
-        .get_runtime_logs(
-            limit,
-            params.source.as_deref(),
-            Some(id),
-            params.include_children,
-            params.node_name.as_deref(),
-            params.node_uuid.as_deref(),
-            params.level.as_deref(),
-            params
-                .q
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty()),
-            params.before_id,
-        )
-        .await?;
-    json_response(logs)
 }
 
 async fn get_logs(

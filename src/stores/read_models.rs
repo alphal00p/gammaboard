@@ -1,8 +1,6 @@
 //! Read models for API/dashboard responses.
 
-use crate::core::{
-    BatchStatus, EvaluatorPerformanceMetrics, SamplerPerformanceMetrics, WorkerRole,
-};
+use crate::core::{EvaluatorPerformanceMetrics, SamplerPerformanceMetrics, WorkerRole};
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 
@@ -74,17 +72,6 @@ pub struct RunProgress {
     pub completed_batches: i64,
     pub failed_batches: i64,
     pub completion_rate: f64,
-}
-
-/// Work queue statistics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkQueueStats {
-    pub run_id: i32,
-    pub status: BatchStatus,
-    pub batch_count: i64,
-    pub total_samples: i64,
-    pub avg_batch_time_ms: Option<f64>,
-    pub avg_sample_time_ms: Option<f64>,
 }
 
 /// Task-local persisted accumulator snapshot.
