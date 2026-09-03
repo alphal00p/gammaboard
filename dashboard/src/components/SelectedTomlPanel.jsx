@@ -14,45 +14,39 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { copyToClipboard } from "../utils/clipboard";
 
-const SelectedTaskTomlPanel = ({ task }) => {
+const SelectedTomlPanel = ({ kind, name, toml }) => {
   const [copyStatus, setCopyStatus] = useState(null);
-
-  if (!task) {
-    return null;
-  }
+  const normalizedKind = kind.toLowerCase();
 
   const copyToml = async () => {
     try {
-      await copyToClipboard(task.task_toml || "");
-      setCopyStatus({ severity: "success", message: "Task TOML copied." });
+      await copyToClipboard(toml || "");
+      setCopyStatus({ severity: "success", message: `${kind} TOML copied.` });
     } catch (error) {
-      setCopyStatus({ severity: "error", message: error?.message || "Failed to copy task TOML." });
+      setCopyStatus({
+        severity: "error",
+        message: error?.message || `Failed to copy ${normalizedKind} TOML.`,
+      });
     }
   };
 
   return (
     <Accordion sx={{ mb: 2 }}>
-      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ width: "100%", pr: 1 }}>
+      <Stack direction="row" alignItems="center">
+        <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ flex: 1 }}>
           <Box>
-            <Typography variant="h6">Selected Task TOML</Typography>
+            <Typography variant="h6">Selected {kind} TOML</Typography>
             <Typography variant="body2" color="text.secondary">
-              {task.name || "Unnamed task"}
+              {name || `Unnamed ${normalizedKind}`}
             </Typography>
           </Box>
-          <Tooltip title="Copy task TOML">
-            <IconButton
-              size="small"
-              onClick={(event) => {
-                event.stopPropagation();
-                copyToml();
-              }}
-            >
-              <ContentCopyIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-      </AccordionSummary>
+        </AccordionSummary>
+        <Tooltip title={`Copy ${normalizedKind} TOML`}>
+          <IconButton size="small" onClick={copyToml} sx={{ mr: 1 }}>
+            <ContentCopyIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Stack>
       <AccordionDetails>
         {copyStatus ? (
           <Alert severity={copyStatus.severity} sx={{ mb: 2 }} onClose={() => setCopyStatus(null)}>
@@ -69,11 +63,11 @@ const SelectedTaskTomlPanel = ({ task }) => {
             fontSize: 13,
           }}
         >
-          {task.task_toml || "# task TOML unavailable"}
+          {toml || `# ${normalizedKind} TOML unavailable`}
         </Box>
       </AccordionDetails>
     </Accordion>
   );
 };
 
-export default SelectedTaskTomlPanel;
+export default SelectedTomlPanel;

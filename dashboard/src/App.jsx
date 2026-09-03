@@ -44,8 +44,7 @@ const CloneRunDialog = lazy(() => import("./components/runs/CloneRunDialog"));
 const LogsWorkspace = lazy(() => import("./components/LogsWorkspace"));
 const PerformanceWorkspace = lazy(() => import("./components/PerformanceWorkspace"));
 const RunInfo = lazy(() => import("./components/RunInfo"));
-const SelectedRunTomlPanel = lazy(() => import("./components/SelectedRunTomlPanel"));
-const SelectedTaskTomlPanel = lazy(() => import("./components/SelectedTaskTomlPanel"));
+const SelectedTomlPanel = lazy(() => import("./components/SelectedTomlPanel"));
 const SettingsWorkspace = lazy(() => import("./components/SettingsWorkspace"));
 const TaskOutputPanel = lazy(() => import("./components/TaskOutputPanel"));
 const TaskQueuePanel = lazy(() => import("./components/TaskQueuePanel"));
@@ -397,10 +396,14 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
       {currentRun || selectedTask ? (
         <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 1, mb: 2 }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <SelectedRunTomlPanel run={currentRun} />
+            {currentRun ? (
+              <SelectedTomlPanel kind="Run" name={currentRun.run_name} toml={currentRun.run_toml} />
+            ) : null}
           </Box>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <SelectedTaskTomlPanel task={selectedTask} />
+            {selectedTask ? (
+              <SelectedTomlPanel kind="Task" name={selectedTask.name} toml={selectedTask.task_toml} />
+            ) : null}
           </Box>
         </Stack>
       ) : null}

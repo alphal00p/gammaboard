@@ -66,13 +66,6 @@ fn panel_specs(_run_spec: &RunSpec) -> Vec<PanelSpec> {
             PanelWidth::Half,
         ),
         sized_panel_spec(
-            "run_engine",
-            "Engine Summary",
-            PanelKind::KeyValue,
-            PanelHistoryMode::None,
-            PanelWidth::Half,
-        ),
-        sized_panel_spec(
             "run_target",
             "Target",
             PanelKind::Text,
@@ -260,62 +253,9 @@ fn panel_states(
                 ),
             ],
         ),
-        key_value_panel(
-            "run_engine",
-            vec![
-                key_value(
-                    "evaluator",
-                    "Evaluator",
-                    run_spec
-                        .integration_params
-                        .evaluator
-                        .as_ref()
-                        .map(kind_of)
-                        .unwrap_or_else(|| "none".to_string()),
-                ),
-                key_value(
-                    "accumulator",
-                    "Accumulator",
-                    current_task
-                        .map(|task| accumulator_label(&task.task))
-                        .unwrap_or_else(|| "none".to_string()),
-                ),
-                key_value("domain", "Domain", &run_spec.domain),
-                key_value(
-                    "sampler",
-                    "Sampler",
-                    current_task
-                        .map(sampler_label)
-                        .unwrap_or_else(|| "none".to_string()),
-                ),
-            ],
-        ),
         text_panel("run_target", target_summary(run.target.as_ref())),
     ];
     Ok(panels)
-}
-
-fn accumulator_label(task: &crate::core::RunTaskSpec) -> String {
-    match task.new_accumulator_config() {
-        Ok(Some(config)) => kind_of(&config),
-        Ok(None) => "reuse_previous".to_string(),
-        Err(_) => "none".to_string(),
-    }
-}
-
-fn sampler_label(task: &RunTask) -> String {
-    let spec = &task.task;
-    if let Some(config) = spec
-        .sample_sampler_config()
-        .or_else(|| spec.sampler_config())
-    {
-        return kind_of(&config);
-    }
-    match spec.sample_sampler_source() {
-        Some(crate::core::SourceRefSpec::Latest) => "reuse_previous".to_string(),
-        Some(crate::core::SourceRefSpec::FromName(name)) => format!("from:{name}"),
-        None => "none".to_string(),
-    }
 }
 
 fn current_task_label(task: Option<&RunTask>) -> String {
@@ -349,20 +289,6 @@ fn runner_diagnostic_i64(metrics: &JsonValue, key: &str) -> Option<i64> {
         .and_then(JsonValue::as_object)
         .and_then(|value| value.get(key))
         .and_then(JsonValue::as_i64)
-}
-
-fn kind_of(value: &impl serde::Serialize) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| match value {
-            JsonValue::String(value) => Some(value),
-            JsonValue::Object(value) => value
-                .get("kind")
-                .and_then(JsonValue::as_str)
-                .map(str::to_string),
-            _ => None,
-        })
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn target_summary(target: Option<&JsonValue>) -> String {
