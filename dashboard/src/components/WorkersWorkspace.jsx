@@ -22,15 +22,7 @@ import { formatDateTime } from "../utils/formatters";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { useAuth } from "../auth/AuthProvider";
 import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
-import { useTemplates } from "../hooks/useTemplates";
-import {
-  autoRunNodes,
-  deleteTemplateFile,
-  fetchTemplateFile,
-  saveTemplateFile,
-  unassignAllNodes,
-  stopAllNodes,
-} from "../services/api";
+import { autoRunNodes, stopAllNodes, unassignAllNodes } from "../services/api";
 
 const DEFAULT_NODE_LAUNCH_TOML = "";
 const NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.node_launch.selected_template";
@@ -41,12 +33,6 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
   const [launchOpen, setLaunchOpen] = useState(false);
   const [startingNodes, setStartingNodes] = useState(false);
   const [startNodesError, setStartNodesError] = useState(null);
-  const { templates: nodeTemplates, reload: reloadNodeTemplates } = useTemplates({
-    kind: "nodes",
-    enabled: authenticated,
-    onError: (error) =>
-      setSnackbar({ message: error?.message || "Failed to fetch node templates.", severity: "error" }),
-  });
   const [unassigningAllNodes, setUnassigningAllNodes] = useState(false);
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
@@ -295,20 +281,13 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
         submitLabel="Request Nodes"
         initialValue={DEFAULT_NODE_LAUNCH_TOML}
         templateSelectionStorageKey={NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY}
-        templates={nodeTemplates}
-        loadTemplate={async (name) => {
-          const response = await fetchTemplateFile("nodes", name);
-          return response?.toml || "";
-        }}
-        onSaveTemplate={async (name, toml) => {
-          const response = await saveTemplateFile("nodes", { name, toml });
-          await reloadNodeTemplates();
+        templateKind="nodes"
+        templatesEnabled={authenticated}
+        allowTemplateDelete
+        onTemplateSaved={(response, name) => {
           setSnackbar({ message: `Saved node template "${response?.name || name}".`, severity: "success" });
-          return response;
         }}
-        onDeleteTemplate={async (name) => {
-          await deleteTemplateFile("nodes", name);
-          await reloadNodeTemplates();
+        onTemplateDeleted={(name) => {
           setSnackbar({ message: `Deleted node template "${name}".`, severity: "success" });
         }}
         busy={startingNodes}

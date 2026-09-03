@@ -11,6 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
+import { useTemplates } from "../../hooks/useTemplates";
 
 const TomlActionDialog = ({
   open,
@@ -19,10 +20,11 @@ const TomlActionDialog = ({
   submitLabel,
   initialValue,
   helperText = null,
-  templates = [],
-  loadTemplate = null,
-  onSaveTemplate = null,
-  onDeleteTemplate = null,
+  templateKind = null,
+  templatesEnabled = true,
+  allowTemplateDelete = false,
+  onTemplateSaved = null,
+  onTemplateDeleted = null,
   busy = false,
   error = null,
   templateSelectionStorageKey = null,
@@ -38,6 +40,11 @@ const TomlActionDialog = ({
   const [saveTemplateName, setSaveTemplateName] = useState("");
   const wasOpenRef = useRef(false);
   const restoreGenerationRef = useRef(0);
+  const { templates, load: loadTemplate, save: saveTemplate, remove: deleteTemplate } = useTemplates({
+    kind: templateKind,
+    enabled: templatesEnabled && Boolean(templateKind),
+    onError: (err) => setTemplateError(err?.message || "Failed to load templates."),
+  });
 
   const canUseStorage = typeof window !== "undefined" && typeof window.localStorage !== "undefined";
   const readStoredSelection = () => {
@@ -125,7 +132,7 @@ const TomlActionDialog = ({
   };
 
   const handleSaveTemplate = async () => {
-    if (!onSaveTemplate) return;
+    if (!templateKind) return;
     const suggested = selectedTemplate || "new-template.toml";
     setSaveTemplateName(suggested);
     setSaveDialogOpen(true);
@@ -138,18 +145,19 @@ const TomlActionDialog = ({
 
   const handleSaveTemplateSubmit = async (event) => {
     event.preventDefault();
-    if (!onSaveTemplate) return;
+    if (!templateKind) return;
     const name = saveTemplateName.trim();
     if (!name) return;
     setTemplateError(null);
     setTemplateActionBusy(true);
     try {
-      const saved = await onSaveTemplate(name, value);
+      const saved = await saveTemplate(name, value);
       const savedName = String(saved?.name || name).trim();
       if (savedName) {
         setSelectedTemplate(savedName);
         writeStoredSelection(savedName);
       }
+      onTemplateSaved?.(saved, name);
       setSaveDialogOpen(false);
     } catch (err) {
       setTemplateError(err?.message || "Failed to save template.");
@@ -159,12 +167,13 @@ const TomlActionDialog = ({
   };
 
   const handleDeleteTemplate = async () => {
-    if (!onDeleteTemplate || !selectedTemplate) return;
+    if (!allowTemplateDelete || !selectedTemplate) return;
     if (!window.confirm(`Delete template "${selectedTemplate}"?`)) return;
     setTemplateError(null);
     setTemplateActionBusy(true);
     try {
-      await onDeleteTemplate(selectedTemplate);
+      await deleteTemplate(selectedTemplate);
+      onTemplateDeleted?.(selectedTemplate);
       setSelectedTemplate("");
       writeStoredSelection("");
     } catch (err) {
@@ -203,12 +212,12 @@ const TomlActionDialog = ({
                       </MenuItem>
                     ))}
                   </TextField>
-                  {onSaveTemplate ? (
+                  {templateKind ? (
                     <Button variant="outlined" onClick={handleSaveTemplate} disabled={templateActionBusy || templateBusy}>
                       Save as Template
                     </Button>
                   ) : null}
-                  {onDeleteTemplate ? (
+                  {allowTemplateDelete ? (
                     <Button
                       variant="outlined"
                       color="error"

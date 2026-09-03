@@ -19,7 +19,6 @@ import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { useRuns } from "./hooks/useRuns";
 import { useServerStatus } from "./hooks/useServerStatus";
 import { useRunTasks } from "./hooks/useRunTasks";
-import { useTemplates } from "./hooks/useTemplates";
 import { useWorkersData } from "./hooks/useWorkersData";
 import {
   addRunTasks,
@@ -28,12 +27,9 @@ import {
   createRun,
   deleteRun,
   deleteRunTask,
-  deleteTemplateFile,
   fetchNodes,
-  fetchTemplateFile,
   fetchRunReproToml,
   pauseRun,
-  saveTemplateFile,
   unassignNode,
 } from "./services/api";
 import { copyToClipboard } from "./utils/clipboard";
@@ -115,10 +111,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
   const [addTasksBusy, setAddTasksBusy] = useState(false);
   const [cloneRunError, setCloneRunError] = useState(null);
   const [addTasksError, setAddTasksError] = useState(null);
-  const { templates: taskTemplates, reload: reloadTaskTemplates } = useTemplates({
-    kind: "tasks",
-    onError: (error) => console.error("Failed to fetch task templates:", error),
-  });
   const [evaluatorCount, setEvaluatorCount] = useState(() => {
     if (typeof window === "undefined") return "";
     const stored = window.localStorage.getItem(EVALUATOR_COUNT_STORAGE_KEY);
@@ -432,21 +424,13 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
         submitLabel="Add Tasks"
         initialValue={DEFAULT_ADD_TASKS_TOML}
         helperText='Submit one or more [[task_queue]] entries using sampler_aggregator / accumulator sources: omitted = latest, or { from_name = "..." }, or { config = ... }.'
-        templates={taskTemplates}
-        loadTemplate={async (name) => {
-          const response = await fetchTemplateFile("tasks", name);
-          return response?.toml || "";
-        }}
-        onSaveTemplate={async (name, toml) => {
-          const response = await saveTemplateFile("tasks", { name, toml });
-          await reloadTaskTemplates();
+        templateKind="tasks"
+        allowTemplateDelete
+        onTemplateSaved={(response, name) => {
           setSnackbar({ message: `Saved task template "${response?.name || name}".`, severity: "success" });
-          return response;
         }}
         templateSelectionStorageKey={ADD_TASKS_TEMPLATE_SELECTION_STORAGE_KEY}
-        onDeleteTemplate={async (name) => {
-          await deleteTemplateFile("tasks", name);
-          await reloadTaskTemplates();
+        onTemplateDeleted={(name) => {
           setSnackbar({ message: `Deleted task template "${name}".`, severity: "success" });
         }}
         busy={addTasksBusy}
@@ -499,10 +483,6 @@ const RunsWorkspace = ({
   const [copyRunBusy, setCopyRunBusy] = useState(false);
   const [createRunError, setCreateRunError] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
-  const { templates: runTemplates, reload: reloadRunTemplates } = useTemplates({
-    kind: "runs",
-    onError: (error) => console.error("Failed to fetch run templates:", error),
-  });
 
   return (
     <>
@@ -576,16 +556,9 @@ const RunsWorkspace = ({
         submitLabel="Create Run"
         initialValue={DEFAULT_CREATE_RUN_TOML}
         helperText="Enter a run config. The backend merges this with the built-in default run template."
-        templates={runTemplates}
-        loadTemplate={async (name) => {
-          const response = await fetchTemplateFile("runs", name);
-          return response?.toml || "";
-        }}
-        onSaveTemplate={async (name, toml) => {
-          const response = await saveTemplateFile("runs", { name, toml });
-          await reloadRunTemplates();
+        templateKind="runs"
+        onTemplateSaved={(response, name) => {
           setSnackbar({ message: `Saved run template "${response?.name || name}".`, severity: "success" });
-          return response;
         }}
         templateSelectionStorageKey={CREATE_RUN_TEMPLATE_SELECTION_STORAGE_KEY}
         busy={createRunBusy}
