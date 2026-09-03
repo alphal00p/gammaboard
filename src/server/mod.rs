@@ -708,14 +708,6 @@ fn build_app(state: AppState) -> Router {
             "/runs/:id/performance/sampler-aggregator",
             get(get_run_sampler_performance_history),
         )
-        .route(
-            "/nodes/:id/performance/evaluator",
-            get(get_node_evaluator_performance_history),
-        )
-        .route(
-            "/nodes/:id/performance/sampler-aggregator",
-            get(get_node_sampler_performance_history),
-        )
         .route("/histogram-bundle/export", post(export_histogram_bundle))
         .route("/runs", post(create_run))
         .route("/runs/clone", post(clone_run))
@@ -2388,36 +2380,6 @@ async fn get_run_sampler_performance_history(
         .get_sampler_performance_history(id, limit, params.node_name.as_deref())
         .await?;
     json_response(build_sampler_performance_response(Some(scope_id), rows))
-}
-
-async fn get_node_evaluator_performance_history(
-    State(state): State<AppState>,
-    AxumPath(node_name): AxumPath<String>,
-    Query(params): Query<PerformanceHistoryQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let limit = clamp_limit(params.limit);
-    let payload = state
-        .store
-        .get_worker_evaluator_performance_history(&node_name, limit)
-        .await?;
-    json_response(build_evaluator_performance_response(
-        Some(node_name),
-        payload,
-        false,
-    ))
-}
-
-async fn get_node_sampler_performance_history(
-    State(state): State<AppState>,
-    AxumPath(node_name): AxumPath<String>,
-    Query(params): Query<PerformanceHistoryQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let limit = clamp_limit(params.limit);
-    let payload = state
-        .store
-        .get_worker_sampler_performance_history(&node_name, limit)
-        .await?;
-    json_response(build_sampler_performance_response(Some(node_name), payload))
 }
 
 async fn export_histogram_bundle(

@@ -413,17 +413,3 @@ export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeNam
     signal,
   );
 };
-
-export const fetchNodeEvaluatorPerformanceHistory = async (nodeName, limit = 500, signal) =>
-  apiGet(
-    `/nodes/${nodeName}/performance/evaluator${buildQueryString([["limit", limit]])}`,
-    "Failed to fetch node evaluator performance history",
-    signal,
-  );
-
-export const fetchNodeSamplerPerformanceHistory = async (nodeName, limit = 500, signal) =>
-  apiGet(
-    `/nodes/${nodeName}/performance/sampler-aggregator${buildQueryString([["limit", limit]])}`,
-    "Failed to fetch node sampler performance history",
-    signal,
-  );

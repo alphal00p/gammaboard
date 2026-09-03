@@ -339,22 +339,6 @@ impl RunReadStore for PgStore {
     ) -> Result<Vec<crate::stores::SamplerPerformanceHistoryEntry>, StoreError> {
         Ok(queries::get_sampler_performance_history(&self.pool, run_id, limit, worker_id).await?)
     }
-
-    async fn get_worker_evaluator_performance_history(
-        &self,
-        worker_id: &str,
-        limit: i64,
-    ) -> Result<Vec<crate::stores::EvaluatorPerformanceHistoryEntry>, StoreError> {
-        Ok(queries::get_worker_evaluator_performance_history(&self.pool, worker_id, limit).await?)
-    }
-
-    async fn get_worker_sampler_performance_history(
-        &self,
-        worker_id: &str,
-        limit: i64,
-    ) -> Result<Vec<crate::stores::SamplerPerformanceHistoryEntry>, StoreError> {
-        Ok(queries::get_worker_sampler_performance_history(&self.pool, worker_id, limit).await?)
-    }
 }
 
 #[async_trait::async_trait]

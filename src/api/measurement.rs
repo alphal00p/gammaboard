@@ -562,20 +562,6 @@ mod tests {
         ) -> Result<Vec<SamplerPerformanceHistoryEntry>, crate::core::StoreError> {
             Ok(self.sampler_history.as_ref().clone())
         }
-        async fn get_worker_evaluator_performance_history(
-            &self,
-            _worker_id: &str,
-            _limit: i64,
-        ) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, crate::core::StoreError> {
-            unreachable!("unused")
-        }
-        async fn get_worker_sampler_performance_history(
-            &self,
-            _worker_id: &str,
-            _limit: i64,
-        ) -> Result<Vec<SamplerPerformanceHistoryEntry>, crate::core::StoreError> {
-            unreachable!("unused")
-        }
     }
 
     #[async_trait]

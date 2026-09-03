@@ -22,12 +22,6 @@ vi.mock("./services/api", () => ({
   fetchTemplateFile: vi.fn(async () => ({ name: "template.toml", toml: "" })),
   fetchEvaluatorPerformanceHistory: vi.fn(async () => ({ source_id: "perf:run:evaluator", panels: [], updates: [] })),
   fetchSamplerPerformanceHistory: vi.fn(async () => ({ source_id: "perf:sampler", panels: [], updates: [] })),
-  fetchNodeEvaluatorPerformanceHistory: vi.fn(async () => ({ source_id: "perf:evaluator", panels: [], updates: [] })),
-  fetchNodeSamplerPerformanceHistory: vi.fn(async () => ({
-    source_id: "perf:node:sampler",
-    panels: [],
-    updates: [],
-  })),
   fetchNodeLaunchRequests: vi.fn(async () => []),
   fetchServerStatus: vi.fn(async () => ({ status: "ok", database: "connected", server_name: "local" })),
   shutdownControlProcess: vi.fn(async () => ({ shutdown_requested: true })),
@@ -63,16 +57,6 @@ describe("App Component", () => {
       updates: [],
     });
     api.fetchSamplerPerformanceHistory.mockResolvedValue({ source_id: "perf:sampler", panels: [], updates: [] });
-    api.fetchNodeEvaluatorPerformanceHistory.mockResolvedValue({
-      source_id: "perf:evaluator",
-      panels: [],
-      updates: [],
-    });
-    api.fetchNodeSamplerPerformanceHistory.mockResolvedValue({
-      source_id: "perf:node:sampler",
-      panels: [],
-      updates: [],
-    });
     api.fetchNodeLaunchRequests.mockResolvedValue([]);
     api.fetchServerStatus.mockResolvedValue({ status: "ok", database: "connected", server_name: "local" });
     api.shutdownControlProcess.mockResolvedValue({ shutdown_requested: true });

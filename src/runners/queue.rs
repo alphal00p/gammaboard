@@ -1663,22 +1663,6 @@ mod tests {
         ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError> {
             unreachable!("unused in test")
         }
-
-        async fn get_worker_evaluator_performance_history(
-            &self,
-            _worker_id: &str,
-            _limit: i64,
-        ) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_worker_sampler_performance_history(
-            &self,
-            _worker_id: &str,
-            _limit: i64,
-        ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError> {
-            unreachable!("unused in test")
-        }
     }
 
     fn latent_batch_with_weight(weight: f64) -> LatentBatch {

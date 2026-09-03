@@ -1,9 +1,5 @@
 import { useCallback } from "react";
-import {
-  fetchEvaluatorPerformanceHistory,
-  fetchNodeEvaluatorPerformanceHistory,
-  fetchSamplerPerformanceHistory,
-} from "../services/api";
+import { fetchEvaluatorPerformanceHistory, fetchSamplerPerformanceHistory } from "../services/api";
 import { usePanelSource } from "./usePanelSource";
 
 export const useRunPerformancePanels = ({ runId, evaluatorNodeName = null, limit = 200, pollMs = 5000 } = {}) => {
@@ -22,9 +18,9 @@ export const useRunPerformancePanels = ({ runId, evaluatorNodeName = null, limit
   const fetchEvaluatorPanels = useCallback(
     (_request, signal) => {
       if (!evaluatorEnabled) return null;
-      return fetchNodeEvaluatorPerformanceHistory(evaluatorNodeName, limit, signal);
+      return fetchEvaluatorPerformanceHistory(runId, limit, evaluatorNodeName, signal);
     },
-    [evaluatorEnabled, evaluatorNodeName, limit],
+    [evaluatorEnabled, evaluatorNodeName, limit, runId],
   );
   const fetchRunEvaluatorPanels = useCallback(
     (_request, signal) => {
