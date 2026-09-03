@@ -22,11 +22,11 @@ import { formatDateTime } from "../utils/formatters";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { useAuth } from "../auth/AuthProvider";
 import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
+import { useTemplates } from "../hooks/useTemplates";
 import {
   autoRunNodes,
   deleteTemplateFile,
   fetchTemplateFile,
-  fetchTemplateList,
   saveTemplateFile,
   unassignAllNodes,
   stopAllNodes,
@@ -41,36 +41,17 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
   const [launchOpen, setLaunchOpen] = useState(false);
   const [startingNodes, setStartingNodes] = useState(false);
   const [startNodesError, setStartNodesError] = useState(null);
-  const [nodeTemplates, setNodeTemplates] = useState([]);
+  const { templates: nodeTemplates, reload: reloadNodeTemplates } = useTemplates({
+    kind: "nodes",
+    enabled: authenticated,
+    onError: (error) =>
+      setSnackbar({ message: error?.message || "Failed to fetch node templates.", severity: "error" }),
+  });
   const [unassigningAllNodes, setUnassigningAllNodes] = useState(false);
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
   const launchRequestsData = useNodeLaunchRequests({ enabled: authenticated });
   const sortedWorkers = useMemo(() => [...workers].sort(compareNodesByName), [workers]);
-
-  const reloadNodeTemplates = async () => {
-    try {
-      const items = await fetchTemplateList("nodes");
-      setNodeTemplates(items);
-    } catch (err) {
-      setSnackbar({ message: err?.message || "Failed to fetch node templates.", severity: "error" });
-    }
-  };
-
-  useEffect(() => {
-    if (!authenticated) return;
-    let cancelled = false;
-    fetchTemplateList("nodes")
-      .then((items) => {
-        if (!cancelled) setNodeTemplates(items);
-      })
-      .catch((err) => {
-        if (!cancelled) setSnackbar({ message: err?.message || "Failed to fetch node templates.", severity: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [authenticated]);
 
   const displayRole = (worker) => worker.current_role || "None";
   const displayRun = (worker) => {

@@ -19,6 +19,7 @@ import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
 import { useRuns } from "./hooks/useRuns";
 import { useServerStatus } from "./hooks/useServerStatus";
 import { useRunTasks } from "./hooks/useRunTasks";
+import { useTemplates } from "./hooks/useTemplates";
 import { useWorkersData } from "./hooks/useWorkersData";
 import {
   addRunTasks,
@@ -30,7 +31,6 @@ import {
   deleteTemplateFile,
   fetchNodes,
   fetchTemplateFile,
-  fetchTemplateList,
   fetchRunReproToml,
   pauseRun,
   saveTemplateFile,
@@ -115,7 +115,10 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
   const [addTasksBusy, setAddTasksBusy] = useState(false);
   const [cloneRunError, setCloneRunError] = useState(null);
   const [addTasksError, setAddTasksError] = useState(null);
-  const [taskTemplates, setTaskTemplates] = useState([]);
+  const { templates: taskTemplates, reload: reloadTaskTemplates } = useTemplates({
+    kind: "tasks",
+    onError: (error) => console.error("Failed to fetch task templates:", error),
+  });
   const [evaluatorCount, setEvaluatorCount] = useState(() => {
     if (typeof window === "undefined") return "";
     const stored = window.localStorage.getItem(EVALUATOR_COUNT_STORAGE_KEY);
@@ -123,29 +126,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
   });
   const [autoUnassigning, setAutoUnassigning] = useState(false);
   const { authenticated } = useAuth();
-
-  const reloadTaskTemplates = useCallback(async () => {
-    try {
-      const items = await fetchTemplateList("tasks");
-      setTaskTemplates(items);
-    } catch (err) {
-      console.error("Failed to fetch task templates:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchTemplateList("tasks")
-      .then((items) => {
-        if (!cancelled) setTaskTemplates(items);
-      })
-      .catch((err) => {
-        console.error("Failed to fetch task templates:", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -519,30 +499,10 @@ const RunsWorkspace = ({
   const [copyRunBusy, setCopyRunBusy] = useState(false);
   const [createRunError, setCreateRunError] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
-  const [runTemplates, setRunTemplates] = useState([]);
-
-  const reloadRunTemplates = useCallback(async () => {
-    try {
-      const items = await fetchTemplateList("runs");
-      setRunTemplates(items);
-    } catch (err) {
-      console.error("Failed to fetch run templates:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchTemplateList("runs")
-      .then((items) => {
-        if (!cancelled) setRunTemplates(items);
-      })
-      .catch((err) => {
-        console.error("Failed to fetch run templates:", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { templates: runTemplates, reload: reloadRunTemplates } = useTemplates({
+    kind: "runs",
+    onError: (error) => console.error("Failed to fetch run templates:", error),
+  });
 
   return (
     <>
