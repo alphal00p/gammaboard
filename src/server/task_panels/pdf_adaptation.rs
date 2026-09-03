@@ -25,7 +25,7 @@ pub(super) fn projectors(
             "Reference-normalized integrand",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::LogPlaneNormalizedIntegrand,
+            ImageKind::LogReferenceNormalizedIntegrand,
         ),
         image_projector(
             "pdf_adaptation_log_pdf",
@@ -38,7 +38,7 @@ pub(super) fn projectors(
             "pdf_adaptation_log_integrand_histogram",
             "Histogram: Reference-normalized integrand",
             PanelWidth::Half,
-            ImageKind::LogPlaneNormalizedIntegrand,
+            ImageKind::LogReferenceNormalizedIntegrand,
         ),
         histogram_projector(
             "pdf_adaptation_log_pdf_histogram",
@@ -122,7 +122,7 @@ pub(super) fn line_projectors(
             "Reference-normalized integrand (1D)",
             PanelWidth::Half,
             geometry.clone(),
-            ImageKind::LogPlaneNormalizedIntegrand,
+            ImageKind::LogReferenceNormalizedIntegrand,
         ),
         line_projector(
             "pdf_adaptation_log_pdf_line",
@@ -143,7 +143,7 @@ pub(super) fn line_projectors(
             "pdf_adaptation_log_integrand_histogram",
             "Histogram: Reference-normalized integrand",
             PanelWidth::Half,
-            ImageKind::LogPlaneNormalizedIntegrand,
+            ImageKind::LogReferenceNormalizedIntegrand,
         ),
         histogram_projector(
             "pdf_adaptation_log_pdf_histogram",
@@ -162,7 +162,7 @@ pub(super) fn line_projectors(
 
 #[derive(Clone, Copy)]
 enum ImageKind {
-    LogPlaneNormalizedIntegrand,
+    LogReferenceNormalizedIntegrand,
     LogPlaneNormalizedPdf,
     Oversampling,
 }
@@ -410,7 +410,6 @@ fn finite_positive_abs(value: f64) -> Option<f64> {
 struct DerivedValues {
     output: PdfAdaptationImagePersistedOutput,
     reference_abs_integrand_norm: Option<f64>,
-    log_plane_normalized_integrand: Vec<Option<f64>>,
     log_reference_normalized_integrand: Vec<Option<f64>>,
     log_plane_normalized_pdf: Vec<Option<f64>>,
     oversampling_ratio: Vec<Option<f64>>,
@@ -426,11 +425,6 @@ impl DerivedValues {
         let reference_abs_integrand_norm = target_abs_integrand_norm
             .or(output.global_abs_integrand_norm)
             .or(mean_abs_integrand);
-        let log_plane_normalized_integrand = output
-            .abs_integrand_values
-            .iter()
-            .map(|value| log10_ratio(*value, mean_abs_integrand))
-            .collect::<Vec<_>>();
         let log_reference_normalized_integrand = output
             .abs_integrand_values
             .iter()
@@ -457,7 +451,6 @@ impl DerivedValues {
         Self {
             output,
             reference_abs_integrand_norm,
-            log_plane_normalized_integrand,
             log_reference_normalized_integrand,
             log_plane_normalized_pdf,
             oversampling_ratio,
@@ -466,7 +459,7 @@ impl DerivedValues {
 
     fn values(&self, image_kind: ImageKind, metric: OversamplingMetric) -> Vec<Option<f64>> {
         match image_kind {
-            ImageKind::LogPlaneNormalizedIntegrand => {
+            ImageKind::LogReferenceNormalizedIntegrand => {
                 self.log_reference_normalized_integrand.clone()
             }
             ImageKind::LogPlaneNormalizedPdf => self.log_plane_normalized_pdf.clone(),
@@ -562,16 +555,16 @@ fn histogram_panel(
     metric: OversamplingMetric,
 ) -> PanelState {
     let bins = match image_kind {
-        ImageKind::LogPlaneNormalizedIntegrand => {
+        ImageKind::LogReferenceNormalizedIntegrand => {
             histogram_bins_on_shared_edges(
-                &derived.log_plane_normalized_integrand,
+                &derived.log_reference_normalized_integrand,
                 &derived.log_plane_normalized_pdf,
             )
             .0
         }
         ImageKind::LogPlaneNormalizedPdf => {
             histogram_bins_on_shared_edges(
-                &derived.log_plane_normalized_integrand,
+                &derived.log_reference_normalized_integrand,
                 &derived.log_plane_normalized_pdf,
             )
             .1
@@ -588,7 +581,7 @@ fn histogram_panel(
 fn metric_label(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
     match image_kind {
         ImageKind::Oversampling => Some(metric.label()),
-        ImageKind::LogPlaneNormalizedIntegrand => Some("log10(normalized integrand)"),
+        ImageKind::LogReferenceNormalizedIntegrand => Some("log10(normalized integrand)"),
         ImageKind::LogPlaneNormalizedPdf => Some("log10(normalized PDF)"),
     }
 }
@@ -596,7 +589,7 @@ fn metric_label(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'s
 fn metric_mode(image_kind: ImageKind, metric: OversamplingMetric) -> Option<&'static str> {
     match image_kind {
         ImageKind::Oversampling => Some(metric.as_str()),
-        ImageKind::LogPlaneNormalizedIntegrand => Some("log10_integrand"),
+        ImageKind::LogReferenceNormalizedIntegrand => Some("log10_integrand"),
         ImageKind::LogPlaneNormalizedPdf => Some("log10_pdf"),
     }
 }
@@ -943,8 +936,8 @@ mod tests {
     fn derived_values_compute_log_panels() {
         let derived = DerivedValues::from_output(output(), None);
         assert_eq!(
-            derived.log_plane_normalized_integrand,
-            vec![Some((2.0_f64 / 3.0).log10()), Some((4.0_f64 / 3.0).log10())]
+            derived.log_reference_normalized_integrand,
+            vec![Some((2.0_f64 / 5.0).log10()), Some((4.0_f64 / 5.0).log10())]
         );
         assert_eq!(
             derived.log_plane_normalized_pdf,
