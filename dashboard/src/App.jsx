@@ -42,11 +42,10 @@ import { asArray } from "./utils/collections";
 import { asTaskList, getCurrentTask } from "./utils/tasks";
 
 const CloneRunDialog = lazy(() => import("./components/runs/CloneRunDialog"));
-const EvaluatorPanel = lazy(() => import("./components/EvaluatorPanel"));
 const LogsWorkspace = lazy(() => import("./components/LogsWorkspace"));
 const PerformanceWorkspace = lazy(() => import("./components/PerformanceWorkspace"));
+const RunConfigPanel = lazy(() => import("./components/RunConfigPanel"));
 const RunInfo = lazy(() => import("./components/RunInfo"));
-const SamplerAggregatorPanel = lazy(() => import("./components/SamplerAggregatorPanel"));
 const SelectedRunTomlPanel = lazy(() => import("./components/SelectedRunTomlPanel"));
 const SelectedTaskTomlPanel = lazy(() => import("./components/SelectedTaskTomlPanel"));
 const SettingsWorkspace = lazy(() => import("./components/SettingsWorkspace"));
@@ -107,7 +106,7 @@ const DashboardHeader = () => {
 const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelectRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
-  const { evaluator, sampler } = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
+  const runConfig = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [pausing, setPausing] = useState(false);
@@ -415,8 +414,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
         onSelectRun={onSelectRun}
       />
       <RunInfo runId={selectedRun} />
-      <EvaluatorPanel run={currentRun} panelResponse={evaluator} />
-      <SamplerAggregatorPanel run={currentRun} panelResponse={sampler} />
+      <RunConfigPanel panelResponse={runConfig} />
       <CloneRunDialog
         open={cloneRunOpen}
         initialName={cloneInitialName}

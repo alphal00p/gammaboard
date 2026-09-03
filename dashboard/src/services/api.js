@@ -323,11 +323,8 @@ export const fetchRunTasks = async (runId, signal) => {
   return asArray(data).map(normalizeRunTaskEntry).filter(Boolean);
 };
 
-export const fetchRunEvaluatorConfigPanels = async (runId, signal) =>
-  apiGet(`/runs/${runId}/config/evaluator`, "Failed to fetch evaluator config panels", signal);
-
-export const fetchRunSamplerConfigPanels = async (runId, signal) =>
-  apiGet(`/runs/${runId}/config/sampler-aggregator`, "Failed to fetch sampler config panels", signal);
+export const fetchRunConfigPanels = async (runId, signal) =>
+  apiGet(`/runs/${runId}/config`, "Failed to fetch run config panels", signal);
 
 export const fetchRunTaskPanels = async (
   runId,

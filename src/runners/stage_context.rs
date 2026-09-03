@@ -12,9 +12,36 @@ pub(crate) const PDF_ADAPTATION_HANDOFF_REQUIRED_ERROR: &str =
 
 pub(crate) struct ResolvedStageContext {
     pub(crate) evaluator_config: EvaluatorConfig,
+    pub(crate) evaluator_provenance: StageConfigProvenance,
     pub(crate) sampler_config: crate::core::SamplerAggregatorConfig,
+    pub(crate) sampler_provenance: StageConfigProvenance,
     pub(crate) batch_transforms: Vec<BatchTransformConfig>,
     pub(crate) handoff: Option<StageHandoffOwned>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StageConfigProvenance {
+    pub(crate) name: String,
+    pub(crate) task_id: Option<i64>,
+    pub(crate) snapshot_id: Option<i64>,
+}
+
+impl StageConfigProvenance {
+    fn from_task(task: &RunTask) -> Self {
+        Self {
+            name: task.name.clone(),
+            task_id: Some(task.id),
+            snapshot_id: None,
+        }
+    }
+
+    pub(crate) fn from_snapshot(snapshot: &crate::core::RunStageSnapshot) -> Self {
+        Self {
+            name: snapshot.name.clone(),
+            task_id: snapshot.task_id,
+            snapshot_id: snapshot.id,
+        }
+    }
 }
 
 fn handoff_contains_havana_grid(handoff: &StageHandoffOwned) -> bool {
@@ -65,7 +92,7 @@ pub(crate) async fn resolve_stage_context<S>(
 where
     S: AggregationStore + RunTaskStore + Send + Sync,
 {
-    let explicit_sampler_config =
+    let has_explicit_sampler_config =
         task.task.sampler_config().is_some() || task.task.sample_sampler_config().is_some();
     let restoring_active_task = restored_snapshot.is_some();
     let sampler_source_snapshot =
@@ -77,46 +104,60 @@ where
         .load_latest_stage_snapshot_before_sequence(run_id, fallback_sequence_nr)
         .await?;
 
-    let evaluator_config = task
-        .task
-        .evaluator_config()
-        .or_else(|| {
-            evaluator_source_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.evaluator.clone())
-        })
-        .or_else(|| {
-            base_stage_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.evaluator.clone())
-        })
-        .ok_or_else(|| {
-            StoreError::store(format!(
+    let (evaluator_config, evaluator_provenance) =
+        if let Some(config) = task.task.evaluator_config() {
+            (config, StageConfigProvenance::from_task(task))
+        } else if let Some(snapshot) = evaluator_source_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.evaluator.is_some())
+        {
+            (
+                snapshot.evaluator.clone().expect("checked above"),
+                StageConfigProvenance::from_snapshot(snapshot),
+            )
+        } else if let Some(snapshot) = base_stage_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.evaluator.is_some())
+        {
+            (
+                snapshot.evaluator.clone().expect("checked above"),
+                StageConfigProvenance::from_snapshot(snapshot),
+            )
+        } else {
+            return Err(StoreError::store(format!(
                 "run {} task {} has no evaluator configuration",
                 run_id, task.id
-            ))
-        })?;
+            )));
+        };
 
-    let sampler_config = task
+    let task_sampler_config = task
         .task
         .sampler_config()
-        .or_else(|| task.task.sample_sampler_config())
-        .or_else(|| {
-            sampler_source_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.sampler_aggregator.clone())
-        })
-        .or_else(|| {
-            base_stage_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.sampler_aggregator.clone())
-        })
-        .ok_or_else(|| {
-            StoreError::store(format!(
-                "run {} task {} has no sampler configuration",
-                run_id, task.id
-            ))
-        })?;
+        .or_else(|| task.task.sample_sampler_config());
+    let (sampler_config, sampler_provenance) = if let Some(config) = task_sampler_config {
+        (config, StageConfigProvenance::from_task(task))
+    } else if let Some(snapshot) = sampler_source_snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.sampler_aggregator.is_some())
+    {
+        (
+            snapshot.sampler_aggregator.clone().expect("checked above"),
+            StageConfigProvenance::from_snapshot(snapshot),
+        )
+    } else if let Some(snapshot) = base_stage_snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.sampler_aggregator.is_some())
+    {
+        (
+            snapshot.sampler_aggregator.clone().expect("checked above"),
+            StageConfigProvenance::from_snapshot(snapshot),
+        )
+    } else {
+        return Err(StoreError::store(format!(
+            "run {} task {} has no sampler configuration",
+            run_id, task.id
+        )));
+    };
 
     let batch_transforms = task
         .task
@@ -182,7 +223,7 @@ where
         }
         (_, handoff) => handoff,
     };
-    let handoff = if explicit_sampler_config
+    let handoff = if has_explicit_sampler_config
         && !restoring_active_task
         && !matches!(
             sampler_config,
@@ -197,7 +238,9 @@ where
 
     Ok(ResolvedStageContext {
         evaluator_config,
+        evaluator_provenance,
         sampler_config,
+        sampler_provenance,
         batch_transforms,
         handoff,
     })

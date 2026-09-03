@@ -34,8 +34,8 @@ Backend panel poll endpoints -> usePanelSource -> PanelCollection -> renderers
   response containing panel specs plus `replace` and `append` updates.
 - `PerformanceWorkspace` renders run-level sampler throughput and selected
   evaluator worker timing panels through the same panel transport.
-- Engine config panels use the same generic panel response, but normally only
-  emit `replace` updates.
+- The effective engine config uses one stage-aware panel response for both the
+  evaluator and sampler and normally only emits `replace` updates.
 - `usePanelSource` owns cursor tracking and patch application.
 - `PanelCollection` renders panel state and applies simple layout hints.
 - `RunInfo` uses backend-generated run summary panels instead of parsing run
@@ -49,7 +49,7 @@ Backend panel poll endpoints -> usePanelSource -> PanelCollection -> renderers
   server-owned opaque cursor.
 - `useRunPerformancePanels({ runId, evaluatorNodeId })` polls performance
   panels.
-- `useRunConfigPanels({ runId })` polls backend-generated evaluator and sampler
+- `useRunConfigPanels({ runId })` polls the backend-generated effective engine
   config panels.
 - `useWorkerLogs()` fetches log history for the Logs tab.
 

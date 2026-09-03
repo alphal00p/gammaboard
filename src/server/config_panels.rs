@@ -31,11 +31,13 @@ pub trait PanelRenderer<C> {
 pub struct EvaluatorPanelContext<'a> {
     pub domain: &'a Domain,
     pub runner_params: &'a EvaluatorRunnerParams,
+    pub provenance: &'a str,
 }
 
 pub struct SamplerAggregatorPanelContext<'a> {
     pub domain: &'a Domain,
     pub runner_params: &'a SamplerAggregatorRunnerParams,
+    pub provenance: &'a str,
 }
 
 impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
@@ -64,6 +66,7 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     ) -> Result<Vec<PanelState>, EngineError> {
         let summary = vec![
             key_value("implementation", "Implementation", self.kind_str()),
+            key_value("effective_source", "Effective Source", ctx.provenance),
             key_value("domain", "Domain", summarize_domain(ctx.domain)),
             key_value(
                 "snapshot_interval_ms",
@@ -125,6 +128,7 @@ impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
             "sampler_summary",
             vec![
                 key_value("implementation", "Implementation", self.kind_str()),
+                key_value("effective_source", "Effective Source", ctx.provenance),
                 key_value("domain", "Domain", summarize_domain(ctx.domain)),
                 key_value(
                     "snapshot_interval_ms",

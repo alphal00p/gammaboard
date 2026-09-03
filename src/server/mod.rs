@@ -16,6 +16,7 @@ use crate::core::{
     SamplerQueueTuning,
 };
 use crate::evaluation::AccumulatorState;
+use crate::runners::stage_context::{StageConfigProvenance, resolve_stage_context};
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
@@ -696,11 +697,7 @@ fn build_app(state: AppState) -> Router {
         .route("/templates/tasks/:name", get(get_task_template))
         .route("/templates/nodes", get(list_node_templates))
         .route("/templates/nodes/:name", get(get_node_template))
-        .route("/runs/:id/config/evaluator", get(get_run_evaluator_config))
-        .route(
-            "/runs/:id/config/sampler-aggregator",
-            get(get_run_sampler_aggregator_config),
-        )
+        .route("/runs/:id/config", get(get_run_config))
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route("/logs", get(get_logs))
         .route(
@@ -1034,7 +1031,7 @@ async fn delete_node_template(
     json_response(serde_json::json!({ "deleted": true, "name": name }))
 }
 
-async fn get_run_evaluator_config(
+async fn get_run_config(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
@@ -1043,103 +1040,104 @@ async fn get_run_evaluator_config(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let Some(evaluator) = run_spec.integration_params.evaluator.as_ref() else {
-        return Err(ApiError::NotFound(format!(
-            "run {run_id} has no root evaluator config"
-        )));
+    let active_task = state.store.load_active_run_task(run_id).await?;
+
+    let (evaluator, sampler) = match active_task {
+        Some(task) if task.task.runs_on_sampler_worker() => {
+            let resolved =
+                resolve_stage_context(&state.store, run_id, &task, task.sequence_nr, None).await?;
+            (
+                Some((resolved.evaluator_config, resolved.evaluator_provenance)),
+                Some((resolved.sampler_config, resolved.sampler_provenance)),
+            )
+        }
+        Some(task) if task.task.is_controller() => (None, None),
+        _ => {
+            let latest_snapshot = state
+                .store
+                .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
+                .await?;
+            configs_from_stage_snapshot(latest_snapshot.as_ref())
+        }
     };
-    let response: PanelResponse = evaluator
-        .build_response(
-            format!("run:{run_id}:config:evaluator"),
-            &EvaluatorPanelContext {
-                domain: &run_spec.domain,
-                runner_params: &run_spec.integration_params.evaluator_runner_params,
-            },
-        )
-        .map_err(|err| ApiError::Internal(err.to_string()))?;
+
+    let mut response = PanelResponse {
+        source_id: format!("run:{run_id}:config"),
+        cursor: None,
+        reset_required: true,
+        panels: Vec::new(),
+        updates: Vec::new(),
+        poll_after_ms: None,
+    };
+    if let Some((evaluator, provenance)) = evaluator {
+        let provenance = format_stage_config_provenance(&provenance);
+        let evaluator_response = evaluator
+            .build_response(
+                response.source_id.clone(),
+                &EvaluatorPanelContext {
+                    domain: &run_spec.domain,
+                    runner_params: &run_spec.integration_params.evaluator_runner_params,
+                    provenance: &provenance,
+                },
+            )
+            .map_err(|err| ApiError::Internal(err.to_string()))?;
+        response.panels.extend(evaluator_response.panels);
+        response.updates.extend(evaluator_response.updates);
+    }
+    if let Some((sampler, provenance)) = sampler {
+        let provenance = format_stage_config_provenance(&provenance);
+        let sampler_response = sampler
+            .build_response(
+                response.source_id.clone(),
+                &SamplerAggregatorPanelContext {
+                    domain: &run_spec.domain,
+                    runner_params: &run_spec.integration_params.sampler_aggregator_runner_params,
+                    provenance: &provenance,
+                },
+            )
+            .map_err(|err: crate::core::BuildError| ApiError::Internal(err.to_string()))?;
+        response.panels.extend(sampler_response.panels);
+        response.updates.extend(sampler_response.updates);
+    }
     json_response(response)
 }
 
-async fn get_run_sampler_aggregator_config(
-    State(state): State<AppState>,
-    AxumPath(run_id): AxumPath<i32>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let _run = state
-        .store
-        .get_run_progress(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let run_spec = state
-        .store
-        .load_run_spec(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let sampler_config = if let Some(task) = state.store.load_active_run_task(run_id).await? {
-        resolve_active_task_sampler_config(&state, run_id, &task).await?
-    } else if let Some(latest_snapshot) = state
-        .store
-        .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
-        .await?
-    {
-        latest_snapshot.sampler_aggregator.ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "run {run_id} has no configured sampler_aggregator yet"
-            ))
-        })?
-    } else {
-        return Err(ApiError::BadRequest(format!(
-            "run {run_id} has no configured sampler_aggregator yet"
-        )));
-    };
-    let response: PanelResponse = sampler_config
-        .build_response(
-            format!("run:{run_id}:config:sampler_aggregator"),
-            &SamplerAggregatorPanelContext {
-                domain: &run_spec.domain,
-                runner_params: &run_spec.integration_params.sampler_aggregator_runner_params,
-            },
-        )
-        .map_err(|err: crate::core::BuildError| ApiError::Internal(err.to_string()))?;
-    json_response(response)
+type EffectiveEvaluatorConfig = (crate::core::EvaluatorConfig, StageConfigProvenance);
+type EffectiveSamplerConfig = (crate::core::SamplerAggregatorConfig, StageConfigProvenance);
+
+fn configs_from_stage_snapshot(
+    snapshot: Option<&crate::core::RunStageSnapshot>,
+) -> (
+    Option<EffectiveEvaluatorConfig>,
+    Option<EffectiveSamplerConfig>,
+) {
+    let evaluator = snapshot.and_then(|snapshot| {
+        snapshot
+            .evaluator
+            .clone()
+            .map(|config| (config, StageConfigProvenance::from_snapshot(snapshot)))
+    });
+    let sampler = snapshot.and_then(|snapshot| {
+        snapshot
+            .sampler_aggregator
+            .clone()
+            .map(|config| (config, StageConfigProvenance::from_snapshot(snapshot)))
+    });
+    (evaluator, sampler)
 }
 
-async fn resolve_active_task_sampler_config(
-    state: &AppState,
-    run_id: i32,
-    task: &RunTask,
-) -> Result<crate::core::SamplerAggregatorConfig, ApiError> {
-    if let Some(config) = task.task.sampler_config() {
-        return Ok(config);
+fn format_stage_config_provenance(provenance: &StageConfigProvenance) -> String {
+    match (provenance.task_id, provenance.snapshot_id) {
+        (Some(task_id), Some(snapshot_id)) => format!(
+            "stage '{}' (task #{task_id}, snapshot #{snapshot_id})",
+            provenance.name
+        ),
+        (Some(task_id), None) => format!("task '{}' (#{task_id})", provenance.name),
+        (None, Some(snapshot_id)) => {
+            format!("stage '{}' (snapshot #{snapshot_id})", provenance.name)
+        }
+        (None, None) => format!("stage '{}'", provenance.name),
     }
-    if let Some(config) = task.task.sample_sampler_config() {
-        return Ok(config);
-    }
-
-    if let Some(source_snapshot) = stage_api::resolve_task_source_snapshot(
-        &state.store,
-        run_id,
-        task,
-        task.task.sample_sampler_source(),
-    )
-    .await?
-        && let Some(config) = source_snapshot.sampler_aggregator
-    {
-        return Ok(config);
-    }
-
-    if let Some(base_snapshot) = state
-        .store
-        .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
-        .await?
-        && let Some(config) = base_snapshot.sampler_aggregator
-    {
-        return Ok(config);
-    }
-
-    Err(ApiError::BadRequest(format!(
-        "task {} has no effective sampler_aggregator configuration",
-        task.id
-    )))
 }
 
 async fn get_run_task_output(

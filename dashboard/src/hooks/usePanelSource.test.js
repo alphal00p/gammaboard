@@ -87,4 +87,34 @@ describe("usePanelSource", () => {
     await waitFor(() => expect(fetchPanels).toHaveBeenCalledTimes(2));
     expect(fetchPanels.mock.calls[1][0].panelState).toMatchObject({ mode: "log" });
   });
+
+  test("clears panels when a complete response becomes empty", async () => {
+    const fetchPanels = vi
+      .fn()
+      .mockResolvedValueOnce({
+        source_id: "source",
+        panels: [{ panel_id: "summary", kind: "key_value", label: "Summary", history: "none" }],
+        updates: [],
+        poll_after_ms: 1,
+      })
+      .mockResolvedValue({
+        source_id: "source",
+        panels: [],
+        updates: [],
+        reset_required: true,
+        poll_after_ms: null,
+      });
+
+    const { result } = renderHook(() =>
+      usePanelSource({
+        enabled: true,
+        pollMs: 60_000,
+        fetchPanels,
+        useCursor: false,
+      }),
+    );
+
+    await waitFor(() => expect(fetchPanels).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.panelSpecs).toEqual([]));
+  });
 });
