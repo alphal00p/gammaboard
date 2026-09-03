@@ -703,7 +703,10 @@ struct RunTaskResponse {
     run_id: i32,
     name: String,
     sequence_nr: i32,
-    task: RunTaskSpec,
+    task_kind: String,
+    goal_label: String,
+    is_sample: bool,
+    queue_tuning: Option<SamplerQueueTuning>,
     state: RunTaskState,
     nr_completed_samples_including_children: i64,
     failure_reason: Option<String>,
@@ -719,12 +722,28 @@ impl RunTaskResponse {
         latest_stage_snapshot_id: Option<i64>,
         root_stage_snapshot_id: Option<i64>,
     ) -> Self {
+        let task_kind = task.task.kind_str().to_string();
+        let goal_label = match &task.task {
+            RunTaskSpec::SetAccumulator { .. } => "-".to_string(),
+            task => task
+                .nr_expected_samples()
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "unbounded".to_string()),
+        };
+        let queue_tuning = match &task.task {
+            RunTaskSpec::Sample { queue_tuning, .. } => queue_tuning.clone(),
+            _ => None,
+        };
+        let is_sample = matches!(task.task, RunTaskSpec::Sample { .. });
         Self {
             id: task.id,
             run_id: task.run_id,
             name: task.name,
             sequence_nr: task.sequence_nr,
-            task: task.task,
+            task_kind,
+            goal_label,
+            is_sample,
+            queue_tuning,
             state: task.state,
             nr_completed_samples_including_children: task.nr_completed_samples_including_children,
             failure_reason: task.failure_reason,
@@ -2107,8 +2126,11 @@ mod tests {
         let value = serde_json::to_value(RunTaskResponse::new(task, Some(8), Some(2))).unwrap();
 
         assert_eq!(value["id"], "7");
-        assert_eq!(value["task"]["kind"], "set_accumulator");
+        assert_eq!(value["task_kind"], "set_accumulator");
+        assert_eq!(value["goal_label"], "-");
+        assert_eq!(value["is_sample"], false);
         for omitted in [
+            "task",
             "task_toml",
             "nr_produced_samples",
             "nr_completed_samples",

@@ -10,7 +10,6 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
-import { getTaskKindLabel, getTaskTargetLabel } from "../utils/tasks";
 
 const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null }) => {
   return (
@@ -49,9 +48,13 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                     >
                       <TableCell>{task.name || "Unnamed task"}</TableCell>
                       <TableCell>{task.state}</TableCell>
-                      <TableCell>{getTaskKindLabel(task)}</TableCell>
+                      <TableCell>{task.task_kind}</TableCell>
                       <TableCell>{task.failure_reason || "-"}</TableCell>
-                      <TableCell align="right">{getTaskTargetLabel(task)}</TableCell>
+                      <TableCell align="right">
+                        {Number.isFinite(Number(task.goal_label))
+                          ? Number(task.goal_label).toLocaleString()
+                          : task.goal_label}
+                      </TableCell>
                       <TableCell align="right">
                         {Number(
                           task.nr_completed_samples_including_children ?? task.nr_completed_samples ?? 0,

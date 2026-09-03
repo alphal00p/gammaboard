@@ -90,10 +90,10 @@ const PerformanceWorkspace = ({
   const sampleTask = useMemo(() => {
     const taskList = asTaskList(tasks);
     const currentTask = getCurrentTask(taskList);
-    if (currentTask?.task?.kind === "sample") return currentTask;
+    if (currentTask?.is_sample) return currentTask;
     return (
-      taskList.find((task) => task?.state === "active" && task?.task?.kind === "sample") ??
-      taskList.find((task) => task?.task?.kind === "sample") ??
+      taskList.find((task) => task?.state === "active" && task?.is_sample) ??
+      taskList.find((task) => task?.is_sample) ??
       null
     );
   }, [tasks]);

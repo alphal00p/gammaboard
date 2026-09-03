@@ -39,11 +39,11 @@ const QueueTuningPanel = ({
   onSave,
   onClear,
 }) => {
-  const isSampleTask = task?.task?.kind === "sample";
+  const isSampleTask = task?.is_sample === true;
 
   const initialForm = useMemo(() => {
     const defaults = run?.queue_tuning_defaults ?? {};
-    const override = isSampleTask ? task?.task?.queue_tuning ?? null : null;
+    const override = isSampleTask ? task?.queue_tuning ?? null : null;
     const next = {};
     for (const field of QUEUE_TUNING_FIELDS) {
       next[field.key] = valueText(override?.[field.key] ?? defaults?.[field.key] ?? "");
