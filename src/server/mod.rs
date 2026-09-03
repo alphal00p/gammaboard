@@ -12,15 +12,18 @@ use crate::api::{
     templates as template_api, toml_template,
 };
 use crate::core::{
-    AggregationStore, ControlPlaneStore, RunReadStore, RunSpecStore, RunTask, RunTaskStore,
-    SamplerQueueTuning,
+    AggregationStore, ControlPlaneStore, EngineError, RunReadStore, RunSpec, RunSpecStore, RunTask,
+    RunTaskStore, SamplerQueueTuning,
 };
 use crate::evaluation::AccumulatorState;
 use crate::runners::stage_context::{StageConfigProvenance, resolve_stage_context};
 use crate::server::config_panels::{
     EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
 };
-use crate::server::panels::{PanelRequest, PanelResponse};
+use crate::server::panels::{
+    PanelHistoryMode, PanelKind, PanelRequest, PanelResponse, PanelWidth, replace_panel,
+    sized_panel_spec, text_panel,
+};
 use crate::server::performance_panels::{
     build_evaluator_performance_response, build_sampler_performance_response,
 };
@@ -704,7 +707,6 @@ fn build_app(state: AppState) -> Router {
             "/templates/:kind/:name",
             get(get_template).delete(delete_template),
         )
-        .route("/runs/:id/config", get(get_run_config))
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route("/logs", get(get_logs))
         .route(
@@ -880,10 +882,51 @@ async fn get_run_panels(
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
     let tasks = state.store.list_run_tasks(run_id).await?;
     let workers = state.store.get_registered_workers(Some(run_id)).await?;
-    json_response(
-        build_run_panel_response(&run, &run_spec, &tasks, &workers)
-            .map_err(|err| ApiError::Internal(err.to_string()))?,
-    )
+    let mut response = build_run_panel_response(&run, &run_spec, &tasks, &workers)
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+
+    let active_task = tasks.iter().find(|task| task.state.as_str() == "active");
+    let configs = match active_task {
+        Some(task) if task.task.runs_on_sampler_worker() => {
+            resolve_stage_context(&state.store, run_id, task, task.sequence_nr, None)
+                .await
+                .map(|resolved| {
+                    (
+                        Some((resolved.evaluator_config, resolved.evaluator_provenance)),
+                        Some((resolved.sampler_config, resolved.sampler_provenance)),
+                    )
+                })
+        }
+        Some(task) if task.task.is_controller() => Ok((None, None)),
+        _ => state
+            .store
+            .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
+            .await
+            .map(|snapshot| configs_from_stage_snapshot(snapshot.as_ref())),
+    };
+
+    match configs {
+        Ok((evaluator, sampler)) => {
+            append_engine_config_panels(&mut response, &run_spec, evaluator, sampler)
+                .map_err(|err| ApiError::Internal(err.to_string()))?;
+        }
+        Err(err) => {
+            tracing::warn!(run_id, error = %err, "failed to resolve run engine configuration panels");
+            response.panels.push(sized_panel_spec(
+                "engine_config_error",
+                "Engine Configuration",
+                PanelKind::Text,
+                PanelHistoryMode::None,
+                PanelWidth::Full,
+            ));
+            response.updates.push(replace_panel(text_panel(
+                "engine_config_error",
+                format!("Failed to resolve the effective engine configuration: {err}"),
+            )));
+        }
+    }
+
+    json_response(response)
 }
 
 async fn get_run_tasks(
@@ -956,75 +999,43 @@ async fn delete_template(
     json_response(serde_json::json!({ "deleted": true, "name": name }))
 }
 
-async fn get_run_config(
-    State(state): State<AppState>,
-    AxumPath(run_id): AxumPath<i32>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let run_spec = state
-        .store
-        .load_run_spec(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let active_task = state.store.load_active_run_task(run_id).await?;
-
-    let (evaluator, sampler) = match active_task {
-        Some(task) if task.task.runs_on_sampler_worker() => {
-            let resolved =
-                resolve_stage_context(&state.store, run_id, &task, task.sequence_nr, None).await?;
-            (
-                Some((resolved.evaluator_config, resolved.evaluator_provenance)),
-                Some((resolved.sampler_config, resolved.sampler_provenance)),
-            )
-        }
-        Some(task) if task.task.is_controller() => (None, None),
-        _ => {
-            let latest_snapshot = state
-                .store
-                .load_latest_stage_snapshot_before_sequence(run_id, i32::MAX)
-                .await?;
-            configs_from_stage_snapshot(latest_snapshot.as_ref())
-        }
-    };
-
-    let mut response = PanelResponse {
-        source_id: format!("run:{run_id}:config"),
-        cursor: None,
-        reset_required: true,
-        panels: Vec::new(),
-        updates: Vec::new(),
-        poll_after_ms: None,
-    };
+fn append_engine_config_panels(
+    response: &mut PanelResponse,
+    run_spec: &RunSpec,
+    evaluator: Option<EffectiveEvaluatorConfig>,
+    sampler: Option<EffectiveSamplerConfig>,
+) -> Result<(), EngineError> {
     if let Some((evaluator, provenance)) = evaluator {
         let provenance = format_stage_config_provenance(&provenance);
-        let evaluator_response = evaluator
-            .build_response(
-                response.source_id.clone(),
-                &EvaluatorPanelContext {
-                    domain: &run_spec.domain,
-                    runner_params: &run_spec.integration_params.evaluator_runner_params,
-                    provenance: &provenance,
-                },
-            )
-            .map_err(|err| ApiError::Internal(err.to_string()))?;
-        response.panels.extend(evaluator_response.panels);
-        response.updates.extend(evaluator_response.updates);
+        let context = EvaluatorPanelContext {
+            domain: &run_spec.domain,
+            runner_params: &run_spec.integration_params.evaluator_runner_params,
+            provenance: &provenance,
+        };
+        response.panels.extend(evaluator.panel_specs(&context));
+        response.updates.extend(
+            evaluator
+                .panel_states(&context)?
+                .into_iter()
+                .map(replace_panel),
+        );
     }
     if let Some((sampler, provenance)) = sampler {
         let provenance = format_stage_config_provenance(&provenance);
-        let sampler_response = sampler
-            .build_response(
-                response.source_id.clone(),
-                &SamplerAggregatorPanelContext {
-                    domain: &run_spec.domain,
-                    runner_params: &run_spec.integration_params.sampler_aggregator_runner_params,
-                    provenance: &provenance,
-                },
-            )
-            .map_err(|err: crate::core::BuildError| ApiError::Internal(err.to_string()))?;
-        response.panels.extend(sampler_response.panels);
-        response.updates.extend(sampler_response.updates);
+        let context = SamplerAggregatorPanelContext {
+            domain: &run_spec.domain,
+            runner_params: &run_spec.integration_params.sampler_aggregator_runner_params,
+            provenance: &provenance,
+        };
+        response.panels.extend(sampler.panel_specs(&context));
+        response.updates.extend(
+            sampler
+                .panel_states(&context)?
+                .into_iter()
+                .map(replace_panel),
+        );
     }
-    json_response(response)
+    Ok(())
 }
 
 type EffectiveEvaluatorConfig = (crate::core::EvaluatorConfig, StageConfigProvenance);

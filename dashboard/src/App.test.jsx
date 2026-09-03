@@ -16,7 +16,6 @@ vi.mock("./services/api", () => ({
     has_more_older: false,
   })),
   fetchRunTasks: vi.fn(async () => []),
-  fetchRunConfigPanels: vi.fn(async () => ({ source_id: "cfg", panels: [], updates: [] })),
   fetchRunTaskPanels: vi.fn(async () => ({ source_id: "task", panels: [], updates: [] })),
   fetchTemplateList: vi.fn(async () => []),
   fetchTemplateFile: vi.fn(async () => ({ name: "template.toml", toml: "" })),
@@ -47,7 +46,6 @@ describe("App Component", () => {
       has_more_older: false,
     });
     api.fetchRunTasks.mockResolvedValue([]);
-    api.fetchRunConfigPanels.mockResolvedValue({ source_id: "cfg", panels: [], updates: [] });
     api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task", panels: [], updates: [] });
     api.fetchTemplateList.mockResolvedValue([]);
     api.fetchTemplateFile.mockResolvedValue({ name: "template.toml", toml: "" });

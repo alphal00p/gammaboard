@@ -16,7 +16,6 @@ import gammaboardLogo from "./assets/gammalooplogo.svg";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import LoginDialog from "./components/auth/LoginDialog";
 import RunScopedWorkspace from "./components/common/RunScopedWorkspace";
-import { useRunConfigPanels } from "./hooks/useRunConfigPanels";
 import { useRuns } from "./hooks/useRuns";
 import { useServerStatus } from "./hooks/useServerStatus";
 import { useRunTasks } from "./hooks/useRunTasks";
@@ -44,7 +43,6 @@ import { asTaskList, getCurrentTask } from "./utils/tasks";
 const CloneRunDialog = lazy(() => import("./components/runs/CloneRunDialog"));
 const LogsWorkspace = lazy(() => import("./components/LogsWorkspace"));
 const PerformanceWorkspace = lazy(() => import("./components/PerformanceWorkspace"));
-const RunConfigPanel = lazy(() => import("./components/RunConfigPanel"));
 const RunInfo = lazy(() => import("./components/RunInfo"));
 const SelectedRunTomlPanel = lazy(() => import("./components/SelectedRunTomlPanel"));
 const SelectedTaskTomlPanel = lazy(() => import("./components/SelectedTaskTomlPanel"));
@@ -106,7 +104,6 @@ const DashboardHeader = () => {
 const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelectRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
   const { tasks } = useRunTasks(selectedRun, 2000);
-  const runConfig = useRunConfigPanels({ runId: selectedRun, pollMs: 5000 });
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
   const [pausing, setPausing] = useState(false);
@@ -414,7 +411,6 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
         onSelectRun={onSelectRun}
       />
       <RunInfo runId={selectedRun} />
-      <RunConfigPanel panelResponse={runConfig} />
       <CloneRunDialog
         open={cloneRunOpen}
         initialName={cloneInitialName}

@@ -323,9 +323,6 @@ export const fetchRunTasks = async (runId, signal) => {
   return asArray(data).map(normalizeRunTaskEntry).filter(Boolean);
 };
 
-export const fetchRunConfigPanels = async (runId, signal) =>
-  apiGet(`/runs/${runId}/config`, "Failed to fetch run config panels", signal);
-
 export const fetchRunTaskPanels = async (
   runId,
   taskId,

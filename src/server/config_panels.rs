@@ -1,8 +1,8 @@
 use crate::core::{EngineError, EvaluatorConfig, SamplerAggregatorConfig};
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, key_value,
-    key_value_panel, replace_panel, sized_panel_spec,
+    PanelHistoryMode, PanelKind, PanelSpec, PanelState, PanelWidth, key_value, key_value_panel,
+    sized_panel_spec,
 };
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
@@ -11,21 +11,6 @@ use serde_json::json;
 pub trait PanelRenderer<C> {
     fn panel_specs(&self, ctx: &C) -> Vec<PanelSpec>;
     fn panel_states(&self, ctx: &C) -> Result<Vec<PanelState>, EngineError>;
-
-    fn build_response(&self, source_id: String, ctx: &C) -> Result<PanelResponse, EngineError> {
-        Ok(PanelResponse {
-            source_id,
-            cursor: None,
-            reset_required: false,
-            panels: self.panel_specs(ctx),
-            updates: self
-                .panel_states(ctx)?
-                .into_iter()
-                .map(replace_panel)
-                .collect(),
-            poll_after_ms: None,
-        })
-    }
 }
 
 pub struct EvaluatorPanelContext<'a> {
