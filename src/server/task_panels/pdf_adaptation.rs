@@ -899,7 +899,6 @@ mod tests {
     fn output() -> PdfAdaptationImagePersistedOutput {
         PdfAdaptationImagePersistedOutput {
             processed: 2,
-            abs_integrand_mean: Some(3.0),
             global_abs_integrand_norm: Some(5.0),
             global_pdf_norm: 1.0,
             signed_integrand_values: vec![Some(-2.0), Some(4.0)],

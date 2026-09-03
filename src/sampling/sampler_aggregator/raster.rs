@@ -73,14 +73,11 @@ pub struct PdfAdaptationImageOutputState {
     pub signed_integrand_values: Vec<Option<f64>>,
     pub abs_integrand_values: Vec<Option<f64>>,
     pub pdf_values: Vec<Option<f64>>,
-    pub abs_integrand_sum: f64,
-    pub abs_integrand_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PdfAdaptationImagePersistedOutput {
     pub processed: usize,
-    pub abs_integrand_mean: Option<f64>,
     #[serde(default)]
     pub global_abs_integrand_norm: Option<f64>,
     #[serde(default = "default_pdf_global_norm")]
@@ -273,7 +270,6 @@ impl PdfAdaptationRasterPlaneSampler {
     fn output_for_frontend(&self) -> PdfAdaptationImagePersistedOutput {
         PdfAdaptationImagePersistedOutput {
             processed: self.ingested_samples,
-            abs_integrand_mean: self.output_state.abs_integrand_mean(),
             global_abs_integrand_norm: self.global_abs_integrand_norm,
             global_pdf_norm: self.global_pdf_norm,
             signed_integrand_values: self.output_state.signed_integrand_values.clone(),
@@ -300,8 +296,6 @@ impl PdfAdaptationRasterPlaneSampler {
             }
             self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
             self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
-            self.output_state.abs_integrand_sum += training_value.abs();
-            self.output_state.abs_integrand_count += 1;
             pdf_indices.push(canonical_index);
             pdf_points.push((
                 self.params.geometry.discrete.clone(),
@@ -388,7 +382,6 @@ impl PdfAdaptationRasterLineSampler {
     fn output_for_frontend(&self) -> PdfAdaptationImagePersistedOutput {
         PdfAdaptationImagePersistedOutput {
             processed: self.ingested_samples,
-            abs_integrand_mean: self.output_state.abs_integrand_mean(),
             global_abs_integrand_norm: self.global_abs_integrand_norm,
             global_pdf_norm: self.global_pdf_norm,
             signed_integrand_values: self.output_state.signed_integrand_values.clone(),
@@ -415,8 +408,6 @@ impl PdfAdaptationRasterLineSampler {
             }
             self.output_state.signed_integrand_values[canonical_index] = Some(training_value);
             self.output_state.abs_integrand_values[canonical_index] = Some(training_value.abs());
-            self.output_state.abs_integrand_sum += training_value.abs();
-            self.output_state.abs_integrand_count += 1;
             pdf_indices.push(canonical_index);
             pdf_points.push((
                 self.params.geometry.discrete.clone(),
@@ -444,14 +435,7 @@ impl PdfAdaptationImageOutputState {
             signed_integrand_values: vec![None; total_samples],
             abs_integrand_values: vec![None; total_samples],
             pdf_values: vec![None; total_samples],
-            abs_integrand_sum: 0.0,
-            abs_integrand_count: 0,
         }
-    }
-
-    fn abs_integrand_mean(&self) -> Option<f64> {
-        (self.abs_integrand_count > 0)
-            .then_some(self.abs_integrand_sum / self.abs_integrand_count as f64)
     }
 }
 
@@ -1079,7 +1063,6 @@ mod tests {
             serde_json::from_value(output).expect("decode payload");
 
         assert_eq!(output.processed, 2);
-        assert_eq!(output.abs_integrand_mean, Some(3.0));
         assert_eq!(output.signed_integrand_values, vec![Some(2.0), Some(4.0)]);
         assert_eq!(output.abs_integrand_values, vec![Some(2.0), Some(4.0)]);
         assert_eq!(output.pdf_values, vec![Some(1.0), Some(1.0)]);
@@ -1133,7 +1116,6 @@ mod tests {
             serde_json::from_value(output).expect("decode payload");
 
         assert_eq!(output.processed, 2);
-        assert_eq!(output.abs_integrand_mean, Some(4.0));
         assert_eq!(output.signed_integrand_values, vec![None, Some(4.0)]);
         assert_eq!(output.abs_integrand_values, vec![None, Some(4.0)]);
         assert_eq!(output.pdf_values, vec![None, Some(1.0)]);
