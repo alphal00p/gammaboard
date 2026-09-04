@@ -259,27 +259,65 @@ fn child_rows(
 mod tests {
     use super::*;
     use crate::core::{
-        ControllerChildOutput, ControllerChildState, IntegrationCampaignChildOutput,
+        AccumulatorMetricName, ControllerChildOutput, ControllerChildState,
+        IntegrationCampaignChildOutput, MeasurementResult, TaskMeasurementOutput,
     };
 
-    #[test]
-    fn stopped_campaign_does_not_show_active_child() {
-        let child = IntegrationCampaignChildOutput {
+    fn child(measurement: Option<TaskMeasurementOutput>) -> IntegrationCampaignChildOutput {
+        IntegrationCampaignChildOutput {
             name: "graph".to_string(),
-            coefficient: 1.0,
+            coefficient: 2.0,
             child: ControllerChildOutput {
                 child_run_id: Some(2),
                 status: ControllerChildState::Active,
                 result_source: None,
                 completed_samples_per_second: None,
-                measurement: None,
+                measurement,
                 failure_reason: None,
             },
             selected: false,
             score: None,
-        };
+        }
+    }
+
+    #[test]
+    fn stopped_campaign_does_not_show_active_child() {
+        let child = child(None);
 
         assert_eq!(child_rows(&child, false)[0][1], json!("active"));
         assert_eq!(child_rows(&child, true)[0][1], json!("stopped"));
+    }
+
+    #[test]
+    fn complex_measurement_exposes_one_row_per_component() {
+        let measurement = TaskMeasurementOutput::Completed {
+            results: vec![
+                MeasurementResult {
+                    name: AccumulatorMetricName::Mean,
+                    component: Some("real".to_string()),
+                    value: 3.0,
+                    uncertainty: Some(0.4),
+                    sample_count: 10,
+                },
+                MeasurementResult {
+                    name: AccumulatorMetricName::Mean,
+                    component: Some("imag".to_string()),
+                    value: -2.0,
+                    uncertainty: Some(0.2),
+                    sample_count: 10,
+                },
+            ],
+        };
+
+        let rows = child_rows(&child(Some(measurement)), false);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][5], json!("real"));
+        assert_eq!(rows[0][6], json!(3.0));
+        assert_eq!(rows[0][7], json!(0.4));
+        assert!((rows[0][8].as_f64().unwrap() - 0.64).abs() < 1e-12);
+        assert_eq!(rows[1][5], json!("imag"));
+        assert_eq!(rows[1][6], json!(-2.0));
+        assert_eq!(rows[1][7], json!(0.2));
+        assert!((rows[1][8].as_f64().unwrap() - 0.16).abs() < 1e-12);
     }
 }

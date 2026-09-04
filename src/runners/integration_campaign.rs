@@ -574,6 +574,35 @@ mod tests {
         }
     }
 
+    fn complex_child(
+        run_id: i32,
+        coefficient: f64,
+        real: (f64, f64),
+        imag: (f64, f64),
+        samples: i64,
+    ) -> ChildState {
+        let mut child = child(run_id, coefficient, real.0, real.1, samples);
+        child.measurement = Some(TaskMeasurementOutput::Completed {
+            results: vec![
+                MeasurementResult {
+                    name: AccumulatorMetricName::Mean,
+                    component: Some("real".to_string()),
+                    value: real.0,
+                    uncertainty: Some(real.1),
+                    sample_count: samples,
+                },
+                MeasurementResult {
+                    name: AccumulatorMetricName::Mean,
+                    component: Some("imag".to_string()),
+                    value: imag.0,
+                    uncertainty: Some(imag.1),
+                    sample_count: samples,
+                },
+            ],
+        });
+        child
+    }
+
     #[test]
     fn combines_weighted_independent_measurements() {
         let results =
@@ -582,6 +611,27 @@ mod tests {
         assert_eq!(results[0].value, 5.0);
         assert!((results[0].uncertainty.unwrap() - 0.73_f64.sqrt()).abs() < 1e-12);
         assert_eq!(results[0].sample_count, 30);
+    }
+
+    #[test]
+    fn combines_weighted_complex_measurements_component_wise() {
+        let results = combine_measurements(&[
+            complex_child(1, 2.0, (3.0, 0.4), (-2.0, 0.2), 10),
+            complex_child(2, -0.5, (1.0, 0.3), (4.0, 0.6), 20),
+        ])
+        .expect("combined");
+
+        let real = &results[0];
+        assert_eq!(real.component.as_deref(), Some("real"));
+        assert_eq!(real.value, 5.5);
+        assert!((real.uncertainty.unwrap() - 0.6625_f64.sqrt()).abs() < 1e-12);
+        assert_eq!(real.sample_count, 30);
+
+        let imag = &results[1];
+        assert_eq!(imag.component.as_deref(), Some("imag"));
+        assert_eq!(imag.value, -6.0);
+        assert!((imag.uncertainty.unwrap() - 0.5).abs() < 1e-12);
+        assert_eq!(imag.sample_count, 30);
     }
 
     #[test]
