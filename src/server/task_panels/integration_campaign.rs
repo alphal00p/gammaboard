@@ -94,32 +94,50 @@ fn summary_projector() -> TaskPanelProjector {
                 .controller_output
                 .as_ref()
                 .and_then(crate::core::ControllerTaskOutput::integration_campaign);
-            let result = output
+            let results = output
                 .and_then(|output| output.combined_measurement.as_ref())
                 .and_then(|measurement| match measurement {
-                    crate::core::TaskMeasurementOutput::Completed { results } => results.first(),
+                    crate::core::TaskMeasurementOutput::Completed { results } => Some(results),
                     crate::core::TaskMeasurementOutput::Failed { .. } => None,
                 });
-            let estimate = result.and_then(|result| {
-                Some(json!({
-                    "kind": "estimate",
-                    "value": result.value,
-                    "error": result.uncertainty?,
-                }))
-            });
-            Ok(Some(key_value_panel(
-                SUMMARY_ID,
-                vec![
-                    key_value("estimate", "Estimate", estimate.unwrap_or(JsonValue::Null)),
+            let mut entries = results
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(index, result)| {
+                    let component = result.component.as_deref();
+                    let key = component
+                        .map(str::to_string)
+                        .unwrap_or_else(|| index.to_string());
                     key_value(
-                        "samples",
-                        "Total Samples",
-                        output
-                            .map(|output| json!(output.total_samples))
-                            .unwrap_or(JsonValue::Null),
-                    ),
-                ],
-            )))
+                        &format!("estimate_{key}"),
+                        match component {
+                            Some("real") => "Real",
+                            Some("imag") => "Imaginary",
+                            Some(component) => component,
+                            None => "Estimate",
+                        },
+                        result.uncertainty.map_or_else(
+                            || json!(result.value),
+                            |error| {
+                                json!({
+                                    "kind": "estimate",
+                                    "value": result.value,
+                                    "error": error,
+                                })
+                            },
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            entries.push(key_value(
+                "samples",
+                "Total Samples",
+                output
+                    .map(|output| json!(output.total_samples))
+                    .unwrap_or(JsonValue::Null),
+            ));
+            Ok(Some(key_value_panel(SUMMARY_ID, entries)))
         },
         |_ctx| Ok(None),
     )
@@ -148,11 +166,11 @@ fn children_projector() -> TaskPanelProjector {
                     output
                         .children
                         .iter()
-                        .map(|child| child_row(child, campaign_stopped))
+                        .flat_map(|child| child_rows(child, campaign_stopped))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let payload = child_table_payload(&rows, 7, Default::default());
+            let payload = child_table_payload(&rows, 8, Default::default());
             Ok(Some(table_panel_with_payload_and_options(
                 CHILDREN_ID,
                 vec![
@@ -161,6 +179,7 @@ fn children_projector() -> TaskPanelProjector {
                     "selected".to_string(),
                     "run".to_string(),
                     "coefficient".to_string(),
+                    "component".to_string(),
                     "value".to_string(),
                     "uncertainty".to_string(),
                     "variance contribution".to_string(),
@@ -169,7 +188,7 @@ fn children_projector() -> TaskPanelProjector {
                 rows,
                 Some(payload),
                 crate::server::panels::TableStateOptions {
-                    visible_column_indices: vec![0, 1, 2, 4, 5, 6, 7, 8],
+                    visible_column_indices: vec![0, 1, 2, 4, 5, 6, 7, 8, 9],
                     row_keys: None,
                 },
             )))
@@ -178,20 +197,19 @@ fn children_projector() -> TaskPanelProjector {
     )
 }
 
-fn child_row(
+fn child_rows(
     child: &crate::core::IntegrationCampaignChildOutput,
     campaign_stopped: bool,
-) -> Vec<JsonValue> {
-    let result = child
+) -> Vec<Vec<JsonValue>> {
+    let results = child
         .child
         .measurement
         .as_ref()
         .and_then(|measurement| match measurement {
-            crate::core::TaskMeasurementOutput::Completed { results } => results.first(),
+            crate::core::TaskMeasurementOutput::Completed { results } => Some(results.as_slice()),
             crate::core::TaskMeasurementOutput::Failed { .. } => None,
         });
-    let uncertainty = result.and_then(|result| result.uncertainty);
-    vec![
+    let common = vec![
         json!(child.name),
         if campaign_stopped
             && matches!(
@@ -208,17 +226,33 @@ fn child_row(
         json!(child.selected),
         json!(child.child.child_run_id),
         json!(child.coefficient),
-        result
-            .map(|result| json!(result.value))
-            .unwrap_or(JsonValue::Null),
-        uncertainty.map_or(JsonValue::Null, |value| json!(value)),
-        uncertainty.map_or(JsonValue::Null, |value| {
-            json!(child.coefficient.powi(2) * value.powi(2))
-        }),
-        result
-            .map(|result| json!(result.sample_count))
-            .unwrap_or(JsonValue::Null),
-    ]
+    ];
+    results
+        .filter(|results| !results.is_empty())
+        .map(|results| {
+            results
+                .iter()
+                .map(|result| {
+                    let uncertainty = result.uncertainty;
+                    let mut row = common.clone();
+                    row.extend([
+                        json!(result.component),
+                        json!(result.value),
+                        uncertainty.map_or(JsonValue::Null, |value| json!(value)),
+                        uncertainty.map_or(JsonValue::Null, |value| {
+                            json!(child.coefficient.powi(2) * value.powi(2))
+                        }),
+                        json!(result.sample_count),
+                    ]);
+                    row
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            let mut row = common;
+            row.extend(std::iter::repeat_n(JsonValue::Null, 5));
+            vec![row]
+        })
 }
 
 #[cfg(test)]
@@ -245,7 +279,7 @@ mod tests {
             score: None,
         };
 
-        assert_eq!(child_row(&child, false)[1], json!("active"));
-        assert_eq!(child_row(&child, true)[1], json!("stopped"));
+        assert_eq!(child_rows(&child, false)[0][1], json!("active"));
+        assert_eq!(child_rows(&child, true)[0][1], json!("stopped"));
     }
 }
