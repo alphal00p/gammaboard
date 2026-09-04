@@ -330,12 +330,60 @@ GammaLoop continuous or discrete observables when every child publishes the
 same observable name and bin layout. Each native child bundle remains available
 through its child run even when an observable cannot be summed.
 
-`allocation.algorithm` is `variance_reduction_rate` by default and ranks the
-weighted variance reduction proxy per second. `largest_variance` ignores measured
-throughput. `min_samples_per_child` provides pilot coverage,
-`allocation_window_samples` limits reassignment churn, and `max_active_runs`
-controls child concurrency. The campaign stops on its combined absolute or
-relative error after `min_total_samples`, or at `max_total_samples`.
+### Variance-based campaign allocation
+
+For a campaign estimate
+
+`I = sum_i c_i I_i`,
+
+the controller assumes statistically independent child estimates and computes
+the current weighted variance of child `i` as
+
+`V_i = c_i^2 sum_k sigma_(i,k)^2`,
+
+where `c_i` is the child's coefficient and `sigma_(i,k)` is the uncertainty of
+measurement component `k`. Summing components gives the allocator one scalar
+priority for vector or complex measurements. The combined result retains each
+component separately and combines its child uncertainties in quadrature.
+
+The default `allocation.algorithm = "variance_reduction_rate"` assigns the next
+sample window by descending
+
+`score_i = V_i r_i / N_i`,
+
+where `N_i` is the child's sample count and `r_i` is its measured completed-sample
+throughput. Monte Carlo variance approximately follows `V_i(N) = C_i / N`, so
+its expected decrease per additional sample is proportional to `V_i / N_i`.
+Multiplying by throughput estimates the decrease in total campaign variance per
+wall-clock second. This directs work to the child expected to improve the final
+precision fastest; it deliberately does not try to equalize child sample counts.
+
+`allocation.algorithm = "largest_variance"` instead uses `score_i = V_i`. It is
+useful when child evaluation costs are comparable or throughput should not affect
+allocation. Unlike the default proxy, it does not explicitly divide by the
+current sample count when estimating the marginal benefit of more samples.
+
+Before scoring, children below `min_samples_per_child` receive pilot coverage,
+least-sampled first. This supplies an initial uncertainty and throughput estimate
+for every child. The selected set is retained until
+`allocation_window_samples` additional child samples have completed, then scores
+are recomputed; this avoids rapid reassignment from noisy live estimates.
+`max_active_runs` selects how many of the highest-ranked children run concurrently.
+
+The dashboard's **variance contribution (%)** is
+`100 V_i / sum_j V_j`. It explains the current uncertainty budget, but is not the
+default allocation score: throughput, sample count, the pilot phase, and the
+current allocation window can make the selected child differ from the largest
+displayed contributor. Percentages are withheld until every child has reported
+the uncertainties needed for the total.
+
+These calculations require independent child estimates. Correlated child
+estimators need covariance terms and should not be represented as an independent
+campaign. Early estimates can also be noisy; increase `min_samples_per_child` or
+`allocation_window_samples` when allocations are unstable.
+
+The campaign stops on its combined absolute or relative error after
+`min_total_samples`, or at `max_total_samples`.
 
 All controller child records include a result source reference containing the
 child run, source task, immutable stage snapshot when available, and live sample

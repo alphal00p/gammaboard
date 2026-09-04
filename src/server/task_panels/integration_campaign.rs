@@ -1,4 +1,4 @@
-use super::controller::{child_table_payload, progress_projector};
+use super::controller::progress_projector;
 use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelProjector, panel_projector,
     panel_projector_with_source,
@@ -157,38 +157,46 @@ fn children_projector() -> TaskPanelProjector {
                 ctx.task.state,
                 crate::core::RunTaskState::Completed | crate::core::RunTaskState::Failed
             );
-            let rows = ctx
+            let output = ctx
                 .task
                 .controller_output
                 .as_ref()
-                .and_then(crate::core::ControllerTaskOutput::integration_campaign)
-                .map(|output| {
-                    output
-                        .children
-                        .iter()
-                        .flat_map(|child| child_rows(child, campaign_stopped))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let payload = child_table_payload(&rows, 8, Default::default());
+                .and_then(crate::core::ControllerTaskOutput::integration_campaign);
+            let children = output.map_or(&[][..], |output| output.children.as_slice());
+            let result_keys = campaign_result_keys(children);
+            let total_variance = children
+                .iter()
+                .try_fold(0.0, |sum, child| Some(sum + child_variance(child)?));
+            let rows = children
+                .iter()
+                .map(|child| child_row(child, campaign_stopped, &result_keys, total_variance))
+                .collect::<Vec<_>>();
+            let mut columns = vec![
+                "name".to_string(),
+                "status".to_string(),
+                "run".to_string(),
+                "coefficient".to_string(),
+            ];
+            for key in &result_keys {
+                let label = result_key_label(key, result_keys.len());
+                columns.push(label.clone());
+                columns.push(format!("{label} uncertainty"));
+            }
+            columns.extend([
+                "variance contribution (%)".to_string(),
+                "samples".to_string(),
+            ]);
+            let payload = json!({
+                "row_action": { "kind": "select_run", "column": "run" }
+            });
+            let visible_column_indices = (0..columns.len()).filter(|index| *index != 2).collect();
             Ok(Some(table_panel_with_payload_and_options(
                 CHILDREN_ID,
-                vec![
-                    "name".to_string(),
-                    "status".to_string(),
-                    "selected".to_string(),
-                    "run".to_string(),
-                    "coefficient".to_string(),
-                    "component".to_string(),
-                    "value".to_string(),
-                    "uncertainty".to_string(),
-                    "variance contribution".to_string(),
-                    "samples".to_string(),
-                ],
+                columns,
                 rows,
                 Some(payload),
                 crate::server::panels::TableStateOptions {
-                    visible_column_indices: vec![0, 1, 2, 4, 5, 6, 7, 8, 9],
+                    visible_column_indices,
                     row_keys: None,
                 },
             )))
@@ -197,62 +205,109 @@ fn children_projector() -> TaskPanelProjector {
     )
 }
 
-fn child_rows(
+type ResultKey = (crate::core::AccumulatorMetricName, Option<String>);
+
+fn measurement_results(
+    child: &crate::core::IntegrationCampaignChildOutput,
+) -> Option<&[crate::core::MeasurementResult]> {
+    match child.child.measurement.as_ref()? {
+        crate::core::TaskMeasurementOutput::Completed { results } => Some(results),
+        crate::core::TaskMeasurementOutput::Failed { .. } => None,
+    }
+}
+
+fn campaign_result_keys(
+    children: &[crate::core::IntegrationCampaignChildOutput],
+) -> Vec<ResultKey> {
+    let mut keys = Vec::new();
+    for result in children.iter().filter_map(measurement_results).flatten() {
+        let key = (result.name, result.component.clone());
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+fn result_key_label(key: &ResultKey, key_count: usize) -> String {
+    key.1.clone().unwrap_or_else(|| {
+        if key_count == 1 {
+            "estimate".to_string()
+        } else {
+            format!("{:?}", key.0).to_lowercase()
+        }
+    })
+}
+
+fn child_variance(child: &crate::core::IntegrationCampaignChildOutput) -> Option<f64> {
+    measurement_results(child)?
+        .iter()
+        .try_fold(0.0, |sum, result| {
+            result
+                .uncertainty
+                .map(|uncertainty| sum + child.coefficient.powi(2) * uncertainty.powi(2))
+        })
+}
+
+fn child_row(
     child: &crate::core::IntegrationCampaignChildOutput,
     campaign_stopped: bool,
-) -> Vec<Vec<JsonValue>> {
-    let results = child
-        .child
-        .measurement
-        .as_ref()
-        .and_then(|measurement| match measurement {
-            crate::core::TaskMeasurementOutput::Completed { results } => Some(results.as_slice()),
-            crate::core::TaskMeasurementOutput::Failed { .. } => None,
-        });
-    let common = vec![
-        json!(child.name),
-        if campaign_stopped
-            && matches!(
-                child.child.status,
+    result_keys: &[ResultKey],
+    total_variance: Option<f64>,
+) -> Vec<JsonValue> {
+    let status = if campaign_stopped
+        && matches!(
+            child.child.status,
+            crate::core::ControllerChildState::Planned
+                | crate::core::ControllerChildState::Pending
+                | crate::core::ControllerChildState::Active
+        ) {
+        json!("stopped")
+    } else {
+        match (child.child.status, child.selected) {
+            (crate::core::ControllerChildState::Active, true) => json!("running"),
+            (crate::core::ControllerChildState::Active, false) => json!("waiting"),
+            (
                 crate::core::ControllerChildState::Planned
-                    | crate::core::ControllerChildState::Pending
-                    | crate::core::ControllerChildState::Active
-            )
-        {
-            json!("stopped")
-        } else {
-            json!(child.child.status)
-        },
-        json!(child.selected),
+                | crate::core::ControllerChildState::Pending,
+                true,
+            ) => json!("starting"),
+            (status, _) => json!(status),
+        }
+    };
+    let mut row = vec![
+        json!(child.name),
+        status,
         json!(child.child.child_run_id),
         json!(child.coefficient),
     ];
-    results
-        .filter(|results| !results.is_empty())
-        .map(|results| {
-            results
-                .iter()
-                .map(|result| {
-                    let uncertainty = result.uncertainty;
-                    let mut row = common.clone();
-                    row.extend([
-                        json!(result.component),
-                        json!(result.value),
-                        uncertainty.map_or(JsonValue::Null, |value| json!(value)),
-                        uncertainty.map_or(JsonValue::Null, |value| {
-                            json!(child.coefficient.powi(2) * value.powi(2))
-                        }),
-                        json!(result.sample_count),
-                    ]);
-                    row
-                })
-                .collect()
-        })
-        .unwrap_or_else(|| {
-            let mut row = common;
-            row.extend(std::iter::repeat_n(JsonValue::Null, 5));
-            vec![row]
-        })
+    let results = measurement_results(child).unwrap_or_default();
+    for key in result_keys {
+        let result = results
+            .iter()
+            .find(|result| result.name == key.0 && result.component == key.1);
+        row.push(result.map_or(JsonValue::Null, |result| json!(result.value)));
+        row.push(
+            result
+                .and_then(|result| result.uncertainty)
+                .map_or(JsonValue::Null, |uncertainty| json!(uncertainty)),
+        );
+    }
+    row.push(
+        child_variance(child)
+            .zip(total_variance.filter(|total| total.is_finite() && *total > 0.0))
+            .map_or(JsonValue::Null, |(variance, total)| {
+                json!(100.0 * variance / total)
+            }),
+    );
+    row.push(
+        results
+            .iter()
+            .map(|result| result.sample_count)
+            .max()
+            .map_or(JsonValue::Null, |samples| json!(samples)),
+    );
+    row
 }
 
 #[cfg(test)]
@@ -280,44 +335,78 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stopped_campaign_does_not_show_active_child() {
-        let child = child(None);
-
-        assert_eq!(child_rows(&child, false)[0][1], json!("active"));
-        assert_eq!(child_rows(&child, true)[0][1], json!("stopped"));
-    }
-
-    #[test]
-    fn complex_measurement_exposes_one_row_per_component() {
-        let measurement = TaskMeasurementOutput::Completed {
+    fn complex_measurement(
+        real: (f64, f64),
+        imag: (f64, f64),
+        samples: i64,
+    ) -> TaskMeasurementOutput {
+        TaskMeasurementOutput::Completed {
             results: vec![
                 MeasurementResult {
                     name: AccumulatorMetricName::Mean,
                     component: Some("real".to_string()),
-                    value: 3.0,
-                    uncertainty: Some(0.4),
-                    sample_count: 10,
+                    value: real.0,
+                    uncertainty: Some(real.1),
+                    sample_count: samples,
                 },
                 MeasurementResult {
                     name: AccumulatorMetricName::Mean,
                     component: Some("imag".to_string()),
-                    value: -2.0,
-                    uncertainty: Some(0.2),
-                    sample_count: 10,
+                    value: imag.0,
+                    uncertainty: Some(imag.1),
+                    sample_count: samples,
                 },
             ],
-        };
+        }
+    }
 
-        let rows = child_rows(&child(Some(measurement)), false);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][5], json!("real"));
-        assert_eq!(rows[0][6], json!(3.0));
-        assert_eq!(rows[0][7], json!(0.4));
-        assert!((rows[0][8].as_f64().unwrap() - 0.64).abs() < 1e-12);
-        assert_eq!(rows[1][5], json!("imag"));
-        assert_eq!(rows[1][6], json!(-2.0));
-        assert_eq!(rows[1][7], json!(0.2));
-        assert!((rows[1][8].as_f64().unwrap() - 0.16).abs() < 1e-12);
+    #[test]
+    fn stopped_campaign_does_not_show_active_child() {
+        let child = child(None);
+        let children = [child];
+
+        assert_eq!(
+            child_row(&children[0], false, &[], None)[1],
+            json!("waiting")
+        );
+        assert_eq!(
+            child_row(&children[0], true, &[], None)[1],
+            json!("stopped")
+        );
+    }
+
+    #[test]
+    fn complex_measurement_exposes_one_row_with_component_columns() {
+        let mut campaign_child = child(Some(complex_measurement((3.0, 0.4), (-2.0, 0.2), 10)));
+        campaign_child.selected = true;
+        let children = [campaign_child];
+        let keys = campaign_result_keys(&children);
+        let variance = child_variance(&children[0]).unwrap();
+        let row = child_row(&children[0], false, &keys, Some(variance));
+
+        assert_eq!(row.len(), 10);
+        assert_eq!(row[1], json!("running"));
+        assert_eq!(row[4], json!(3.0));
+        assert_eq!(row[5], json!(0.4));
+        assert_eq!(row[6], json!(-2.0));
+        assert_eq!(row[7], json!(0.2));
+        assert_eq!(row[8], json!(100.0));
+        assert_eq!(row[9], json!(10));
+    }
+
+    #[test]
+    fn variance_contributions_are_percentages_of_the_campaign_total() {
+        let first = child(Some(complex_measurement((3.0, 0.4), (-2.0, 0.2), 10)));
+        let mut second = child(Some(complex_measurement((1.0, 0.3), (4.0, 0.1), 20)));
+        second.name = "other".to_string();
+        second.coefficient = 1.0;
+        let children = [first, second];
+        let keys = campaign_result_keys(&children);
+        let total_variance = children.iter().filter_map(child_variance).sum();
+
+        let first_row = child_row(&children[0], false, &keys, Some(total_variance));
+        let second_row = child_row(&children[1], false, &keys, Some(total_variance));
+        assert!((first_row[8].as_f64().unwrap() - 88.888_888_888_888_89).abs() < 1e-12);
+        assert!((second_row[8].as_f64().unwrap() - 11.111_111_111_111_11).abs() < 1e-12);
     }
 }

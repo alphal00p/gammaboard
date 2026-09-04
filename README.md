@@ -147,6 +147,16 @@ scientific results remain separate from runtime throughput and controller state.
   their signed coefficients; independent variances are combined in quadrature.
   Incompatible histogram layouts are reported as omitted rather than pooled.
 
+Campaign allocation targets uncertainty reduction, not equal sample counts.
+After giving every child its configured pilot samples, the default policy ranks
+each child by `weighted variance * throughput / samples`: the estimated decrease
+in total campaign variance per wall-clock second. Allocation is reconsidered at
+sample-window boundaries to avoid rapid worker churn. The table's variance
+contribution is only `weighted variance / total variance`; it can therefore
+differ from the allocation order when child throughputs or sample counts differ.
+See [docs/config.md](docs/config.md#variance-based-campaign-allocation) for the
+formula and assumptions.
+
 Controller plots and child tables remain available after completion. Clicking
 a scan point, tuning trial, or campaign entry opens that persistent child run.
 

@@ -106,6 +106,7 @@ where
                 .ok_or_else(|| StoreError::store("created campaign child is missing"))?;
             let persisted =
                 load_child_task_result(&self.store, run_id, &measurement.source_task).await?;
+            let task_failure_reason = persisted.task_failure_reason();
             let completed_samples_per_second = self.latest_throughput(run_id).await?;
             let projected = persisted.accumulator.as_ref().and_then(|accumulator| {
                 project_measurement_results(
@@ -122,13 +123,17 @@ where
                 _ if persisted.task_state == RunTaskState::Active => projected,
                 output => output.or(projected),
             };
-            if let Some(TaskMeasurementOutput::Failed { reason }) = &output {
-                failure.get_or_insert_with(|| {
-                    format!(
+            let child_failure_reason = task_failure_reason
+                .map(|reason| format!("campaign child '{}' task failed: {reason}", child.name))
+                .or_else(|| match &output {
+                    Some(TaskMeasurementOutput::Failed { reason }) => Some(format!(
                         "campaign child '{}' measurement failed: {reason}",
                         child.name
-                    )
+                    )),
+                    _ => None,
                 });
+            if let Some(reason) = &child_failure_reason {
+                failure.get_or_insert_with(|| reason.clone());
             }
             let status = match (&output, persisted.task_state) {
                 (Some(TaskMeasurementOutput::Failed { .. }), _) => ControllerChildState::Failed,
@@ -144,6 +149,7 @@ where
                 accumulator: persisted.accumulator,
                 completed_samples_per_second,
                 measurement: output,
+                failure_reason: child_failure_reason,
             });
         }
 
@@ -371,6 +377,7 @@ struct ChildState {
     accumulator: Option<crate::evaluation::AccumulatorState>,
     completed_samples_per_second: Option<f64>,
     measurement: Option<TaskMeasurementOutput>,
+    failure_reason: Option<String>,
 }
 
 impl ChildState {
@@ -423,8 +430,16 @@ fn select_children(
         right
             .1
             .cmp(&left.1)
-            .then_with(|| left.2.cmp(&right.2))
-            .then_with(|| right.3.total_cmp(&left.3))
+            .then_with(|| {
+                if left.1 {
+                    left.2.cmp(&right.2)
+                } else {
+                    right
+                        .3
+                        .total_cmp(&left.3)
+                        .then_with(|| left.2.cmp(&right.2))
+                }
+            })
             .then_with(|| left.0.cmp(&right.0))
     });
     ranked
@@ -530,10 +545,7 @@ fn build_output(
                     result_source: Some(child.result_source.clone()),
                     completed_samples_per_second: child.completed_samples_per_second,
                     measurement: child.measurement.clone(),
-                    failure_reason: match child.measurement.as_ref() {
-                        Some(TaskMeasurementOutput::Failed { reason }) => Some(reason.clone()),
-                        _ => None,
-                    },
+                    failure_reason: child.failure_reason.clone(),
                 },
                 selected: selected.contains(&child.run_id),
                 score: child.score(algorithm).filter(|score| score.is_finite()),
@@ -571,6 +583,7 @@ mod tests {
                     sample_count: samples,
                 }],
             }),
+            failure_reason: None,
         }
     }
 
@@ -654,6 +667,17 @@ mod tests {
             1,
         );
         assert_eq!(selected, vec![2]);
+    }
+
+    #[test]
+    fn variance_reduction_rate_does_not_balance_samples_after_pilot() {
+        let selected = select_children(
+            &[child(1, 1.0, 1.0, 0.5, 120), child(2, 1.0, 1.0, 0.1, 100)],
+            IntegrationCampaignAllocationAlgorithm::VarianceReductionRate,
+            50,
+            1,
+        );
+        assert_eq!(selected, vec![1]);
     }
 
     #[test]

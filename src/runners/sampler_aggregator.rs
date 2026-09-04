@@ -384,6 +384,23 @@ struct EvaluatorFleetSnapshot {
     total_rss_bytes: Option<i64>,
 }
 
+fn no_progress_is_terminal(
+    stop_reached: bool,
+    open_batch_count: usize,
+    failed_batches: i64,
+    completed_batches: usize,
+    produced_batches: usize,
+    sampler_wants_to_produce: bool,
+    active_evaluator_count: Option<usize>,
+) -> bool {
+    !stop_reached
+        && open_batch_count == 0
+        && failed_batches == 0
+        && completed_batches == 0
+        && produced_batches == 0
+        && !(sampler_wants_to_produce && active_evaluator_count == Some(0))
+}
+
 impl<S> SamplerAggregatorRunner<S>
 where
     S: SamplerWorkerStore + Clone + Send + Sync + 'static,
@@ -955,7 +972,8 @@ where
             ingest_stats.completed_samples_delta,
         );
         let produce_started = Instant::now();
-        let produced_batches = self.produce(queue_before_produce).await?;
+        let (produced_batches, sampler_wants_to_produce) =
+            self.produce(queue_before_produce).await?;
         observe_duration_pair(
             &mut self.runtime_state.rolling.produce_ms,
             &mut self.window_state.produce_ms,
@@ -984,6 +1002,7 @@ where
             queue_before_produce,
             ingest_stats.completed_batches,
             produced_batches,
+            sampler_wants_to_produce,
         )
     }
 
@@ -1007,18 +1026,26 @@ where
         queue_before_produce: crate::core::BatchQueueCounts,
         completed_batches: usize,
         produced_batches: usize,
+        sampler_wants_to_produce: bool,
     ) -> Result<bool, RunnerError> {
         let open_batch_count = (queue_before_produce
             .open()
             .saturating_add(produced_batches as i64))
         .max(0) as usize;
         let stop_status = self.stop_condition_status()?;
-        if !stop_status.reached
-            && open_batch_count == 0
-            && queue_before_produce.failed == 0
-            && completed_batches == 0
-            && produced_batches == 0
-        {
+        let active_evaluator_count = self
+            .queue
+            .diagnostics_snapshot()
+            .and_then(|snapshot| snapshot.active_evaluator_count);
+        if no_progress_is_terminal(
+            stop_status.reached,
+            open_batch_count,
+            queue_before_produce.failed,
+            completed_batches,
+            produced_batches,
+            sampler_wants_to_produce,
+            active_evaluator_count,
+        ) {
             return Err(RunnerError::Engine(EngineError::engine(format!(
                 "run {} task {} cannot make further progress: stop condition not reached (min_samples_reached={}, max_samples_reached={}, absolute_error_reached={}, relative_error_reached={}) and sampler produced no new batches",
                 self.run_id,
@@ -1371,9 +1398,10 @@ where
     async fn produce(
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
-    ) -> Result<usize, RunnerError> {
+    ) -> Result<(usize, bool), RunnerError> {
         let accumulator_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
+        let sampler_wants_to_produce = matches!(sample_plan, SamplePlan::Produce { .. });
         let open_before_produce = queue_before_produce.open().max(0) as usize;
         let batch_plan = self
             .resolve_batch_plan(sample_plan, queue_before_produce, open_before_produce)
@@ -1405,7 +1433,7 @@ where
         }
         let produced_batches = produced.len();
         if produced_batches == 0 {
-            return Ok(0);
+            return Ok((0, sampler_wants_to_produce));
         }
 
         self.runtime_state.produced_batches_total += produced_batches as i64;
@@ -1413,7 +1441,7 @@ where
         self.nr_produced_samples += produced_samples_total;
         self.task.nr_produced_samples += produced_samples_total;
         self.queue.ingest(produced);
-        Ok(produced_batches)
+        Ok((produced_batches, sampler_wants_to_produce))
     }
 
     async fn resolve_batch_plan(
@@ -1744,7 +1772,7 @@ fn observe_duration_pair(
 
 #[cfg(test)]
 mod tests {
-    use super::{SamplerAggregatorCheckpoint, SamplerRuntimeState};
+    use super::{SamplerAggregatorCheckpoint, SamplerRuntimeState, no_progress_is_terminal};
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
     use crate::runners::SamplerQueueCheckpoint;
     use crate::sampling::{
@@ -1841,5 +1869,12 @@ mod tests {
             runtime_state.accumulator_checkpoint_state,
             super::AccumulatorCheckpointState::NeedsInitialRoundTrip
         );
+    }
+
+    #[test]
+    fn no_progress_waits_for_a_newly_assigned_evaluator() {
+        assert!(!no_progress_is_terminal(false, 0, 0, 0, 0, true, Some(0)));
+        assert!(no_progress_is_terminal(false, 0, 0, 0, 0, true, Some(1)));
+        assert!(no_progress_is_terminal(false, 0, 0, 0, 0, false, None));
     }
 }

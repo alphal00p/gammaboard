@@ -96,6 +96,25 @@ where
             )
             .await?;
             let result_source = Some(measurement_output.source.clone());
+            if let Some(reason) = measurement_output.task_failure_reason() {
+                failed_reason = Some(format!(
+                    "scan point {index} child run {} task failed: {reason}",
+                    child.run_id
+                ));
+                points.push(ParameterScanPointOutput {
+                    index,
+                    parameter_values,
+                    child: ControllerChildOutput {
+                        child_run_id: Some(child.run_id),
+                        status: ControllerChildState::Failed,
+                        result_source,
+                        completed_samples_per_second: None,
+                        measurement: measurement_output.output,
+                        failure_reason: Some(reason),
+                    },
+                });
+                continue;
+            }
             match measurement_output.output {
                 Some(TaskMeasurementOutput::Completed { results }) => {
                     completed_count += 1;

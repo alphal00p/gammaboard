@@ -167,6 +167,24 @@ where
                 load_child_task_result_reference(&self.store, child.run_id, &objective.source_task)
                     .await?;
             let result_source = Some(measurement_output.source.clone());
+            if let Some(reason) = measurement_output.task_failure_reason() {
+                failed_count += 1;
+                trials.push(HyperparameterTrialOutput {
+                    index,
+                    parameters: parameters_json,
+                    objective_value: None,
+                    objective_uncertainty: None,
+                    child: ControllerChildOutput {
+                        child_run_id: Some(child.run_id),
+                        status: ControllerChildState::Failed,
+                        result_source,
+                        completed_samples_per_second: None,
+                        measurement: measurement_output.output,
+                        failure_reason: Some(reason),
+                    },
+                });
+                continue;
+            }
             match measurement_output.output {
                 Some(TaskMeasurementOutput::Completed { results }) => {
                     match objective_result(objective, &results) {

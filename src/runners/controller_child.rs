@@ -16,6 +16,28 @@ pub struct ChildTaskResult {
     pub source_task: crate::core::RunTask,
 }
 
+impl ChildTaskResult {
+    pub fn task_failure_reason(&self) -> Option<String> {
+        task_failure_reason(
+            self.task_state,
+            &self.source_task.name,
+            self.source_task.failure_reason.as_deref(),
+        )
+    }
+}
+
+fn task_failure_reason(
+    state: RunTaskState,
+    task_name: &str,
+    failure_reason: Option<&str>,
+) -> Option<String> {
+    (state == RunTaskState::Failed).then(|| {
+        failure_reason
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("child task '{task_name}' failed"))
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct ControllerAssignmentPlan {
     pub parent_run_id: i32,
@@ -198,6 +220,23 @@ pub async fn load_child_task_result_reference(
     source_task: &str,
 ) -> Result<ChildTaskResult, StoreError> {
     load_child_task_result_inner(store, child_run_id, source_task, false).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_child_task_overrides_cached_measurement_state() {
+        assert_eq!(
+            task_failure_reason(RunTaskState::Failed, "integrate", Some("engine stopped")),
+            Some("engine stopped".to_string())
+        );
+        assert_eq!(
+            task_failure_reason(RunTaskState::Active, "integrate", Some("stale")),
+            None
+        );
+    }
 }
 
 async fn load_child_task_result_inner(
