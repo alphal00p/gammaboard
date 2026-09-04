@@ -1,6 +1,6 @@
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelState, PanelWidth, key_value, key_value_panel,
-    replace_panel, sized_panel_spec,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelState, PanelWidth, format_bytes_human,
+    key_value, key_value_panel, replace_panel, sized_panel_spec,
 };
 use crate::{core::WorkerRole, stores::RegisteredWorkerEntry};
 use serde_json::Value as JsonValue;
@@ -127,23 +127,6 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
     }
 
     panels
-}
-
-fn format_bytes_human(bytes: i64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = 1024.0 * KIB;
-    const GIB: f64 = 1024.0 * MIB;
-
-    let bytes_f64 = bytes as f64;
-    if bytes_f64 >= GIB {
-        format!("{:.2} GiB", bytes_f64 / GIB)
-    } else if bytes_f64 >= MIB {
-        format!("{:.1} MiB", bytes_f64 / MIB)
-    } else if bytes_f64 >= KIB {
-        format!("{:.1} KiB", bytes_f64 / KIB)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {

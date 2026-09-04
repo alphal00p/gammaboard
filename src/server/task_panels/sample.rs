@@ -18,8 +18,6 @@ use crate::server::panels::{
     scalar_timeseries_panel_with_smoothing, sized_panel_spec, table_panel_with_payload,
     table_panel_with_payload_and_options, tick_breakdown_panel,
 };
-#[cfg(feature = "gammaloop")]
-use gammalooprs::observables::{ObservablePhase, ObservableValueTransform};
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -231,7 +229,7 @@ fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPan
     panel_projector_with_source(
         sized_panel_spec(
             "estimate_summary",
-            "Estimate Summary",
+            "Result",
             PanelKind::KeyValue,
             PanelHistoryMode::None,
             PanelWidth::Full,
@@ -273,7 +271,7 @@ fn gammaloop_panel_projector(
 fn gammaloop_histogram_bundle_projector() -> TaskPanelProjector {
     gammaloop_panel_projector(
         "gammaloop_histogram_bundle",
-        "GammaLoop Histograms",
+        "Observables",
         PanelKind::Table,
         gammaloop_histogram_bundle_panel,
     )
@@ -1029,13 +1027,6 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
     let mut payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
     if let JsonValue::Object(payload) = &mut payload {
         payload.insert(
-            "expands_to".to_string(),
-            json!({
-                "kind": "histogram",
-                "source": "selected_row",
-            }),
-        );
-        payload.insert(
             "actions".to_string(),
             json!({
                 "export": true,
@@ -1044,102 +1035,7 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
         );
     }
 
-    let columns = vec![
-        "Name".to_string(),
-        "Title".to_string(),
-        "Phase".to_string(),
-        "Transform".to_string(),
-        "Samples".to_string(),
-        "Bins".to_string(),
-        "Range".to_string(),
-        "In Range".to_string(),
-        "Underflow".to_string(),
-        "Overflow".to_string(),
-        "NaN".to_string(),
-        "Mitigated Pairs".to_string(),
-        "Misbinning".to_string(),
-        "Log X".to_string(),
-        "Log Y".to_string(),
-    ];
-    let rows = state
-        .bundle
-        .histograms
-        .iter()
-        .map(|(name, projection)| {
-            vec![
-                JsonValue::String(name.clone()),
-                JsonValue::String(projection.title.clone()),
-                JsonValue::String(match projection.phase {
-                    ObservablePhase::Real => "real".to_string(),
-                    ObservablePhase::Imag => "imag".to_string(),
-                }),
-                JsonValue::String(match projection.value_transform {
-                    ObservableValueTransform::Identity => "identity".to_string(),
-                    ObservableValueTransform::Log10 => "log10".to_string(),
-                }),
-                JsonValue::from(projection.sample_count as i64),
-                JsonValue::from(projection.bins.len() as i64),
-                JsonValue::String(match projection.kind {
-                    gammalooprs::observables::HistogramSnapshotKind::Continuous => {
-                        match (projection.x_min, projection.x_max) {
-                            (Some(x_min), Some(x_max)) => format!("[{}, {}]", x_min, x_max),
-                            _ => "continuous".to_string(),
-                        }
-                    }
-                    gammalooprs::observables::HistogramSnapshotKind::Discrete => projection
-                        .discrete_min_bin_id
-                        .map(|min_bin_id| {
-                            format!(
-                                "[{}, {}]",
-                                min_bin_id,
-                                min_bin_id + projection.bins.len() as isize
-                            )
-                        })
-                        .unwrap_or_else(|| "discrete".to_string()),
-                }),
-                JsonValue::from(projection.statistics.in_range_entry_count as i64),
-                JsonValue::from(projection.underflow_bin.entry_count as i64),
-                JsonValue::from(projection.overflow_bin.entry_count as i64),
-                JsonValue::from(projection.statistics.nan_value_count as i64),
-                JsonValue::from(projection.statistics.mitigated_pair_count as i64),
-                JsonValue::from(projection.supports_misbinning_mitigation),
-                JsonValue::from(projection.log_x_axis),
-                JsonValue::from(projection.log_y_axis),
-            ]
-        })
-        .collect::<Vec<_>>();
-    let name_column_index = columns.iter().position(|column| column == "Name");
-    let hidden_columns = ["Name", "Log X", "Log Y"];
-    let visible_column_indices = columns
-        .iter()
-        .enumerate()
-        .filter_map(|(index, column)| {
-            if hidden_columns.iter().any(|hidden| column == hidden) {
-                None
-            } else {
-                Some(index)
-            }
-        })
-        .collect::<Vec<_>>();
-    let row_keys = name_column_index.and_then(|index| {
-        rows.iter()
-            .map(|row| match row.get(index) {
-                Some(JsonValue::String(name)) => Some(name.clone()),
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>()
-    });
-
-    Some(table_panel_with_payload_and_options(
-        "gammaloop_histogram_bundle",
-        columns,
-        rows,
-        Some(payload),
-        TableStateOptions {
-            visible_column_indices,
-            row_keys,
-        },
-    ))
+    super::observable::histogram_bundle_panel("gammaloop_histogram_bundle", "Observable", payload)
 }
 
 fn discrete_projection_bundle_panel(

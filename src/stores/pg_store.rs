@@ -285,6 +285,14 @@ impl RunReadStore for PgStore {
         Ok(queries::get_latest_task_stage_snapshot(&self.pool, run_id, task_id).await?)
     }
 
+    async fn get_latest_task_stage_snapshot_id(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(queries::get_latest_task_stage_snapshot_id(&self.pool, run_id, task_id).await?)
+    }
+
     async fn get_runtime_logs(
         &self,
         limit: i64,
@@ -919,6 +927,17 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn persist_task_result_snapshot(
+        &self,
+        run_id: i32,
+        task_id: i64,
+        result: &JsonValue,
+    ) -> Result<i64, StoreError> {
+        queries::insert_task_output_snapshot(&self.pool, run_id, task_id, result)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn load_sampler_checkpoint(
         &self,
         run_id: i32,
@@ -988,7 +1007,7 @@ impl AggregationStore for PgStore {
         }
 
         if let Some(persisted_observable) = persisted_observable {
-            queries::insert_persisted_observable_snapshot(
+            let _ = queries::insert_task_output_snapshot(
                 &self.pool,
                 run_id,
                 task_id,

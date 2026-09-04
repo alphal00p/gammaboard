@@ -106,10 +106,6 @@ pub struct BatchQueueCounts {
 }
 
 impl BatchQueueCounts {
-    pub fn runnable(self) -> i64 {
-        self.pending + self.claimed
-    }
-
     pub fn open(self) -> i64 {
         self.pending + self.claimed + self.completed
     }
@@ -166,7 +162,32 @@ pub struct MeasurementResult {
     pub value: f64,
     pub uncertainty: Option<f64>,
     pub sample_count: i64,
-    pub completed_samples_per_second: Option<f64>,
+}
+
+/// Identifies the exact child result used by a controller. Active results do
+/// not have a stage snapshot yet, so their sample count is the live revision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResultSourceRef {
+    pub run_id: i32,
+    #[serde(
+        serialize_with = "crate::utils::serde_bigint::serialize_i64_as_string",
+        deserialize_with = "crate::utils::serde_bigint::deserialize_i64_from_string_or_number"
+    )]
+    pub task_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    pub sample_count: i64,
+}
+
+/// Scientific result materialized above accumulator state. Metrics remain
+/// small selector projections; observables contain normalized, directly
+/// composable values and uncertainties.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DerivedResultSnapshot {
+    pub sources: Vec<ResultSourceRef>,
+    pub metrics: Vec<MeasurementResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observables: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,4 +407,25 @@ pub struct RunStageSnapshot {
     pub evaluator: Option<EvaluatorConfig>,
     pub sampler_aggregator: Option<SamplerAggregatorConfig>,
     pub batch_transforms: Vec<BatchTransformConfig>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResultSourceRef;
+
+    #[test]
+    fn result_source_reference_roundtrips_json_safe_ids() {
+        let source = ResultSourceRef {
+            run_id: 3,
+            task_id: i64::MAX,
+            snapshot_id: Some("7".to_string()),
+            sample_count: 42,
+        };
+        let value = serde_json::to_value(&source).expect("serialize");
+        assert_eq!(value["task_id"], i64::MAX.to_string());
+        assert_eq!(
+            serde_json::from_value::<ResultSourceRef>(value).expect("deserialize"),
+            source
+        );
+    }
 }

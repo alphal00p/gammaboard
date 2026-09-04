@@ -4587,6 +4587,120 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness
+        .start_nodes(&["campaign-parent", "campaign-s1", "campaign-e1"])
+        .await?;
+
+    let config = temp_run_add_config(
+        r#"
+name = "integration-campaign-result-e2e"
+
+[evaluator_runner_params]
+min_tick_time_ms = 20
+db_pool_size = 1
+
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 10
+db_pool_size = 1
+
+[[task_queue]]
+name = "campaign"
+kind = "integration_campaign"
+measurement = { source_task = "sample" }
+stop_condition = { min_total_samples = 16, max_total_samples = 64, absolute_error = 1e-12 }
+allocation = { algorithm = "largest_variance", max_active_runs = 1, allocation_window_samples = 8, min_samples_per_child = 8 }
+
+[[task_queue.children]]
+name = "left"
+coefficient = 2.0
+run_toml = '''
+name = "campaign-result-left"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 1000 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
+'''
+
+[[task_queue.children]]
+name = "right"
+coefficient = -0.5
+run_toml = '''
+name = "campaign-result-right"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 1000 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+'''
+"#,
+    );
+
+    harness.add_run(&config);
+    let run_id = harness.run_id("integration-campaign-result-e2e").await?;
+    harness
+        .cli()
+        .args(["node", "auto-assign", &run_id.to_string()])
+        .assert()
+        .success();
+
+    wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'campaign'",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(
+        output["combined_measurement"]["results"][0]["value"],
+        json!(1.5)
+    );
+    assert!(output["result_snapshot_id"].is_string());
+    assert!(
+        output["children"]
+            .as_array()
+            .is_some_and(|children| children.iter().all(|child| {
+                child["result_source"]["sample_count"]
+                    .as_i64()
+                    .is_some_and(|count| count > 0)
+            }))
+    );
+
+    let result: JsonValue = sqlx::query_scalar(
+        "SELECT persisted_observable FROM persisted_observable_snapshots WHERE id = $1",
+    )
+    .bind(
+        output["result_snapshot_id"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()?,
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(result["sources"].as_array().map(Vec::len), Some(2));
+    assert_eq!(result["metrics"][0]["value"], json!(1.5));
+
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_parameter_scan_creates_child_runs_and_collects_measurements()
 -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
@@ -4705,6 +4819,12 @@ source_task = "sample"
     assert_eq!(output["completed_points"], json!(3));
     assert_eq!(output["total_points"], json!(3));
     assert_eq!(output["points"].as_array().map(Vec::len), Some(3));
+    assert!(output["points"].as_array().is_some_and(|points| {
+        points.iter().all(|point| {
+            point["result_source"]["snapshot_id"].is_string()
+                && point["result_source"]["task_id"].is_string()
+        })
+    }));
 
     let measured_children: i64 = sqlx::query_scalar(
         r#"
@@ -5219,6 +5339,12 @@ values = ["auto", "none"]
     assert_eq!(output["total_trials"], json!(4));
     assert_eq!(output["trials"].as_array().map(Vec::len), Some(4));
     assert!(output["best_trial"].is_number());
+    assert!(output["best_result_source"]["snapshot_id"].is_string());
+    assert!(output["trials"].as_array().is_some_and(|trials| {
+        trials
+            .iter()
+            .all(|trial| trial["result_source"]["snapshot_id"].is_string())
+    }));
 
     let measured_children: i64 = sqlx::query_scalar(
         r#"

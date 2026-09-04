@@ -234,7 +234,11 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
             previous.sourceId != null && response?.source_id != null && previous.sourceId !== response.source_id;
           const shouldSeedFromStorage = sourceChanged || (previous.sourceId == null && nextSourceId != null);
           const resetRequired = response?.reset_required === true || sourceChanged;
-          const panelSpecs = Array.isArray(response?.panels) ? response.panels : previous.panelSpecs;
+          const receivedPanelSpecs = Array.isArray(response?.panels) ? response.panels : null;
+          const panelSpecs =
+            receivedPanelSpecs && (receivedPanelSpecs.length > 0 || resetRequired || !useCursor)
+              ? receivedPanelSpecs
+              : previous.panelSpecs;
           const seededPanelValues = shouldSeedFromStorage
             ? readStoredPanelValues(nextSourceId)
             : panelValuesRef.current;

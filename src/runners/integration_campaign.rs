@@ -1,14 +1,15 @@
-use crate::api::measurement::extract_measurement;
+use crate::api::measurement::project_measurement_results;
+use crate::api::results::combine_independent_observables;
 use crate::api::runs::{ChildRunRequest, create_child_run};
 use crate::core::{
     AggregationStore, ControlPlaneStore, ControllerChildOutput, ControllerChildState,
-    ControllerTaskOutput, IntegrationCampaignAllocationAlgorithm, IntegrationCampaignChildOutput,
-    IntegrationCampaignOutput, IntegrationCampaignStopCondition, MeasurementResult, RunReadStore,
-    RunSpecStore, RunTask, RunTaskSpec, RunTaskState, RunTaskStore, SamplerRuntimeMetrics,
-    StoreError, StoreResultExt, TaskMeasurementOutput,
+    ControllerTaskOutput, DerivedResultSnapshot, IntegrationCampaignAllocationAlgorithm,
+    IntegrationCampaignChildOutput, IntegrationCampaignOutput, IntegrationCampaignStopCondition,
+    MeasurementResult, RunReadStore, RunSpecStore, RunTask, RunTaskSpec, RunTaskState,
+    RunTaskStore, SamplerRuntimeMetrics, StoreError, StoreResultExt, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_measurement,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_result,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -104,28 +105,23 @@ where
                 .get(&child.name)
                 .ok_or_else(|| StoreError::store("created campaign child is missing"))?;
             let persisted =
-                load_child_task_measurement(&self.store, run_id, &measurement.source_task).await?;
-            let mut output = persisted.output;
-            if output.is_none()
-                && matches!(
-                    persisted.task_state,
-                    RunTaskState::Active | RunTaskState::Completed
+                load_child_task_result(&self.store, run_id, &measurement.source_task).await?;
+            let completed_samples_per_second = self.latest_throughput(run_id).await?;
+            let projected = persisted.accumulator.as_ref().and_then(|accumulator| {
+                project_measurement_results(
+                    accumulator,
+                    &measurement.task_measurement(),
+                    completed_samples_per_second,
+                    &persisted.source_task,
                 )
-                && let Ok(extracted) = extract_measurement(&self.store, run_id, measurement).await
-            {
-                output = Some(TaskMeasurementOutput::Completed {
-                    results: extracted.results,
-                });
-            }
-            if let Some(TaskMeasurementOutput::Completed { results }) = &mut output
-                && let Some(throughput) = self.latest_throughput(run_id).await?
-            {
-                for result in results {
-                    result
-                        .completed_samples_per_second
-                        .get_or_insert(throughput);
-                }
-            }
+                .ok()
+                .map(|results| TaskMeasurementOutput::Completed { results })
+            });
+            let output = match persisted.output {
+                failed @ Some(TaskMeasurementOutput::Failed { .. }) => failed,
+                _ if persisted.task_state == RunTaskState::Active => projected,
+                output => output.or(projected),
+            };
             if let Some(TaskMeasurementOutput::Failed { reason }) = &output {
                 failure.get_or_insert_with(|| {
                     format!(
@@ -144,6 +140,9 @@ where
                 run_id,
                 status,
                 task_state: persisted.task_state,
+                result_source: persisted.source,
+                accumulator: persisted.accumulator,
+                completed_samples_per_second,
                 measurement: output,
             });
         }
@@ -152,6 +151,9 @@ where
         let combined_measurement = combined_results
             .clone()
             .map(|results| TaskMeasurementOutput::Completed { results });
+        let result_snapshot_id = self
+            .persist_derived_result(&states, combined_results.as_deref(), previous_output)
+            .await?;
         let total_samples = states.iter().map(ChildState::sample_count).sum::<i64>();
         let pilots_complete = states
             .iter()
@@ -164,6 +166,7 @@ where
                 total_samples,
                 total_samples,
                 combined_measurement,
+                result_snapshot_id,
                 allocation.algorithm,
             );
             self.persist_output(&output).await?;
@@ -189,6 +192,7 @@ where
                 total_samples,
                 total_samples,
                 combined_measurement.clone(),
+                result_snapshot_id,
                 allocation.algorithm,
             );
             self.persist_output(&output).await?;
@@ -224,6 +228,7 @@ where
                 total_samples,
                 total_samples,
                 combined_measurement,
+                result_snapshot_id,
                 allocation.algorithm,
             );
             self.persist_output(&output).await?;
@@ -267,6 +272,7 @@ where
             total_samples,
             allocation_started_total_samples,
             combined_measurement,
+            result_snapshot_id,
             allocation.algorithm,
         );
         self.persist_output(&output).await?;
@@ -296,6 +302,62 @@ where
             )
             .await
     }
+
+    async fn persist_derived_result(
+        &self,
+        states: &[ChildState],
+        metrics: Option<&[MeasurementResult]>,
+        previous: Option<&IntegrationCampaignOutput>,
+    ) -> Result<Option<String>, StoreError> {
+        let previous_id = previous.and_then(|output| output.result_snapshot_id.clone());
+        let Some(metrics) = metrics else {
+            return Ok(previous_id);
+        };
+        let sources = states
+            .iter()
+            .map(|state| state.result_source.clone())
+            .collect::<Vec<_>>();
+        let unchanged =
+            previous.is_some_and(|output| {
+                output.children.len() == states.len()
+                    && output.children.iter().zip(states).all(|(old, new)| {
+                        old.child.result_source.as_ref() == Some(&new.result_source)
+                    })
+                    && matches!(
+                        output.combined_measurement.as_ref(),
+                        Some(TaskMeasurementOutput::Completed { results }) if results == metrics
+                    )
+            });
+        if unchanged {
+            return Ok(previous_id);
+        }
+        let Some(observable_inputs) = states
+            .iter()
+            .map(|state| Some((state.coefficient, state.accumulator.as_ref()?)))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(previous_id);
+        };
+        if observable_inputs
+            .iter()
+            .any(|(_, accumulator)| accumulator.sample_count() <= 0)
+        {
+            return Ok(previous_id);
+        }
+        let result = DerivedResultSnapshot {
+            sources,
+            metrics: metrics.to_vec(),
+            observables: combine_independent_observables(&observable_inputs),
+        };
+        let payload = serde_json::to_value(result).map_err(|err| {
+            StoreError::store(format!("failed to serialize campaign result: {err}"))
+        })?;
+        let id = self
+            .store
+            .persist_task_result_snapshot(self.run_id, self.task.id, &payload)
+            .await?;
+        Ok(Some(id.to_string()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +367,9 @@ struct ChildState {
     run_id: i32,
     status: ControllerChildState,
     task_state: RunTaskState,
+    result_source: crate::core::ResultSourceRef,
+    accumulator: Option<crate::evaluation::AccumulatorState>,
+    completed_samples_per_second: Option<f64>,
     measurement: Option<TaskMeasurementOutput>,
 }
 
@@ -332,12 +397,7 @@ impl ChildState {
             IntegrationCampaignAllocationAlgorithm::LargestVariance => Some(variance),
             IntegrationCampaignAllocationAlgorithm::VarianceReductionRate => {
                 let samples = self.sample_count().max(1) as f64;
-                let throughput = results
-                    .iter()
-                    .filter_map(|result| result.completed_samples_per_second)
-                    .fold(None::<f64>, |current, value| {
-                        Some(current.map_or(value, |current| current.min(value)))
-                    })?;
+                let throughput = self.completed_samples_per_second?;
                 Some(variance * throughput / samples)
             }
         }
@@ -398,7 +458,6 @@ fn combine_measurements(states: &[ChildState]) -> Option<Vec<MeasurementResult>>
             value,
             uncertainty: Some(variance.sqrt()),
             sample_count,
-            completed_samples_per_second: None,
         });
     }
     Some(combined)
@@ -441,6 +500,7 @@ fn build_output(
     total_samples: i64,
     allocation_started_total_samples: i64,
     combined_measurement: Option<TaskMeasurementOutput>,
+    result_snapshot_id: Option<String>,
     algorithm: IntegrationCampaignAllocationAlgorithm,
 ) -> IntegrationCampaignOutput {
     let selected = selected.iter().copied().collect::<BTreeSet<_>>();
@@ -458,6 +518,7 @@ fn build_output(
         selected_child_run_ids: selected.iter().copied().collect(),
         allocation_started_total_samples,
         combined_measurement,
+        result_snapshot_id,
         children: states
             .iter()
             .map(|child| IntegrationCampaignChildOutput {
@@ -466,6 +527,8 @@ fn build_output(
                 child: ControllerChildOutput {
                     child_run_id: Some(child.run_id),
                     status: child.status,
+                    result_source: Some(child.result_source.clone()),
+                    completed_samples_per_second: child.completed_samples_per_second,
                     measurement: child.measurement.clone(),
                     failure_reason: match child.measurement.as_ref() {
                         Some(TaskMeasurementOutput::Failed { reason }) => Some(reason.clone()),
@@ -491,6 +554,14 @@ mod tests {
             run_id,
             status: ControllerChildState::Active,
             task_state: RunTaskState::Active,
+            result_source: crate::core::ResultSourceRef {
+                run_id,
+                task_id: i64::from(run_id),
+                snapshot_id: None,
+                sample_count: samples,
+            },
+            accumulator: None,
+            completed_samples_per_second: Some(10.0),
             measurement: Some(TaskMeasurementOutput::Completed {
                 results: vec![MeasurementResult {
                     name: AccumulatorMetricName::Mean,
@@ -498,7 +569,6 @@ mod tests {
                     value,
                     uncertainty: Some(error),
                     sample_count: samples,
-                    completed_samples_per_second: Some(10.0),
                 }],
             }),
         }
@@ -544,7 +614,6 @@ mod tests {
             value: 1.5,
             uncertainty: Some(0.0),
             sample_count: 2_012,
-            completed_samples_per_second: None,
         }];
         let stop = IntegrationCampaignStopCondition {
             min_total_samples: 1_500,
@@ -556,5 +625,14 @@ mod tests {
         assert!(!campaign_should_stop(&results, 2_012, false, &stop));
         assert!(campaign_should_stop(&results, 2_012, true, &stop));
         assert!(campaign_should_stop(&results, 4_000, false, &stop));
+    }
+
+    #[cfg(feature = "gammaloop")]
+    #[test]
+    fn gammaloop_accumulator_exposes_the_result_bundle_path() {
+        let value = crate::evaluation::AccumulatorState::empty_gammaloop()
+            .to_json()
+            .expect("json");
+        assert!(value.pointer("/bundle/histograms").is_some());
     }
 }

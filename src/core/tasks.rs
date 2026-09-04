@@ -1848,6 +1848,10 @@ pub struct ControllerChildOutput {
     pub child_run_id: Option<i32>,
     pub status: ControllerChildState,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_source: Option<crate::core::ResultSourceRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_samples_per_second: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub measurement: Option<TaskMeasurementOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
@@ -1892,6 +1896,8 @@ pub struct HyperparameterTuningOutput {
     pub best_trial: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub best_objective_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_result_source: Option<crate::core::ResultSourceRef>,
     pub trials: Vec<HyperparameterTrialOutput>,
 }
 
@@ -1914,6 +1920,8 @@ pub struct IntegrationCampaignOutput {
     pub selected_child_run_ids: Vec<i32>,
     pub allocation_started_total_samples: i64,
     pub combined_measurement: Option<TaskMeasurementOutput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_snapshot_id: Option<String>,
     pub children: Vec<IntegrationCampaignChildOutput>,
 }
 

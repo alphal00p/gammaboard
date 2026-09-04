@@ -71,24 +71,6 @@ where
     }
 }
 
-pub async fn resolve_effective_sample_accumulator_config<S>(
-    store: &S,
-    run_id: i32,
-    task: &RunTask,
-) -> Result<AccumulatorConfig, StoreError>
-where
-    S: AggregationStore + RunTaskStore + Send + Sync,
-{
-    try_resolve_effective_sample_accumulator_config(store, run_id, task)
-        .await?
-        .ok_or_else(|| {
-            StoreError::store(format!(
-                "task {} has no effective accumulator configuration",
-                task.id
-            ))
-        })
-}
-
 pub async fn try_resolve_effective_sample_accumulator_config<S>(
     store: &S,
     run_id: i32,

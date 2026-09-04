@@ -7,7 +7,7 @@ use crate::core::{AccumulatorConfig, BuildError, EvalError};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
 };
-use crate::process_runtime::build_process_worker_command;
+use crate::process_runtime::{build_process_worker_command, default_process_args};
 use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
 use crate::utils::domain::Domain;
 
@@ -29,7 +29,7 @@ pub struct ProcessEvaluatorParams {
     pub components: Vec<String>,
     #[serde(default)]
     pub accumulator: ProcessAccumulatorKind,
-    #[serde(default = "default_args")]
+    #[serde(default = "default_process_args")]
     pub args: Value,
 }
 
@@ -253,7 +253,7 @@ impl ProcessRuntimeWorker {
             domain,
             components: params.components.clone(),
             accumulator_kind: params.accumulator.clone(),
-            metadata: default_args(),
+            metadata: default_process_args(),
         };
         worker.send_init(params.args.clone())?;
         Ok(worker)
@@ -366,14 +366,10 @@ impl ProcessRuntimeWorker {
             return Ok(response
                 .get("metadata")
                 .cloned()
-                .unwrap_or_else(default_args));
+                .unwrap_or_else(default_process_args));
         }
         Err("process worker initialize result missing ok=true".to_string())
     }
-}
-
-fn default_args() -> Value {
-    Value::Object(serde_json::Map::new())
 }
 
 fn default_components() -> Vec<String> {

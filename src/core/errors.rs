@@ -29,10 +29,6 @@ impl StoreError {
         Self::NotFound(message.into())
     }
 
-    pub fn is_invalid_input(&self) -> bool {
-        matches!(self, Self::InvalidInput(_))
-    }
-
     pub fn batch_ownership_lost(batch_id: i64, node_uuid: impl Into<String>) -> Self {
         Self::BatchOwnershipLost {
             batch_id,

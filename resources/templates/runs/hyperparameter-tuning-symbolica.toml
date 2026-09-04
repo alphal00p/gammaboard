@@ -1,4 +1,6 @@
-# Hyperparameter tuning showcase: random search, grid search, and variance objectives.
+# Hyperparameter tuning showcase: random search, grid search, and variance
+# objectives. Each task exposes objective and best-so-far history plus a stable
+# reference to the complete result of its current best trial.
 # Requires: a working Symbolica runtime license.
 # Scale: dozens of child runs; this is a tuning showcase, not a smoke test.
 # Run: ./gammaboard run create resources/templates/runs/hyperparameter-tuning-symbolica.toml

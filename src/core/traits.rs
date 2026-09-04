@@ -188,6 +188,12 @@ pub trait WorkQueueStore: Send + Sync {
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
     async fn load_current_accumulator(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
+    async fn persist_task_result_snapshot(
+        &self,
+        run_id: i32,
+        task_id: i64,
+        result: &JsonValue,
+    ) -> Result<i64, StoreError>;
     async fn load_sampler_checkpoint(
         &self,
         run_id: i32,
@@ -376,6 +382,11 @@ pub trait RunReadStore: Send + Sync {
         run_id: i32,
         task_id: i64,
     ) -> Result<Option<TaskStageSnapshot>, StoreError>;
+    async fn get_latest_task_stage_snapshot_id(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<String>, StoreError>;
     async fn get_runtime_logs(
         &self,
         limit: i64,

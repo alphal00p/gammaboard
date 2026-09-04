@@ -131,6 +131,11 @@ mod tests {
         assert!(auth.find_subcommand("hash-password").is_some());
         let deploy = command.find_subcommand("deploy").expect("deploy command");
         assert!(deploy.find_subcommand("run").is_none());
+        assert!(
+            deploy
+                .get_arguments()
+                .any(|arg| arg.get_long() == Some("rebuild-frontend"))
+        );
     }
 
     #[test]

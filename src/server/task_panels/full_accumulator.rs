@@ -4,12 +4,12 @@ use crate::core::{
     PlotAccumulatorKind,
 };
 use crate::evaluation::{AccumulatorState, FullAccumulatorProgress};
+use crate::sampling::sampler_aggregator::{coprime_stride, permuted_raster_index};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelSpec, PanelState,
     PanelWidth, PlotPoint, PlotSeries, multi_timeseries_panel, panel_spec, progress_panel,
     scalar_timeseries_panel, select_state_spec, sized_panel_spec, state_option,
 };
-use num::Integer;
 use serde_json::Value as JsonValue;
 
 pub(super) fn image_projectors(
@@ -412,30 +412,6 @@ fn reordered_invalid_indices(invalid_entries: &[usize], total: usize) -> Option<
             .map(|shuffled_index| permuted_raster_index(shuffled_index, total, stride))
             .collect(),
     )
-}
-
-fn permuted_raster_index(index: usize, total_samples: usize, stride: usize) -> usize {
-    if total_samples <= 1 {
-        return index.min(total_samples.saturating_sub(1));
-    }
-    (index * stride) % total_samples
-}
-
-fn coprime_stride(total_samples: usize) -> usize {
-    if total_samples <= 1 {
-        return 1;
-    }
-
-    let phi_minus_one = 0.618_033_988_749_894_9_f64;
-    let mut candidate =
-        ((total_samples as f64 * phi_minus_one).floor() as usize).clamp(1, total_samples - 1);
-    while candidate.gcd(&total_samples) != 1 {
-        candidate += 1;
-        if candidate >= total_samples {
-            candidate = 1;
-        }
-    }
-    candidate
 }
 
 fn decode_full_progress(persisted: &JsonValue) -> Result<FullAccumulatorProgress, EngineError> {

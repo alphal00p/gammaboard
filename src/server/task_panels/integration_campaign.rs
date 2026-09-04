@@ -1,5 +1,8 @@
 use super::controller::{child_table_payload, progress_projector};
-use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
+use super::{
+    TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelProjector, panel_projector,
+    panel_projector_with_source,
+};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelWidth, key_value, key_value_panel, panel_spec,
     sized_panel_spec, table_panel_with_payload_and_options,
@@ -8,6 +11,7 @@ use serde_json::{Value as JsonValue, json};
 
 const PROGRESS_ID: &str = "campaign_progress";
 const SUMMARY_ID: &str = "campaign_combined_result";
+const HISTOGRAMS_ID: &str = "campaign_histograms";
 const CHILDREN_ID: &str = "campaign_children";
 
 pub(super) fn projectors() -> Vec<TaskPanelProjector> {
@@ -25,8 +29,38 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
             campaign_max_samples,
         ),
         summary_projector(),
+        histograms_projector(),
         children_projector(),
     ]
+}
+
+fn histograms_projector() -> TaskPanelProjector {
+    panel_projector_with_source(
+        sized_panel_spec(
+            HISTOGRAMS_ID,
+            "Combined Observables",
+            PanelKind::Table,
+            PanelHistoryMode::None,
+            PanelWidth::Full,
+        ),
+        TaskPanelCurrentSourcePolicy::PersistedAlways,
+        |ctx| {
+            let Some(payload) = ctx
+                .source
+                .persisted()
+                .and_then(|result| result.get("observables"))
+                .cloned()
+            else {
+                return Ok(None);
+            };
+            Ok(super::observable::histogram_bundle_panel(
+                HISTOGRAMS_ID,
+                "Combined Observable",
+                payload,
+            ))
+        },
+        |_ctx| Ok(None),
+    )
 }
 
 fn campaign_max_samples(ctx: &TaskPanelContext<'_>) -> Option<f64> {
@@ -50,7 +84,7 @@ fn summary_projector() -> TaskPanelProjector {
     panel_projector(
         panel_spec(
             SUMMARY_ID,
-            "Combined Result",
+            "Result",
             PanelKind::KeyValue,
             PanelHistoryMode::None,
         ),
@@ -83,13 +117,6 @@ fn summary_projector() -> TaskPanelProjector {
                         output
                             .map(|output| json!(output.total_samples))
                             .unwrap_or(JsonValue::Null),
-                    ),
-                    key_value(
-                        "active",
-                        "Selected Runs",
-                        output
-                            .map(|output| json!(output.selected_child_run_ids))
-                            .unwrap_or_else(|| json!([])),
                     ),
                 ],
             )))
@@ -138,11 +165,13 @@ fn children_projector() -> TaskPanelProjector {
                     "uncertainty".to_string(),
                     "variance contribution".to_string(),
                     "samples".to_string(),
-                    "score".to_string(),
                 ],
                 rows,
                 Some(payload),
-                Default::default(),
+                crate::server::panels::TableStateOptions {
+                    visible_column_indices: vec![0, 1, 2, 4, 5, 6, 7, 8],
+                    row_keys: None,
+                },
             )))
         },
         |_ctx| Ok(None),
@@ -189,7 +218,6 @@ fn child_row(
         result
             .map(|result| json!(result.sample_count))
             .unwrap_or(JsonValue::Null),
-        json!(child.score),
     ]
 }
 
@@ -208,6 +236,8 @@ mod tests {
             child: ControllerChildOutput {
                 child_run_id: Some(2),
                 status: ControllerChildState::Active,
+                result_source: None,
+                completed_samples_per_second: None,
                 measurement: None,
                 failure_reason: None,
             },

@@ -32,6 +32,7 @@ use self::raster::{
     PdfAdaptationRasterPlaneSampler, PdfAdaptationRasterPlaneSamplerSnapshot, RasterLineSampler,
     RasterLineSamplerSnapshot, RasterPlaneSampler, RasterPlaneSamplerSnapshot,
 };
+pub(crate) use self::raster::{coprime_stride, permuted_raster_index};
 
 fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> Option<f64> {
     let observable = handoff.and_then(|value| value.observable_state)?;

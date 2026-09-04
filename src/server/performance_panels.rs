@@ -1,9 +1,9 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
-    PlotSeries, TickBreakdownSegment, history_x, key_value, key_value_panel, key_value_with_tone,
-    merge_panel_state, multi_timeseries_panel, replace_panel, sized_panel_spec,
-    tick_breakdown_panel,
+    PlotSeries, TickBreakdownSegment, format_bytes_human, history_x, key_value, key_value_panel,
+    key_value_with_tone, merge_panel_state, multi_timeseries_panel, replace_panel,
+    sized_panel_spec, tick_breakdown_panel,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
 use serde_json::Value as JsonValue;
@@ -1232,21 +1232,4 @@ fn sampler_tick_total_ms(runtime: &SamplerRuntimeMetrics) -> f64 {
         .iter()
         .map(|segment| segment.value_ms)
         .sum()
-}
-
-fn format_bytes_human(bytes: i64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = 1024.0 * KIB;
-    const GIB: f64 = 1024.0 * MIB;
-
-    let bytes_f64 = bytes as f64;
-    if bytes_f64 >= GIB {
-        format!("{:.2} GiB", bytes_f64 / GIB)
-    } else if bytes_f64 >= MIB {
-        format!("{:.1} MiB", bytes_f64 / MIB)
-    } else if bytes_f64 >= KIB {
-        format!("{:.1} KiB", bytes_f64 / KIB)
-    } else {
-        format!("{bytes} B")
-    }
 }

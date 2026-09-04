@@ -158,6 +158,12 @@ In that build, `evaluator.kind = "gammaloop"` and HwU histogram export return ex
 
 For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are inferred from the selected integrand and should be omitted.
 
+`graph_groups = [0, 3]` optionally restricts a discretely sampled GammaLoop
+integrand to those graph-group indices. The exposed domain renumbers the chosen
+groups locally while evaluation maps them back to GammaLoop's original indices.
+This lets separate child runs load and sample individual graph groups without
+changing the generated state.
+
 Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized observable and histogram path is used.
 
 `[evaluator.preprocessing]` is optional and runs GammaLoop commands after loading
@@ -312,7 +318,17 @@ Each `[[task_queue.children]]` entry supplies a stable name, a finite coefficien
 and a complete child `run_toml`. The common `measurement` selects the child task
 whose live or completed measurement is combined. Child estimates are assumed
 independent, so uncertainties are combined in quadrature after applying the
-coefficients.
+coefficients. The controller also materializes live result snapshots from the
+same child accumulator revisions. Compatible histogram bins are combined as
+weighted values with independent variances in quadrature; incompatible or
+missing layouts are listed as omitted. These larger payloads are stored as task
+result snapshots rather than repeated in controller queue state.
+
+Children may use entirely different evaluators, GammaLoop processes, or state
+folders. Histogram summation is evaluator-independent and accepts arbitrary
+GammaLoop continuous or discrete observables when every child publishes the
+same observable name and bin layout. Each native child bundle remains available
+through its child run even when an observable cannot be summed.
 
 `allocation.algorithm` is `variance_reduction_rate` by default and ranks the
 weighted variance reduction proxy per second. `largest_variance` ignores measured
@@ -321,8 +337,14 @@ throughput. `min_samples_per_child` provides pilot coverage,
 controls child concurrency. The campaign stops on its combined absolute or
 relative error after `min_total_samples`, or at `max_total_samples`.
 
-See `resources/templates/runs/integration-campaign-unit.toml` for a complete,
-dependency-free example.
+All controller child records include a result source reference containing the
+child run, source task, immutable stage snapshot when available, and live sample
+revision. Parameter scans use these records for their 1D series, 2D heatmaps,
+and point table. Hyperparameter tuning exposes objective and best-so-far
+history, plus `best_result_source` for the complete winning child result.
+
+See `resources/templates/runs/integration-campaign-qft-like.toml` for a complete
+two-graph-group ttH example with native GammaLoop histograms.
 
 ## Queue Tuning
 

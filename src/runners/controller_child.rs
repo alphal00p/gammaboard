@@ -1,15 +1,19 @@
 use crate::api::measurement::load_task_measurement_output;
 use crate::core::StoreResultExt;
 use crate::core::{
-    ControlPlaneStore, DesiredAssignment, RegisteredNode, RunReadStore, RunTaskState, RunTaskStore,
-    StoreError, TaskMeasurementOutput, WorkerRole,
+    AggregationStore, ControlPlaneStore, DesiredAssignment, RegisteredNode, ResultSourceRef,
+    RunReadStore, RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput, WorkerRole,
 };
+use crate::evaluation::AccumulatorState;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
-pub struct ChildTaskMeasurement {
+pub struct ChildTaskResult {
     pub task_state: RunTaskState,
     pub output: Option<TaskMeasurementOutput>,
+    pub source: ResultSourceRef,
+    pub accumulator: Option<AccumulatorState>,
+    pub source_task: crate::core::RunTask,
 }
 
 #[derive(Debug, Clone)]
@@ -180,16 +184,83 @@ fn idle_node_assignments_from_nodes(nodes: &[RegisteredNode]) -> Vec<DesiredAssi
     assignments
 }
 
-pub async fn load_child_task_measurement(
-    store: &(impl RunReadStore + RunTaskStore),
+pub async fn load_child_task_result(
+    store: &(impl AggregationStore + RunReadStore + RunTaskStore),
     child_run_id: i32,
     source_task: &str,
-) -> Result<ChildTaskMeasurement, StoreError> {
+) -> Result<ChildTaskResult, StoreError> {
+    load_child_task_result_inner(store, child_run_id, source_task, true).await
+}
+
+pub async fn load_child_task_result_reference(
+    store: &(impl AggregationStore + RunReadStore + RunTaskStore),
+    child_run_id: i32,
+    source_task: &str,
+) -> Result<ChildTaskResult, StoreError> {
+    load_child_task_result_inner(store, child_run_id, source_task, false).await
+}
+
+async fn load_child_task_result_inner(
+    store: &(impl AggregationStore + RunReadStore + RunTaskStore),
+    child_run_id: i32,
+    source_task: &str,
+    include_accumulator: bool,
+) -> Result<ChildTaskResult, StoreError> {
     let output = load_task_measurement_output(store, child_run_id, source_task)
         .await
         .store_err()?;
-    Ok(ChildTaskMeasurement {
+    let (accumulator, snapshot_id) = if !include_accumulator {
+        let snapshot_id = if output.task_state == RunTaskState::Active {
+            None
+        } else {
+            store
+                .get_latest_task_stage_snapshot_id(child_run_id, output.task_id)
+                .await?
+        };
+        (None, snapshot_id)
+    } else if output.task_state == RunTaskState::Active {
+        let accumulator = store
+            .load_current_accumulator(child_run_id)
+            .await?
+            .map(|value| AccumulatorState::from_json(&value))
+            .transpose()
+            .map_err(|err| StoreError::store(err.to_string()))?;
+        (accumulator, None)
+    } else {
+        let snapshot = store
+            .get_latest_task_stage_snapshot(child_run_id, output.task_id)
+            .await?;
+        let snapshot_id = snapshot.as_ref().map(|snapshot| snapshot.id.clone());
+        (
+            snapshot.map(|snapshot| snapshot.observable_state),
+            snapshot_id,
+        )
+    };
+    let sample_count = accumulator
+        .as_ref()
+        .map(AccumulatorState::sample_count)
+        .or_else(|| {
+            output
+                .output
+                .as_ref()
+                .and_then(|measurement| match measurement {
+                    TaskMeasurementOutput::Completed { results } => {
+                        results.iter().map(|result| result.sample_count).max()
+                    }
+                    TaskMeasurementOutput::Failed { .. } => None,
+                })
+        })
+        .unwrap_or(output.source_task.nr_completed_samples);
+    Ok(ChildTaskResult {
         task_state: output.task_state,
         output: output.output,
+        source: ResultSourceRef {
+            run_id: child_run_id,
+            task_id: output.task_id,
+            snapshot_id,
+            sample_count,
+        },
+        accumulator,
+        source_task: output.source_task,
     })
 }

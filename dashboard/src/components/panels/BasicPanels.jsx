@@ -106,7 +106,7 @@ const domainSummaryText = (value) => {
 const formatDebugJson = (value) => {
   try {
     return JSON.stringify(value, null, 2);
-  } catch (_error) {
+  } catch {
     return String(value);
   }
 };

@@ -25,6 +25,8 @@ pub struct GammaLoopParams {
     pub state_folder: PathBuf,
     pub process_id: Option<JsonValue>,
     pub integrand_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_groups: Option<Vec<usize>>,
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
@@ -54,6 +56,7 @@ impl Default for GammaLoopParams {
             state_folder: PathBuf::from("./gammaloop_state"),
             process_id: None,
             integrand_name: None,
+            graph_groups: None,
             momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),

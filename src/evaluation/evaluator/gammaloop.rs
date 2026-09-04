@@ -38,6 +38,7 @@ pub struct GammaLoopEvaluator {
     metadata: GammaLoopMetadata,
     momentum_space: bool,
     training_projection: TrainingProjection,
+    graph_groups: Option<Vec<usize>>,
     domain: Domain,
 }
 
@@ -50,6 +51,7 @@ struct GammaLoopMetadata {
     momentum_space: bool,
     coordinate_space: &'static str,
     domain_axes: Vec<&'static str>,
+    graph_groups: Option<Vec<usize>>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -79,6 +81,8 @@ pub struct GammaLoopParams {
     pub state_folder: PathBuf,
     pub process_id: Option<ProcessRef>,
     pub integrand_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_groups: Option<Vec<usize>>,
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
@@ -108,6 +112,7 @@ impl Default for GammaLoopParams {
             state_folder: PathBuf::from("./gammaloop_state"),
             process_id: None,
             integrand_name: None,
+            graph_groups: None,
             momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),
@@ -161,14 +166,16 @@ impl GammaLoopEvaluator {
                 "x_space"
             },
             domain_axes: Self::domain_axes(&integrand),
+            graph_groups: params.graph_groups,
         };
         Ok((integrand, model, metadata))
     }
 
     pub fn resolve_domain_from_params(params: GammaLoopParams) -> Result<Domain, BuildError> {
         match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Domain, BuildError> {
+            let graph_groups = params.graph_groups.clone();
             let (integrand, _model, metadata) = Self::load_integrand_and_model(params)?;
-            Self::build_domain(&integrand, metadata.momentum_space)
+            Self::build_domain(&integrand, metadata.momentum_space, graph_groups.as_deref())
         })) {
             Ok(result) => result,
             Err(payload) => Err(BuildError::build(format!(
@@ -181,6 +188,7 @@ impl GammaLoopEvaluator {
     fn build_domain(
         integrand: &ProcessIntegrand,
         momentum_space: bool,
+        selected_graph_groups: Option<&[usize]>,
     ) -> Result<Domain, BuildError> {
         fn discrete_group_count(integrand: &ProcessIntegrand) -> usize {
             let discrete_depth = integrand.discrete_sampling_depth();
@@ -310,14 +318,40 @@ impl GammaLoopEvaluator {
 
         match integrand.get_settings().sampling.clone() {
             SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => {
+                if selected_graph_groups.is_some() {
+                    return Err(BuildError::build(
+                        "gammaloop graph_groups requires discrete graph sampling",
+                    ));
+                }
                 continuous_leaf(integrand, momentum_space, &[])
             }
             SamplingSettings::DiscreteGraphs(_) => {
                 let group_count = discrete_group_count(integrand);
-                let mut group_branches = Vec::with_capacity(group_count);
-                for group_idx in 0..group_count {
+                let group_indices = selected_graph_groups
+                    .map(|indices| indices.to_vec())
+                    .unwrap_or_else(|| (0..group_count).collect());
+                if group_indices.is_empty() {
+                    return Err(BuildError::build(
+                        "gammaloop graph_groups must select at least one graph group",
+                    ));
+                }
+                let mut group_branches = Vec::with_capacity(group_indices.len());
+                for (local_group_idx, group_idx) in group_indices.into_iter().enumerate() {
+                    if group_idx >= group_count {
+                        return Err(BuildError::build(format!(
+                            "gammaloop graph_groups contains {group_idx}, but the integrand has {group_count} graph groups"
+                        )));
+                    }
+                    if group_branches
+                        .iter()
+                        .any(|branch: &DomainBranch| branch.index == group_idx)
+                    {
+                        return Err(BuildError::build(format!(
+                            "gammaloop graph_groups contains duplicate graph group {group_idx}"
+                        )));
+                    }
                     let branch = build_group_branch(integrand, momentum_space, group_idx)?;
-                    group_branches.push(DomainBranch::new(group_idx, branch));
+                    group_branches.push(DomainBranch::new(local_group_idx, branch));
                 }
                 if group_branches.is_empty() {
                     return Err(BuildError::build(
@@ -456,7 +490,11 @@ impl GammaLoopEvaluator {
     pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
         match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, BuildError> {
             let (mut integrand, model, metadata) = Self::load_integrand_and_model(params.clone())?;
-            let domain = Self::build_domain(&integrand, metadata.momentum_space)?;
+            let domain = Self::build_domain(
+                &integrand,
+                metadata.momentum_space,
+                params.graph_groups.as_deref(),
+            )?;
             integrand
                 .warm_up(&model)
                 .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
@@ -467,6 +505,7 @@ impl GammaLoopEvaluator {
                 momentum_space: metadata.momentum_space,
                 metadata,
                 training_projection: params.training_projection,
+                graph_groups: params.graph_groups,
                 domain,
             })
         })) {
@@ -492,6 +531,25 @@ impl GammaLoopEvaluator {
 
     fn reset_observables(&mut self) {
         self.integrand = self.pristine_integrand.clone();
+    }
+
+    fn map_graph_group(&self, mut discrete: Vec<usize>) -> Result<Vec<usize>, EvalError> {
+        let Some(graph_groups) = &self.graph_groups else {
+            return Ok(discrete);
+        };
+        let Some(local_group) = discrete.first_mut() else {
+            return Err(EvalError::eval(
+                "gammaloop graph_groups requires a graph-group discrete coordinate",
+            ));
+        };
+        *local_group = graph_groups.get(*local_group).copied().ok_or_else(|| {
+            EvalError::eval(format!(
+                "gammaloop graph-group coordinate {} is outside the configured {} groups",
+                *local_group,
+                graph_groups.len()
+            ))
+        })?;
+        Ok(discrete)
     }
 
     fn ingest_vector_batch(
@@ -588,6 +646,7 @@ impl GammaLoopEvaluator {
                             })
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    let discrete_dim = self.map_graph_group(discrete_dim)?;
 
                     let (group_id, orientation, channel_id) = match &self.integrand.get_settings().sampling
                     {
@@ -643,6 +702,7 @@ impl GammaLoopEvaluator {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let discrete_dim = self.map_graph_group(discrete_dim)?;
                 let expected_dimension = Self::call_external("expected_x_space_dimension", || {
                     self.integrand
                         .expected_x_space_dimension(discrete_dim.as_slice())

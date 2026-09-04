@@ -22,6 +22,7 @@ pub struct PersistedTaskMeasurement {
     pub task_name: String,
     pub task_state: RunTaskState,
     pub output: Option<TaskMeasurementOutput>,
+    pub source_task: RunTask,
 }
 
 pub async fn load_task_measurement_output(
@@ -36,6 +37,7 @@ pub async fn load_task_measurement_output(
         task_name: task.name.clone(),
         task_state: task.state,
         output: task.measurement_output.clone(),
+        source_task: task.clone(),
     })
 }
 
@@ -83,15 +85,29 @@ async fn extract_task_measurement_with_spec(
     let accumulator = load_measurement_accumulator(store, run_id, source_task).await?;
     let throughput =
         load_measurement_throughput(store, run_id, tasks, source_task, measurement).await?;
-    let metrics = extract_measurement_metrics(&accumulator, measurement, throughput, source_task)?;
+    let results = project_measurement_results(&accumulator, measurement, throughput, source_task)?;
     Ok(ExtractedMeasurement {
         source_task_id: source_task.id,
         source_task_name: source_task.name.clone(),
-        results: metrics
-            .into_iter()
-            .map(|metric| measurement_result_from_metric(metric, throughput))
-            .collect(),
+        results,
     })
+}
+
+pub(crate) fn project_measurement_results(
+    accumulator: &AccumulatorState,
+    measurement: &TaskMeasurementSpec,
+    completed_samples_per_second: Option<f64>,
+    source_task: &RunTask,
+) -> Result<Vec<MeasurementResult>, ApiError> {
+    Ok(extract_measurement_metrics(
+        accumulator,
+        measurement,
+        completed_samples_per_second,
+        source_task,
+    )?
+    .into_iter()
+    .map(measurement_result_from_metric)
+    .collect())
 }
 
 fn resolve_measurement_source_task<'a>(
@@ -201,17 +217,13 @@ fn decode_completed_samples_per_second(entry: &SamplerPerformanceHistoryEntry) -
     }
 }
 
-fn measurement_result_from_metric(
-    metric: AccumulatorMetricValue,
-    completed_samples_per_second: Option<f64>,
-) -> MeasurementResult {
+fn measurement_result_from_metric(metric: AccumulatorMetricValue) -> MeasurementResult {
     MeasurementResult {
         name: metric.name,
         component: metric.component,
         value: metric.value,
         uncertainty: metric.uncertainty,
         sample_count: metric.sample_count,
-        completed_samples_per_second,
     }
 }
 
@@ -337,6 +349,14 @@ mod tests {
             _run_id: i32,
         ) -> Result<Option<JsonValue>, crate::core::StoreError> {
             Ok(self.current_accumulator.clone())
+        }
+        async fn persist_task_result_snapshot(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+            _result: &JsonValue,
+        ) -> Result<i64, crate::core::StoreError> {
+            unreachable!("unused")
         }
         async fn load_sampler_checkpoint(
             &self,
@@ -525,6 +545,16 @@ mod tests {
             _task_id: i64,
         ) -> Result<Option<TaskStageSnapshot>, crate::core::StoreError> {
             Ok(self.latest_stage_snapshot.clone())
+        }
+        async fn get_latest_task_stage_snapshot_id(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+        ) -> Result<Option<String>, crate::core::StoreError> {
+            Ok(self
+                .latest_stage_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.id.clone()))
         }
         async fn get_runtime_logs(
             &self,
@@ -843,7 +873,6 @@ mod tests {
         assert_eq!(result.name, AccumulatorMetricName::Variance);
         assert!(result.value > 0.0);
         assert!(result.uncertainty.is_some());
-        assert_eq!(result.completed_samples_per_second, None);
     }
 
     #[tokio::test]
@@ -856,7 +885,6 @@ mod tests {
                 value: 2.0,
                 uncertainty: None,
                 sample_count: 4,
-                completed_samples_per_second: None,
             }],
         });
         let store = TestStore {
@@ -1029,7 +1057,6 @@ mod tests {
             extracted.results[0].name,
             AccumulatorMetricName::TimeNormalizedVariance
         );
-        assert_eq!(extracted.results[0].completed_samples_per_second, Some(2.0));
         assert!(extracted.results[0].value > 0.0);
         assert!(extracted.results[0].uncertainty.is_some());
     }

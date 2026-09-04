@@ -295,24 +295,24 @@ pub(crate) async fn get_run_sample_progress(
     .await
 }
 
-pub(crate) async fn insert_persisted_observable_snapshot(
+pub(crate) async fn insert_task_output_snapshot(
     pool: &PgPool,
     run_id: i32,
     task_id: i64,
     persisted_observable: &JsonValue,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
         r#"
         INSERT INTO persisted_observable_snapshots (run_id, task_id, persisted_observable)
         VALUES ($1, $2, $3)
+        RETURNING id
         "#,
     )
     .bind(run_id)
     .bind(task_id)
     .bind(persisted_observable)
-    .execute(pool)
-    .await?;
-    Ok(())
+    .fetch_one(pool)
+    .await
 }
 
 pub(crate) async fn update_run_current_accumulator(

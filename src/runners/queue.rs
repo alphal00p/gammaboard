@@ -1261,6 +1261,15 @@ mod tests {
             unreachable!("unused in test")
         }
 
+        async fn persist_task_result_snapshot(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+            _result: &JsonValue,
+        ) -> Result<i64, StoreError> {
+            unreachable!("unused in test")
+        }
+
         async fn load_sampler_checkpoint(
             &self,
             _run_id: i32,
@@ -1619,6 +1628,14 @@ mod tests {
             _run_id: i32,
             _task_id: i64,
         ) -> Result<Option<TaskStageSnapshot>, StoreError> {
+            unreachable!("unused in test")
+        }
+
+        async fn get_latest_task_stage_snapshot_id(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+        ) -> Result<Option<String>, StoreError> {
             unreachable!("unused in test")
         }
 

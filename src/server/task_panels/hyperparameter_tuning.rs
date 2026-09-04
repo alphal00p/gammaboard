@@ -43,7 +43,7 @@ fn tuning_best_projector() -> TaskPanelProjector {
     panel_projector(
         panel_spec(
             TUNING_BEST_PANEL_ID,
-            "Best Trial",
+            "Best Result",
             PanelKind::KeyValue,
             PanelHistoryMode::None,
         ),
@@ -60,11 +60,6 @@ fn tuning_best_projector() -> TaskPanelProjector {
                     "trial",
                     "Trial",
                     best.get("index").cloned().unwrap_or(JsonValue::Null),
-                ),
-                key_value(
-                    "run",
-                    "Run",
-                    best.get("child_run_id").cloned().unwrap_or(JsonValue::Null),
                 ),
                 key_value(
                     "objective",
@@ -101,7 +96,7 @@ fn tuning_objective_projector() -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
             TUNING_OBJECTIVE_PANEL_ID,
-            "Objective by Trial",
+            "Objective History",
             PanelKind::MultiTimeseries,
             PanelHistoryMode::None,
             PanelWidth::Full,
@@ -172,12 +167,16 @@ fn tuning_trials_projector() -> TaskPanelProjector {
             let payload =
                 child_table_payload(&rows, tuning_table_objective_column(), Default::default());
 
+            let visible_column_indices = (0..columns.len()).filter(|index| *index != 2).collect();
             Ok(Some(table_panel_with_payload_and_options(
                 TUNING_TRIALS_PANEL_ID,
                 columns,
                 rows,
                 Some(payload),
-                Default::default(),
+                crate::server::panels::TableStateOptions {
+                    visible_column_indices,
+                    row_keys: None,
+                },
             )))
         },
         |_ctx| Ok(None),
@@ -589,7 +588,6 @@ mod tests {
             .map(|entry| (entry.key.as_str(), entry.value.clone()))
             .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(entries_by_key.get("trial"), Some(&json!(1)));
-        assert_eq!(entries_by_key.get("run"), Some(&json!(12)));
         assert_eq!(entries_by_key.get("objective"), Some(&json!(2.0)));
         assert_eq!(entries_by_key.get("samples"), Some(&json!(200)));
         assert_eq!(entries_by_key.get("parameter_center"), Some(&json!(0.5)));

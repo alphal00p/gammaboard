@@ -8,7 +8,7 @@ mod symbolica;
 pub(crate) mod unit;
 
 use crate::core::{AccumulatorConfig, BuildError, EvaluatorConfig};
-use crate::evaluation::{AccumulatorState, Evaluator, SemanticAccumulatorKind};
+use crate::evaluation::{Evaluator, SemanticAccumulatorKind};
 use crate::utils::domain::Domain;
 
 use self::gammaloop::GammaLoopEvaluator;
@@ -94,13 +94,6 @@ impl EvaluatorConfig {
             ),
             Self::Gammaloop { .. } => Ok(()),
         }
-    }
-
-    pub fn empty_accumulator_state(
-        &self,
-        config: &AccumulatorConfig,
-    ) -> Result<AccumulatorState, BuildError> {
-        Ok(AccumulatorState::from_config(config))
     }
 }
 

@@ -123,6 +123,7 @@ const TablePanel = ({
   const actions = payload?.actions && typeof payload.actions === "object" ? payload.actions : {};
   const supportsBundleExport = actions.export === true || actions.export_json === true;
   const supportsBundleUpload = actions.upload_bundle === true;
+  const omittedHistogramCount = asArray(payload?.omitted_incompatible_histograms).length;
   const rowAction = payload?.row_action && typeof payload.row_action === "object" ? payload.row_action : null;
   const rowTones = asArray(payload?.row_tones).map((tone) => (typeof tone === "string" ? tone : null));
   const rowToneLabels = payload?.row_tone_labels && typeof payload.row_tone_labels === "object" ? payload.row_tone_labels : {};
@@ -148,7 +149,7 @@ const TablePanel = ({
               inputRef={uploadInputRef}
             />
           ) : null}
-          <Alert severity="info">Bundle is empty.</Alert>
+          <Alert severity="info">No observables available.</Alert>
         </CardContent>
       </Card>
     );
@@ -236,6 +237,12 @@ const TablePanel = ({
             onRemoveBundle={onRemoveBundle}
             inputRef={uploadInputRef}
           />
+        ) : null}
+        {omittedHistogramCount > 0 ? (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {omittedHistogramCount} incompatible {omittedHistogramCount === 1 ? "observable was" : "observables were"}
+            omitted from the combined result.
+          </Alert>
         ) : null}
         <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
           <MuiTable size="small" stickyHeader>

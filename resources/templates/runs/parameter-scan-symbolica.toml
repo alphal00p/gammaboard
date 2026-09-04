@@ -1,4 +1,6 @@
-# Parameter scan demo: compare 1D, 2D, and 3D Cartesian scans.
+# Parameter scan demo: compare 1D, 2D, and 3D Cartesian scans. The controller
+# exposes live progress, child result references, 1D result series, and a 2D
+# result heatmap; higher-dimensional scans remain available as a result table.
 # Requires: a working Symbolica runtime license.
 # Scale: 26 short child runs with 4096 samples each.
 # Run: ./gammaboard run create resources/templates/runs/parameter-scan-symbolica.toml

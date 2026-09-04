@@ -34,23 +34,72 @@ case "${profile}" in
 esac
 
 uses_deploy=false
+rebuild_frontend=false
+forwarded_args=()
 for arg in "$@"; do
-    if [[ "${arg}" == "deploy" ]]; then
-        uses_deploy=true
-        break
-    fi
+    case "${arg}" in
+        deploy)
+            uses_deploy=true
+            forwarded_args+=("${arg}")
+            ;;
+        --rebuild-frontend)
+            rebuild_frontend=true
+            forwarded_args+=("${arg}")
+            ;;
+        *)
+            forwarded_args+=("${arg}")
+            ;;
+    esac
 done
+
+if [[ "${rebuild_frontend}" == true && "${uses_deploy}" == false ]]; then
+    echo "--rebuild-frontend is only valid with deploy" >&2
+    exit 2
+fi
+
+frontend_needs_build() {
+    local output="${repo_root}/dashboard/build/index.html"
+    local base_stamp="${repo_root}/dashboard/build/.gammaboard-frontend-base"
+    local requested_base="${GAMMABOARD_FRONTEND_BASE:-/}"
+    if [[ "${rebuild_frontend}" == true || ! -f "${output}" ]]; then
+        return 0
+    fi
+    if [[ ! -f "${base_stamp}" || "$(<"${base_stamp}")" != "${requested_base}" ]]; then
+        return 0
+    fi
+
+    local input
+    for input in \
+        "${repo_root}/dashboard/index.html" \
+        "${repo_root}/dashboard/package.json" \
+        "${repo_root}/dashboard/package-lock.json" \
+        "${repo_root}/dashboard/vite.config.js"; do
+        if [[ "${input}" -nt "${output}" ]]; then
+            return 0
+        fi
+    done
+
+    [[ -n "$(find "${repo_root}/dashboard/src" "${repo_root}/dashboard/public" -type f -newer "${output}" -print -quit)" ]]
+}
 
 if [[ "${uses_deploy}" == true ]]; then
     require_command npm
     cd "${repo_root}/dashboard"
     if [[ ! -x node_modules/.bin/vite ]]; then
         npm ci
+        frontend_dependencies_installed=true
+    else
+        frontend_dependencies_installed=false
     fi
 
-    npm run build
+    if [[ "${frontend_dependencies_installed}" == true ]] || frontend_needs_build; then
+        npm run build
+        printf '%s\n' "${GAMMABOARD_FRONTEND_BASE:-/}" > build/.gammaboard-frontend-base
+    else
+        echo "frontend build is current; skipping npm run build"
+    fi
     cd "${repo_root}"
 fi
 
 cargo build "${build_args[@]}"
-exec "${bin}" "$@"
+exec "${bin}" "${forwarded_args[@]}"

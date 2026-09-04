@@ -1,4 +1,4 @@
-import { Suspense, forwardRef, lazy, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, Typography } from "@mui/material";
 import { asArray } from "../../utils/collections";
 import { formatScientific } from "../../utils/formatters";
@@ -62,39 +62,11 @@ import {
   buildRelativeHistogramOption,
   projectBinsToReferenceBins,
 } from "./histogramOptions";
-
-const ReactECharts = lazy(() =>
-  Promise.all([import("echarts-for-react"), import("../../lib/echarts")]).then(([module]) => ({
-    default: module.default,
-  })),
-);
-
-const LazyChart = forwardRef((props, ref) => (
-  <Suspense
-    fallback={
-      <Box
-        sx={{
-          width: "100%",
-          height: "100%",
-          minHeight: 160,
-          display: "grid",
-          placeItems: "center",
-          color: "text.secondary",
-          typography: "body2",
-        }}
-      >
-        Loading chart...
-      </Box>
-    }
-  >
-    <ReactECharts ref={ref} {...props} />
-  </Suspense>
-));
-LazyChart.displayName = "LazyChart";
+import LazyChart from "./LazyChart";
 
 const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
 
-const inferDefaultHistogramYScale = (_state) => "linear";
+const inferDefaultHistogramYScale = () => "linear";
 
 const inferDefaultHistogramXScale = (state) => (state?.log_x_axis ? "log" : "linear");
 
@@ -114,7 +86,7 @@ const HistogramPanel = ({
   const sourcePanelId = state?.source_panel_id || panelId;
   const isBundleControlled = Boolean(sourcePanelId && sourcePanelId !== panelId);
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
-  const defaultYScale = inferDefaultHistogramYScale(state);
+  const defaultYScale = inferDefaultHistogramYScale();
   const defaultXScale = inferDefaultHistogramXScale(state);
   const declaredViews = useMemo(() => normalizeHistogramViews(state?.views), [state?.views]);
   const [localSelectedViewId, setLocalSelectedViewId] = useState(null);

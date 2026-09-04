@@ -77,6 +77,8 @@ For UBELIX Slurm/Apptainer operation, use
 The repo-root `./gammaboard` helper builds the current CLI before forwarding
 arguments to it. It uses `dev-optim` by default, `GAMMABOARD_PROFILE=release`
 for release builds, and also builds the dashboard frontend for `deploy`.
+The frontend build is skipped when its output is newer than its sources and
+configuration. Pass `./gammaboard deploy --rebuild-frontend` to force a rebuild.
 Set `GAMMABOARD_FRONTEND_BASE=/board/` when building the dashboard for a
 reverse-proxy mount below a URL path instead of at `/`.
 
@@ -128,13 +130,39 @@ JSON-RPC over stdin/stdout. The protocol is in
 [docs/process-runtime.md](docs/process-runtime.md); the Python helpers and
 working runtimes are in [process_api](process_api).
 
-## Integration campaigns
+## Controller results
 
-`integration_campaign` tasks combine weighted measurements from independent child
-runs and move the parent run's workers between them in persisted allocation windows.
-Each child remains a normal inspectable run with its own domain and adaptive state.
-A dependency-free steering example is available at
-`resources/templates/runs/integration-campaign-unit.toml`.
+Controller tasks keep their children as normal inspectable runs and expose a
+small result reference for each child. A reference identifies the source run,
+task, immutable stage snapshot when available, and live sample revision.
+Measurements are scalar selectors used for stopping and optimization; full
+scientific results remain separate from runtime throughput and controller state.
+
+- `parameter_scan` exposes completed point metrics as 1D series or a 2D heatmap,
+  together with the full parameter table and child result references.
+- `hyperparameter_tuning` exposes objective history, best-so-far history, all
+  trial parameters, and a direct result reference for the best trial.
+- `integration_campaign` continuously materializes a parent result from the
+  latest child revisions. Metrics and compatible histogram bins are summed with
+  their signed coefficients; independent variances are combined in quadrature.
+  Incompatible histogram layouts are reported as omitted rather than pooled.
+
+Controller plots and child tables remain available after completion. Clicking
+a scan point, tuning trial, or campaign entry opens that persistent child run.
+
+Campaign result snapshots are persisted independently of the frequently polled
+controller state. Consequently the dashboard can update combined histograms
+while sampling is active without placing the histogram bundle in every task-list
+response. The final snapshot records exactly which child revisions contributed.
+
+Examples are available in `resources/templates/runs/parameter-scan-symbolica.toml`,
+`resources/templates/runs/hyperparameter-tuning-symbolica.toml`, and the
+QFT-like `resources/templates/runs/integration-campaign-qft-like.toml`.
+The campaign example uses a generated GammaLoop ttH state and restricts its two
+children to graph groups GL0 and GL2 via `evaluator.graph_groups`; their native
+GammaLoop histogram bundles are combined live in the campaign view. Generate
+the state with the same GammaLoop revision used to build GammaBoard, or override
+the template's `state_folder` replacement.
 
 ## Development
 

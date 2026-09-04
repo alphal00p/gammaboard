@@ -44,24 +44,6 @@ where
         .map_err(|err| ApiError::BadRequest(format!("invalid {label}: {err}")))
 }
 
-pub fn parse_templated_toml_with_replacements<T>(
-    raw: &str,
-    replacements: BTreeMap<String, toml::Value>,
-    label: &str,
-) -> Result<T, ApiError>
-where
-    T: DeserializeOwned,
-{
-    let mut value = toml::from_str(raw)
-        .map_err(|err| ApiError::BadRequest(format!("failed parsing {label}: {err}")))?;
-    merge_replacements(&mut value, replacements)?;
-    let expanded = expand_toml_template(value)?;
-    expanded
-        .value
-        .try_into()
-        .map_err(|err| ApiError::BadRequest(format!("invalid {label}: {err}")))
-}
-
 pub fn merge_replacements(
     value: &mut toml::Value,
     replacements: BTreeMap<String, toml::Value>,

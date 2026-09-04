@@ -37,6 +37,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   discrete subspaces. The live sampler runner probes it during performance
   snapshots and exposes the latest values through sampler diagnostics; panel
   projection must not rebuild large samplers to fetch these values.
+- GammaLoop evaluators may restrict discrete graph sampling with `graph_groups`;
+  their local domain indices map back to the selected GammaLoop group indices.
 - Multi-component observables use vector accumulator models. Full raster
   outputs use `FullVectorAccumulatorState` with named components.
 - Symbolica evaluators use either a native expression plus optional `constants`
@@ -73,6 +75,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Controller progress is persisted as typed `ControllerTaskOutput`; scan points, tuning
   trials, and campaign entries flatten the shared `ControllerChildOutput` lifecycle,
   measurement, and failure fields into the JSONB wire shape.
+- Controller children expose `ResultSourceRef` provenance. Measurements are
+  scalar metric selections; full derived results use separately persisted
+  `DerivedResultSnapshot` payloads. Campaign snapshots combine normalized
+  compatible observables linearly and independent variances in quadrature.
 - Run, task-append, and node-launch TOML may use a top-level `replacements`
   table plus placeholders `$(name:default)`. Exact full-string placeholders are
   typed TOML replacements; embedded placeholders interpolate as strings. Server

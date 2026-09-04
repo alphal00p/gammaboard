@@ -9,12 +9,12 @@ pub use batch_ids::next_batch_ids;
 pub use errors::{BuildError, EngineError, EngineResultExt, EvalError, StoreError, StoreResultExt};
 pub use models::{
     BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchRecord, BatchStatus, CompletedBatch,
-    DesiredAssignment, EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics,
-    EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome, MeasurementResult,
-    NodeCapabilities, NodeLaunchRequest, RegisteredNode, RollingMetricSnapshot, RunSampleProgress,
-    RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
-    SamplerPerformanceMetrics, SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics,
-    SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
+    DerivedResultSnapshot, DesiredAssignment, EvaluatorIdleProfileMetrics,
+    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, InsertBatchesMetrics,
+    InsertBatchesOutcome, MeasurementResult, NodeCapabilities, NodeLaunchRequest, RegisteredNode,
+    ResultSourceRef, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
+    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerQueueRollingAverages,
+    SamplerQueueRuntimeMetrics, SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };
 pub use run_spec::{
     AccumulatorConfig, AccumulatorMomentConfig, BatchTransformConfig, CapabilityRequirements,

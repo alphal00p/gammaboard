@@ -9,8 +9,6 @@ use serde_json::{Map, Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
 const SCAN_PROGRESS_PANEL_ID: &str = "scan_progress";
 const SCAN_MEAN_PANEL_ID: &str = "scan_mean";
-const SCAN_MEAN_REAL_PANEL_ID: &str = "scan_mean_real";
-const SCAN_MEAN_IMAG_PANEL_ID: &str = "scan_mean_imag";
 const SCAN_MEAN_HEATMAP_PANEL_ID: &str = "scan_mean_heatmap";
 const SCAN_POINTS_PANEL_ID: &str = "scan_points";
 
@@ -18,16 +16,6 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
     vec![
         scan_progress_projector(),
         scan_measurements_projector(),
-        scan_component_measurements_projector(
-            "real",
-            SCAN_MEAN_REAL_PANEL_ID,
-            "Real Central Value",
-        ),
-        scan_component_measurements_projector(
-            "imag",
-            SCAN_MEAN_IMAG_PANEL_ID,
-            "Imaginary Central Value",
-        ),
         scan_heatmap_projector(),
         scan_points_projector(),
     ]
@@ -56,7 +44,7 @@ fn scan_measurements_projector() -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
             SCAN_MEAN_PANEL_ID,
-            "Central Value",
+            "Observables by Parameter",
             PanelKind::MultiTimeseries,
             PanelHistoryMode::None,
             PanelWidth::Full,
@@ -68,10 +56,6 @@ fn scan_measurements_projector() -> TaskPanelProjector {
                     if parameter_names.len() == 1 {
                         build_measurement_series(&points, &parameter_names[0], |result| {
                             result.get("name").and_then(JsonValue::as_str) == Some("mean")
-                                && result
-                                    .get("component")
-                                    .and_then(JsonValue::as_str)
-                                    .is_none()
                         })
                     } else {
                         Vec::new()
@@ -87,48 +71,11 @@ fn scan_measurements_projector() -> TaskPanelProjector {
     )
 }
 
-fn scan_component_measurements_projector(
-    component: &'static str,
-    panel_id: &'static str,
-    title: &'static str,
-) -> TaskPanelProjector {
-    panel_projector(
-        sized_panel_spec(
-            panel_id,
-            title,
-            PanelKind::MultiTimeseries,
-            PanelHistoryMode::None,
-            PanelWidth::Full,
-        ),
-        |ctx| {
-            let parameter_names = scan_parameter_names(ctx);
-            let series = scan_points(ctx)
-                .map(|points| {
-                    if parameter_names.len() == 1 {
-                        build_measurement_series(&points, &parameter_names[0], |result| {
-                            result.get("name").and_then(JsonValue::as_str) == Some("mean")
-                                && result.get("component").and_then(JsonValue::as_str)
-                                    == Some(component)
-                        })
-                    } else {
-                        Vec::new()
-                    }
-                })
-                .unwrap_or_default();
-            if series.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(multi_timeseries_panel(panel_id, series)))
-        },
-        |_ctx| Ok(None),
-    )
-}
-
 fn scan_heatmap_projector() -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
             SCAN_MEAN_HEATMAP_PANEL_ID,
-            "Central Value Heatmap",
+            "Observable Heatmap",
             PanelKind::Image2d,
             PanelHistoryMode::None,
             PanelWidth::Full,
@@ -169,7 +116,6 @@ fn scan_points_projector() -> TaskPanelProjector {
             columns.extend([
                 "status".to_string(),
                 "run".to_string(),
-                "metric".to_string(),
                 "component".to_string(),
                 "value".to_string(),
                 "uncertainty".to_string(),
@@ -181,12 +127,19 @@ fn scan_points_projector() -> TaskPanelProjector {
                 Map::from_iter([("parameters".to_string(), json!(scan_parameter_names(ctx)))]),
             );
 
+            let run_column = parameter_names.len() + 2;
+            let visible_column_indices = (0..columns.len())
+                .filter(|index| *index != run_column)
+                .collect();
             Ok(Some(table_panel_with_payload_and_options(
                 SCAN_POINTS_PANEL_ID,
                 columns,
                 rows,
                 Some(payload),
-                Default::default(),
+                crate::server::panels::TableStateOptions {
+                    visible_column_indices,
+                    row_keys: None,
+                },
             )))
         },
         |_ctx| Ok(None),
@@ -285,7 +238,7 @@ fn scan_points(ctx: &TaskPanelContext<'_>) -> Option<Vec<JsonValue>> {
 }
 
 fn scan_table_value_column(parameter_count: usize) -> usize {
-    parameter_count + 5
+    parameter_count + 4
 }
 
 fn build_measurement_series(
@@ -357,7 +310,6 @@ fn scan_point_to_table_rows(point: &JsonValue, parameter_names: &[String]) -> Ve
         .map(|result| {
             let mut row = common.to_vec();
             row.extend([
-                result.get("name").cloned().unwrap_or(JsonValue::Null),
                 result.get("component").cloned().unwrap_or(JsonValue::Null),
                 result.get("value").cloned().unwrap_or(JsonValue::Null),
                 result
@@ -375,7 +327,6 @@ fn scan_point_to_table_rows(point: &JsonValue, parameter_names: &[String]) -> Ve
     if rows.is_empty() {
         let mut row = common.to_vec();
         row.extend([
-            JsonValue::Null,
             JsonValue::Null,
             JsonValue::Null,
             JsonValue::Null,
@@ -603,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_mean_component_plots_are_separate_and_include_error_bars() {
+    fn scan_observable_plot_combines_components_and_includes_error_bars() {
         let task = scan_task(Some(json!({
             "parameters": ["scale"],
             "completed_points": 1,
@@ -626,39 +577,28 @@ mod tests {
                 }
             ]
         })));
-        let real_panel = scan_component_measurements_projector(
-            "real",
-            SCAN_MEAN_REAL_PANEL_ID,
-            "Real Central Value",
-        )
-        .current(&panel_ctx(&task, &JsonValue::Null))
-        .expect("projector")
-        .expect("panel");
-        let PanelState::MultiTimeseries { series, .. } = real_panel else {
+        let panel = scan_measurements_projector()
+            .current(&panel_ctx(&task, &JsonValue::Null))
+            .expect("projector")
+            .expect("panel");
+        let PanelState::MultiTimeseries { series, .. } = panel else {
             panic!("expected multi timeseries");
         };
-        assert_eq!(series.len(), 1);
-        assert_eq!(series[0].id, "mean:real");
-        assert_eq!(series[0].points[0].y, 2.0);
-        assert_eq!(series[0].points[0].y_min, Some(1.8));
-        assert_eq!(series[0].points[0].y_max, Some(2.2));
-
-        let imag_panel = scan_component_measurements_projector(
-            "imag",
-            SCAN_MEAN_IMAG_PANEL_ID,
-            "Imaginary Central Value",
-        )
-        .current(&panel_ctx(&task, &JsonValue::Null))
-        .expect("projector")
-        .expect("panel");
-        let PanelState::MultiTimeseries { series, .. } = imag_panel else {
-            panic!("expected multi timeseries");
-        };
-        assert_eq!(series.len(), 1);
-        assert_eq!(series[0].id, "mean:imag");
-        assert_eq!(series[0].points[0].y, -1.0);
-        assert_eq!(series[0].points[0].y_min, Some(-1.1));
-        assert_eq!(series[0].points[0].y_max, Some(-0.9));
+        assert_eq!(series.len(), 2);
+        let real = series
+            .iter()
+            .find(|series| series.id == "mean:real")
+            .unwrap();
+        assert_eq!(real.points[0].y, 2.0);
+        assert_eq!(real.points[0].y_min, Some(1.8));
+        assert_eq!(real.points[0].y_max, Some(2.2));
+        let imag = series
+            .iter()
+            .find(|series| series.id == "mean:imag")
+            .unwrap();
+        assert_eq!(imag.points[0].y, -1.0);
+        assert_eq!(imag.points[0].y_min, Some(-1.1));
+        assert_eq!(imag.points[0].y_max, Some(-0.9));
     }
 
     #[test]

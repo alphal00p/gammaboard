@@ -170,7 +170,6 @@ async fn task_measurement_output_round_trips() {
                     value: 1.25,
                     uncertainty: Some(0.1),
                     sample_count: 10,
-                    completed_samples_per_second: Some(100.0),
                 }],
             },
         )

@@ -1376,18 +1376,35 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
     }
 
     #[test]
-    fn parse_run_add_accepts_integration_campaign_task() {
+    fn parse_run_add_accepts_qft_like_integration_campaign_example() {
         let config = parse_run_add_config_toml(include_str!(
-            "../../resources/templates/runs/integration-campaign-unit.toml"
+            "../../resources/templates/runs/integration-campaign-qft-like.toml"
         ))
         .expect("integration campaign config");
-        assert!(matches!(
-            config.task_queue.as_deref(),
-            Some([RunTaskInput {
-                task: RunTaskSpec::IntegrationCampaign { .. },
-                ..
-            }])
-        ));
+        let Some(
+            [
+                RunTaskInput {
+                    task: RunTaskSpec::IntegrationCampaign { children, .. },
+                    ..
+                },
+            ],
+        ) = config.task_queue.as_deref()
+        else {
+            panic!("expected one integration campaign task");
+        };
+        assert_eq!(children.len(), 2);
+        for (index, child) in children.iter().enumerate() {
+            let child_config = parse_run_add_config_toml(&child.run_toml)
+                .unwrap_or_else(|err| panic!("invalid child '{}': {err}", child.name));
+            let crate::core::EvaluatorConfig::Gammaloop { params } = child_config
+                .integration_params
+                .evaluator
+                .expect("campaign child evaluator")
+            else {
+                panic!("expected gammaloop child evaluator");
+            };
+            assert_eq!(params.graph_groups, Some(vec![index]));
+        }
     }
 
     #[test]

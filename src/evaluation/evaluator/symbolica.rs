@@ -108,7 +108,7 @@ impl SymbolicaEngine {
 
         let mut args = Vec::with_capacity(params.args.len());
         for arg in &params.args {
-            let parsed = Atom::parse(&arg, namespace!(), settings.clone()).build_err()?;
+            let parsed = Atom::parse(arg, namespace!(), settings.clone()).build_err()?;
             args.push(parsed);
         }
 
@@ -304,7 +304,7 @@ fn build_function_map(
         .build_err()?;
 
     for (name, value) in constants {
-        let key = Atom::parse(&name, namespace!(), settings.clone()).map_err(|err| {
+        let key = Atom::parse(name, namespace!(), settings.clone()).map_err(|err| {
             BuildError::build(format!("invalid symbolica constant {name:?}: {err}"))
         })?;
         let value_expr = constant_value_expr(value)?;
@@ -389,7 +389,7 @@ fn decimal_literal_to_rational_expr(raw: &str) -> Option<String> {
     let decimal_places = fraction.len() as i32 - exponent;
     let sign = if negative { "-" } else { "" };
     if decimal_places <= 0 {
-        digits.extend(std::iter::repeat('0').take((-decimal_places) as usize));
+        digits.extend(std::iter::repeat_n('0', (-decimal_places) as usize));
         return Some(format!("{sign}{digits}"));
     }
     let denominator = format!("1{}", "0".repeat(decimal_places as usize));
@@ -402,6 +402,7 @@ fn compile_complex_evaluator(
     function_map: &FunctionMap,
     artifacts_dir: &TempDir,
 ) -> Result<CompiledComplexEvaluator, BuildError> {
+    crate::activate_symbolica_oem_license().map_err(|err| BuildError::build(err.to_string()))?;
     let evaluator = expr
         .evaluator(args)
         .function_map(function_map.clone())
@@ -457,7 +458,7 @@ impl Evaluator for SymbolicaEngine {
                     SymbolicaInputSlot::Sample(idx) => {
                         continuous.push(SymbolicaComplex::new(point.continuous[*idx], 0.0));
                     }
-                    SymbolicaInputSlot::Fixed(value) => continuous.push(value.clone()),
+                    SymbolicaInputSlot::Fixed(value) => continuous.push(*value),
                 }
             }
         }
@@ -717,12 +718,13 @@ mod tests {
 
     #[test]
     fn symbolica_compiled_source_loads_with_bound_fixed_inputs() {
+        crate::activate_symbolica_oem_license().expect("activate Symbolica OEM license");
         let settings = ParseSettings::symbolica();
         let expr = Atom::parse("a + k0 + k1 + k2", namespace!(), settings.clone())
             .expect("parse expression");
         let args = ["a", "k0", "k1", "k2"]
             .iter()
-            .map(|arg| Atom::parse(&arg, namespace!(), settings.clone()).expect("parse arg"))
+            .map(|arg| Atom::parse(arg, namespace!(), settings.clone()).expect("parse arg"))
             .collect::<Vec<_>>();
         let artifacts_dir = tempfile::tempdir().expect("create artifacts dir");
         let _compiled =

@@ -2,6 +2,7 @@ mod controller;
 mod full_accumulator;
 mod hyperparameter_tuning;
 mod integration_campaign;
+mod observable;
 mod parameter_scan;
 mod pdf_adaptation;
 mod sample;
@@ -40,6 +41,7 @@ pub enum TaskPanelCurrentSourcePolicy {
     #[default]
     StageFirst,
     PersistedFirst,
+    PersistedAlways,
 }
 
 #[derive(Clone, Copy)]
@@ -762,6 +764,11 @@ fn resolve_current_source<'a>(
     latest_persisted_snapshot: Option<&'a TaskOutputSnapshot>,
     policy: TaskPanelCurrentSourcePolicy,
 ) -> TaskPanelCurrentSource<'a> {
+    if policy == TaskPanelCurrentSourcePolicy::PersistedAlways
+        && let Some(snapshot) = latest_persisted_snapshot
+    {
+        return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
+    }
     if matches!(task.state, crate::core::RunTaskState::Active)
         && let Some(accumulator) = current_accumulator
     {
@@ -776,10 +783,8 @@ fn resolve_current_source<'a>(
                 return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
             }
         }
-        TaskPanelCurrentSourcePolicy::PersistedFirst => {
-            if let Some(snapshot) = latest_persisted_snapshot {
-                return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
-            }
+        TaskPanelCurrentSourcePolicy::PersistedFirst
+        | TaskPanelCurrentSourcePolicy::PersistedAlways => {
             if let Some(snapshot) = latest_stage_snapshot {
                 return TaskPanelCurrentSource::StageSnapshot(snapshot);
             }
@@ -1064,6 +1069,28 @@ mod tests {
             values_row_major: vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0],
             invalid_entries: vec![],
         })
+    }
+
+    #[test]
+    fn persisted_always_selects_live_derived_result_over_parent_accumulator() {
+        let task = run_task(inherited_vector_sample_task());
+        let accumulator = AccumulatorState::empty();
+        let snapshot = TaskOutputSnapshot {
+            id: "9".to_string(),
+            run_id: 1,
+            task_id: "1".to_string(),
+            persisted_output: serde_json::json!({"metrics": []}),
+            created_at: None,
+        };
+
+        let source = resolve_current_source(
+            &task,
+            Some(&accumulator),
+            None,
+            Some(&snapshot),
+            TaskPanelCurrentSourcePolicy::PersistedAlways,
+        );
+        assert!(matches!(source, TaskPanelCurrentSource::Persisted(_)));
     }
 
     #[test]

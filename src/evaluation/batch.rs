@@ -194,15 +194,6 @@ impl BatchResult {
             .is_none_or(|values| values.len() == batch.size())
     }
 
-    pub fn values_to_json(&self) -> JsonValue {
-        match &self.values {
-            Some(values) => {
-                serde_json::to_value(values).expect("batch values serialization should never fail")
-            }
-            None => JsonValue::Null,
-        }
-    }
-
     pub fn values_to_bytes(&self) -> Result<Option<Vec<u8>>, BatchError> {
         self.values
             .as_ref()
@@ -224,24 +215,6 @@ impl BatchResult {
             BatchError::layout(format!("batch accumulator is not JSON-safe: {err}"))
         })?;
         Ok(())
-    }
-
-    pub fn values_from_json(
-        values: Option<&JsonValue>,
-        accumulator: &JsonValue,
-    ) -> Result<Self, BatchError> {
-        let parsed_values = match values {
-            Some(values) if !values.is_null() => {
-                Some(serde_json::from_value(values.clone()).map_err(|err| {
-                    BatchError::layout(format!("invalid batch values payload: {err}"))
-                })?)
-            }
-            _ => None,
-        };
-        let parsed_observable = serde_json::from_value(accumulator.clone()).map_err(|err| {
-            BatchError::layout(format!("invalid batch accumulator payload: {err}"))
-        })?;
-        Ok(Self::new(parsed_values, parsed_observable))
     }
 
     pub fn values_from_bytes(

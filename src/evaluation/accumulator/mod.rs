@@ -111,29 +111,6 @@ pub enum SemanticAccumulatorKind {
     Vector,
 }
 
-impl SemanticAccumulatorKind {
-    pub fn aggregate_accumulator_config(self) -> AccumulatorConfig {
-        match self {
-            Self::Scalar => AccumulatorConfig::scalar(),
-            Self::Vector => AccumulatorConfig::vector(
-                vec!["real".to_string(), "imag".to_string()],
-                crate::core::TrainingProjection::Norm,
-            ),
-        }
-    }
-
-    pub fn full_accumulator_config(self) -> AccumulatorConfig {
-        match self {
-            Self::Scalar => AccumulatorConfig::FullVector {
-                components: vec!["value".to_string()],
-            },
-            Self::Vector => AccumulatorConfig::FullVector {
-                components: vec!["real".to_string(), "imag".to_string()],
-            },
-        }
-    }
-}
-
 impl AccumulatorState {
     pub fn from_aggregate_persistent_json(
         _kind: SemanticAccumulatorKind,
@@ -266,15 +243,6 @@ impl AccumulatorState {
             Self::Vector(accumulator) => accumulator.sample_count(),
             Self::Gammaloop(accumulator) => accumulator.sample_count(),
             Self::FullVector(accumulator) => accumulator.sample_count(),
-        }
-    }
-
-    pub fn abs_signal_to_noise(&self) -> f64 {
-        match self {
-            Self::Empty(_) => 0.0,
-            Self::Vector(accumulator) => accumulator.signal_to_noise(),
-            Self::Gammaloop(accumulator) => accumulator.signal_to_noise(),
-            Self::FullVector(_) => 0.0,
         }
     }
 

@@ -7,7 +7,9 @@ use serde_json::Value;
 
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, BatchTransform, Point};
-use crate::process_runtime::build_process_worker_command;
+use crate::process_runtime::{
+    build_process_worker_command, default_process_args, parse_process_offsets,
+};
 use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
 use crate::utils::domain::Domain;
 
@@ -15,7 +17,7 @@ use crate::utils::domain::Domain;
 pub struct ProcessBatchTransformParams {
     pub command: Vec<String>,
     pub cwd: Option<String>,
-    #[serde(default = "default_args")]
+    #[serde(default = "default_process_args")]
     pub args: Value,
 }
 
@@ -204,12 +206,13 @@ fn decode_batch(
                 "process batch transform response missing 'xs_discrete_row_major' array",
             )
         })?;
-    let xs_discrete_offsets = parse_offsets_or_fixed(
+    let xs_discrete_offsets = parse_process_offsets(
         response,
         "xs_discrete_offsets",
         nr_samples,
         domain.fixed_discrete_depth().unwrap_or(0),
         xs_discrete.len(),
+        "batch transform",
     )?;
     let xs_continuous = response
         .get("xs_continuous_row_major")
@@ -219,12 +222,13 @@ fn decode_batch(
                 "process batch transform response missing 'xs_continuous_row_major' array",
             )
         })?;
-    let xs_continuous_offsets = parse_offsets_or_fixed(
+    let xs_continuous_offsets = parse_process_offsets(
         response,
         "xs_continuous_offsets",
         nr_samples,
         domain.fixed_continuous_dims().unwrap_or(0),
         xs_continuous.len(),
+        "batch transform",
     )?;
     let xs_discrete_row_major = xs_discrete
         .iter()
@@ -300,75 +304,11 @@ fn decode_batch(
     Batch::new(points).engine_err()
 }
 
-fn parse_offsets_or_fixed(
-    response: &Value,
-    field: &str,
-    nr_samples: usize,
-    fixed_width: usize,
-    values_len: usize,
-) -> Result<Vec<usize>, EngineError> {
-    let Some(raw) = response.get(field) else {
-        let expected_len = nr_samples.saturating_mul(fixed_width);
-        if values_len != expected_len {
-            return Err(EngineError::engine(format!(
-                "process batch transform response missing '{field}' for ragged output with {values_len} values; fixed-width fallback expected {expected_len}"
-            )));
-        }
-        return Ok((0..=nr_samples).map(|index| index * fixed_width).collect());
-    };
-    let offsets = raw.as_array().ok_or_else(|| {
-        EngineError::engine(format!(
-            "process batch transform response field '{field}' must be an array"
-        ))
-    })?;
-    if offsets.len() != nr_samples + 1 {
-        return Err(EngineError::engine(format!(
-            "process batch transform response field '{field}' must contain nr_samples + 1 offsets"
-        )));
-    }
-    let mut parsed = Vec::with_capacity(offsets.len());
-    let mut previous = 0_usize;
-    for (index, value) in offsets.iter().enumerate() {
-        let offset = value.as_u64().ok_or_else(|| {
-            EngineError::engine(format!(
-                "process batch transform response field '{field}[{index}]' must be a non-negative integer"
-            ))
-        })? as usize;
-        if index == 0 && offset != 0 {
-            return Err(EngineError::engine(format!(
-                "process batch transform response field '{field}' must start at 0"
-            )));
-        }
-        if offset < previous {
-            return Err(EngineError::engine(format!(
-                "process batch transform response field '{field}' must be non-decreasing"
-            )));
-        }
-        if offset > values_len {
-            return Err(EngineError::engine(format!(
-                "process batch transform response field '{field}[{index}]' exceeds row-major value length {values_len}"
-            )));
-        }
-        previous = offset;
-        parsed.push(offset);
-    }
-    if parsed.last().copied() != Some(values_len) {
-        return Err(EngineError::engine(format!(
-            "process batch transform response field '{field}' must end at row-major value length {values_len}"
-        )));
-    }
-    Ok(parsed)
-}
-
 fn expect_ack(response: Value) -> Result<(), String> {
     if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(());
     }
     Err("process batch transform initialize result missing ok=true".to_string())
-}
-
-fn default_args() -> Value {
-    Value::Object(serde_json::Map::new())
 }
 
 #[cfg(test)]

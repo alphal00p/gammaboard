@@ -20,6 +20,9 @@ use super::shared::with_control_store;
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
+    /// Force the `./gammaboard` wrapper to rebuild the dashboard frontend.
+    #[arg(long = "rebuild-frontend")]
+    _rebuild_frontend: bool,
     #[arg(long = "server-config", default_value = DEFAULT_SERVER_CONFIG_PATH, value_name = "PATH")]
     server_config: PathBuf,
     #[arg(long)]

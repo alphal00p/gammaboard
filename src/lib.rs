@@ -23,19 +23,20 @@ pub mod utils;
 
 pub use core::{
     AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, ControllerChildOutput,
-    ControllerChildState, ControllerTaskOutput, EgoboxInfillStrategy, EgoboxOptimizerParams,
-    EgoboxQeiStrategy, HyperparameterTrialOutput, HyperparameterTuningAlgorithm,
-    HyperparameterTuningCategoricalDomain, HyperparameterTuningFloatDomain,
-    HyperparameterTuningIntegerDomain, HyperparameterTuningOptimizerSpec,
-    HyperparameterTuningOutput, HyperparameterTuningParameterDomain, ImageDisplayMode,
-    IntegrationCampaignChildOutput, IntegrationCampaignOutput, LineDisplayMode, LineRasterGeometry,
-    Linspace, MeasurementMetricQuantity, MeasurementMetricSpec, MeasurementMode,
-    MeasurementQuantityName, MeasurementQuantitySpec, MeasurementResult, MeasurementSpec,
-    ParameterIntegerRangeSpec, ParameterLinspaceSpec, ParameterScanOutput,
-    ParameterScanParameterSpec, ParameterScanPointOutput, ParameterValueSourceSpec,
-    PlaneRasterGeometry, PlotAccumulatorKind, RunTask, RunTaskInput, RunTaskSpec, RunTaskState,
-    SampleErrorProjection, SampleStopCondition, SamplerAggregatorSourceSpec, SourceRefSpec,
-    TaskMeasurementOutput, TaskMeasurementSpec, canonical_task_toml,
+    ControllerChildState, ControllerTaskOutput, DerivedResultSnapshot, EgoboxInfillStrategy,
+    EgoboxOptimizerParams, EgoboxQeiStrategy, HyperparameterTrialOutput,
+    HyperparameterTuningAlgorithm, HyperparameterTuningCategoricalDomain,
+    HyperparameterTuningFloatDomain, HyperparameterTuningIntegerDomain,
+    HyperparameterTuningOptimizerSpec, HyperparameterTuningOutput,
+    HyperparameterTuningParameterDomain, ImageDisplayMode, IntegrationCampaignChildOutput,
+    IntegrationCampaignOutput, LineDisplayMode, LineRasterGeometry, Linspace,
+    MeasurementMetricQuantity, MeasurementMetricSpec, MeasurementMode, MeasurementQuantityName,
+    MeasurementQuantitySpec, MeasurementResult, MeasurementSpec, ParameterIntegerRangeSpec,
+    ParameterLinspaceSpec, ParameterScanOutput, ParameterScanParameterSpec,
+    ParameterScanPointOutput, ParameterValueSourceSpec, PlaneRasterGeometry, PlotAccumulatorKind,
+    ResultSourceRef, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, SampleErrorProjection,
+    SampleStopCondition, SamplerAggregatorSourceSpec, SourceRefSpec, TaskMeasurementOutput,
+    TaskMeasurementSpec, canonical_task_toml,
 };
 pub use core::{BatchRecord, BatchStatus};
 pub use core::{BuildError, EngineError, EvalError, StoreError};

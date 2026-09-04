@@ -679,14 +679,14 @@ fn validate_line_geometry(
     Ok(())
 }
 
-fn permuted_raster_index(index: usize, total_samples: usize, stride: usize) -> usize {
+pub(crate) fn permuted_raster_index(index: usize, total_samples: usize, stride: usize) -> usize {
     if total_samples <= 1 {
         return index.min(total_samples.saturating_sub(1));
     }
     (index * stride) % total_samples
 }
 
-fn coprime_stride(total_samples: usize) -> usize {
+pub(crate) fn coprime_stride(total_samples: usize) -> usize {
     if total_samples <= 1 {
         return 1;
     }

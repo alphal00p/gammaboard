@@ -1,18 +1,15 @@
-import { Suspense, forwardRef, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Card,
   CardContent,
   Button,
-  FormControl,
-  MenuItem,
   Stack,
-  Select,
   Slider,
   Typography,
 } from "@mui/material";
-import { formatCompactNumber, formatDateTime, formatScientific } from "../../utils/formatters";
+import { formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 import {
   KeyValuePanel,
@@ -21,7 +18,6 @@ import {
   SvgPanel,
   TextPanel,
   TickBreakdownPanel,
-  renderStructuredValue,
 } from "./BasicPanels";
 import FigureExportActions, { escapeXml } from "./FigureExportActions";
 import TablePanel from "./TablePanel";
@@ -30,7 +26,6 @@ import {
   buildHistogramData,
   fitDomain,
   fitXDomain,
-  histogramIsDiscrete,
   normalizeGammaLoopHistogramBins,
   readHistogramBundleSelectedValue,
 } from "./histogramUtils";
@@ -53,40 +48,19 @@ import {
   readYZoomFromPanelValue,
   readZoomFromPanelValue,
   visibleXRangeFromZoom,
-  visibleXRangeFromZoomWithScale,
   writeZoomPanelValue,
   zoomRangeChanged,
 } from "./panelView";
 import { useHistogramBundles } from "./histogramBundles";
-
-const ReactECharts = lazy(() =>
-  Promise.all([import("echarts-for-react"), import("../../lib/echarts")]).then(([module]) => ({
-    default: module.default,
-  })),
-);
-
-const LazyChart = forwardRef((props, ref) => (
-  <Suspense
-    fallback={
-      <Box
-        sx={{
-          width: "100%",
-          height: "100%",
-          minHeight: 160,
-          display: "grid",
-          placeItems: "center",
-          color: "text.secondary",
-          typography: "body2",
-        }}
-      >
-        Loading chart...
-      </Box>
-    }
-  >
-    <ReactECharts ref={ref} {...props} />
-  </Suspense>
-));
-LazyChart.displayName = "LazyChart";
+import {
+  baseAxisLabel,
+  baseCartesianGrid,
+  buildErrorBarSeries,
+  formatAxisValue,
+  gridColor,
+  inferXAxisLabel,
+} from "./chartPrimitives";
+import LazyChart from "./LazyChart";
 
 const PANEL_ORDER_RANK = new Map([
   ["sample_progress", 0],
@@ -94,21 +68,23 @@ const PANEL_ORDER_RANK = new Map([
   ["real_estimate_history", 3],
   ["imag_estimate_history", 4],
   ["abs_signal_to_noise_history", 5],
-  ["gammaloop_histogram_bundle", 20],
-  ["gammaloop_histogram_bundle_selected", 21],
-  ["gammaloop_selected_histogram", 21],
   ["gammaloop_evaluation_timing", 22],
   ["gammaloop_evaluation_diagnostics", 23],
 ]);
+
+const panelOrderRank = (panel) => {
+  const payload = panel?.state?.payload;
+  if (payload?.expands_to?.kind === "histogram" && payload?.expands_to?.source === "selected_row") return 20;
+  if (panel?.descriptor?.kind === "histogram" && panel?.state?.source_panel_id) return 21;
+  return PANEL_ORDER_RANK.get(panel?.descriptor?.panel_id) ?? Number.MAX_SAFE_INTEGER;
+};
 
 const sortRenderablePanels = (panels) =>
   asArray(panels)
     .map((panel, index) => ({ panel, index }))
     .sort((left, right) => {
-      const leftId = left.panel?.descriptor?.panel_id;
-      const rightId = right.panel?.descriptor?.panel_id;
-      const leftRank = PANEL_ORDER_RANK.get(leftId) ?? Number.MAX_SAFE_INTEGER;
-      const rightRank = PANEL_ORDER_RANK.get(rightId) ?? Number.MAX_SAFE_INTEGER;
+      const leftRank = panelOrderRank(left.panel);
+      const rightRank = panelOrderRank(right.panel);
       if (leftRank !== rightRank) return leftRank - rightRank;
       return left.index - right.index;
     })
@@ -224,14 +200,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
     const payload = state?.payload;
     const expandsToHistogram =
       payload?.expands_to?.kind === "histogram" && payload?.expands_to?.source === "selected_row";
-    return (
-      descriptor?.kind === "table" &&
-      (expandsToHistogram ||
-        // Fallback for older histogram bundle payloads.
-        (payload?.histograms &&
-          typeof payload.histograms === "object" &&
-          !Array.isArray(payload.histograms)))
-    );
+    return descriptor?.kind === "table" && expandsToHistogram;
   });
   const payload = bundlePanel?.state?.payload;
   const histograms = payload?.histograms;
@@ -239,7 +208,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
     payload?.expands_to?.kind === "histogram" && payload?.expands_to?.source === "selected_row";
   if (
     bundlePanel &&
-    (expandsToHistogram || payload?.expands_to == null) &&
+    expandsToHistogram &&
       payload?.histograms &&
       typeof payload.histograms === "object" &&
       !Array.isArray(payload.histograms)
@@ -263,7 +232,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
       renderablePanels.push({
         descriptor: {
           panel_id: `${sourcePanelId}_selected`,
-          label: "Selected Histogram",
+          label: typeof payload?.expanded_label === "string" ? payload.expanded_label : "Selected Histogram",
           kind: "histogram",
           history: "none",
           width: "full",
@@ -382,7 +351,6 @@ const normalizePanelStateForPanelValues = (state, panelValues) => {
   };
 };
 
-const inferXAxisLabel = (panelId) => (String(panelId || "").includes("_history") ? "Nr samples" : null);
 const inferNumericXAxisLabel = (panelId, mode = HISTORY_X_AXIS_MODE_WALL_TIME) => {
   if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) return "Sampler Runner Uptime";
   if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) return "Completed Samples";
@@ -469,8 +437,6 @@ const remapAndSortTimeseriesPoints = (points, mode) =>
     .sort((left, right) => Number(left?.x) - Number(right?.x));
 
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
-const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
-
 const scalarHeatmapColors = ["#1d4ed8", "#16a34a", "#dc2626"];
 const HEATMAP_LEGEND_WIDTH = 116;
 const HEATMAP_LEGEND_GAP = 12;
@@ -501,13 +467,6 @@ const panelColumnSpan = (descriptor) => {
           return { xs: "1 / -1", md: "span 6" };
       }
   }
-};
-
-const gridColor = "rgba(148,163,184,0.18)";
-
-const formatAxisValue = (value) => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? formatScientific(numeric, 3) : "";
 };
 
 const clampHeatmapSpread = (candidate, fallback = 1) => {
@@ -542,77 +501,6 @@ const isPdfAdaptationImagePanelSpec = (spec) =>
   spec?.kind === "image2d" &&
   typeof spec?.panel_id === "string" &&
   spec.panel_id.startsWith("pdf_adaptation_");
-
-const baseCartesianGrid = {
-  left: 56,
-  right: 20,
-  top: 12,
-  bottom: 48,
-};
-
-const baseAxisLabel = {
-  color: "#64748b",
-  fontSize: 12,
-  formatter: (value) => formatAxisValue(value),
-};
-
-const buildErrorBarSeries = ({ name = "error", data, color = "#7c8a96", capPx = 4 }) => ({
-  type: "custom",
-  name,
-  data,
-  clip: true,
-  silent: true,
-  z: 5,
-  tooltip: { show: false },
-  renderItem: (params, api) => {
-    const xValue = Number(api.value(0));
-    const yLowValue = Number(api.value(1));
-    const yHighValue = Number(api.value(2));
-    if (!Number.isFinite(xValue) || !Number.isFinite(yLowValue) || !Number.isFinite(yHighValue)) {
-      return null;
-    }
-    const [xPx, yLowPx] = api.coord([xValue, yLowValue]);
-    const [, yHighPx] = api.coord([xValue, yHighValue]);
-    if (!Number.isFinite(xPx) || !Number.isFinite(yLowPx) || !Number.isFinite(yHighPx)) {
-      return null;
-    }
-    const coordSys = params?.coordSys;
-    if (!coordSys) return null;
-    const left = Number(coordSys.x);
-    const right = Number(coordSys.x) + Number(coordSys.width);
-    const top = Number(coordSys.y);
-    const bottom = Number(coordSys.y) + Number(coordSys.height);
-    if (!Number.isFinite(left) || !Number.isFinite(right) || !Number.isFinite(top) || !Number.isFinite(bottom)) {
-      return null;
-    }
-    if (xPx < left || xPx > right) return null;
-    if ((yLowPx < top && yHighPx < top) || (yLowPx > bottom && yHighPx > bottom)) return null;
-    const y1 = Math.max(top, Math.min(bottom, yLowPx));
-    const y2 = Math.max(top, Math.min(bottom, yHighPx));
-    const capLeft = Math.max(left, xPx - capPx);
-    const capRight = Math.min(right, xPx + capPx);
-    return {
-      type: "group",
-      children: [
-        {
-          type: "line",
-          shape: { x1: xPx, y1, x2: xPx, y2 },
-          style: { stroke: color, lineWidth: 1.2 },
-        },
-        {
-          type: "line",
-          shape: { x1: capLeft, y1, x2: capRight, y2: y1 },
-          style: { stroke: color, lineWidth: 1.2 },
-        },
-        {
-          type: "line",
-          shape: { x1: capLeft, y1: y2, x2: capRight, y2 },
-          style: { stroke: color, lineWidth: 1.2 },
-        },
-      ],
-    };
-  },
-});
 
 const buildErrorBarData = (points) =>
   asArray(points)

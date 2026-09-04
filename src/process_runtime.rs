@@ -1,8 +1,74 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::core::BuildError;
+use crate::core::{BuildError, EngineError};
 use crate::resources::primary_resource_root;
+use serde_json::Value;
+
+pub(crate) fn default_process_args() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
+pub(crate) fn parse_process_offsets(
+    response: &Value,
+    field: &str,
+    nr_samples: usize,
+    fixed_width: usize,
+    values_len: usize,
+    adapter: &str,
+) -> Result<Vec<usize>, EngineError> {
+    let Some(raw) = response.get(field) else {
+        let expected_len = nr_samples.saturating_mul(fixed_width);
+        if values_len != expected_len {
+            return Err(EngineError::engine(format!(
+                "process {adapter} response missing '{field}' for ragged output with {values_len} values; fixed-width fallback expected {expected_len}"
+            )));
+        }
+        return Ok((0..=nr_samples).map(|index| index * fixed_width).collect());
+    };
+    let offsets = raw.as_array().ok_or_else(|| {
+        EngineError::engine(format!(
+            "process {adapter} response field '{field}' must be an array"
+        ))
+    })?;
+    if offsets.len() != nr_samples + 1 {
+        return Err(EngineError::engine(format!(
+            "process {adapter} response field '{field}' must contain nr_samples + 1 offsets"
+        )));
+    }
+    let mut parsed = Vec::with_capacity(offsets.len());
+    let mut previous = 0;
+    for (index, value) in offsets.iter().enumerate() {
+        let offset = value.as_u64().ok_or_else(|| {
+            EngineError::engine(format!(
+                "process {adapter} response field '{field}[{index}]' must be a non-negative integer"
+            ))
+        })? as usize;
+        if index == 0 && offset != 0 {
+            return Err(EngineError::engine(format!(
+                "process {adapter} response field '{field}' must start at 0"
+            )));
+        }
+        if offset < previous {
+            return Err(EngineError::engine(format!(
+                "process {adapter} response field '{field}' must be non-decreasing"
+            )));
+        }
+        if offset > values_len {
+            return Err(EngineError::engine(format!(
+                "process {adapter} response field '{field}[{index}]' exceeds row-major value length {values_len}"
+            )));
+        }
+        previous = offset;
+        parsed.push(offset);
+    }
+    if parsed.last().copied() != Some(values_len) {
+        return Err(EngineError::engine(format!(
+            "process {adapter} response field '{field}' must end at row-major value length {values_len}"
+        )));
+    }
+    Ok(parsed)
+}
 
 pub(crate) fn build_process_worker_command(
     runtime_command: &[String],

@@ -8,14 +8,14 @@ use crate::core::{
     RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_measurement,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_result_reference,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use egobox_ego::{EgorServiceBuilder, InfillStrategy, QEiStrategy, XType};
 use ndarray::Array2;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use std::{
     collections::{BTreeMap, BTreeSet},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -154,6 +154,8 @@ where
                     child: ControllerChildOutput {
                         child_run_id: None,
                         status: ControllerChildState::Planned,
+                        result_source: None,
+                        completed_samples_per_second: None,
                         measurement: None,
                         failure_reason: None,
                     },
@@ -162,8 +164,9 @@ where
             };
 
             let measurement_output =
-                load_child_task_measurement(&self.store, child.run_id, &objective.source_task)
+                load_child_task_result_reference(&self.store, child.run_id, &objective.source_task)
                     .await?;
+            let result_source = Some(measurement_output.source.clone());
             match measurement_output.output {
                 Some(TaskMeasurementOutput::Completed { results }) => {
                     match objective_result(objective, &results) {
@@ -177,6 +180,8 @@ where
                                 child: ControllerChildOutput {
                                     child_run_id: Some(child.run_id),
                                     status: ControllerChildState::Completed,
+                                    result_source,
+                                    completed_samples_per_second: None,
                                     measurement: Some(TaskMeasurementOutput::Completed { results }),
                                     failure_reason: None,
                                 },
@@ -199,6 +204,8 @@ where
                                 child: ControllerChildOutput {
                                     child_run_id: Some(child.run_id),
                                     status: ControllerChildState::Failed,
+                                    result_source,
+                                    completed_samples_per_second: None,
                                     measurement: Some(TaskMeasurementOutput::Completed { results }),
                                     failure_reason: Some(failure_reason),
                                 },
@@ -222,6 +229,8 @@ where
                         child: ControllerChildOutput {
                             child_run_id: Some(child.run_id),
                             status: ControllerChildState::Failed,
+                            result_source,
+                            completed_samples_per_second: None,
                             measurement: Some(TaskMeasurementOutput::Failed {
                                 reason: reason.clone(),
                             }),
@@ -242,6 +251,8 @@ where
                             child: ControllerChildOutput {
                                 child_run_id: Some(child.run_id),
                                 status: ControllerChildState::Failed,
+                                result_source,
+                                completed_samples_per_second: None,
                                 measurement: None,
                                 failure_reason: Some(failure_reason),
                             },
@@ -256,6 +267,8 @@ where
                             child: ControllerChildOutput {
                                 child_run_id: Some(child.run_id),
                                 status: measurement_output.task_state.into(),
+                                result_source,
+                                completed_samples_per_second: None,
                                 measurement: None,
                                 failure_reason: None,
                             },
@@ -399,6 +412,12 @@ where
     ) -> Result<(), StoreError> {
         let (best_trial, best_objective_value) =
             best_trial(&trials, objective_mode(&self.task.task));
+        let best_result_source = best_trial.and_then(|best_index| {
+            trials
+                .iter()
+                .find(|trial| trial.index == best_index)
+                .and_then(|trial| trial.child.result_source.clone())
+        });
         let output = ControllerTaskOutput::HyperparameterTuning(HyperparameterTuningOutput {
             total_trials,
             completed_trials,
@@ -406,6 +425,7 @@ where
             failed_trials,
             best_trial,
             best_objective_value,
+            best_result_source,
             trials,
         });
         self.store
@@ -1374,16 +1394,6 @@ fn splitmix64(mut x: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-pub fn placeholder_output(max_trials: usize) -> JsonValue {
-    json!({
-        "completed_trials": 0,
-        "running_trials": 0,
-        "failed_trials": 0,
-        "total_trials": max_trials,
-        "trials": [],
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1392,6 +1402,7 @@ mod tests {
         HyperparameterTuningIntegerDomain, HyperparameterTuningOptimizerSpec,
         MeasurementMetricQuantity, MeasurementMetricSpec,
     };
+    use serde_json::json;
 
     #[test]
     fn random_trial_parameters_are_deterministic_by_index() {
@@ -1874,7 +1885,6 @@ mod tests {
                 value: 1.0,
                 uncertainty: None,
                 sample_count: 10,
-                completed_samples_per_second: None,
             },
             crate::core::MeasurementResult {
                 name: AccumulatorMetricName::Mean,
@@ -1882,7 +1892,6 @@ mod tests {
                 value: 2.0,
                 uncertainty: None,
                 sample_count: 10,
-                completed_samples_per_second: None,
             },
         ];
 
@@ -1905,7 +1914,6 @@ mod tests {
                 value: 1.0,
                 uncertainty: None,
                 sample_count: 10,
-                completed_samples_per_second: None,
             },
             crate::core::MeasurementResult {
                 name: AccumulatorMetricName::Mean,
@@ -1913,7 +1921,6 @@ mod tests {
                 value: 2.0,
                 uncertainty: None,
                 sample_count: 10,
-                completed_samples_per_second: None,
             },
         ];
 
@@ -1938,7 +1945,6 @@ mod tests {
             value: 1.0,
             uncertainty: None,
             sample_count: 10,
-            completed_samples_per_second: None,
         }];
 
         let reason = objective_failure_reason(3, 42, &objective, &results, "not found");

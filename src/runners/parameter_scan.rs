@@ -6,7 +6,7 @@ use crate::core::{
     RunSpecStore, RunTask, RunTaskSpec, RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_measurement,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_result_reference,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use std::collections::BTreeMap;
@@ -80,6 +80,8 @@ where
                     child: ControllerChildOutput {
                         child_run_id: None,
                         status: ControllerChildState::Pending,
+                        result_source: None,
+                        completed_samples_per_second: None,
                         measurement: None,
                         failure_reason: None,
                     },
@@ -87,9 +89,13 @@ where
                 continue;
             };
 
-            let measurement_output =
-                load_child_task_measurement(&self.store, child.run_id, &measurement.source_task)
-                    .await?;
+            let measurement_output = load_child_task_result_reference(
+                &self.store,
+                child.run_id,
+                &measurement.source_task,
+            )
+            .await?;
+            let result_source = Some(measurement_output.source.clone());
             match measurement_output.output {
                 Some(TaskMeasurementOutput::Completed { results }) => {
                     completed_count += 1;
@@ -99,6 +105,8 @@ where
                         child: ControllerChildOutput {
                             child_run_id: Some(child.run_id),
                             status: ControllerChildState::Completed,
+                            result_source,
+                            completed_samples_per_second: None,
                             measurement: Some(TaskMeasurementOutput::Completed { results }),
                             failure_reason: None,
                         },
@@ -115,6 +123,8 @@ where
                         child: ControllerChildOutput {
                             child_run_id: Some(child.run_id),
                             status: ControllerChildState::Failed,
+                            result_source,
+                            completed_samples_per_second: None,
                             measurement: Some(TaskMeasurementOutput::Failed {
                                 reason: reason.clone(),
                             }),
@@ -132,6 +142,8 @@ where
                         child: ControllerChildOutput {
                             child_run_id: Some(child.run_id),
                             status: measurement_output.task_state.into(),
+                            result_source,
+                            completed_samples_per_second: None,
                             measurement: None,
                             failure_reason: None,
                         },
@@ -142,7 +154,7 @@ where
 
         if let Some(reason) = failed_reason {
             self.persist_output(
-                parameter_scan_names(&parameters),
+                parameter_scan_names(parameters),
                 completed_count,
                 running_count,
                 points,
@@ -159,7 +171,7 @@ where
 
         if completed_count == total_points {
             self.persist_output(
-                parameter_scan_names(&parameters),
+                parameter_scan_names(parameters),
                 completed_count,
                 running_count,
                 points,
@@ -222,7 +234,7 @@ where
         .await?;
 
         self.persist_output(
-            parameter_scan_names(&parameters),
+            parameter_scan_names(parameters),
             completed_count,
             running_count,
             points,

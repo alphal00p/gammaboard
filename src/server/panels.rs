@@ -578,3 +578,20 @@ fn merge_plot_points(points: &mut Vec<PlotPoint>, delta_points: Vec<PlotPoint>) 
 pub(crate) fn history_x(created_at: chrono::DateTime<chrono::Utc>) -> f64 {
     created_at.timestamp_millis() as f64
 }
+
+pub(crate) fn format_bytes_human(bytes: i64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * KIB;
+    const GIB: f64 = 1024.0 * MIB;
+
+    let bytes_f64 = bytes as f64;
+    if bytes_f64 >= GIB {
+        format!("{:.2} GiB", bytes_f64 / GIB)
+    } else if bytes_f64 >= MIB {
+        format!("{:.1} MiB", bytes_f64 / MIB)
+    } else if bytes_f64 >= KIB {
+        format!("{:.1} KiB", bytes_f64 / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}

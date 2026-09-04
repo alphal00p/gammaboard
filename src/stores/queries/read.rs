@@ -746,6 +746,27 @@ pub(crate) async fn get_latest_task_stage_snapshot(
     row.map(TryInto::try_into).transpose()
 }
 
+pub(crate) async fn get_latest_task_stage_snapshot_id(
+    pool: &PgPool,
+    run_id: i32,
+    task_id: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id
+        FROM run_stage_snapshots
+        WHERE run_id = $1 AND task_id = $2
+        ORDER BY id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .bind(task_id)
+    .fetch_optional(pool)
+    .await
+    .map(|id| id.map(|id| id.to_string()))
+}
+
 pub(crate) async fn get_runtime_logs(
     pool: &PgPool,
     limit: i64,

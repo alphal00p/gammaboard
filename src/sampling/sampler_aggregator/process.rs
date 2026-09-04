@@ -7,7 +7,9 @@ use serde_json::Value;
 
 use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Point};
-use crate::process_runtime::build_process_worker_command;
+use crate::process_runtime::{
+    build_process_worker_command, default_process_args, parse_process_offsets,
+};
 use crate::process_worker::{
     PROCESS_PROTOCOL, ProcessWorker, extend_le_f64, pipe_process_stderr, read_le_f64, read_le_i64,
 };
@@ -23,7 +25,7 @@ pub struct ProcessSamplerParams {
     pub cwd: Option<String>,
     #[serde(default)]
     pub requires_training_values: bool,
-    #[serde(default = "default_args")]
+    #[serde(default = "default_process_args")]
     pub args: Value,
 }
 
@@ -307,19 +309,21 @@ impl ProcessSamplerWorker {
             nr_samples,
             continuous_dims,
         )?;
-        let xs_discrete_offsets = parse_offsets_or_fixed(
+        let xs_discrete_offsets = parse_process_offsets(
             &response,
             "xs_discrete_offsets",
             nr_samples,
             discrete_dims,
             discrete_len,
+            "sampler",
         )?;
-        let xs_continuous_offsets = parse_offsets_or_fixed(
+        let xs_continuous_offsets = parse_process_offsets(
             &response,
             "xs_continuous_offsets",
             nr_samples,
             continuous_dims,
             continuous_len,
+            "sampler",
         )?;
         let (xs_discrete_row_major, next) =
             read_le_i64(&binary, 0, discrete_len).map_err(EngineError::engine)?;
@@ -501,10 +505,6 @@ impl ProcessSamplerWorker {
     }
 }
 
-fn default_args() -> Value {
-    Value::Object(serde_json::Map::new())
-}
-
 /// Total row-major length implied by an offsets field: its last entry when
 /// present, otherwise the homogeneous `nr_samples * fixed_width`.
 fn offsets_total_len(
@@ -525,66 +525,6 @@ fn offsets_total_len(
             }),
         None => Ok(nr_samples.saturating_mul(fixed_width)),
     }
-}
-
-fn parse_offsets_or_fixed(
-    response: &Value,
-    field: &str,
-    nr_samples: usize,
-    fixed_width: usize,
-    values_len: usize,
-) -> Result<Vec<usize>, EngineError> {
-    let Some(raw) = response.get(field) else {
-        let expected_len = nr_samples.saturating_mul(fixed_width);
-        if values_len != expected_len {
-            return Err(EngineError::engine(format!(
-                "process sampler response missing '{field}' for ragged output with {values_len} values; fixed-width fallback expected {expected_len}"
-            )));
-        }
-        return Ok((0..=nr_samples).map(|index| index * fixed_width).collect());
-    };
-    let offsets = raw.as_array().ok_or_else(|| {
-        EngineError::engine(format!(
-            "process sampler response field '{field}' must be an array"
-        ))
-    })?;
-    if offsets.len() != nr_samples + 1 {
-        return Err(EngineError::engine(format!(
-            "process sampler response field '{field}' must contain nr_samples + 1 offsets"
-        )));
-    }
-    let mut parsed = Vec::with_capacity(offsets.len());
-    let mut previous = 0_usize;
-    for (index, value) in offsets.iter().enumerate() {
-        let offset = value.as_u64().ok_or_else(|| {
-            EngineError::engine(format!(
-                "process sampler response field '{field}[{index}]' must be a non-negative integer"
-            ))
-        })? as usize;
-        if index == 0 && offset != 0 {
-            return Err(EngineError::engine(format!(
-                "process sampler response field '{field}' must start at 0"
-            )));
-        }
-        if offset < previous {
-            return Err(EngineError::engine(format!(
-                "process sampler response field '{field}' must be non-decreasing"
-            )));
-        }
-        if offset > values_len {
-            return Err(EngineError::engine(format!(
-                "process sampler response field '{field}[{index}]' exceeds row-major value length {values_len}"
-            )));
-        }
-        previous = offset;
-        parsed.push(offset);
-    }
-    if parsed.last().copied() != Some(values_len) {
-        return Err(EngineError::engine(format!(
-            "process sampler response field '{field}' must end at row-major value length {values_len}"
-        )));
-    }
-    Ok(parsed)
 }
 
 #[cfg(test)]
