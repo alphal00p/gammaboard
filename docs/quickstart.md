@@ -36,9 +36,11 @@ Local development:
 ./gammaboard deploy
 ```
 
-This builds the current Rust CLI, rebuilds the dashboard frontend, starts local
-Postgres, starts the backend API, and serves the dashboard through nginx at
-`http://localhost:8080`. Stop the stack with `Ctrl-C`.
+This builds the current Rust CLI, builds the dashboard frontend when its sources
+or build configuration changed, starts local Postgres and the backend API, and
+serves the dashboard through nginx at `http://localhost:8080`. Use
+`./gammaboard deploy --rebuild-frontend` to force a frontend rebuild. Stop the
+stack with `Ctrl-C`.
 
 ITPhlies release deployment:
 
@@ -67,8 +69,9 @@ GAMMABOARD_PROFILE=release ./gammaboard --help
 GAMMABOARD_PROFILE=debug ./gammaboard --help
 ```
 
-When the forwarded command is `deploy`, the helper also builds the
-dashboard frontend.
+When the forwarded command is `deploy`, the helper also ensures that the
+dashboard frontend build is current. `--rebuild-frontend` is a helper option;
+the built Rust binary expects an already-built frontend.
 
 ## Isolated Instances
 

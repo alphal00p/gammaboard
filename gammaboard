@@ -44,7 +44,6 @@ for arg in "$@"; do
             ;;
         --rebuild-frontend)
             rebuild_frontend=true
-            forwarded_args+=("${arg}")
             ;;
         *)
             forwarded_args+=("${arg}")
