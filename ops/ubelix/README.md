@@ -10,7 +10,8 @@ Shared docs live in repo-root `docs/`: `docs/deployment.md`, `docs/config.md`, a
 - Deploy: one control/UI Slurm job with Postgres, API, nginx, and frontend
 - Workers: separate Slurm jobs connecting to the control job database
 - Access: one SSH tunnel to the frontend port
-- Resources: UBELIX template paths resolve under `${WORKSPACE_ROOT}/ops/resources`; shared runtime assets resolve under `${WORKSPACE_ROOT}/resources`
+- Resources: templates, states, and process runtimes live under
+  `${WORKSPACE_ROOT}/resources`
 
 ## Sync From Local
 
@@ -32,11 +33,15 @@ Run on a UBELIX login node:
 ```bash
 python ubelix.py build gammaloop
 python ubelix.py build gammaboard
-python ubelix.py build apptainer resources/processes/madnis_gammaboard_api/madnis.sif resources/processes/madnis_gammaboard_api/apptainer.def
+python ubelix.py build apptainer resources/runtimes/madnis/madnis.sif resources/runtimes/madnis/apptainer.def
 ```
 
-GammaBoard and GammaLoop are service images under `images/`; each build overwrites `images/<family>/<family>.sif` and writes `images/<family>/<family>.meta`. Build logs go to `logs/slurm/build`.
-The MADNIS sampler is a process runtime image under `resources/processes/`; the generic Apptainer build writes `resources/processes/madnis_gammaboard_api/madnis.sif`. The runtime definition lives with the MADNIS GammaBoard API checkout so it can also be built outside this deploy repository.
+GammaBoard and GammaLoop are service images under `images/`; each build resolves
+the remote repository's current `HEAD`, records the chosen commit in
+`images/<family>/<family>.meta`, and replaces the current image. Build logs go
+to `logs/slurm/build`. Generic process-runtime builds take explicit output and
+definition paths; stage the definition and its sources under
+`resources/runtimes/` first.
 
 ## Start
 
@@ -90,7 +95,13 @@ max_start_failures = 6
 config = { gpu = "rtx4090:1" }
 ```
 
-submits worker jobs with `--gres=gpu:rtx4090:1 --partition=gpu` and registers `gpu=1` as a worker capability. Select another free-tier GPU type with `config = { gpu = "h100:1" }` when available. The dashboard template root is `ops/resources/templates`, and UBELIX-specific node launch templates are checked in under `ops/ubelix/resources/templates/nodes`. Supported `config` keys are `account`, `partition`, `qos`, `wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
+submits worker jobs with `--gres=gpu:rtx4090:1 --partition=gpu` and registers
+`gpu=1` as a worker capability. Select another free-tier GPU type with
+`config = { gpu = "h100:1" }` when available. Synced templates live under
+`resources/templates`; their source is `ops/ubelix/resources/templates` in the
+local checkout. Supported `config` keys are `account`, `partition`, `qos`,
+`wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`,
+`mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
 Use `cores`, `nr_cores`, or `cpus` as dashboard-friendly aliases for `cpus_per_task`; they submit `--cpus-per-task=<value>` and register `cpus=<value>` as the worker capability.
 Omitted group `config` defaults to `{}` and omitted `max_start_failures` defaults to `3`.
 Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`, so nested Python Apptainer runtimes can request NVIDIA passthrough with `nv = true`.
@@ -106,28 +117,28 @@ python ubelix.py down
 
 `down` requests node shutdown through the API, waits briefly for workers, cancels remaining worker jobs, then cancels the control or single-node job.
 
-Admin-protected commands accept `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`.
+When the selected server config enables authentication, protected commands
+require `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`. The checked-in
+UBELIX configs are passwordless and should only be exposed to a trusted network.
 
 ## UBELIX Layout
 
 ```text
 <WORKSPACE_ROOT>/
-  ops/{build,config,resources,slurm}/
+  ops/{build,config,slurm}/
   ubelix.py
   README.md
   artifacts/{bin,npm-cache,sqlx-root,src}/
   images/{gammaboard,gammaloop}/      # service images
   logs/slurm/
   resources/db/{postgres,socket,logfile}
-  resources/processes/                # process evaluator/sampler runtimes
+  resources/runtimes/                 # process evaluator/sampler runtimes
   resources/states/
-  runtime/
 ```
 
-Local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch scripts source it when present. The workspace is self-locating from the installed `ubelix.py` and sbatch paths, so `GAMMABOARD_WORKSPACE_ROOT` is only needed as an explicit override. GammaBoard/GammaLoop use the Symbolica OEM license compiled during the build jobs, so runtime Slurm jobs do not require `SYMBOLICA_LICENSE`.
-
-Remove obsolete Nix state after syncing current ops:
-
-```bash
-rm -rf nix /scratch/network/users/$USER/gammaboard-nix
-```
+Local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch
+scripts source it when present. The workspace is self-locating from the
+installed `ubelix.py` and sbatch paths, so `GAMMABOARD_WORKSPACE_ROOT` is only
+needed as an explicit override. GammaBoard/GammaLoop use the Symbolica OEM
+license compiled during the build jobs, so runtime Slurm jobs do not require
+`SYMBOLICA_LICENSE`.

@@ -21,34 +21,34 @@
     "gammaboard-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1779278548,
-        "narHash": "sha256-x/8YzWm6dcWwXi+yxe3zMhIbP7jQzJTkfrkOI+BGPkg=",
+        "lastModified": 1788867648,
+        "narHash": "sha256-+1+aC+wlpQWwwZ4rqPHqmec8cq1VGZ6BnTdLNwmo3go=",
         "owner": "alphal00p",
         "repo": "gammaboard",
-        "rev": "f23c5496b07d9f054355bdb67bd4d831bfa9ed5d",
+        "rev": "58486ade43bf7aeb7e8c402e4021f4b99d774796",
         "type": "github"
       },
       "original": {
         "owner": "alphal00p",
-        "ref": "main",
         "repo": "gammaboard",
+        "rev": "58486ade43bf7aeb7e8c402e4021f4b99d774796",
         "type": "github"
       }
     },
     "madnis-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1777456786,
-        "narHash": "sha256-kJUIETiEYXuMRnmK0psCphdtBClSpaJLqyBfsbvirWc=",
+        "lastModified": 1781884419,
+        "narHash": "sha256-TRUQuozaAc5ItEqrVnlPsyRVsrVUxUN0oVpqyl4Kkbs=",
         "owner": "madgraph-ml",
         "repo": "madnis",
-        "rev": "cc8da074faaf1f1c670c809f56c9ff448390649c",
+        "rev": "f16fb71d41271e3078b8ffc9db072a4241c12498",
         "type": "github"
       },
       "original": {
         "owner": "madgraph-ml",
-        "ref": "main",
         "repo": "madnis",
+        "rev": "f16fb71d41271e3078b8ffc9db072a4241c12498",
         "type": "github"
       }
     },

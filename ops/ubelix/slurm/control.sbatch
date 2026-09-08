@@ -24,7 +24,12 @@ fi
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
 IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
-SERVER_CFG="${WORKSPACE_ROOT}/ops/config/server.toml"
+SINGLE_NODE="${GAMMABOARD_SINGLE_NODE:-0}"
+case "${SINGLE_NODE}" in
+  0) SERVER_CFG="${WORKSPACE_ROOT}/ops/config/server.toml" ;;
+  1) SERVER_CFG="${WORKSPACE_ROOT}/ops/config/server-single-node.toml" ;;
+  *) echo "GAMMABOARD_SINGLE_NODE must be 0 or 1: ${SINGLE_NODE}" >&2; exit 1 ;;
+esac
 DB_PORT="5400"
 FRONTEND_PORT="8080"
 PORT_OFFSET="${GAMMABOARD_PORT_OFFSET:-0}"
@@ -55,7 +60,12 @@ fi
 echo "node: ${HOSTNAME}"
 echo "workspace_root: ${WORKSPACE_ROOT}"
 echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
-echo "tunnel_hint_after_frontend_ready: ssh -N -L ${FRONTEND_PORT}:${HOSTNAME}:${FRONTEND_PORT} ${USER}@ubelix"
+echo "single_node: ${SINGLE_NODE}"
+
+postgres_args=()
+if [[ "${SINGLE_NODE}" == "0" ]]; then
+  postgres_args+=(--postgres-public)
+fi
 
 exec env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
@@ -64,5 +74,5 @@ APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
 apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --resource-root "${WORKSPACE_ROOT}/resources" \
   --port-offset "${PORT_OFFSET}" \
-  --postgres-public \
+  "${postgres_args[@]}" \
   deploy --server-config "${SERVER_CFG}"

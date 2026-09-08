@@ -29,40 +29,7 @@ SRC_DIR_REL="artifacts/src/gammaloop"
 BIN_DIR_REL="artifacts/bin"
 LIB_DIR_REL="artifacts/bin/lib"
 SCRATCH_BASE="${SCRATCH_BASE:-/scratch/network/users/${USER}/apptainer}"
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "missing required command: $1" >&2
-    exit 1
-  }
-}
-
-git_head_sha() {
-  local repo_url="$1"
-  local sha
-  sha="$(git ls-remote "${repo_url}" HEAD | awk 'NR==1 {print $1}')"
-  if [[ -z "${sha}" ]]; then
-    echo "failed to resolve HEAD for ${repo_url}" >&2
-    exit 1
-  fi
-  printf '%s\n' "${sha}"
-}
-
-write_meta() {
-  local meta_path="$1"
-  shift
-  : >"${meta_path}"
-  for line in "$@"; do
-    printf '%s\n' "${line}" >>"${meta_path}"
-  done
-  printf 'built_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${meta_path}"
-}
-
-seconds_since() {
-  local start="$1"
-  local end="$2"
-  printf '%s\n' "$((end - start))"
-}
+source "${WORKSPACE_ROOT}/ops/build/common.sh"
 
 require_cmd apptainer
 require_cmd git
@@ -116,10 +83,10 @@ echo "APPTAINER_CACHEDIR: ${APPTAINER_CACHEDIR}"
 echo "CARGO_INCREMENTAL: ${CARGO_INCREMENTAL}"
 echo "symbolica_license_mode: bundled-oem"
 
+TOTAL_START="$(date +%s)"
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
   git clone "${GAMMALOOP_REPO}" "${SRC_DIR}"
 fi
-TOTAL_START="$(date +%s)"
 FETCH_START="$(date +%s)"
 git -C "${SRC_DIR}" fetch --depth 1 origin "${GAMMALOOP_SHA}"
 git -C "${SRC_DIR}" checkout --detach "${GAMMALOOP_SHA}"

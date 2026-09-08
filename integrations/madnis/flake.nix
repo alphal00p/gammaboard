@@ -1,5 +1,5 @@
 {
-  description = "madnis gammaboard API runtime";
+  description = "MADNIS GammaBoard API runtime";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -11,7 +11,7 @@
       flake = false;
     };
     gammaboard-src = {
-      url = "github:alphal00p/gammaboard/fdd59328814019a524a7838783efde8b42af3d50";
+      url = "github:alphal00p/gammaboard/58486ade43bf7aeb7e8c402e4021f4b99d774796";
       flake = false;
     };
   };

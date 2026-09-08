@@ -1,6 +1,6 @@
-# Gammaboard
+# GammaBoard
 
-Gammaboard runs distributed numerical integration jobs with PostgreSQL as the
+GammaBoard runs distributed numerical integration jobs with PostgreSQL as the
 shared control plane. The dashboard shows runs, task output, nodes, performance,
 logs, and active runtime settings.
 
@@ -84,7 +84,7 @@ reverse-proxy mount below a URL path instead of at `/`.
 
 ## Core Ideas
 
-Gammaboard separates integration into a persisted control plane and stateless-ish
+GammaBoard separates integration into a persisted control plane and replaceable
 workers that can come and go.
 
 - A run is the immutable top-level problem definition: domain, initial evaluator
@@ -96,8 +96,8 @@ workers that can come and go.
   state, evaluator config, and batch transform config. Later tasks restore from
   these snapshots instead of relying on in-memory handoff.
 - A node is a live worker process registered in PostgreSQL by `name` plus
-  process `uuid`. Nodes receive desired role assignments from the control plane:
-  sampler aggregator, evaluator, or supervisor.
+  process `uuid`. Nodes receive sampler-aggregator or evaluator assignments
+  from the control plane.
 - CPU-hours measure allocated sampler/evaluator worker core-time: assignment
   wall time multiplied by the node's declared `cpus` capability, or one CPU when
   omitted. Task counters persist across reassignment and completion; controller
@@ -193,13 +193,13 @@ cargo build --no-default-features
 
 ## License
 
-Gammaboard is intended to be distributed under the MIT License.
+GammaBoard is licensed under the MIT License.
 
 Normal GammaBoard builds include OEM-licensed Symbolica activation, so users do
 not need to obtain or configure a separate Symbolica license. Symbolica remains
 subject to its own license terms: https://symbolica.io/license.html
 
 Builds without the default `gammaloop` feature do not link GammaLoop, but
-Gammaboard still depends directly on Symbolica for built-in Symbolica
+GammaBoard still depends directly on Symbolica for built-in Symbolica
 evaluators. Developers who explicitly compile with
 `NO_SYMBOLICA_OEM_LICENSE=1` must provide `SYMBOLICA_LICENSE` at runtime.

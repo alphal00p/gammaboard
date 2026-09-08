@@ -1,11 +1,11 @@
-# Ghost bump with the MADNIS process sampler runtime deployed under resources/madnis.
+# Ghost bump with the MADNIS process sampler runtime under resources/runtimes/madnis.
 #
 # Required artifacts/tools:
 # - Apptainer with GPU support must be installed on the worker host.
-# - `$resources/madnis/madnis.sif` must exist.
-# - The `madnis/checkpoints` directory must be writable.
+# - `$resources/runtimes/madnis/madnis.sif` must exist.
+# - The `runtimes/madnis/checkpoints` directory must be writable.
 
-replacements = { run_name = "ghost_bump_madnis", train_samples = 200000, training_steps = 200, training_batch_size = 1000, madnis_dir = "madnis", save_path = "madnis/checkpoints/ghost_bump_madnis", image_bins = 128 }
+replacements = { run_name = "ghost_bump_madnis", train_samples = 200000, training_steps = 200, training_batch_size = 1000, madnis_dir = "runtimes/madnis", save_path = "runtimes/madnis/checkpoints/ghost_bump_madnis", image_bins = 128 }
 
 name = '$(run_name:"ghost_bump_madnis")'
 sampler_requirements = { gpu = 1 }
@@ -29,17 +29,17 @@ max_samples = "$(train_samples:200000)"
 
 [task_queue.sampler_aggregator.config]
 kind = "process_sampler"
-command = ["/usr/bin/apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources:$resources", "$resources/$(madnis_dir:\"madnis\")/madnis.sif", "madnis-gammaboard-sampler"]
+command = ["/usr/bin/apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources:$resources", "$resources/$(madnis_dir:\"runtimes/madnis\")/madnis.sif", "madnis-gammaboard-sampler"]
 cwd = "$resources"
 # Alternative with the Nix runtime when Nix is available:
-# command = ["$resources/processes/madnis_gammaboard_api/result/bin/python", "-u", "-m", "run_sampler"]
+# command = ["$resources/runtimes/madnis/result/bin/python", "-u", "-m", "run_sampler"]
 requires_training_values = true
 
 [task_queue.sampler_aggregator.config.args]
 seed = 0
 training_steps = "$(training_steps:200)"
 training_batch_size = "$(training_batch_size:1000)"
-save_path = '$(save_path:"madnis/checkpoints/ghost_bump_madnis")'
+save_path = '$(save_path:"runtimes/madnis/checkpoints/ghost_bump_madnis")'
 
 [[task_queue]]
 name = "pdf-2d"

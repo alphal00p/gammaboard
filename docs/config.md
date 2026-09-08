@@ -164,13 +164,13 @@ groups locally while evaluation maps them back to GammaLoop's original indices.
 This lets separate child runs load and sample individual graph groups without
 changing the generated state.
 
-Gammaboard evaluates GammaLoop runs in x-space so GammaLoop's parameterized observable and histogram path is used.
+GammaBoard evaluates GammaLoop runs in x-space so GammaLoop's parameterized observable and histogram path is used.
 
 `[evaluator.preprocessing]` is optional and runs GammaLoop commands after loading
 the state and before integrand selection. `read_only = true` is the default and
-documents the intended mode; once GammaLoop exposes read-only state loading,
-GammaBoard will pass this flag to the state loader. Commands are executed in
-order and may be any GammaLoop command.
+records the intended mode in logs; GammaLoop's current state-loading API does
+not yet accept that setting. Commands are executed in order and may be any
+GammaLoop command.
 
 ### Process Evaluator
 

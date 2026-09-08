@@ -26,7 +26,7 @@
 # The default `state_folder` assumes the gammaloop checkout is a sister directory
 # of the gammaboard repo (../gammaloop). Adjust it if yours is elsewhere. For a
 # portable deployment, either pass a replacement for `state_folder` or start
-# Gammaboard with:
+# GammaBoard with:
 #
 #   --resource-root ../gammaloop/glnis_gammaloop_examples/6photons/massive/1L
 #

@@ -122,7 +122,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 ## Maintenance
 - No backward compatibility by default; prefer direct current-schema migrations unless requested.
 - Remove duplication and unnecessary indirection whenever you spot simple cases of it, for more complicated refactors ask the operator.
-- Update this file for signnificant architecture/runtime/CLI/config shape changes.
+- Update this file for significant architecture/runtime/CLI/config shape changes.
 - Update `README.md` for setup/operator workflow changes.
 - If Rust code changes: run `cargo fmt`, `cargo check -q`, `cargo test -q`. Run `just test-e2e` only for larger changes touching relevant code.
 - After a coherent stage, provide a commit message as a bare fenced `text` block.

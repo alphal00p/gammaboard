@@ -25,7 +25,6 @@ CONTROL_JOB_NAME = f"{JOB_PREFIX}-ctl"
 SINGLE_NODE_JOB_NAME = f"{JOB_PREFIX}-single"
 WORKER_JOB_NAME = f"{JOB_PREFIX}-wrk"
 CONTROL_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/control.sbatch"
-SINGLE_NODE_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/single_node_deploy.sbatch"
 WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
 GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
 GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
@@ -35,7 +34,6 @@ FRONTEND_PORT = 8080
 DB_PORT = 5400
 DB_PASSWORD = "NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ"
 DEFAULT_SSH_HOST = "submit03.unibe.ch"
-DEFAULT_ADMIN_PASSWORD = "admin"
 DEFAULT_CONTROL_TIME = "00:20:00"
 DB_PATH = os.path.join(WORKSPACE_ROOT, "resources/db")
 
@@ -328,8 +326,10 @@ def database_url(control_node: str, *, port_offset: int | None = None) -> str:
     return f"postgresql://postgres:{DB_PASSWORD}@{control_node}:{db_port(port_offset)}/gammaboard_db"
 
 
-def login(control_node: str, admin_password: str, *, port_offset: int | None = None) -> str:
-    data = f'{{"password":"{admin_password}"}}'.encode()
+def login(
+    control_node: str, admin_password: str, *, port_offset: int | None = None
+) -> str | None:
+    data = json.dumps({"password": admin_password}).encode()
     request = urllib.request.Request(
         api_url(control_node, "/auth/login", port_offset=port_offset),
         data=data,
@@ -346,16 +346,14 @@ def login(control_node: str, admin_password: str, *, port_offset: int | None = N
                 "Set --admin-password or GAMMABOARD_ADMIN_PASSWORD."
             ) from err
         raise
-    if not cookie:
-        raise SystemExit("login did not return a session cookie")
-    return cookie.split(";", 1)[0]
+    return cookie.split(";", 1)[0] if cookie else None
 
 
 def admin_password(args: argparse.Namespace) -> str:
     return (
         getattr(args, "admin_password", None)
         or os.environ.get("GAMMABOARD_ADMIN_PASSWORD")
-        or DEFAULT_ADMIN_PASSWORD
+        or ""
     )
 
 
@@ -411,7 +409,7 @@ def parse_port_offset(value: str) -> int:
 
 
 def submit_singleton_job(
-    job_name: str, sbatch_path: str, time_limit: str, *, port_offset: int
+    job_name: str, time_limit: str, *, port_offset: int, single_node: bool = False
 ) -> Job:
     jobs = active_jobs(name=job_name)
     if len(jobs) == 1:
@@ -425,6 +423,7 @@ def submit_singleton_job(
     env = os.environ.copy()
     env["GAMMABOARD_PORT_OFFSET"] = str(port_offset)
     env["GAMMABOARD_WORKSPACE_ROOT"] = WORKSPACE_ROOT
+    env["GAMMABOARD_SINGLE_NODE"] = "1" if single_node else "0"
     result = run(
         [
             "sbatch",
@@ -434,7 +433,7 @@ def submit_singleton_job(
             job_name,
             "--time",
             time_limit,
-            sbatch_path,
+            CONTROL_SBATCH,
         ],
         env=env,
     )
@@ -444,18 +443,18 @@ def submit_singleton_job(
 
 def submit_control(time_limit: str, *, port_offset: int) -> Job:
     return submit_singleton_job(
-        CONTROL_JOB_NAME, CONTROL_SBATCH, time_limit, port_offset=port_offset
+        CONTROL_JOB_NAME, time_limit, port_offset=port_offset
     )
 
 
 def submit_single_node(time_limit: str, *, port_offset: int) -> Job:
     return submit_singleton_job(
-        SINGLE_NODE_JOB_NAME, SINGLE_NODE_SBATCH, time_limit, port_offset=port_offset
+        SINGLE_NODE_JOB_NAME, time_limit, port_offset=port_offset, single_node=True
     )
 
 
 def claim_launch_request(
-    control_node: str, cookie: str, *, port_offset: int | None = None
+    control_node: str, cookie: str | None, *, port_offset: int | None = None
 ) -> dict | None:
     response = api_request_json(
         control_node,
@@ -469,7 +468,7 @@ def claim_launch_request(
 
 def update_launch_request(
     control_node: str,
-    cookie: str,
+    cookie: str | None,
     request_id: int,
     state: str,
     started_count: int,
@@ -747,7 +746,6 @@ def submit_worker(
             ),
             "GAMMABOARD_IMAGE": IMAGE_PATH,
             "GAMMABOARD_WORKSPACE_ROOT": WORKSPACE_ROOT,
-            "GAMMABOARD_PORT_OFFSET": str(resolved_port_offset),
             "CONTROL_JOB_ID": control_job_id,
             "NODE_CAPABILITIES": " ".join(shlex.quote(arg) for arg in capability_args),
         }
@@ -770,24 +768,7 @@ def submit_worker(
 def resolve_launch_requests(
     control: Job,
     control_node: str,
-    cookie: str,
-    *,
-    max_requests: int | None = None,
-    port_offset: int | None = None,
-) -> int:
-    return resolve_launch_requests_with_callback(
-        control,
-        control_node,
-        cookie,
-        max_requests=max_requests,
-        port_offset=port_offset,
-    )
-
-
-def resolve_launch_requests_with_callback(
-    control: Job,
-    control_node: str,
-    cookie: str,
+    cookie: str | None,
     *,
     max_requests: int | None = None,
     on_launch: Callable[[str], None] | None = None,
@@ -910,17 +891,19 @@ def command_up(args: argparse.Namespace) -> None:
         status_printer = LiveStatusPrinter()
         try:
             cookie: str | None = None
+            can_resolve_requests = False
             if not args.single_node:
                 try:
                     cookie = login(node, admin_password(args), port_offset=port_offset)
+                    can_resolve_requests = True
                 except SystemExit as err:
                     print(
                         f"warning: {err}; continuing watch without launch-request resolution",
                         file=sys.stderr,
                     )
             while job_is_active(job.id):
-                if not args.single_node and cookie:
-                    resolve_launch_requests_with_callback(
+                if can_resolve_requests:
+                    resolve_launch_requests(
                         job,
                         node,
                         cookie,
@@ -1041,7 +1024,7 @@ def command_build(args: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
-            "UBELIX launcher for Gammaboard. Run all commands on a UBELIX login node."
+            "UBELIX launcher for GammaBoard. Run all commands on a UBELIX login node."
         )
     )
     sub = p.add_subparsers(dest="command", required=True)

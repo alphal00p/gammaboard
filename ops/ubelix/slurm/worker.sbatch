@@ -141,5 +141,4 @@ status="$?"
 if [[ -n "${monitor_pid}" ]]; then
   kill "${monitor_pid}" >/dev/null 2>&1 || true
 fi
-rm -f "${RUNTIME_CONFIG}"
 exit "${status}"

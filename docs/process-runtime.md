@@ -9,7 +9,7 @@ The extension protocol is `gammaboard-jsonrpc-v2`.
 - Transport: JSON-RPC 2.0 messages framed with `Content-Length` headers, plus an
   optional raw binary block (see "Binary payloads" below).
 - Direction: GammaBoard sends requests on process stdin; the process writes responses on stdout.
-- Logging: stderr is for logs (stdout is reserved for framed responses; GammaBoard tolerates only limited accidental line-oriented stdout before a frame). Worker stderr is recorded as runtime logs with `source = "worker"`. A line of the form `@gblog\t<level>\t<message>` (level ∈ trace,debug,info,warn,error) is emitted at that level; any other stderr line is recorded at `warn`. Both are then filtered by the server's `db_gammaboard_level` (default `info`). See "Logging" below for the Python helper.
+- Logging: stderr is for logs (stdout is reserved for framed responses; GammaBoard tolerates only limited accidental line-oriented stdout before a frame). Worker stderr is recorded as runtime logs with `source = "worker"`. A line of the form `@gblog\t<level>\t<message>` (level ∈ trace,debug,info,warn,error) is emitted at that level; any other stderr line is recorded at `warn`. Both are then filtered by runtime config `tracing.db_gammaboard_level` (default `info`).
 - Concurrency: requests are synchronous. GammaBoard sends one request at a time per process and waits for the matching response id before sending the next.
 - Batching: evaluator `eval_batch`, sampler `produce_latent_batch`, sampler `ingest_training_values`, sampler `pdf`, batch transform `transform_batch`, and materializer `materialize_batch` are batched.
 - Arguments: run TOML `args = { ... }` is passed unchanged in `initialize`.
@@ -296,7 +296,7 @@ Return:
 ```
 
 `materialize_batch` converts one queued latent batch into concrete evaluator
-points. `latent_batch` is the JSON form stored by Gammaboard; for current
+points. `latent_batch` is the JSON form stored by GammaBoard; for current
 samplers this is usually an `indexed_batch` payload containing discrete
 signatures, per-sample discrete-map entries, continuous layouts/values, and
 weights.
@@ -389,94 +389,10 @@ Nix, Apptainer, virtualenvs, and system packages are all just ways to make this 
 
 ## Python Package
 
-The Python helpers live in `process_api/python` and can be installed into a runtime:
-
-```bash
-pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@fdd59328814019a524a7838783efde8b42af3d50#subdirectory=process_api/python"
-```
-
-Worker modules are ordinary Python entrypoints:
-
-```python
-from demo_integrand import SinIntegrand
-from gammaboard_process import run_evaluator
-
-run_evaluator(SinIntegrand)
-```
-
-```python
-from demo_sampler import SymbolicaHavanaSampler
-from gammaboard_process import run_sampler
-
-run_sampler(SymbolicaHavanaSampler)
-```
-
-```python
-from demo_materializer import MyMaterializer
-from gammaboard_process import run_materializer
-
-run_materializer(MyMaterializer)
-```
-
-```python
-from demo_transform import MyTransform
-from gammaboard_process import run_batch_transform
-
-run_batch_transform(MyTransform)
-```
-
-The `Evaluator`, `Sampler`, `BatchTransform`, and `Materializer` ABCs are optional documentation/type-hint helpers.
-Inheritance is not required; `run_evaluator(...)`, `run_sampler(...)`,
-`run_batch_transform(...)`, and `run_materializer(...)` accept any compatible class.
-
-Evaluator classes implement `eval(xs_discrete, xs_continuous)`.
-
-Sampler classes implement `sample_plan`, `produce_latent_batch`, `ingest_training_values`, `snapshot`, and optional `training_samples_remaining` / `pdf` / `discrete_pdf` / `get_diagnostics`.
-
-Batch transform classes implement `transform_batch(xs_discrete, xs_continuous, weights)` and return a
-`TransformedBatch`, a dict with `xs_discrete` / `xs_continuous` / `weights`, a
-3-tuple, or any object with those attributes.
-
-Materializer classes implement `materialize_batch(latent_batch)` and return a
-`MaterializedBatch`, a dict with `xs_discrete` / `xs_continuous` / `weights`, a
-3-tuple, or any object with those attributes.
-
-Fresh initialization uses
-`ClassName(discrete_cardinalities=..., continuous_dims=..., **args)`.
-Sampler restore may instead implement
-`from_snapshot(snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)`.
-
-### Logging
-
-The framed protocol owns the worker's real stdout, so the Python package routes
-logs over stderr for you:
-
-```python
-import gammaboard_process as gb
-
-gb.log("training started")                 # default level: info
-gb.log("grid looks unstable", level="warn")
-gb.log(f"loss={loss:.3e}", level="debug")
-print("also recorded, at info")            # print() is rerouted to info
-```
-
-- `gb.log(message, level=...)` accepts `trace|debug|info|warn|error` (default
-  `info`; `warning` is accepted as `warn`). Each line becomes a runtime log with
-  `source = "worker"` at the matching level.
-- Plain `print()` is rerouted to `log(..., level="info")`, so existing prints are
-  captured at info instead of corrupting the protocol.
-- Anything written directly to stderr (tracebacks, native libraries) is recorded
-  unstructured at `warn`.
-
-Two filters apply, low to high: the worker drops messages below
-`GAMMABOARD_LOG_LEVEL` (env, default `info`); the server then stores only
-messages at or above `db_gammaboard_level` (server config, default `info`). So
-`info` and above reach the runtime log DB out of the box; to capture `debug`,
-raise both.
-
-Non-Python workers get the same behavior by writing
-`@gblog\t<level>\t<message>\n` lines to stderr (tab-separated; level is one of
-`trace,debug,info,warn,error`).
+The optional `gammaboard-process` package implements this protocol for
+homogeneous Python runtimes. Its installation, class contracts, logging helper,
+and working examples are documented in
+[../process_api/README.md](../process_api/README.md).
 
 ## Benchmark
 

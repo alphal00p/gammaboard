@@ -26,5 +26,6 @@ same shape: implement the class, then call `run_evaluator(MyEvaluator)`.
 config line via `gammaboard_process.log(..., level="info")`, a one-time showcase
 of every level (trace/debug/info/warn/error) on the first batch, and per-batch
 `debug` detail. `debug`/`trace` are dropped by default — set
-`GAMMABOARD_LOG_LEVEL=debug` (worker) and `db_gammaboard_level = "debug"` (server)
-to see them. See [../../../docs/process-runtime.md](../../../docs/process-runtime.md#logging).
+`GAMMABOARD_LOG_LEVEL=debug` (worker) and
+`tracing.db_gammaboard_level = "debug"` (runtime config) to see them. See
+[../../README.md](../../README.md#logging).

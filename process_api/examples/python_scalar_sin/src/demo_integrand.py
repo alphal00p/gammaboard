@@ -41,7 +41,7 @@ class SinIntegrand(Evaluator):
         self.phase_offsets = self._read_2x3(phases, "phase_offsets")
         self._batches = 0
 
-        # Logging showcase (see docs/process-runtime.md#logging). `print` is
+        # Logging showcase (see process_api/README.md#logging). `print` is
         # captured at INFO; `log(..., level=...)` records at the given level.
         print("SinIntegrand worker starting")
         log(

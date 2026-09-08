@@ -1,4 +1,4 @@
-# Gammaboard Docs
+# GammaBoard Docs
 
 This directory is intended to be self-contained enough to copy into an
 organization wiki.

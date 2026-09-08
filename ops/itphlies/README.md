@@ -30,7 +30,8 @@ Nginx access logs are disabled in the checked-in ITPhlies deploy profile so the 
 - Runtime config uses the embedded default. Pass `--runtime-config` only for custom database/resource/Postgres settings.
 - `--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to `8081/4001/5401` and suffixes local Postgres state paths with `-1`.
 - If deploy fails with `Address already in use`, free the conflicting frontend, API, or Postgres port and retry.
-- If deploy fails during DB start, inspect the Postgres log from repo root:
+- If deploy fails during DB start, inspect `resources/db/logfile`; an offset
+  appends `-N` to that path. For example, with `--port-offset 1`:
   ```bash
   tail -n 100 resources/db/logfile-1
   ```

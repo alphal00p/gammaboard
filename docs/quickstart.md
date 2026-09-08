@@ -1,6 +1,6 @@
 # Quickstart
 
-This page is the self-contained operator entry point for Gammaboard. It assumes
+This page is the self-contained operator entry point for GammaBoard. It assumes
 you are running commands from the repository root unless stated otherwise.
 
 ## Prerequisites
@@ -91,23 +91,23 @@ Use a port offset for a second local or ITPhlies instance:
 Create a run from a template:
 
 ```bash
-./gammaboard run create resources/templates/runs/gammaloop.toml
+./gammaboard run create resources/templates/runs/installation-smoke.toml
 ```
 
 Start local workers and assign them:
 
 ```bash
 ./gammaboard node start-local 2
-./gammaboard node assign w-1 sampler_aggregator gammaloop_tth
-./gammaboard node assign w-2 evaluator gammaloop_tth
+./gammaboard node assign w-1 sampler_aggregator installation-smoke
+./gammaboard node assign w-2 evaluator installation-smoke
 ```
 
 Inspect and pause:
 
 ```bash
 ./gammaboard run list
-./gammaboard run task list gammaloop_tth
-./gammaboard run pause gammaloop_tth
+./gammaboard run task list installation-smoke
+./gammaboard run pause installation-smoke
 ```
 
 Stop nodes:
@@ -186,30 +186,6 @@ Useful deploy options:
 - `--postgres-public` allows remote workers to connect to the local Postgres
   instance; keep the default local-only mode unless this is needed.
 
-## Where Things Live
-
-The default resources root is `resources/`.
-
-```text
-resources/
-  runtimes/          Process evaluator/sampler runtime projects and images
-  states/            Shared model, integrator, and checkpoint state
-  templates/         Run, task, and node launch TOML templates
-```
-
-Deployment artifacts are separate:
-
-```text
-artifacts/           Build inputs, compiled binaries, package caches
-db/                  Local Postgres state
-images/              Deployment/service images such as gammaboard.sif and gammaloop.sif
-logs/                Postgres, Slurm, and deployment logs
-runtime/             Runtime sockets, pids, and transient control files
-```
-
-The dashboard Settings tab shows the active config paths, resource root, and
-Postgres paths.
-
 ## Testing
 
 ```bash
@@ -255,7 +231,7 @@ explicit unsupported-feature errors.
 ## Next Pages
 
 - [config.md](config.md): runtime, server, deploy, run, task, and node config.
-- [deployment.md](deployment.md): shared deploy model, profiles, paths, images, and ports.
+- [deployment.md](deployment.md): profiles, resource layout, images, and ports.
 - [operations.md](operations.md): auth, node/run lifecycle, logs, and recovery.
 - [process-runtime.md](process-runtime.md): external process evaluator/sampler protocol.
 - [frontend.md](frontend.md): dashboard architecture and panel data flow.

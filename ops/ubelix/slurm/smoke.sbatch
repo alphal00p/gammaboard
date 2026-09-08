@@ -62,8 +62,8 @@ if apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" ldd /usr/local/bin/gammaboa
   exit 1
 fi
 
-# CLI probes may return non-zero in some builds; run for diagnostics but do not gate smoke on exit code.
-apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --version || true
-apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --help >/dev/null || true
+# Gate on the public CLI being executable. GammaBoard does not expose a
+# top-level --version option; run provenance carries the build revision.
+apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --help >/dev/null
 
 echo "smoke check completed"

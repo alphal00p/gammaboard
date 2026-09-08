@@ -1,8 +1,9 @@
 # Deployment
 
 `gammaboard deploy` is the normal dashboard stack supervisor. It starts the
-backend API, nginx/frontend exposure, local or managed Postgres, and optional
-local node runners according to the selected deploy/runtime/server configs.
+backend API, nginx/frontend exposure, and optionally the managed local
+PostgreSQL instance. When local node spawning is enabled, it also resolves
+dashboard node-launch requests into child worker processes.
 
 ## Profiles
 
@@ -20,19 +21,21 @@ absolute. The default resource layout is:
 
 ```text
 resources/
+  db/                Managed local PostgreSQL state and log
+  logs/nodes/        Local worker stdout/stderr
+  nginx/             Per-port nginx runtime state
   runtimes/          Process evaluator/sampler runtime projects and images
   states/            Shared model/integrator/checkpoint state
   templates/         Run, task, and node launch TOML templates
+  tmp/               Evaluator/runtime scratch state
 ```
 
-Deployment artifacts are separate from user resources:
+Cluster deployment workspaces may additionally contain:
 
 ```text
 artifacts/           Build inputs, compiled binaries, package caches
-db/                  Local Postgres state
 images/              Deployment/service images such as gammaboard.sif and gammaloop.sif
-logs/                Postgres, Slurm, and deployment logs
-runtime/             Runtime sockets/pids/transient control files
+logs/                Slurm and deployment logs
 ```
 
 ## Image Model
@@ -100,8 +103,8 @@ Default ports are:
 - API: `4000`
 - Postgres: `5400`
 
-Deploy helpers support a port offset. Offset `1` shifts these to
-`8081/4001/5401` and also suffixes local Postgres state paths where relevant.
+`--port-offset 1` shifts these to `8081/4001/5401` and isolates the managed
+PostgreSQL and nginx state paths.
 
 ## Access
 

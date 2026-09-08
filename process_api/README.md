@@ -12,11 +12,15 @@ For the stable process protocol, see [../docs/process-runtime.md](../docs/proces
 
 ## Python Package
 
-The Python helpers live in `python/` and can be installed into any runtime:
+The Python helpers live in `python/` and can be installed from a checkout into
+any runtime:
 
 ```bash
-pip install "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@fdd59328814019a524a7838783efde8b42af3d50#subdirectory=process_api/python"
+pip install ./process_api/python
 ```
+
+For a remote build, use the same path as a Git subdirectory dependency and pin
+the GammaBoard release tag or commit used by the server.
 
 Example entrypoint modules should be tiny:
 
@@ -148,6 +152,7 @@ print("captured at info")          # print() is rerouted to info
 runtime log with `source = "worker"` at that level. Direct stderr writes
 (tracebacks, native libraries) are recorded unstructured at `warn`. Messages
 below `GAMMABOARD_LOG_LEVEL` (env, default `info`) are dropped in the worker; the
-server then keeps only those at or above `db_gammaboard_level` (default `info`).
+server then keeps only those at or above runtime config
+`tracing.db_gammaboard_level` (default `info`).
 See [../docs/process-runtime.md](../docs/process-runtime.md) for the wire format
 non-Python workers use.

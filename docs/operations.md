@@ -68,7 +68,7 @@ Useful locations:
 
 - Dashboard Logs tab: run-scoped persisted logs.
 - `resources/logs/nodes` or profile-specific node logs: local node process logs.
-- `logs/postgres`: local Postgres logs.
+- `resources/db/logfile` (or its configured equivalent): managed PostgreSQL log.
 - `logs/slurm`: UBELIX Slurm stdout/stderr.
 
 ## Failure Recovery

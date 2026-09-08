@@ -12,6 +12,11 @@
 
 set -euo pipefail
 
+PRIVATE_ENV="${HOME}/.config/gammaboard/slurm.env"
+if [[ -f "${PRIVATE_ENV}" ]]; then
+  source "${PRIVATE_ENV}"
+fi
+
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
 
 if [[ $# -ne 2 ]]; then

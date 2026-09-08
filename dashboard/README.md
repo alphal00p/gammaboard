@@ -1,4 +1,4 @@
-# Gammaboard Dashboard
+# GammaBoard Dashboard
 
 React/Vite frontend for the GammaBoard dashboard.
 

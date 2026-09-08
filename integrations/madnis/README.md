@@ -44,7 +44,9 @@ The definition file builds from Git, not from the local checkout. Pin the exact
 source when needed:
 
 ```bash
-GAMMABOARD_REF=<branch-or-commit> apptainer build --force madnis.sif apptainer.def
+apptainer build --force \
+  --build-arg GAMMABOARD_REF=<branch-or-commit> \
+  madnis.sif apptainer.def
 ```
 
 On UBELIX, run the build from the GammaBoard workspace:
