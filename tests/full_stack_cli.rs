@@ -729,7 +729,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
         )
         .await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", run_name);
+    harness.assign_node("w-1", "sampler_aggregator", run_name);
 
     if pause_mid_training {
         harness
@@ -787,7 +787,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
                 },
             )
             .await?;
-        harness.assign_node("w-1", "sampler-aggregator", run_name);
+        harness.assign_node("w-1", "sampler_aggregator", run_name);
 
         harness
             .wait_for(
@@ -853,7 +853,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_inference" }} }}
             },
         )
         .await?;
-    harness.assign_node("w-1", "sampler-aggregator", run_name);
+    harness.assign_node("w-1", "sampler_aggregator", run_name);
 
     harness
         .wait_for(
@@ -958,7 +958,7 @@ count = 8
     // Start nodes and assign roles
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "havana-alt-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "havana-alt-e2e");
     harness.assign_node("w-2", "evaluator", "havana-alt-e2e");
 
     // Wait for the first four tasks to complete (sequence_nr 1..4)
@@ -1131,7 +1131,7 @@ count = 128
     let run_id = harness.run_id("symbolica-havana-pdf-1d2d-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
-    harness.assign_node("w-1", "sampler-aggregator", "symbolica-havana-pdf-1d2d-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "symbolica-havana-pdf-1d2d-e2e");
     harness.assign_node("w-2", "evaluator", "symbolica-havana-pdf-1d2d-e2e");
 
     let pdf_task_id: i64 = sqlx::query_scalar(
@@ -1458,7 +1458,7 @@ sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", 
     harness.add_run(&config);
     let run_id = harness.run_id("python-scalar-venv-e2e").await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "python-scalar-venv-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "python-scalar-venv-e2e");
     harness.assign_node("w-2", "evaluator", "python-scalar-venv-e2e");
 
     harness
@@ -1614,7 +1614,7 @@ training_projection = {{ kind = "component", name = "real" }}
     harness.add_run(&config);
     let run_id = harness.run_id(&run_name).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", &run_name);
+    harness.assign_node("w-1", "sampler_aggregator", &run_name);
     harness.assign_node("w-2", "evaluator", &run_name);
 
     for case_idx in 0..cases.len() {
@@ -1776,7 +1776,7 @@ target_batch_eval_ms = 1.0
 
     harness.add_run(&config);
     let run_id = harness.run_id(&run_name).await?;
-    harness.assign_node("w-1", "sampler-aggregator", &run_name);
+    harness.assign_node("w-1", "sampler_aggregator", &run_name);
     harness.assign_node("w-2", "evaluator", &run_name);
 
     sleep(Duration::from_secs(3)).await;
@@ -1895,7 +1895,7 @@ accumulator = "latest"
 
     harness.assign_node(
         "w-1",
-        "sampler-aggregator",
+        "sampler_aggregator",
         "task-level-evaluator-switch-e2e",
     );
     harness.assign_node("w-2", "evaluator", "task-level-evaluator-switch-e2e");
@@ -2034,7 +2034,7 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
 
     harness.assign_node(
         "w-1",
-        "sampler-aggregator",
+        "sampler_aggregator",
         "rust-apptainer-process-evaluator-e2e",
     );
     harness.assign_node("w-2", "evaluator", "rust-apptainer-process-evaluator-e2e");
@@ -2437,7 +2437,7 @@ impl<'a> SamplerCheckpointProgram<'a> {
 
     async fn assign_sampler(&mut self, node_name: &str) -> anyhow::Result<()> {
         self.harness
-            .assign_node(node_name, "sampler-aggregator", self.run_name);
+            .assign_node(node_name, "sampler_aggregator", self.run_name);
         Ok(())
     }
 
@@ -2762,7 +2762,7 @@ name = "full-stack-e2e"
         .failure()
         .stderr(predicate::str::contains("node 'ghost-node' is not live"));
 
-    harness.assign_node("w-2", "sampler-aggregator", "full-stack-e2e");
+    harness.assign_node("w-2", "sampler_aggregator", "full-stack-e2e");
 
     harness
         .wait_for(
@@ -2908,7 +2908,7 @@ async fn full_stack_cli_installation_smoke_produces_unit_estimate() -> anyhow::R
 
     let run_id = harness.run_id("installation-smoke").await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
-    harness.assign_node("w-1", "sampler-aggregator", "installation-smoke");
+    harness.assign_node("w-1", "sampler_aggregator", "installation-smoke");
     harness.assign_node("w-2", "evaluator", "installation-smoke");
 
     harness
@@ -3004,7 +3004,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
     let run_id = harness.run_id("set-accumulator-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
-    harness.assign_node("w-1", "sampler-aggregator", "set-accumulator-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "set-accumulator-e2e");
     harness.assign_node("w-2", "evaluator", "set-accumulator-e2e");
 
     harness
@@ -3561,7 +3561,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     let run_id = harness.run_id("delete-assigned-run-e2e").await?;
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
-    harness.assign_node("w-1", "sampler-aggregator", "delete-assigned-run-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "delete-assigned-run-e2e");
     harness.assign_node("w-2", "evaluator", "delete-assigned-run-e2e");
 
     harness
@@ -4212,7 +4212,7 @@ strict_batch_ordering = true
 
     harness.start_nodes(&["w-1", "w-2", "w-3"]).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "worker-death-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "worker-death-e2e");
     harness.assign_node("w-2", "evaluator", "worker-death-e2e");
 
     harness
@@ -4319,7 +4319,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "sampler-error-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "sampler-error-e2e");
     harness.assign_node("w-2", "evaluator", "sampler-error-e2e");
 
     wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(30)).await?;
@@ -4355,7 +4355,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "materializer-error-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "materializer-error-e2e");
     harness.assign_node("w-2", "evaluator", "materializer-error-e2e");
 
     wait_for_batch_retry_count(&harness, run_id, 1, Duration::from_secs(30)).await?;
@@ -4393,7 +4393,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "evaluator-error-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "evaluator-error-e2e");
     harness.assign_node("w-2", "evaluator", "evaluator-error-e2e");
 
     wait_for_batch_retry_count(&harness, run_id, 1, Duration::from_secs(30)).await?;
@@ -4438,7 +4438,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
     harness.assign_node(
         "w-1",
-        "sampler-aggregator",
+        "sampler_aggregator",
         "evaluator-retry-twice-then-recover-e2e",
     );
     harness.assign_node("w-2", "evaluator", "evaluator-retry-twice-then-recover-e2e");
@@ -4495,7 +4495,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
     harness.assign_node(
         "w-1",
-        "sampler-aggregator",
+        "sampler_aggregator",
         "evaluator-retry-three-then-fail-e2e",
     );
     harness.assign_node("w-2", "evaluator", "evaluator-retry-three-then-fail-e2e");
@@ -4559,7 +4559,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "evaluator-build-fail-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "evaluator-build-fail-e2e");
     harness.assign_node("w-2", "evaluator", "evaluator-build-fail-e2e");
 
     wait_for_task_failed_and_run_unassigned(&harness, run_id, Duration::from_secs(30)).await?;
@@ -5162,7 +5162,7 @@ source_task = "sample"
     let run_id = harness.run_id("parameter-scan-redistribute-e2e").await?;
 
     for (node, role) in [
-        ("scan-owned-s", "sampler-aggregator"),
+        ("scan-owned-s", "sampler_aggregator"),
         ("scan-owned-e1", "evaluator"),
         ("scan-owned-e2", "evaluator"),
     ] {
@@ -5850,7 +5850,7 @@ max = 4
         .await?;
 
     for (node, role) in [
-        ("tune-owned-s", "sampler-aggregator"),
+        ("tune-owned-s", "sampler_aggregator"),
         ("tune-owned-e1", "evaluator"),
         ("tune-owned-e2", "evaluator"),
     ] {
@@ -5974,7 +5974,7 @@ stop_condition = { max_samples = 16 }
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    harness.assign_node("w-1", "sampler-aggregator", "clone-source-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "clone-source-e2e");
     harness.assign_node("w-2", "evaluator", "clone-source-e2e");
 
     harness

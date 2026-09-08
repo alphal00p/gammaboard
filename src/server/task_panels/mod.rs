@@ -1,4 +1,5 @@
 mod controller;
+mod controller_output;
 mod full_accumulator;
 mod hyperparameter_tuning;
 mod integration_campaign;
@@ -736,22 +737,21 @@ impl TaskPanelSource {
             downsample_level: target_level,
         });
 
-        Ok(PanelResponse {
+        Ok(PanelResponse::new(
             source_id,
             cursor,
-            reset_required: false,
-            panels: if requested_cursor.snapshot_id.is_some() {
+            if requested_cursor.snapshot_id.is_some() {
                 Vec::new()
             } else {
                 panels
             },
             updates,
-            poll_after_ms: if should_poll_task_output(task.state) {
+            if should_poll_task_output(task.state) {
                 Some(3000)
             } else {
                 None
             },
-        })
+        ))
     }
 }
 

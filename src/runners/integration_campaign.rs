@@ -1,5 +1,3 @@
-use crate::api::measurement::project_measurement_results;
-use crate::api::results::combine_independent_observables;
 use crate::api::runs::{ChildRunRequest, create_child_run};
 use crate::core::{
     AggregationStore, ControlPlaneStore, ControllerChildOutput, ControllerChildState,
@@ -11,6 +9,8 @@ use crate::core::{
 use crate::runners::controller_child::{
     ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_result,
 };
+use crate::services::measurement::project_measurement_results;
+use crate::services::results::combine_independent_observables;
 use std::collections::{BTreeMap, BTreeSet};
 
 const SPAWN_KIND: &str = "integration_campaign";

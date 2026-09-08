@@ -56,9 +56,6 @@ pub(crate) fn combine_independent_observables(
         "primary_histogram_name": primary_histogram_name,
         "histograms": histograms,
         "omitted_incompatible_histograms": omitted,
-        "expands_to": { "kind": "histogram", "source": "selected_row" },
-        "expanded_label": "Combined Histogram",
-        "actions": { "export_json": true, "export_hwu": false, "upload_bundle": true },
     }))
 }
 

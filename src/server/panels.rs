@@ -300,6 +300,25 @@ pub struct PanelResponse {
     pub poll_after_ms: Option<u64>,
 }
 
+impl PanelResponse {
+    pub(crate) fn new(
+        source_id: String,
+        cursor: Option<String>,
+        panels: Vec<PanelSpec>,
+        updates: Vec<PanelUpdate>,
+        poll_after_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            source_id,
+            cursor,
+            reset_required: false,
+            panels,
+            updates,
+            poll_after_ms,
+        }
+    }
+}
+
 pub(crate) fn panel_spec(
     panel_id: &str,
     label: &str,
@@ -317,13 +336,6 @@ pub(crate) fn panel_spec(
     }
 }
 
-pub(crate) fn with_panel_width(mut spec: PanelSpec, width: PanelWidth) -> PanelSpec {
-    spec.width = width;
-    spec
-}
-
-/// `panel_spec` plus an explicit width, replacing the common
-/// `with_panel_width(panel_spec(...), width)` nesting.
 pub(crate) fn sized_panel_spec(
     panel_id: &str,
     label: &str,
@@ -331,7 +343,10 @@ pub(crate) fn sized_panel_spec(
     history: PanelHistoryMode,
     width: PanelWidth,
 ) -> PanelSpec {
-    with_panel_width(panel_spec(panel_id, label, kind, history), width)
+    PanelSpec {
+        width,
+        ..panel_spec(panel_id, label, kind, history)
+    }
 }
 
 pub(crate) fn select_state_spec(

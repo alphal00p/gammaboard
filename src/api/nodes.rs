@@ -101,12 +101,6 @@ pub async fn claim_external_node_launch_request(
     Ok(store.claim_external_node_launch_request().await?)
 }
 
-pub async fn reconcile_running_node_launch_requests(
-    store: &impl ControlPlaneStore,
-) -> Result<u64, ApiError> {
-    Ok(store.reconcile_running_node_launch_requests().await?)
-}
-
 pub async fn mark_node_launch_request_starting(
     store: &impl ControlPlaneStore,
     id: i64,

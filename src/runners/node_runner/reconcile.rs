@@ -4,7 +4,6 @@ use super::{
 };
 use crate::core::StoreResultExt;
 
-use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{
     AggregationStore, BatchTransformConfig, ControlPlaneStore, RunStageSnapshot, RunTask,
     RunTaskStore, StoreError,
@@ -14,6 +13,7 @@ use crate::runners::{
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
 };
 use crate::sampling::StageHandoffOwned;
+use crate::services::stage::resolve_task_source_snapshot;
 use tracing::{Instrument, debug, error, info, warn};
 
 impl<S: NodeRunnerStore> NodeRunner<S> {

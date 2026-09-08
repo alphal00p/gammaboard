@@ -7,6 +7,8 @@ pub mod api;
 pub mod config;
 pub mod core;
 pub mod evaluation;
+#[doc(hidden)]
+pub mod local_db;
 pub mod preprocess;
 mod process_runtime;
 mod process_worker;
@@ -16,6 +18,8 @@ pub mod runners;
 pub mod runtime_context;
 pub mod sampling;
 pub mod server;
+mod service_error;
+mod services;
 pub mod stores;
 mod symbolica_license;
 pub mod tracing;

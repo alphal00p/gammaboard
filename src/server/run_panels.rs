@@ -18,14 +18,13 @@ pub fn build_run_panel_response(
         .into_iter()
         .map(replace_panel)
         .collect();
-    Ok(PanelResponse {
+    Ok(PanelResponse::new(
         source_id,
-        cursor: None,
-        reset_required: false,
+        None,
         panels,
         updates,
-        poll_after_ms: Some(5000),
-    })
+        Some(5000),
+    ))
 }
 
 fn panel_specs(_run_spec: &RunSpec) -> Vec<PanelSpec> {

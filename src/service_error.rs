@@ -1,7 +1,7 @@
 use crate::core::{EngineError, StoreError};
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum ApiError {
+pub enum ServiceError {
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("unauthorized: {0}")]
@@ -12,7 +12,7 @@ pub enum ApiError {
     Internal(String),
 }
 
-impl From<StoreError> for ApiError {
+impl From<StoreError> for ServiceError {
     fn from(value: StoreError) -> Self {
         match value {
             StoreError::InvalidInput(message) => Self::BadRequest(message),
@@ -30,7 +30,7 @@ impl From<StoreError> for ApiError {
     }
 }
 
-impl From<EngineError> for ApiError {
+impl From<EngineError> for ServiceError {
     fn from(value: EngineError) -> Self {
         Self::BadRequest(value.to_string())
     }

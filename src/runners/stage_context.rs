@@ -1,9 +1,9 @@
-use crate::api::stage::resolve_task_source_snapshot;
 use crate::core::{
     AggregationStore, BatchTransformConfig, EvaluatorConfig, RunTask, RunTaskStore, StoreError,
 };
 use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::StageHandoffOwned;
+use crate::services::stage::resolve_task_source_snapshot;
 
 pub(crate) const HAVANA_HANDOFF_REQUIRED_ERROR: &str =
     "havana_inference sampler requires a havana training or inference snapshot handoff";

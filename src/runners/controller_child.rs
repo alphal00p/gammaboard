@@ -1,10 +1,10 @@
-use crate::api::measurement::load_task_measurement_output;
 use crate::core::StoreResultExt;
 use crate::core::{
     AggregationStore, ControlPlaneStore, DesiredAssignment, RegisteredNode, ResultSourceRef,
     RunReadStore, RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput, WorkerRole,
 };
 use crate::evaluation::AccumulatorState;
+use crate::services::measurement::load_task_measurement_output;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]

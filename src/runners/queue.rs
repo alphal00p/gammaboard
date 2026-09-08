@@ -1531,10 +1531,6 @@ mod tests {
             unreachable!("unused in test")
         }
 
-        async fn reconcile_running_node_launch_requests(&self) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
         async fn update_node_launch_request_state(
             &self,
             _id: i64,

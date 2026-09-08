@@ -98,7 +98,7 @@ Start local workers and assign them:
 
 ```bash
 ./gammaboard node start-local 2
-./gammaboard node assign w-1 sampler-aggregator gammaloop_tth
+./gammaboard node assign w-1 sampler_aggregator gammaloop_tth
 ./gammaboard node assign w-2 evaluator gammaloop_tth
 ```
 

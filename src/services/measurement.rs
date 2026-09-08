@@ -1,25 +1,22 @@
-use crate::api::ApiError;
 use crate::core::{
     AccumulatorMetricName, AccumulatorMetricSelector, AggregationStore, MeasurementResult,
-    MeasurementSpec, RunReadStore, RunTask, RunTaskState, RunTaskStore, SamplerRuntimeMetrics,
+    RunReadStore, RunTask, RunTaskState, RunTaskStore, SamplerRuntimeMetrics,
     TaskMeasurementOutput, TaskMeasurementSpec,
 };
 use crate::evaluation::{
     AccumulatorMetricValue, AccumulatorState, extract_accumulator_metric_with_runtime,
 };
+use crate::service_error::ServiceError as ApiError;
 use crate::stores::SamplerPerformanceHistoryEntry;
 
 #[derive(Debug, Clone)]
 pub struct ExtractedMeasurement {
-    pub source_task_id: i64,
-    pub source_task_name: String,
     pub results: Vec<MeasurementResult>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PersistedTaskMeasurement {
     pub task_id: i64,
-    pub task_name: String,
     pub task_state: RunTaskState,
     pub output: Option<TaskMeasurementOutput>,
     pub source_task: RunTask,
@@ -34,17 +31,17 @@ pub async fn load_task_measurement_output(
     let task = resolve_measurement_source_task(&tasks, task_name)?;
     Ok(PersistedTaskMeasurement {
         task_id: task.id,
-        task_name: task.name.clone(),
         task_state: task.state,
         output: task.measurement_output.clone(),
         source_task: task.clone(),
     })
 }
 
-pub async fn extract_measurement(
+#[cfg(test)]
+async fn extract_measurement(
     store: &(impl RunTaskStore + RunReadStore + AggregationStore),
     run_id: i32,
-    measurement: &MeasurementSpec,
+    measurement: &crate::core::MeasurementSpec,
 ) -> Result<ExtractedMeasurement, ApiError> {
     measurement.validate().map_err(ApiError::BadRequest)?;
     let tasks = store.list_run_tasks(run_id).await?;
@@ -86,11 +83,7 @@ async fn extract_task_measurement_with_spec(
     let throughput =
         load_measurement_throughput(store, run_id, tasks, source_task, measurement).await?;
     let results = project_measurement_results(&accumulator, measurement, throughput, source_task)?;
-    Ok(ExtractedMeasurement {
-        source_task_id: source_task.id,
-        source_task_name: source_task.name.clone(),
-        results,
-    })
+    Ok(ExtractedMeasurement { results })
 }
 
 pub(crate) fn project_measurement_results(
@@ -321,7 +314,7 @@ mod tests {
     };
     use crate::core::{
         AccumulatorConfig, MeasurementMetricSpec, MeasurementMode, MeasurementQuantitySpec,
-        RunTaskInput, RunTaskSpec, SampleStopCondition, SamplerPerformanceMetrics,
+        MeasurementSpec, RunTaskInput, RunTaskSpec, SampleStopCondition, SamplerPerformanceMetrics,
         TaskMeasurementSpec, TrainingProjection,
     };
     use crate::evaluation::Point;
@@ -690,11 +683,6 @@ mod tests {
         ) -> Result<Option<crate::core::NodeLaunchRequest>, crate::core::StoreError> {
             unreachable!("unused")
         }
-        async fn reconcile_running_node_launch_requests(
-            &self,
-        ) -> Result<u64, crate::core::StoreError> {
-            unreachable!("unused")
-        }
         async fn list_node_launch_requests(
             &self,
         ) -> Result<Vec<crate::core::NodeLaunchRequest>, crate::core::StoreError> {
@@ -868,8 +856,6 @@ mod tests {
         .await
         .expect("measurement");
 
-        assert_eq!(extracted.source_task_id, 7);
-        assert_eq!(extracted.source_task_name, "sample");
         assert_eq!(extracted.results.len(), 1);
         let result = &extracted.results[0];
         assert_eq!(result.name, AccumulatorMetricName::Variance);

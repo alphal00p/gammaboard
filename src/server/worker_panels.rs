@@ -13,14 +13,7 @@ pub fn build_worker_panel_response(worker: &RegisteredWorkerEntry) -> PanelRespo
         .map(replace_panel)
         .collect();
 
-    PanelResponse {
-        source_id,
-        cursor: None,
-        reset_required: false,
-        panels,
-        updates,
-        poll_after_ms: Some(3000),
-    }
+    PanelResponse::new(source_id, None, panels, updates, Some(3000))
 }
 
 fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::panels::PanelSpec> {

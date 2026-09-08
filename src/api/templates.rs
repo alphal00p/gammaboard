@@ -1,8 +1,9 @@
 use crate::api::ApiError;
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TemplateFile {
     pub name: String,
     pub toml: String,
@@ -37,7 +38,7 @@ pub fn list_templates(dir: &Path) -> Result<Vec<String>, ApiError> {
 /// Loads a named template file from a template directory.
 pub fn load_template(dir: &Path, name: &str) -> Result<TemplateFile, ApiError> {
     let name = normalize_template_name(name)?;
-    let path = resolve_template_path(dir, &name)?;
+    let path = existing_template_path(dir, &name)?;
     let toml = fs::read_to_string(&path)
         .map_err(|err| ApiError::Internal(format!("failed reading {}: {err}", path.display())))?;
     Ok(TemplateFile { name, toml })
@@ -64,7 +65,7 @@ pub fn save_template(dir: &Path, name: &str, toml: &str) -> Result<TemplateFile,
 /// Deletes a named template file from a template directory.
 pub fn delete_template(dir: &Path, name: &str) -> Result<(), ApiError> {
     let name = normalize_template_name(name)?;
-    let path = resolve_template_path(dir, &name)?;
+    let path = existing_template_path(dir, &name)?;
     fs::remove_file(&path)
         .map_err(|err| ApiError::Internal(format!("failed deleting {}: {err}", path.display())))?;
     Ok(())
@@ -90,15 +91,7 @@ fn normalize_template_name(name: &str) -> Result<String, ApiError> {
     Ok(normalized)
 }
 
-fn resolve_template_path(dir: &Path, name: &str) -> Result<PathBuf, ApiError> {
-    if name.is_empty()
-        || !name.ends_with(".toml")
-        || name.contains('/')
-        || name.contains('\\')
-        || Path::new(name).file_name().and_then(|value| value.to_str()) != Some(name)
-    {
-        return Err(ApiError::BadRequest("invalid template name".to_string()));
-    }
+fn existing_template_path(dir: &Path, name: &str) -> Result<PathBuf, ApiError> {
     let path = dir.join(name);
     if !path.is_file() {
         return Err(ApiError::NotFound(format!("template {name} not found")));

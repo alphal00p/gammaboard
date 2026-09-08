@@ -37,7 +37,7 @@ impl FromStr for WorkerRole {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "evaluator" => Ok(Self::Evaluator),
-            "sampler_aggregator" | "sampler-aggregator" => Ok(Self::SamplerAggregator),
+            "sampler_aggregator" => Ok(Self::SamplerAggregator),
             other => Err(format!("unknown worker role: {other}")),
         }
     }
@@ -411,7 +411,17 @@ pub struct RunStageSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::ResultSourceRef;
+    use super::{ResultSourceRef, WorkerRole};
+    use std::str::FromStr;
+
+    #[test]
+    fn worker_role_accepts_only_canonical_spelling() {
+        assert_eq!(
+            WorkerRole::from_str("sampler_aggregator"),
+            Ok(WorkerRole::SamplerAggregator)
+        );
+        assert!(WorkerRole::from_str("sampler-aggregator").is_err());
+    }
 
     #[test]
     fn result_source_reference_roundtrips_json_safe_ids() {

@@ -8,7 +8,7 @@ use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
-pub trait PanelRenderer<C> {
+pub trait PanelProvider<C> {
     fn panel_specs(&self, ctx: &C) -> Vec<PanelSpec>;
     fn panel_states(&self, ctx: &C) -> Result<Vec<PanelState>, EngineError>;
 }
@@ -25,7 +25,7 @@ pub struct SamplerAggregatorPanelContext<'a> {
     pub provenance: &'a str,
 }
 
-impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
+impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     fn panel_specs(&self, _ctx: &EvaluatorPanelContext<'_>) -> Vec<PanelSpec> {
         vec![
             sized_panel_spec(
@@ -85,7 +85,7 @@ impl PanelRenderer<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     }
 }
 
-impl PanelRenderer<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfig {
+impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfig {
     fn panel_specs(&self, _ctx: &SamplerAggregatorPanelContext<'_>) -> Vec<PanelSpec> {
         vec![
             sized_panel_spec(

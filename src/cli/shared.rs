@@ -29,6 +29,7 @@ pub fn print_json(value: &impl serde::Serialize) {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum RoleArg {
     Evaluator,
+    #[value(name = "sampler_aggregator")]
     SamplerAggregator,
 }
 

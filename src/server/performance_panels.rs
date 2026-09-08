@@ -27,14 +27,13 @@ pub fn build_evaluator_performance_response(
         }
     }
 
-    PanelResponse {
+    PanelResponse::new(
         source_id,
-        cursor: entries.first().map(|entry| entry.id.to_string()),
-        reset_required: false,
+        entries.first().map(|entry| entry.id.to_string()),
         panels,
         updates,
-        poll_after_ms: Some(5000),
-    }
+        Some(5000),
+    )
 }
 
 pub fn build_sampler_performance_response(
@@ -84,14 +83,13 @@ fn build_performance_response<T>(
         }
     }
 
-    PanelResponse {
+    PanelResponse::new(
         source_id,
         cursor,
-        reset_required: false,
         panels,
-        updates: state_by_id.into_values().map(replace_panel).collect(),
-        poll_after_ms: Some(5000),
-    }
+        state_by_id.into_values().map(replace_panel).collect(),
+        Some(5000),
+    )
 }
 
 fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {

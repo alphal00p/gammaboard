@@ -7,6 +7,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 ## Code Map
 - `src/core`: shared domain types, task/run specs, traits, errors.
 - `src/api`: typed use cases shared by CLI and server.
+- `src/services`: internal measurement, result-combination, and stage-resolution services shared by runners and server code.
 - `src/stores`: PostgreSQL queries/read models.
 - `src/evaluation`, `src/sampling`, `src/runners`: engine semantics, queues, workers.
 - `src/process_runtime`, `src/process_worker`: process command launchers and framed JSON-RPC worker protocol.
@@ -97,7 +98,7 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   `evaluator_metadata` in `initialize`.
 
 ## Design Rules
-- Keep adapters thin; put reusable behavior in `src/api` or lower layers.
+- Keep adapters thin; put external use cases in `src/api` and runner-facing reusable behavior in `src/services` or lower layers.
 - Keep `RunSpec` run-global and immutable; its runtime settings are grouped in
   `IntegrationParams`. Task-varying sampler/materializer/transform/accumulator choices
   belong on tasks or persisted stage defaults.

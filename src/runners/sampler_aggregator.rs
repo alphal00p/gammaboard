@@ -1235,7 +1235,7 @@ where
 
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
         self.finalize_completed_task().await?;
-        let measurement_output = match crate::api::measurement::extract_task_measurement(
+        let measurement_output = match crate::services::measurement::extract_task_measurement(
             &self.store,
             self.run_id,
             &self.task,

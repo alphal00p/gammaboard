@@ -1,4 +1,5 @@
 use super::controller::progress_projector;
+use super::controller_output::{measurement_results, select_run_payload};
 use super::{
     TaskPanelContext, TaskPanelCurrentSourcePolicy, TaskPanelProjector, panel_projector,
     panel_projector_with_source,
@@ -186,9 +187,7 @@ fn children_projector() -> TaskPanelProjector {
                 "variance contribution (%)".to_string(),
                 "samples".to_string(),
             ]);
-            let payload = json!({
-                "row_action": { "kind": "select_run", "column": "run" }
-            });
+            let payload = select_run_payload();
             let visible_column_indices = (0..columns.len()).filter(|index| *index != 2).collect();
             Ok(Some(table_panel_with_payload_and_options(
                 CHILDREN_ID,
@@ -207,20 +206,15 @@ fn children_projector() -> TaskPanelProjector {
 
 type ResultKey = (crate::core::AccumulatorMetricName, Option<String>);
 
-fn measurement_results(
-    child: &crate::core::IntegrationCampaignChildOutput,
-) -> Option<&[crate::core::MeasurementResult]> {
-    match child.child.measurement.as_ref()? {
-        crate::core::TaskMeasurementOutput::Completed { results } => Some(results),
-        crate::core::TaskMeasurementOutput::Failed { .. } => None,
-    }
-}
-
 fn campaign_result_keys(
     children: &[crate::core::IntegrationCampaignChildOutput],
 ) -> Vec<ResultKey> {
     let mut keys = Vec::new();
-    for result in children.iter().filter_map(measurement_results).flatten() {
+    for result in children
+        .iter()
+        .filter_map(|child| measurement_results(&child.child))
+        .flatten()
+    {
         let key = (result.name, result.component.clone());
         if !keys.contains(&key) {
             keys.push(key);
@@ -240,7 +234,7 @@ fn result_key_label(key: &ResultKey, key_count: usize) -> String {
 }
 
 fn child_variance(child: &crate::core::IntegrationCampaignChildOutput) -> Option<f64> {
-    measurement_results(child)?
+    measurement_results(&child.child)?
         .iter()
         .try_fold(0.0, |sum, result| {
             result
@@ -281,7 +275,7 @@ fn child_row(
         json!(child.child.child_run_id),
         json!(child.coefficient),
     ];
-    let results = measurement_results(child).unwrap_or_default();
+    let results = measurement_results(&child.child).unwrap_or_default();
     for key in result_keys {
         let result = results
             .iter()

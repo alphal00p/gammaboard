@@ -2,14 +2,14 @@ mod auth;
 mod config_panels;
 mod panels;
 mod performance_panels;
+mod routes;
 mod run_panels;
 mod settings;
 mod task_panels;
 mod worker_panels;
 
 use crate::api::{
-    ApiError, db as db_api, nodes as node_api, runs as run_api, stage as stage_api,
-    templates as template_api, toml_template,
+    ApiError, nodes as node_api, runs as run_api, templates as template_api, toml_template,
 };
 use crate::core::{
     AggregationStore, ControlPlaneStore, EngineError, RunReadStore, RunSpec, RunSpecStore, RunTask,
@@ -18,7 +18,7 @@ use crate::core::{
 use crate::evaluation::AccumulatorState;
 use crate::runners::stage_context::{StageConfigProvenance, resolve_stage_context};
 use crate::server::config_panels::{
-    EvaluatorPanelContext, PanelRenderer, SamplerAggregatorPanelContext,
+    EvaluatorPanelContext, PanelProvider, SamplerAggregatorPanelContext,
 };
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelRequest, PanelResponse, PanelWidth, replace_panel,
@@ -33,11 +33,10 @@ use crate::server::worker_panels::build_worker_panel_response;
 use crate::stores::{PgStore, RunLifecycleState, RunProgress};
 use anyhow::Context;
 use axum::{
-    Router,
-    extract::{DefaultBodyLimit, Json as AxumJson, Path as AxumPath, Query, State},
+    extract::{Json as AxumJson, Path as AxumPath, Query, State},
     http::Request,
     http::StatusCode,
-    middleware::{self, Next},
+    middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post},
 };
@@ -55,7 +54,6 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::Instrument;
 
 use self::auth::{AuthConfig, SessionStatus, login, logout, require_admin_session};
@@ -388,7 +386,7 @@ pub async fn serve(
         runtime: runtime.clone(),
     };
 
-    let app = build_app(state);
+    let app = routes::build_app(state);
 
     println!("server listening on http://{}", bind);
     println!("api available at http://{}/api", bind);
@@ -680,12 +678,6 @@ struct TemplateListResponse {
 }
 
 #[derive(Serialize)]
-struct TemplateFileResponse {
-    name: String,
-    toml: String,
-}
-
-#[derive(Serialize)]
 struct RunReproTomlResponse {
     toml: String,
 }
@@ -760,87 +752,6 @@ struct HistogramBundleExportResponse {
     filename: String,
     mime_type: String,
     contents: String,
-}
-
-fn build_app(state: AppState) -> Router {
-    let public_api_routes = Router::new()
-        .route("/health", get(health_check))
-        .route("/auth/session", get(get_session_status))
-        .route("/auth/login", post(login))
-        .route("/auth/logout", post(logout));
-
-    let protected_api_routes = Router::new()
-        .route("/settings", get(settings::get_settings_overview))
-        .route("/runs", get(get_runs))
-        .route("/nodes", get(get_nodes))
-        .route("/nodes/:id/panels", get(get_node_panels))
-        .route("/runs/:id/repro-toml", get(get_run_repro_toml))
-        .route("/runs/:id/panels", get(get_run_panels))
-        .route("/runs/:id/tasks", get(get_run_tasks))
-        .route("/templates/:kind", get(list_templates).post(save_template))
-        .route(
-            "/templates/:kind/:name",
-            get(get_template).delete(delete_template),
-        )
-        .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
-        .route("/logs", get(get_logs))
-        .route("/runs/:id/performance", get(get_run_performance))
-        .route("/histogram-bundle/export", post(export_histogram_bundle))
-        .route("/runs", post(create_run))
-        .route("/runs/clone", post(clone_run))
-        .route("/runs/:id", delete(delete_run))
-        .route("/runs/:id/pause", post(pause_run))
-        .route("/runs/:id/tasks", post(add_run_tasks))
-        .route(
-            "/runs/:id/tasks/:task_id/queue-tuning",
-            post(update_run_task_queue_tuning),
-        )
-        .route("/runs/:id/tasks/:task_id", delete(delete_run_task))
-        .route("/runs/:id/auto-assign", post(auto_assign_run))
-        .route("/nodes/:id/assign", post(assign_node))
-        .route("/nodes/:id/unassign", post(unassign_node))
-        .route("/nodes/unassign-all", post(unassign_all_nodes))
-        .route("/nodes/:id/stop", post(stop_node))
-        .route("/nodes/stop-all", post(stop_all_nodes))
-        .route("/nodes/auto-run", post(auto_run_nodes))
-        .route(
-            "/node-launch-requests/claim-external",
-            post(claim_external_node_launch_request),
-        )
-        .route(
-            "/node-launch-requests/:id/progress",
-            post(update_node_launch_request_progress),
-        )
-        .route(
-            "/node-launch-requests",
-            get(get_node_launch_requests).post(create_node_launch_request),
-        )
-        .route("/admin/db/restart", post(restart_db))
-        .route("/admin/control/shutdown", post(shutdown_control_process))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_admin_session,
-        ));
-
-    Router::new()
-        .nest("/api", public_api_routes.merge(protected_api_routes))
-        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-        .layer(build_cors_layer(state.allowed_origins.clone()))
-        .layer(middleware::from_fn(request_context_middleware))
-        .with_state(state)
-}
-
-fn build_cors_layer(allowed_origins: Vec<axum::http::HeaderValue>) -> CorsLayer {
-    CorsLayer::new()
-        .allow_credentials(true)
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::DELETE,
-            axum::http::Method::OPTIONS,
-        ])
-        .allow_headers([axum::http::header::CONTENT_TYPE])
-        .allow_origin(AllowOrigin::list(allowed_origins))
 }
 
 async fn request_context_middleware(request: Request<axum::body::Body>, next: Next) -> Response {
@@ -1039,10 +950,7 @@ async fn get_template(
     AxumPath((kind, name)): AxumPath<(TemplateKind, String)>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let template = template_api::load_template(template_dir(&state, kind), &name)?;
-    json_response(TemplateFileResponse {
-        name: template.name,
-        toml: template.toml,
-    })
+    json_response(template)
 }
 
 async fn save_template(
@@ -1052,10 +960,7 @@ async fn save_template(
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let template =
         template_api::save_template(template_dir(&state, kind), &payload.name, &payload.toml)?;
-    json_response(TemplateFileResponse {
-        name: template.name,
-        toml: template.toml,
-    })
+    json_response(template)
 }
 
 async fn delete_template(
@@ -1159,8 +1064,12 @@ async fn get_run_task_output(
     let task = load_run_task(&state.store, run_id, task_id).await?;
     let effective_accumulator_config =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. }) {
-            stage_api::try_resolve_effective_sample_accumulator_config(&state.store, run_id, &task)
-                .await?
+            crate::services::stage::try_resolve_effective_sample_accumulator_config(
+                &state.store,
+                run_id,
+                &task,
+            )
+            .await?
         } else {
             None
         };
@@ -1623,9 +1532,6 @@ async fn create_node_launch_request(
 async fn get_node_launch_requests(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    node_api::reconcile_running_node_launch_requests(&state.store)
-        .await
-        .inspect_err(|err| log_control_api_error("node_launch_requests_reconcile", err))?;
     let requests = node_api::list_node_launch_requests(&state.store)
         .await
         .inspect_err(|err| log_control_api_error("node_launch_requests_list", err))?;
@@ -2201,25 +2107,27 @@ config = { cores = "$(cores:1)" }
 }
 
 async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let binary = std::env::current_exe().map_err(|err| {
-        ApiError::Internal(format!("failed to resolve current executable: {err}"))
-    })?;
-    let runtime_cli_args = state.runtime.runtime_cli_args();
-    let result = db_api::restart_local_database(&binary, &runtime_cli_args)
+    let runtime = state.runtime.runtime_config();
+    let local = runtime.local_postgres.clone();
+    let database_url = runtime.database.url.clone();
+    tokio::task::spawn_blocking(move || crate::local_db::reset_db(&local, true, &database_url))
+        .await
+        .map_err(|err| ApiError::Internal(format!("database restart task failed: {err}")))?
+        .map_err(|err| ApiError::Internal(err.to_string()))
         .inspect_err(|err| log_control_api_error("db_restart", err))?;
 
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
         action = "db_restart",
-        deleted = result.deleted,
-        started = result.started,
+        deleted = true,
+        started = true,
         "dashboard action completed"
     );
 
     json_response(serde_json::json!({
-        "deleted": result.deleted,
-        "started": result.started,
+        "deleted": true,
+        "started": true,
     }))
 }
 
