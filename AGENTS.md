@@ -117,6 +117,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - `server.toml` owns both backend API settings and deploy exposure/cleanup settings; there is no separate deploy config.
 - `server.toml` also owns the human-facing server `name` shown by the frontend connection status and settings view.
 - `--port-offset` is a global runtime/deploy option: it shifts frontend/API/Postgres ports and local Postgres state paths for every spawned child process.
+- `--postgres-trusted-network` listens on all interfaces and grants `trust`
+  authentication only to directly connected networks via PostgreSQL `samenet`.
 - GammaLoop support is controlled by the default `gammaloop` Cargo feature. `--no-default-features` builds must compile without `gammalooprs`/`gammaloop_api` and should return explicit unsupported-feature errors for GammaLoop configs.
 
 ## Maintenance

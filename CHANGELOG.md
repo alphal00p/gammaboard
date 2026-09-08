@@ -11,3 +11,7 @@
 - Added GammaLoop histogram support, complex observables, and optional MadGraph
   and MADNIS integrations.
 - Consolidated local, ITPhlies, and UBELIX deployment workflows.
+- Added database backup/restore commands, explicit version reporting,
+  reproducible UBELIX revision selection, and release upgrade/ops CI coverage.
+- Simplified managed PostgreSQL to an explicit passwordless trust model;
+  `--postgres-trusted-network` limits remote trust to directly connected networks.

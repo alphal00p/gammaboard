@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(name = "gammaboard")]
-#[command(about = "Gammaboard operations CLI", long_about = None)]
+#[command(version, about = "GammaBoard operations CLI", long_about = None)]
 pub struct Cli {
     #[arg(long = "runtime-config", global = true, default_value = DEFAULT_RUNTIME_CONFIG_PATH, value_name = "PATH")]
     runtime_config: PathBuf,
@@ -33,8 +33,8 @@ pub struct Cli {
     resource_roots: Vec<String>,
     #[arg(long = "port-offset", global = true, default_value_t = 0)]
     port_offset: u16,
-    #[arg(long = "postgres-public", global = true, action = ArgAction::SetTrue)]
-    postgres_public: bool,
+    #[arg(long = "postgres-trusted-network", global = true, action = ArgAction::SetTrue)]
+    postgres_trusted_network: bool,
     #[arg(short = 'q', long, global = true, action = ArgAction::SetTrue)]
     quiet: bool,
     #[arg(long, global = true, action = ArgAction::SetTrue)]
@@ -80,9 +80,9 @@ enum Command {
 pub async fn dispatch(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
     shared::set_json_output(cli.json);
-    if cli.postgres_public && !cli.json {
+    if cli.postgres_trusted_network && !cli.json {
         eprintln!(
-            "WARNING: --postgres-public exposes PostgreSQL on 0.0.0.0/0 with trust authentication; any host that can reach the port can connect without a password"
+            "WARNING: --postgres-trusted-network allows passwordless PostgreSQL access from directly connected networks"
         );
     }
     let runtime = RuntimeContext::load(
@@ -91,7 +91,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             database_url: cli.database_url,
             resource_roots: cli.resource_roots,
             port_offset: cli.port_offset,
-            postgres_public: cli.postgres_public,
+            postgres_trusted_network: cli.postgres_trusted_network,
         },
     )?;
     let config = runtime.runtime_config();
@@ -114,6 +114,7 @@ mod tests {
     #[test]
     fn public_command_tree_uses_release_names() {
         let command = Cli::command();
+        assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
         let run = command.find_subcommand("run").expect("run command");
         assert!(run.find_subcommand("create").is_some());
         assert!(run.find_subcommand("add").is_none());
@@ -141,6 +142,15 @@ mod tests {
             Cli::try_parse_from(["gammaboard", "run", "task", "remove", "demo", "1", "--yes",])
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn trusted_network_postgres_flag_is_explicit() {
+        assert!(
+            Cli::try_parse_from(["gammaboard", "--postgres-trusted-network", "db", "status"])
+                .is_ok()
+        );
+        assert!(Cli::try_parse_from(["gammaboard", "--postgres-public", "db", "status"]).is_err());
     }
 
     #[test]

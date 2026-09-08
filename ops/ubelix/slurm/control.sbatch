@@ -64,7 +64,7 @@ echo "single_node: ${SINGLE_NODE}"
 
 postgres_args=()
 if [[ "${SINGLE_NODE}" == "0" ]]; then
-  postgres_args+=(--postgres-public)
+  postgres_args+=(--postgres-trusted-network)
 fi
 
 exec env -u PGTZ -u PGOPTIONS \

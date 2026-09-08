@@ -1,4 +1,5 @@
 //! Sampler task executor orchestration.
+#![allow(clippy::too_many_arguments)]
 //!
 //! This module owns one active sampler task at a time:
 //! - restore/build the sampler and accumulator for that task

@@ -338,6 +338,7 @@ fn record_pdf_adaptation_values(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_pdf_adaptation_values(
     ingested_samples: &mut usize,
     output_state: &mut PdfAdaptationImageOutputState,

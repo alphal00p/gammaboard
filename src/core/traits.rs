@@ -1,4 +1,5 @@
 //! Store contracts for DB-backed control-plane, queue, and lifecycle APIs.
+#![allow(clippy::too_many_arguments)]
 
 use super::errors::StoreError;
 use super::models::{

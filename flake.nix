@@ -1,5 +1,5 @@
 {
-  description = "Gammaboard development shell";
+  description = "GammaBoard development shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 mod controller;
 mod controller_output;
 mod full_accumulator;

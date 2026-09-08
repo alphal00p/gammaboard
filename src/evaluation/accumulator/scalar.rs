@@ -297,7 +297,9 @@ fn reduced_square_deviation_stderr(
     mean_stderr: f64,
 ) -> Option<f64> {
     let variance_stderr = variance_stderr?;
-    if !(variance > 0.0) || !(mean_abs > 0.0) {
+    if variance.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+        || mean_abs.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+    {
         return None;
     }
     let rsd = variance.sqrt() / mean_abs;

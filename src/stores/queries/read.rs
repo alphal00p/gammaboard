@@ -780,6 +780,7 @@ pub(crate) async fn get_latest_task_stage_snapshot_id(
     .map(|id| id.map(|id| id.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn get_runtime_logs(
     pool: &PgPool,
     limit: i64,

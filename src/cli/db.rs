@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 use gammaboard::config::RuntimeConfig;
 use gammaboard::local_db;
+use std::path::PathBuf;
 
 #[derive(Debug, Args)]
 pub struct DbArgs {
@@ -26,8 +27,20 @@ pub enum DbCommand {
         #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
         yes: bool,
     },
-    /// Dump the configured database as SQL
-    DumpSql,
+    /// Create a compressed backup of the configured database
+    Backup {
+        /// Output path (defaults to backups/gammaboard-<timestamp>.dump)
+        #[arg(short, long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+    /// Replace the configured database with a backup and apply pending migrations
+    Restore {
+        /// Backup produced by `gammaboard db backup`
+        #[arg(value_name = "PATH")]
+        backup: PathBuf,
+        #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
+        yes: bool,
+    },
     /// Recreate the local Postgres cluster and run migrations
     Reset {
         #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
@@ -45,7 +58,10 @@ pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
         DbCommand::Start { .. } => local_db::start_db(local, &config.database.url),
         DbCommand::Stop => local_db::stop_db(local),
         DbCommand::Delete { yes } => local_db::delete_db(local, yes),
-        DbCommand::DumpSql => local_db::dump_db_sql(local, &config.database.url),
+        DbCommand::Backup { output } => local_db::backup_db(&config.database.url, output),
+        DbCommand::Restore { backup, yes } => {
+            local_db::restore_db(local, &config.database.url, &backup, yes)
+        }
         DbCommand::Reset { yes } => local_db::reset_db(local, yes, &config.database.url),
     }
 }

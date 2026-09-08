@@ -93,6 +93,7 @@ fn desired_assignment_raw(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn node_raw(
     (
         name,

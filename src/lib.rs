@@ -1,4 +1,4 @@
-//! Gammaboard - Adaptive Numerical Integration System
+//! GammaBoard - Adaptive Numerical Integration System
 //!
 //! This library provides database abstractions for distributed adaptive
 //! numerical integration using PostgreSQL as a work queue.

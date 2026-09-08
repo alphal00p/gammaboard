@@ -31,17 +31,21 @@ just --justfile ops/ubelix/justfile remote_folder=$USER/gammaboard sync-ops
 Run on a UBELIX login node:
 
 ```bash
-python ubelix.py build gammaloop
-python ubelix.py build gammaboard
+python ubelix.py build gammaloop --revision <COMMIT_OR_TAG>
+python ubelix.py build gammaboard --revision <COMMIT_OR_TAG>
 python ubelix.py build apptainer resources/runtimes/madnis/madnis.sif resources/runtimes/madnis/apptainer.def
 ```
 
 GammaBoard and GammaLoop are service images under `images/`; each build resolves
-the remote repository's current `HEAD`, records the chosen commit in
+the requested commit, tag, branch, or ref (default `HEAD`), records both the
+request and resolved commit in
 `images/<family>/<family>.meta`, and replaces the current image. Build logs go
 to `logs/slurm/build`. Generic process-runtime builds take explicit output and
 definition paths; stage the definition and its sources under
 `resources/runtimes/` first.
+
+For reproducible release images, pass a full 40-character commit SHA. The build
+checks out that SHA detached and embeds it in the GammaBoard binary provenance.
 
 ## Start
 
@@ -120,6 +124,10 @@ python ubelix.py down
 When the selected server config enables authentication, protected commands
 require `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`. The checked-in
 UBELIX configs are passwordless and should only be exposed to a trusted network.
+PostgreSQL follows the same model: the control job enables
+`--postgres-trusted-network`, whose `samenet trust` rule admits directly
+connected UBELIX networks. Every user and device able to reach that port is
+therefore part of the deployment trust boundary.
 
 ## UBELIX Layout
 

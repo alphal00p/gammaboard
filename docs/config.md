@@ -27,11 +27,12 @@ gammaboard \
   <COMMAND>
 ```
 
-Use `--postgres-public` only when workers on other machines or Slurm nodes must
-connect to the local Postgres instance. The embedded PostgreSQL URL uses a fixed
-public development credential for the loopback-bound managed database.
-`--postgres-public` preserves passwordless remote operation but prints a warning
-that PostgreSQL is exposed with `trust` authentication.
+Use `--postgres-trusted-network` only when workers on other machines or Slurm
+nodes must connect to the managed Postgres instance. It listens on all network
+interfaces but PostgreSQL accepts passwordless connections only from directly
+connected networks through its `samenet trust` rule. Network access is the
+security boundary: every device and user able to reach the database port must
+be trusted.
 
 Relative evaluator resources, such as GammaLoop `state_folder`, resolve through `resources.roots` in order. Absolute paths are used as-is.
 

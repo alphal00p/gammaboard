@@ -57,7 +57,7 @@ describe("App Component", () => {
 
   test("renders the empty runs view and primary navigation", async () => {
     await renderApp();
-    expect(screen.getByAltText(/Gammaboard/i)).toBeInTheDocument();
+    expect(screen.getByAltText(/GammaBoard/i)).toBeInTheDocument();
     expect(await screen.findByText(/Connected to local/i)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Management/i })).toBeInTheDocument();

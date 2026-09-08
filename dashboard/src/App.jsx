@@ -39,7 +39,7 @@ const DashboardHeader = () => {
         <Box
           component="img"
           src={gammaboardLogo}
-          alt="Gammaboard"
+          alt="GammaBoard"
           sx={{ display: "block", width: "min(100%, 320px)", height: "auto", mb: 1 }}
         />
         <Typography variant="body2" color="text.secondary">

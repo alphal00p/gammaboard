@@ -32,7 +32,6 @@ APPTAINER_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/build.sbatch"
 IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
 FRONTEND_PORT = 8080
 DB_PORT = 5400
-DB_PASSWORD = "NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ"
 DEFAULT_SSH_HOST = "submit03.unibe.ch"
 DEFAULT_CONTROL_TIME = "00:20:00"
 DB_PATH = os.path.join(WORKSPACE_ROOT, "resources/db")
@@ -323,7 +322,7 @@ def copy_to_clipboard_osc52(text: str) -> bool:
 
 
 def database_url(control_node: str, *, port_offset: int | None = None) -> str:
-    return f"postgresql://postgres:{DB_PASSWORD}@{control_node}:{db_port(port_offset)}/gammaboard_db"
+    return f"postgresql://postgres@{control_node}:{db_port(port_offset)}/gammaboard_db"
 
 
 def login(
@@ -1001,8 +1000,10 @@ def command_build(args: argparse.Namespace) -> None:
     env = os.environ.copy()
     env["GAMMABOARD_WORKSPACE_ROOT"] = WORKSPACE_ROOT
     if args.build_kind == "gammaboard":
+        env["GAMMABOARD_REVISION"] = args.revision
         result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GB_BUILD_SBATCH], env=env)
     elif args.build_kind == "gammaloop":
+        env["GAMMALOOP_REVISION"] = args.revision
         result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GL_BUILD_SBATCH], env=env)
     elif args.build_kind == "apptainer":
         result = run(
@@ -1115,10 +1116,16 @@ def parser() -> argparse.ArgumentParser:
     build_gammaboard = build_sub.add_parser(
         "gammaboard", help="submit the GammaBoard image build"
     )
+    build_gammaboard.add_argument(
+        "--revision", default="HEAD", help="Git commit, tag, branch, or ref to build"
+    )
     build_gammaboard.set_defaults(func=command_build)
 
     build_gammaloop = build_sub.add_parser(
         "gammaloop", help="submit the GammaLoop image build"
+    )
+    build_gammaloop.add_argument(
+        "--revision", default="HEAD", help="Git commit, tag, branch, or ref to build"
     )
     build_gammaloop.set_defaults(func=command_build)
 

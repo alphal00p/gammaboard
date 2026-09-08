@@ -18,7 +18,7 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_PASSWORD: NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: gammaboard_db
         ports:
           - 5400:5432
@@ -36,14 +36,21 @@ jobs:
       - run: cargo fmt --check
       - run: cargo check --locked
       - run: cargo check --locked --no-default-features
-      - run: cargo clippy --locked --all-targets --all-features
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked
+      - name: Test migration upgrade from the previous schema
+        run: |
+          createdb -h 127.0.0.1 -p 5400 -U postgres gammaboard_upgrade_test
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5400 -U postgres \
+            -d gammaboard_upgrade_test -f migrations/202608180001_initial_schema.sql
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5400 -U postgres \
+            -d gammaboard_upgrade_test -f tests/migration_upgrade.sql
+          dropdb -h 127.0.0.1 -p 5400 -U postgres gammaboard_upgrade_test
       - name: Run PostgreSQL store integration tests
         run: |
           for migration in migrations/*.sql; do
-            PGPASSWORD=NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ \
-              psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5400 -U postgres -d gammaboard_db \
-              -f "$migration"
+            psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5400 -U postgres \
+              -d gammaboard_db -f "$migration"
           done
           cargo test --locked --test pg_store_integration -- --ignored
       - name: Run authenticated API integration test
@@ -64,6 +71,7 @@ jobs:
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
       - run: npm ci
+      - run: npm audit --omit=dev
       - run: npm run lint
       - run: npm test
       - run: npm run build
@@ -85,11 +93,11 @@ jobs:
           /tmp/gammaboard-process-wheel/bin/python -c 'import gammaboard_process'
       - run: python -m pip install process_api/python/dist/*.whl
       - run: python -m pip install --no-deps -e integrations/madgraph
-      - run: python -m pytest -q integrations/madgraph/tests
+      - run: python -m pytest -q process_api/python/tests integrations/madgraph/tests
       - name: Reject retired CLI and protocol spellings
         run: |
           ! rg -n '(run add|run task add|node auto-run|deploy run|gammaboard-jsonrpc-v1)' \
-            README.md TODO.md docs integrations ops resources process_api justfile
+            README.md docs integrations ops resources process_api justfile
       - name: Validate tracked TOML
         run: |
           python - <<'PY'
@@ -103,3 +111,25 @@ jobs:
               with open(path, "rb") as handle:
                   tomllib.load(handle)
           PY
+
+  ubelix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install --upgrade pytest
+      - run: python -m pytest -q ops/ubelix/tests
+      - name: Validate UBELIX Python and shell entry points
+        run: |
+          python -m py_compile ops/ubelix/ubelix.py
+          bash -n ops/ubelix/build/common.sh
+          bash -n ops/ubelix/build/build.sbatch
+          bash -n ops/ubelix/build/gammaboard.sbatch
+          bash -n ops/ubelix/build/gammaloop.sbatch
+          bash -n ops/ubelix/slurm/control.sbatch
+          bash -n ops/ubelix/slurm/smoke.sbatch
+          bash -n ops/ubelix/slurm/worker.sbatch
+          bash -n ops/ubelix/sync_ops.sh

@@ -69,7 +69,8 @@ export APPTAINER_TMPDIR="${TMP_BASE}"
 export APPTAINER_CACHEDIR="${CACHE_BASE}"
 export CARGO_INCREMENTAL
 
-GAMMABOARD_SHA="$(git_head_sha "${GAMMABOARD_REPO}")"
+GAMMABOARD_REVISION="${GAMMABOARD_REVISION:-HEAD}"
+GAMMABOARD_SHA="$(git_resolve_sha "${GAMMABOARD_REPO}" "${GAMMABOARD_REVISION}")"
 
 GB_OUT_IMAGE="${GB_IMAGE_DIR}/gammaboard.sif"
 GB_TMP_IMAGE="${GB_IMAGE_DIR}/.gammaboard.tmp-${SLURM_JOB_ID:-$$}.sif"
@@ -116,7 +117,9 @@ echo "building native gammaboard binary"
 CARGO_GB_START="$(date +%s)"
 (
   cd "${GB_SRC_DIR}"
-  CARGO_TARGET_DIR="${RUST_TARGET_DIR}" cargo build --release
+  CARGO_TARGET_DIR="${RUST_TARGET_DIR}" \
+    GAMMABOARD_GIT_REVISION="${GAMMABOARD_SHA}" \
+    cargo build --release
 )
 CARGO_GB_END="$(date +%s)"
 BIN_STAGE_START="$(date +%s)"
@@ -168,6 +171,7 @@ write_meta "${GB_META_FILE}" \
 kind=gammaboard \
 def_path="${GAMMABOARD_DEF_REL}" \
 gammaboard_repo="${GAMMABOARD_REPO}" \
+gammaboard_revision="${GAMMABOARD_REVISION}" \
 gammaboard_sha="${GAMMABOARD_SHA}" \
 gammaboard_git_dirty="${GAMMABOARD_GIT_DIRTY}" \
 slurm_job_id="${SLURM_JOB_ID:-}" \

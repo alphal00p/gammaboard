@@ -10,7 +10,7 @@ use gammaboard::api::runs as run_api;
 use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, RunReadStore, RunTaskSpec, RunTaskStore, SourceRefSpec};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -162,7 +162,7 @@ async fn resume_run(store: &PgStore, run_ref: &str, max_evaluators: Option<usize
     Ok(())
 }
 
-async fn run_create(store: &PgStore, config_file: &PathBuf) -> Result<()> {
+async fn run_create(store: &PgStore, config_file: &Path) -> Result<()> {
     let config = run_api::load_run_add_config_file(config_file).map_err(api_to_anyhow)?;
     let created = run_api::create_run(store, config)
         .await

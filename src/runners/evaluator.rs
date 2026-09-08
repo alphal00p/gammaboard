@@ -1,4 +1,5 @@
 //! Evaluator worker runner orchestration.
+#![allow(clippy::too_many_arguments)]
 
 use crate::core::{
     BatchClaim, BatchFailOutcome, BatchTransformConfig, EngineError, EvalError, EvaluatorConfig,

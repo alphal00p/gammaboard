@@ -82,6 +82,28 @@ Useful locations:
   errors can fail the task.
 - Stale workers: stop/unassign from the dashboard or use the profile helper
   command, then start fresh workers.
+
+## Database Backup And Restore
+
+Create a compressed backup of the database selected by the runtime config:
+
+```bash
+gammaboard db backup
+gammaboard db backup --output /safe/path/gammaboard.dump
+```
+
+The default output is `backups/gammaboard-<timestamp>.dump`. To restore, first
+stop the GammaBoard server and workers so they cannot write concurrently, then
+run:
+
+```bash
+gammaboard db restore /safe/path/gammaboard.dump
+```
+
+Restore replaces the configured database contents and applies pending
+migrations afterward, so a backup from the immediately preceding schema can be
+used during an upgrade. In scripts, acknowledge replacement with `--yes`.
+
 ## Capacity Planning
 
 Each `node run` process keeps one PostgreSQL connection for leases and control

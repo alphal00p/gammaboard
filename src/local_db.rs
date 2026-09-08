@@ -3,7 +3,7 @@ use anyhow::{Context, Result, anyhow, bail};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{
-    fs::{self, File},
+    fs,
     io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -105,7 +105,7 @@ fn start_postgres(local: &LocalPostgresConfig, database_url: &str) -> Result<()>
     )
 }
 
-fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+fn ensure_database(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     let connection = LocalDbConnection::from_url(database_url)?;
     if !database_exists(local, database_url)? {
         let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
@@ -124,6 +124,12 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
     } else {
         println!("database '{}' already exists", connection.database);
     }
+    Ok(())
+}
+
+fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
+    ensure_database(local, database_url)?;
+    let connection = LocalDbConnection::from_url(database_url)?;
     println!("applying migrations");
     let migrations_dir = resolve_migrations_dir();
     run_command(
@@ -239,7 +245,14 @@ pub fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
 }
 
 pub fn delete_db(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
-    confirm_delete(local, assume_yes)?;
+    confirm(
+        assume_yes,
+        "db delete",
+        &format!(
+            "Delete local postgres state? This deletes '{}' and '{}'.",
+            local.data_dir, local.socket_dir
+        ),
+    )?;
     stop_db(local)?;
     let removed_data = remove_path_if_exists(&local.data_dir)?;
     let removed_socket = remove_path_if_exists(&local.socket_dir)?;
@@ -256,18 +269,15 @@ pub fn delete_db(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn confirm_delete(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
+fn confirm(assume_yes: bool, command: &str, prompt: &str) -> Result<()> {
     if assume_yes {
         return Ok(());
     }
     if !io::stdin().is_terminal() {
-        bail!("db delete requires --yes in non-interactive mode");
+        bail!("{command} requires --yes in non-interactive mode");
     }
 
-    print!(
-        "Delete local postgres state? This deletes '{}' and '{}'. [y/N]: ",
-        local.data_dir, local.socket_dir
-    );
+    print!("{prompt} [y/N]: ");
     io::stdout().flush().context("failed to flush stdout")?;
     let mut line = String::new();
     io::stdin()
@@ -277,36 +287,75 @@ fn confirm_delete(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
     if answer == "y" || answer == "yes" {
         Ok(())
     } else {
-        bail!("aborted delete");
+        bail!("aborted {command}");
     }
 }
 
-pub fn dump_db_sql(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
-    let connection = LocalDbConnection::from_url(database_url)?;
-    let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
-    fs::create_dir_all("dump").context("failed to create dump directory")?;
+pub fn backup_db(database_url: &str, output: Option<PathBuf>) -> Result<()> {
+    require_commands(&["pg_dump"])?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock moved backwards")?
         .as_secs();
-    let output_path = PathBuf::from(format!("dump/db-{timestamp}.sql"));
-    let output = File::create(&output_path)
-        .with_context(|| format!("failed to create {}", output_path.display()))?;
-    let status = Command::new("pg_dump")
-        .arg("-h")
-        .arg(&socket_dir)
-        .arg("-p")
-        .arg(connection.port.to_string())
-        .arg("-U")
-        .arg(&connection.user)
-        .arg(&connection.database)
-        .stdout(Stdio::from(output))
-        .status()
-        .context("failed to spawn pg_dump")?;
-    if !status.success() {
-        bail!("pg_dump failed with status {status}");
+    let output_path =
+        output.unwrap_or_else(|| PathBuf::from(format!("backups/gammaboard-{timestamp}.dump")));
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    run_command(
+        Command::new("pg_dump")
+            .arg("--format=custom")
+            .arg("--file")
+            .arg(&output_path)
+            .arg(database_url),
+        "pg_dump",
+    )?;
     println!("{}", output_path.display());
+    Ok(())
+}
+
+pub fn restore_db(
+    local: &LocalPostgresConfig,
+    database_url: &str,
+    backup: &Path,
+    assume_yes: bool,
+) -> Result<()> {
+    if !backup.is_file() {
+        bail!(
+            "backup does not exist or is not a file: {}",
+            backup.display()
+        );
+    }
+    confirm(
+        assume_yes,
+        "db restore",
+        "Replace the configured database with this backup? Current data will be overwritten.",
+    )?;
+    require_commands(&["initdb", "pg_ctl", "createdb", "psql", "sqlx", "pg_restore"])?;
+    start_postgres_cluster(local, database_url)?;
+    ensure_database(local, database_url)?;
+    run_command(
+        Command::new("psql")
+            .arg("--variable=ON_ERROR_STOP=1")
+            .arg(database_url)
+            .arg("--command")
+            .arg("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"),
+        "psql reset public schema",
+    )?;
+    run_command(
+        Command::new("pg_restore")
+            .arg("--no-owner")
+            .arg("--exit-on-error")
+            .arg("--dbname")
+            .arg(database_url)
+            .arg(backup),
+        "pg_restore",
+    )?;
+    ensure_database_and_migrations(local, database_url)?;
+    println!("restored {}", backup.display());
     Ok(())
 }
 
@@ -418,14 +467,21 @@ fn ensure_pg_hba_rule(local: &LocalPostgresConfig) -> Result<()> {
     if !hba_path.exists() {
         return Ok(());
     }
-    let rule = format!("host all all {} trust", local.host_auth_cidr.trim());
+    let trust_scope = postgres_trust_scope(&local.listen_addresses);
+    let rule = format!("host all all {trust_scope} trust");
     let existing = fs::read_to_string(&hba_path)
         .with_context(|| format!("failed to read {}", hba_path.display()))?;
-    if existing.lines().any(|line| line.trim() == rule) {
-        return Ok(());
-    }
-    let mut content = existing;
-    if !content.ends_with('\n') {
+    let managed_rules = [
+        "host all all 127.0.0.1/32 trust",
+        "host all all 0.0.0.0/0 trust",
+        "host all all samenet trust",
+    ];
+    let mut content = existing
+        .lines()
+        .filter(|line| !managed_rules.contains(&line.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !content.is_empty() {
         content.push('\n');
     }
     content.push_str(&rule);
@@ -433,6 +489,18 @@ fn ensure_pg_hba_rule(local: &LocalPostgresConfig) -> Result<()> {
     fs::write(&hba_path, content)
         .with_context(|| format!("failed to update {}", hba_path.display()))?;
     Ok(())
+}
+
+fn postgres_trust_scope(listen_addresses: &str) -> &'static str {
+    let mut addresses = listen_addresses.split(',').map(str::trim).peekable();
+    let has_addresses = addresses.peek().is_some();
+    if has_addresses
+        && addresses.all(|address| matches!(address, "localhost" | "127.0.0.1" | "::1"))
+    {
+        "127.0.0.1/32"
+    } else {
+        "samenet"
+    }
 }
 
 fn ensure_postgres_data_dir_permissions(local: &LocalPostgresConfig) -> Result<()> {
@@ -496,5 +564,18 @@ impl LocalDbConnection {
             database,
             port,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::postgres_trust_scope;
+
+    #[test]
+    fn postgres_trust_scope_follows_listen_exposure() {
+        assert_eq!(postgres_trust_scope("localhost"), "127.0.0.1/32");
+        assert_eq!(postgres_trust_scope("127.0.0.1, ::1"), "127.0.0.1/32");
+        assert_eq!(postgres_trust_scope("0.0.0.0"), "samenet");
+        assert_eq!(postgres_trust_scope("*"), "samenet");
     }
 }

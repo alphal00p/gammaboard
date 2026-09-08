@@ -35,8 +35,8 @@ a central value of `1.0`. Stop the workers and deployment with:
 # Press Ctrl-C in the deployment terminal.
 ```
 
-This local workflow intentionally uses public development credentials and
-passwordless control on loopback. Security configuration is optional. A
+This local workflow intentionally uses passwordless PostgreSQL and dashboard
+control on loopback. Security configuration is optional. A
 deployment is an operator tool: anyone who can reach a passwordless deployment,
 or knows its configured admin password, has full administrative access,
 including creating runs that launch configured process commands. Keep that
@@ -73,6 +73,8 @@ For UBELIX Slurm/Apptainer operation, use
 - `gammaboard node`: run workers, list nodes, assign roles, unassign, and request shutdown.
 - `gammaboard db`: manage the local PostgreSQL instance used by the active runtime config.
 - `gammaboard server`: run only the backend API for API-only/manual setups.
+
+Run `gammaboard --version` to print the release version.
 
 The repo-root `./gammaboard` helper builds the current CLI before forwarding
 arguments to it. It uses `dev-optim` by default, `GAMMABOARD_PROFILE=release`

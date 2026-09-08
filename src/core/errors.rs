@@ -58,7 +58,7 @@ impl From<serde_json::Error> for StoreError {
 }
 
 #[derive(Debug, Clone, Error)]
-pub enum GammaboardEngineError {
+pub enum GammaBoardEngineError {
     #[error("evaluation error: {0}")]
     Eval(String),
     #[error("build error: {0}")]
@@ -75,7 +75,7 @@ pub enum GammaboardEngineError {
     Serialization(String),
 }
 
-impl GammaboardEngineError {
+impl GammaBoardEngineError {
     pub fn eval(message: impl Into<String>) -> Self {
         Self::Eval(message.into())
     }
@@ -101,39 +101,39 @@ impl GammaboardEngineError {
     }
 }
 
-pub type EvalError = GammaboardEngineError;
-pub type BuildError = GammaboardEngineError;
-pub type EngineError = GammaboardEngineError;
+pub type EvalError = GammaBoardEngineError;
+pub type BuildError = GammaBoardEngineError;
+pub type EngineError = GammaBoardEngineError;
 
-impl From<std::io::Error> for GammaboardEngineError {
+impl From<std::io::Error> for GammaBoardEngineError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value.to_string())
     }
 }
 
-impl From<serde_json::Error> for GammaboardEngineError {
+impl From<serde_json::Error> for GammaBoardEngineError {
     fn from(value: serde_json::Error) -> Self {
         Self::Serialization(value.to_string())
     }
 }
 
-/// Map any `Display` error into a `GammaboardEngineError` variant by its
+/// Map any `Display` error into a `GammaBoardEngineError` variant by its
 /// stringified message, replacing `.map_err(|err| X::ctor(err.to_string()))`.
 pub trait EngineResultExt<T> {
-    fn engine_err(self) -> Result<T, GammaboardEngineError>;
-    fn build_err(self) -> Result<T, GammaboardEngineError>;
-    fn eval_err(self) -> Result<T, GammaboardEngineError>;
+    fn engine_err(self) -> Result<T, GammaBoardEngineError>;
+    fn build_err(self) -> Result<T, GammaBoardEngineError>;
+    fn eval_err(self) -> Result<T, GammaBoardEngineError>;
 }
 
 impl<T, E: std::fmt::Display> EngineResultExt<T> for Result<T, E> {
-    fn engine_err(self) -> Result<T, GammaboardEngineError> {
-        self.map_err(|err| GammaboardEngineError::engine(err.to_string()))
+    fn engine_err(self) -> Result<T, GammaBoardEngineError> {
+        self.map_err(|err| GammaBoardEngineError::engine(err.to_string()))
     }
-    fn build_err(self) -> Result<T, GammaboardEngineError> {
-        self.map_err(|err| GammaboardEngineError::build(err.to_string()))
+    fn build_err(self) -> Result<T, GammaBoardEngineError> {
+        self.map_err(|err| GammaBoardEngineError::build(err.to_string()))
     }
-    fn eval_err(self) -> Result<T, GammaboardEngineError> {
-        self.map_err(|err| GammaboardEngineError::eval(err.to_string()))
+    fn eval_err(self) -> Result<T, GammaBoardEngineError> {
+        self.map_err(|err| GammaBoardEngineError::eval(err.to_string()))
     }
 }
 

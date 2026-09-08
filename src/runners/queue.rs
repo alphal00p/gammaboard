@@ -1119,9 +1119,11 @@ mod tests {
     use serde_json::Value as JsonValue;
     use std::sync::{Arc, Mutex};
 
+    type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
+
     #[derive(Clone, Default)]
     struct RecordingStore {
-        inserts: Arc<Mutex<Vec<(f64, Vec<i64>)>>>,
+        inserts: RecordedInserts,
         fetch_completed_calls: Arc<Mutex<usize>>,
     }
 

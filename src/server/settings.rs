@@ -31,7 +31,6 @@ pub(super) async fn get_settings_overview(
             "local_postgres": {
                 "max_connections": runtime_config.local_postgres.max_connections,
                 "listen_addresses": runtime_config.local_postgres.listen_addresses,
-                "host_auth_cidr": runtime_config.local_postgres.host_auth_cidr,
                 "shared_buffers": runtime_config.local_postgres.shared_buffers,
                 "effective_cache_size": runtime_config.local_postgres.effective_cache_size,
                 "work_mem": runtime_config.local_postgres.work_mem,

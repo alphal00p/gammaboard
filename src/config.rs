@@ -61,8 +61,6 @@ pub struct LocalPostgresConfig {
     pub max_connections: u32,
     #[serde(default = "default_listen_addresses")]
     pub listen_addresses: String,
-    #[serde(default = "default_host_auth_cidr")]
-    pub host_auth_cidr: String,
     #[serde(default = "default_shared_buffers")]
     pub shared_buffers: String,
     #[serde(default = "default_effective_cache_size")]
@@ -105,7 +103,6 @@ impl Default for LocalPostgresConfig {
             log_file: default_postgres_log_file(),
             max_connections: default_max_connections(),
             listen_addresses: default_listen_addresses(),
-            host_auth_cidr: default_host_auth_cidr(),
             shared_buffers: default_shared_buffers(),
             effective_cache_size: default_effective_cache_size(),
             work_mem: default_work_mem(),
@@ -167,9 +164,7 @@ pub fn read_toml_with_default_fallback(
 }
 
 fn default_database_url() -> String {
-    // Public development credential for the loopback-only managed Postgres.
-    "postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:5400/gammaboard_db"
-        .to_string()
+    "postgresql://postgres@127.0.0.1:5400/gammaboard_db".to_string()
 }
 
 fn default_persist_runtime_logs() -> bool {
@@ -206,10 +201,6 @@ fn default_shared_buffers() -> String {
 
 fn default_listen_addresses() -> String {
     "localhost".to_string()
-}
-
-fn default_host_auth_cidr() -> String {
-    "127.0.0.1/32".to_string()
 }
 
 fn default_effective_cache_size() -> String {

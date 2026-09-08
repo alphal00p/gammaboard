@@ -9,7 +9,7 @@ pub struct RuntimeOverrides {
     pub database_url: Option<String>,
     pub resource_roots: Vec<String>,
     pub port_offset: u16,
-    pub postgres_public: bool,
+    pub postgres_trusted_network: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct RuntimeContext {
     primary_resource_root: PathBuf,
     database_url_override: Option<String>,
     port_offset: u16,
-    postgres_public: bool,
+    postgres_trusted_network: bool,
 }
 
 impl RuntimeContext {
@@ -30,7 +30,7 @@ impl RuntimeContext {
         let runtime_config_path = runtime_config_path.as_ref().to_path_buf();
         let database_url_override = overrides.database_url.clone();
         let port_offset = overrides.port_offset;
-        let postgres_public = overrides.postgres_public;
+        let postgres_trusted_network = overrides.postgres_trusted_network;
         let mut runtime_config = RuntimeConfig::load(&runtime_config_path)?;
         apply_runtime_overrides(&mut runtime_config, overrides)?;
         normalize_local_postgres_paths(
@@ -45,7 +45,7 @@ impl RuntimeContext {
             primary_resource_root,
             database_url_override,
             port_offset,
-            postgres_public,
+            postgres_trusted_network,
         })
     }
 
@@ -82,8 +82,8 @@ impl RuntimeContext {
             args.push("--port-offset".to_string());
             args.push(self.port_offset.to_string());
         }
-        if self.postgres_public {
-            args.push("--postgres-public".to_string());
+        if self.postgres_trusted_network {
+            args.push("--postgres-trusted-network".to_string());
         }
         args
     }
@@ -124,14 +124,19 @@ fn apply_runtime_overrides(config: &mut RuntimeConfig, overrides: RuntimeOverrid
     if overrides.port_offset != 0 {
         apply_port_offset(config, overrides.port_offset)?;
     }
-    apply_local_postgres_overrides(&mut config.local_postgres, overrides.postgres_public);
+    apply_local_postgres_overrides(
+        &mut config.local_postgres,
+        overrides.postgres_trusted_network,
+    );
     Ok(())
 }
 
-fn apply_local_postgres_overrides(local_postgres: &mut LocalPostgresConfig, postgres_public: bool) {
-    if postgres_public {
+fn apply_local_postgres_overrides(
+    local_postgres: &mut LocalPostgresConfig,
+    postgres_trusted_network: bool,
+) {
+    if postgres_trusted_network {
         local_postgres.listen_addresses = "0.0.0.0".to_string();
-        local_postgres.host_auth_cidr = "0.0.0.0/0".to_string();
     }
 }
 

@@ -1908,204 +1908,6 @@ async fn create_and_maybe_resolve_node_launch_request(
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn task_list_response_omits_duplicate_and_runtime_only_fields() {
-        let task = RunTask {
-            id: 7,
-            run_id: 3,
-            name: "accumulator".to_string(),
-            sequence_nr: 1,
-            task: RunTaskSpec::SetAccumulator {
-                accumulator: crate::core::AccumulatorConfig::Empty,
-            },
-            spawned_from_snapshot_id: None,
-            state: RunTaskState::Pending,
-            nr_produced_samples: 11,
-            nr_completed_samples: 9,
-            nr_produced_samples_including_children: 11,
-            nr_completed_samples_including_children: 9,
-            cpu_seconds: 1800.0,
-            cpu_seconds_including_children: 3600.0,
-            failure_reason: None,
-            started_at: None,
-            completed_at: None,
-            failed_at: None,
-            created_at: chrono::Utc::now(),
-            task_toml: "kind = \"set_accumulator\"".to_string(),
-            measurement_output: None,
-            controller_output: None,
-        };
-        let value = serde_json::to_value(RunTaskResponse::new(task, Some(8), Some(2))).unwrap();
-
-        assert_eq!(value["id"], "7");
-        assert_eq!(value["cpu_hours_including_children"], 1.0);
-        assert_eq!(value["task_kind"], "set_accumulator");
-        assert_eq!(value["goal_label"], "-");
-        assert_eq!(value["is_sample"], false);
-        for omitted in [
-            "task",
-            "task_toml",
-            "nr_produced_samples",
-            "nr_completed_samples",
-            "cpu_seconds",
-            "cpu_seconds_including_children",
-            "started_at",
-            "completed_at",
-            "created_at",
-            "measurement_output",
-            "controller_output",
-        ] {
-            assert!(value.get(omitted).is_none(), "unexpected field {omitted}");
-        }
-    }
-
-    #[test]
-    fn template_kinds_are_strictly_allowlisted() {
-        assert_eq!(
-            serde_json::from_str::<TemplateKind>(r#""runs""#).unwrap(),
-            TemplateKind::Runs
-        );
-        assert_eq!(
-            serde_json::from_str::<TemplateKind>(r#""tasks""#).unwrap(),
-            TemplateKind::Tasks
-        );
-        assert_eq!(
-            serde_json::from_str::<TemplateKind>(r#""nodes""#).unwrap(),
-            TemplateKind::Nodes
-        );
-        assert!(serde_json::from_str::<TemplateKind>(r#""other""#).is_err());
-    }
-
-    #[test]
-    fn security_warnings_keep_passwordless_loopback_deployments_quiet() {
-        let mut config: ServerConfig =
-            toml::from_str(DEFAULT_SERVER_CONFIG_TOML).expect("default server config");
-        config.server_config_path = PathBuf::new();
-        assert!(config.security_warnings().is_empty());
-    }
-
-    #[test]
-    fn security_warnings_report_insecure_remote_deployments() {
-        let mut config: ServerConfig =
-            toml::from_str(DEFAULT_SERVER_CONFIG_TOML).expect("default server config");
-        config.server_config_path = PathBuf::new();
-        config.frontend.host = "0.0.0.0".to_string();
-
-        let warnings = config.security_warnings();
-        assert!(
-            warnings
-                .iter()
-                .any(|warning| warning.contains("authentication is disabled"))
-        );
-
-        config.auth = Some(ServerAuthConfig {
-            admin_password_hash: "public-development-placeholder".to_string(),
-            session_secret: "public-development-placeholder".to_string(),
-            session_version: "1".to_string(),
-        });
-        let warnings = config.security_warnings();
-        assert!(
-            warnings
-                .iter()
-                .any(|warning| warning.contains("non-secure session cookie"))
-        );
-        assert!(
-            warnings
-                .iter()
-                .any(|warning| warning.contains("shorter than 32 bytes"))
-        );
-        assert!(
-            warnings
-                .iter()
-                .any(|warning| warning.contains("appears to be a placeholder"))
-        );
-    }
-
-    #[test]
-    fn resolve_node_launch_groups_expands_typed_top_level_replacements() {
-        let payload = AutoRunNodesRequest {
-            toml: Some(
-                r#"
-replacements = { count = 2, prefix = "cpu", cores = 4 }
-
-[[groups]]
-count = "$(count:1)"
-name_prefix = '$(prefix:"worker")'
-config = { cores = "$(cores:1)" }
-"#
-                .to_string(),
-            ),
-            count: None,
-            max_start_failures: None,
-            args: empty_json_object(),
-            name_prefix: None,
-        };
-
-        let groups = resolve_node_launch_groups(&payload).expect("node launch groups");
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].count, 2);
-        assert_eq!(groups[0].name_prefix, "cpu");
-        assert_eq!(groups[0].capabilities.get("cpus"), Some(&4));
-    }
-
-    #[test]
-    fn node_launch_group_cpu_aliases_derive_cpus_capability() {
-        for key in [
-            "cores",
-            "nr_cores",
-            "cpus",
-            "cpus_per_task",
-            "cpus-per-task",
-        ] {
-            let config = serde_json::json!({ key: 8 });
-            let capabilities = derive_capabilities_from_config(&config);
-            assert_eq!(
-                capabilities.get("cpus"),
-                Some(&8),
-                "cpu alias {key} should register cpus capability"
-            );
-            if key != "cpus" {
-                assert_eq!(capabilities.get(key), None);
-            }
-        }
-    }
-
-    #[test]
-    fn bundled_node_templates_parse_after_replacement_expansion() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for relative_path in [
-            "resources/templates/nodes/local-two-workers.toml",
-            "ops/ubelix/resources/templates/nodes/cpu-workers.toml",
-            "ops/ubelix/resources/templates/nodes/free-gpu-plus-cpu.toml",
-        ] {
-            let toml = std::fs::read_to_string(root.join(relative_path)).expect("template file");
-            let payload = AutoRunNodesRequest {
-                toml: Some(toml),
-                count: None,
-                max_start_failures: None,
-                args: empty_json_object(),
-                name_prefix: None,
-            };
-            resolve_node_launch_groups(&payload)
-                .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
-        }
-    }
-
-    #[test]
-    fn server_config_does_not_expand_placeholders() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("server.toml");
-        std::fs::write(&path, r#"name = '$(server_name:"local")'"#).expect("write server config");
-
-        let config = ServerConfig::load(&path).expect("server config");
-        assert_eq!(config.name, r#"$(server_name:"local")"#);
-    }
-}
-
 async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let runtime = state.runtime.runtime_config();
     let local = runtime.local_postgres.clone();
@@ -2352,4 +2154,202 @@ async fn export_histogram_bundle(
     };
 
     json_response(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_list_response_omits_duplicate_and_runtime_only_fields() {
+        let task = RunTask {
+            id: 7,
+            run_id: 3,
+            name: "accumulator".to_string(),
+            sequence_nr: 1,
+            task: RunTaskSpec::SetAccumulator {
+                accumulator: crate::core::AccumulatorConfig::Empty,
+            },
+            spawned_from_snapshot_id: None,
+            state: RunTaskState::Pending,
+            nr_produced_samples: 11,
+            nr_completed_samples: 9,
+            nr_produced_samples_including_children: 11,
+            nr_completed_samples_including_children: 9,
+            cpu_seconds: 1800.0,
+            cpu_seconds_including_children: 3600.0,
+            failure_reason: None,
+            started_at: None,
+            completed_at: None,
+            failed_at: None,
+            created_at: chrono::Utc::now(),
+            task_toml: "kind = \"set_accumulator\"".to_string(),
+            measurement_output: None,
+            controller_output: None,
+        };
+        let value = serde_json::to_value(RunTaskResponse::new(task, Some(8), Some(2))).unwrap();
+
+        assert_eq!(value["id"], "7");
+        assert_eq!(value["cpu_hours_including_children"], 1.0);
+        assert_eq!(value["task_kind"], "set_accumulator");
+        assert_eq!(value["goal_label"], "-");
+        assert_eq!(value["is_sample"], false);
+        for omitted in [
+            "task",
+            "task_toml",
+            "nr_produced_samples",
+            "nr_completed_samples",
+            "cpu_seconds",
+            "cpu_seconds_including_children",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "measurement_output",
+            "controller_output",
+        ] {
+            assert!(value.get(omitted).is_none(), "unexpected field {omitted}");
+        }
+    }
+
+    #[test]
+    fn template_kinds_are_strictly_allowlisted() {
+        assert_eq!(
+            serde_json::from_str::<TemplateKind>(r#""runs""#).unwrap(),
+            TemplateKind::Runs
+        );
+        assert_eq!(
+            serde_json::from_str::<TemplateKind>(r#""tasks""#).unwrap(),
+            TemplateKind::Tasks
+        );
+        assert_eq!(
+            serde_json::from_str::<TemplateKind>(r#""nodes""#).unwrap(),
+            TemplateKind::Nodes
+        );
+        assert!(serde_json::from_str::<TemplateKind>(r#""other""#).is_err());
+    }
+
+    #[test]
+    fn security_warnings_keep_passwordless_loopback_deployments_quiet() {
+        let mut config: ServerConfig =
+            toml::from_str(DEFAULT_SERVER_CONFIG_TOML).expect("default server config");
+        config.server_config_path = PathBuf::new();
+        assert!(config.security_warnings().is_empty());
+    }
+
+    #[test]
+    fn security_warnings_report_insecure_remote_deployments() {
+        let mut config: ServerConfig =
+            toml::from_str(DEFAULT_SERVER_CONFIG_TOML).expect("default server config");
+        config.server_config_path = PathBuf::new();
+        config.frontend.host = "0.0.0.0".to_string();
+
+        let warnings = config.security_warnings();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("authentication is disabled"))
+        );
+
+        config.auth = Some(ServerAuthConfig {
+            admin_password_hash: "public-development-placeholder".to_string(),
+            session_secret: "public-development-placeholder".to_string(),
+            session_version: "1".to_string(),
+        });
+        let warnings = config.security_warnings();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("non-secure session cookie"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("shorter than 32 bytes"))
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("appears to be a placeholder"))
+        );
+    }
+
+    #[test]
+    fn resolve_node_launch_groups_expands_typed_top_level_replacements() {
+        let payload = AutoRunNodesRequest {
+            toml: Some(
+                r#"
+replacements = { count = 2, prefix = "cpu", cores = 4 }
+
+[[groups]]
+count = "$(count:1)"
+name_prefix = '$(prefix:"worker")'
+config = { cores = "$(cores:1)" }
+"#
+                .to_string(),
+            ),
+            count: None,
+            max_start_failures: None,
+            args: empty_json_object(),
+            name_prefix: None,
+        };
+
+        let groups = resolve_node_launch_groups(&payload).expect("node launch groups");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[0].name_prefix, "cpu");
+        assert_eq!(groups[0].capabilities.get("cpus"), Some(&4));
+    }
+
+    #[test]
+    fn node_launch_group_cpu_aliases_derive_cpus_capability() {
+        for key in [
+            "cores",
+            "nr_cores",
+            "cpus",
+            "cpus_per_task",
+            "cpus-per-task",
+        ] {
+            let config = serde_json::json!({ key: 8 });
+            let capabilities = derive_capabilities_from_config(&config);
+            assert_eq!(
+                capabilities.get("cpus"),
+                Some(&8),
+                "cpu alias {key} should register cpus capability"
+            );
+            if key != "cpus" {
+                assert_eq!(capabilities.get(key), None);
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_node_templates_parse_after_replacement_expansion() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for relative_path in [
+            "resources/templates/nodes/local-two-workers.toml",
+            "ops/ubelix/resources/templates/nodes/cpu-workers.toml",
+            "ops/ubelix/resources/templates/nodes/free-gpu-plus-cpu.toml",
+        ] {
+            let toml = std::fs::read_to_string(root.join(relative_path)).expect("template file");
+            let payload = AutoRunNodesRequest {
+                toml: Some(toml),
+                count: None,
+                max_start_failures: None,
+                args: empty_json_object(),
+                name_prefix: None,
+            };
+            resolve_node_launch_groups(&payload)
+                .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
+        }
+    }
+
+    #[test]
+    fn server_config_does_not_expand_placeholders() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("server.toml");
+        std::fs::write(&path, r#"name = '$(server_name:"local")'"#).expect("write server config");
+
+        let config = ServerConfig::load(&path).expect("server config");
+        assert_eq!(config.name, r#"$(server_name:"local")"#);
+    }
 }

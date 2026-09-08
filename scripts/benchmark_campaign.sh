@@ -63,7 +63,7 @@ cd "$repo_root"
 
 api_port=$((4000 + port_offset))
 postgres_port=$((5400 + port_offset))
-database_url="${GAMMABOARD_BENCHMARK_DATABASE_URL:-postgresql://postgres:NqVj2yt5WsCE5nYCOx01MkeFD8n8awoZ@127.0.0.1:${postgres_port}/gammaboard_db}"
+database_url="${GAMMABOARD_BENCHMARK_DATABASE_URL:-postgresql://postgres@127.0.0.1:${postgres_port}/gammaboard_db}"
 run_name="campaign-benchmark-$(date +%s)-$$"
 config_file="$(mktemp)"
 deploy_log="$(mktemp)"

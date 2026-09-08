@@ -7,12 +7,21 @@ require_cmd() {
   }
 }
 
-git_head_sha() {
+git_resolve_sha() {
   local repo_url="$1"
+  local revision="${2:-HEAD}"
   local sha
-  sha="$(git ls-remote "${repo_url}" HEAD | awk 'NR==1 {print $1}')"
+  if [[ "${revision}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    printf '%s\n' "${revision,,}"
+    return
+  fi
+  sha="$(git ls-remote "${repo_url}" "${revision}" "${revision}^{}" | awk '
+    NR == 1 { first = $1 }
+    $2 ~ /\^\{\}$/ { peeled = $1 }
+    END { print peeled != "" ? peeled : first }
+  ')"
   if [[ -z "${sha}" ]]; then
-    echo "failed to resolve HEAD for ${repo_url}" >&2
+    echo "failed to resolve revision '${revision}' for ${repo_url}" >&2
     exit 1
   fi
   printf '%s\n' "${sha}"

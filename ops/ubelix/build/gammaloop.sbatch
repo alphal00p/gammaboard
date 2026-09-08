@@ -61,7 +61,8 @@ export APPTAINER_TMPDIR="${TMP_BASE}"
 export APPTAINER_CACHEDIR="${CACHE_BASE}"
 export CARGO_INCREMENTAL
 
-GAMMALOOP_SHA="$(git_head_sha "${GAMMALOOP_REPO}")"
+GAMMALOOP_REVISION="${GAMMALOOP_REVISION:-HEAD}"
+GAMMALOOP_SHA="$(git_resolve_sha "${GAMMALOOP_REPO}" "${GAMMALOOP_REVISION}")"
 OUT_IMAGE="${IMAGE_DIR}/gammaloop.sif"
 TMP_IMAGE="${IMAGE_DIR}/.gammaloop.tmp-${SLURM_JOB_ID:-$$}.sif"
 META_FILE="${IMAGE_DIR}/gammaloop.meta"
@@ -145,6 +146,7 @@ write_meta "${META_FILE}" \
 kind=gammaloop \
 def_path="${DEF_REL_PATH}" \
 gammaloop_repo="${GAMMALOOP_REPO}" \
+gammaloop_revision="${GAMMALOOP_REVISION}" \
 gammaloop_sha="${GAMMALOOP_SHA}" \
 gammaloop_git_dirty="${GAMMALOOP_GIT_DIRTY}" \
 slurm_job_id="${SLURM_JOB_ID:-}" \

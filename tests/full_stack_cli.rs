@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use argon2::{
     Argon2,
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
@@ -4161,8 +4163,8 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
         .stderr(predicate::str::contains(
             "run name 'duplicate-run' matches multiple runs",
         ))
-        .stderr(predicate::str::contains(&format!("id={id_a}")))
-        .stderr(predicate::str::contains(&format!("id={id_b}")));
+        .stderr(predicate::str::contains(format!("id={id_a}")))
+        .stderr(predicate::str::contains(format!("id={id_b}")));
 
     harness.cleanup().await?;
     Ok(())

@@ -222,23 +222,6 @@ pub async fn load_child_task_result_reference(
     load_child_task_result_inner(store, child_run_id, source_task, false).await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn failed_child_task_overrides_cached_measurement_state() {
-        assert_eq!(
-            task_failure_reason(RunTaskState::Failed, "integrate", Some("engine stopped")),
-            Some("engine stopped".to_string())
-        );
-        assert_eq!(
-            task_failure_reason(RunTaskState::Active, "integrate", Some("stale")),
-            None
-        );
-    }
-}
-
 async fn load_child_task_result_inner(
     store: &(impl AggregationStore + RunReadStore + RunTaskStore),
     child_run_id: i32,
@@ -302,4 +285,21 @@ async fn load_child_task_result_inner(
         accumulator,
         source_task: output.source_task,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_child_task_overrides_cached_measurement_state() {
+        assert_eq!(
+            task_failure_reason(RunTaskState::Failed, "integrate", Some("engine stopped")),
+            Some("engine stopped".to_string())
+        );
+        assert_eq!(
+            task_failure_reason(RunTaskState::Active, "integrate", Some("stale")),
+            None
+        );
+    }
 }

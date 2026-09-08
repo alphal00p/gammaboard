@@ -145,8 +145,15 @@ Database commands:
 ```bash
 ./gammaboard db status
 ./gammaboard db start
+./gammaboard db backup
+./gammaboard db restore backups/gammaboard-<timestamp>.dump
 ./gammaboard db reset --yes
 ```
+
+`db backup` writes a compressed PostgreSQL archive and prints its path. Stop
+GammaBoard servers and workers before `db restore`; restore replaces the
+configured database, then applies any migrations newer than the archive. Pass
+`--yes` for non-interactive restore.
 
 ## Manual Build And Deploy
 
@@ -183,8 +190,9 @@ Useful deploy options:
 - `--api-port <PORT>` overrides the private backend API port for one launch.
 - `--database-url` and `--resource-root` are the normal runtime overrides for
   manual or shared deployments.
-- `--postgres-public` allows remote workers to connect to the local Postgres
-  instance; keep the default local-only mode unless this is needed.
+- `--postgres-trusted-network` allows workers on directly connected networks to
+  use passwordless PostgreSQL; keep the default loopback-only mode unless this
+  is needed.
 
 ## Testing
 

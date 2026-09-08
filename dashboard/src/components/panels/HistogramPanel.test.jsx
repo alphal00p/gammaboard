@@ -4,8 +4,12 @@ import { describe, expect, test, vi } from "vitest";
 import HistogramPanel from "./HistogramPanel";
 
 vi.mock("echarts-for-react", () => ({
-  default: forwardRef(function MockECharts(_props, ref) {
-    return <div ref={ref} data-testid="echarts-mock" />;
+  default: forwardRef(function MockECharts(props, ref) {
+    return (
+      <div ref={ref} data-testid="echarts-mock">
+        {(props.option?.series ?? []).map((series) => series.name).join("|")}
+      </div>
+    );
   }),
 }));
 
@@ -104,5 +108,26 @@ describe("HistogramPanel smoke tests", () => {
         },
       ],
     });
+  });
+
+  test("keeps uploaded histogram comparisons in the rendered series", async () => {
+    render(
+      <HistogramPanel
+        title="Uploaded comparison"
+        state={{ panel_id: "continuous_histogram", name: "cross_section", bins: baseContinuousBins }}
+        uploadedBundles={[
+          {
+            id: "reference",
+            label: "Reference run",
+            histograms: {
+              cross_section: {
+                bins: baseContinuousBins.map((bin) => ({ ...bin, value: bin.value * 2 })),
+              },
+            },
+          },
+        ]}
+      />,
+    );
+    expect((await screen.findAllByText(/Reference run: cross_section/)).length).toBeGreaterThan(0);
   });
 });
