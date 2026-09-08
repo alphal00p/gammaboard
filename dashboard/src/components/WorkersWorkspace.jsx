@@ -70,7 +70,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
   );
   const workerRoleCounts = useMemo(() => {
     return workers.reduce((acc, worker) => {
-      const role = worker?.role || "unknown";
+      const role = worker?.current_role || worker?.desired_role || "none";
       acc[role] = (acc[role] || 0) + 1;
       return acc;
     }, {});

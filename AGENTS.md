@@ -108,6 +108,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   compute tasks.
 - Persist/API payloads must be JSON-safe
 - Backend owns panel/read-model semantics; frontend should render generic panel payloads.
+- Run performance is exposed as one panel response containing sampler,
+  run-evaluator, and optional selected-evaluator panels.
 
 ## Ops Rules
 - `gammaboard deploy` is the normal dashboard stack supervisor for nginx/backend/Postgres.

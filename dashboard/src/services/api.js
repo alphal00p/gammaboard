@@ -1,5 +1,3 @@
-import { asArray } from "../utils/collections";
-
 const APP_BASE_URL = import.meta.env.BASE_URL || "/";
 const normalizedAppBase = APP_BASE_URL.endsWith("/") ? APP_BASE_URL : `${APP_BASE_URL}/`;
 const API_BASE_URL = `${normalizedAppBase}api`;
@@ -93,97 +91,6 @@ const apiDelete = async (path, message, signal) =>
     method: "DELETE",
   });
 
-const numberOr = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
-
-const normalizeWorkerEntry = (entry) => {
-  if (!entry || typeof entry !== "object") return null;
-  return {
-    node_name: entry.node_name ?? "",
-    node_uuid: entry.node_uuid ?? "",
-    capabilities: entry.capabilities && typeof entry.capabilities === "object" ? entry.capabilities : {},
-    desired_run_id: numberOr(entry.desired_run_id, null),
-    desired_run_name: entry.desired_run_name ?? null,
-    desired_role: entry.desired_role ?? null,
-    current_run_id: numberOr(entry.current_run_id, null),
-    current_run_name: entry.current_run_name ?? null,
-    current_role: entry.current_role ?? null,
-    role: entry.current_role ?? entry.desired_role ?? "none",
-    status: entry.status ?? "unknown",
-    last_seen: entry.last_seen ?? null,
-  };
-};
-
-const normalizeRuntimeLogEntry = (entry) => {
-  if (!entry || typeof entry !== "object") return null;
-  const rawId = entry.id ?? null;
-  if (rawId == null) return null;
-
-  const rawRunId = entry.run_id ?? null;
-  const runId = rawRunId == null ? null : Number(rawRunId);
-  const timestamp = entry.ts ?? null;
-  const level = typeof entry.level === "string" ? entry.level.toLowerCase() : "info";
-
-  return {
-    id: String(rawId),
-    ts: timestamp,
-    source: typeof entry.source === "string" ? entry.source : "unknown",
-    run_id: runId != null && Number.isFinite(runId) ? runId : null,
-    node_uuid: entry.node_uuid ?? null,
-    node_name: entry.node_name ?? null,
-    level,
-    target: typeof entry.target === "string" ? entry.target : "",
-    message: entry.message ?? "",
-    fields: entry.fields ?? {},
-  };
-};
-
-const normalizeRuntimeLogPage = (payload) => {
-  const rows = asArray(payload?.items);
-  return {
-    items: rows.map(normalizeRuntimeLogEntry).filter(Boolean),
-    next_before_id: payload?.next_before_id != null ? String(payload.next_before_id) : null,
-    has_more_older: payload?.has_more_older === true,
-  };
-};
-
-const normalizeRunEntry = (entry) => {
-  if (!entry || typeof entry !== "object") return null;
-  const runId = Number(entry.run_id);
-  const rootStageSnapshotId = entry.root_stage_snapshot_id == null ? null : String(entry.root_stage_snapshot_id);
-  return {
-    run_id: Number.isFinite(runId) ? runId : entry.run_id,
-    run_name: typeof entry.run_name === "string" ? entry.run_name : String(entry.run_name ?? ""),
-    parent_run_id: entry.parent_run_id == null ? null : Number(entry.parent_run_id),
-    spawn_label: entry.spawn_label ?? null,
-    root_stage_snapshot_id: rootStageSnapshotId,
-    lifecycle_state: typeof entry.lifecycle_state === "string" ? entry.lifecycle_state : "unknown",
-    nr_completed_samples_including_children: numberOr(entry.nr_completed_samples_including_children, 0),
-    cpu_hours_including_children: numberOr(entry.cpu_hours_including_children, 0),
-    queue_tuning_defaults: entry.queue_tuning_defaults ?? {},
-  };
-};
-
-const normalizeRunTaskEntry = (entry) => {
-  if (!entry || typeof entry !== "object") return null;
-  if (entry.id == null) return null;
-  return {
-    id: String(entry.id),
-    run_id: numberOr(entry.run_id, entry.run_id),
-    name: typeof entry.name === "string" ? entry.name : String(entry.name ?? ""),
-    sequence_nr: numberOr(entry.sequence_nr, 0),
-    task_kind: typeof entry.task_kind === "string" ? entry.task_kind : "unknown",
-    goal_label: typeof entry.goal_label === "string" ? entry.goal_label : "unbounded",
-    is_sample: entry.is_sample === true,
-    queue_tuning: entry.queue_tuning ?? null,
-    state: typeof entry.state === "string" ? entry.state : "unknown",
-    failure_reason: entry.failure_reason ?? null,
-    latest_stage_snapshot_id: entry.latest_stage_snapshot_id == null ? null : String(entry.latest_stage_snapshot_id),
-    root_stage_snapshot_id: entry.root_stage_snapshot_id == null ? null : String(entry.root_stage_snapshot_id),
-    nr_completed_samples_including_children: numberOr(entry.nr_completed_samples_including_children, 0),
-    cpu_hours_including_children: numberOr(entry.cpu_hours_including_children, 0),
-  };
-};
-
 export const fetchRuns = async ({ includeChildren = false, limit = 100, offset = 0 } = {}, signal) => {
   const data = await apiGet(
     `/runs${buildQueryString([
@@ -195,8 +102,8 @@ export const fetchRuns = async ({ includeChildren = false, limit = 100, offset =
     signal,
   );
   return {
-    items: asArray(data?.items ?? data).map(normalizeRunEntry).filter(Boolean),
-    nextOffset: Number.isInteger(data?.next_offset) ? data.next_offset : null,
+    items: data.items,
+    nextOffset: data.next_offset,
   };
 };
 
@@ -275,19 +182,11 @@ export const autoRunNodes = async ({ toml, count = null, maxStartFailures = null
 
 export const fetchNodeLaunchRequests = async (signal) => {
   const data = await apiGet("/node-launch-requests", "Failed to fetch node launch requests", signal);
-  return asArray(data?.items).map((entry) => ({
-    ...entry,
-    id: entry?.id == null ? "" : String(entry.id),
-    requested_count: numberOr(entry?.requested_count, 0),
-    started_count: numberOr(entry?.started_count, 0),
-    args: entry?.args ?? {},
-    result: entry?.result ?? {},
-  }));
+  return data.items;
 };
 
 export const fetchNodes = async (runId = null, signal) => {
-  const data = await apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
-  return asArray(data).map(normalizeWorkerEntry).filter(Boolean);
+  return apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
 };
 
 export const fetchNodePanels = async (nodeName, signal) =>
@@ -300,8 +199,7 @@ export const fetchRunPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/panels`, "Failed to fetch run panels", signal);
 
 export const fetchRunTasks = async (runId, signal) => {
-  const data = await apiGet(`/runs/${runId}/tasks`, "Failed to fetch run tasks", signal);
-  return asArray(data).map(normalizeRunTaskEntry).filter(Boolean);
+  return apiGet(`/runs/${runId}/tasks`, "Failed to fetch run tasks", signal);
 };
 
 export const fetchRunTaskPanels = async (
@@ -324,7 +222,7 @@ export const fetchRunTaskPanels = async (
 
 export const fetchTemplateList = async (kind, signal) => {
   const data = await apiGet(`/templates/${kind}`, `Failed to fetch ${kind} templates`, signal);
-  return asArray(data?.items).filter((value) => typeof value === "string" && value.trim());
+  return data.items;
 };
 
 export const fetchTemplateFile = async (kind, name, signal) =>
@@ -350,7 +248,7 @@ export const fetchRuntimeLogPage = async (
   } = {},
   signal,
 ) => {
-  const data = await apiGet(
+  return apiGet(
     `/logs${buildQueryString([
       ["limit", limit],
       ["source", source],
@@ -365,21 +263,14 @@ export const fetchRuntimeLogPage = async (
     "Failed to fetch runtime logs",
     signal,
   );
-  return normalizeRuntimeLogPage(data);
 };
 
-const fetchPerformanceHistory = (runId, kind, label, limit, nodeName, signal) =>
+export const fetchRunPerformance = (runId, limit = 500, evaluatorNodeName = null, signal) =>
   apiGet(
-    `/runs/${runId}/performance/${kind}${buildQueryString([
+    `/runs/${runId}/performance${buildQueryString([
       ["limit", limit],
-      ["node_name", nodeName],
+      ["node_name", evaluatorNodeName],
     ])}`,
-    `Failed to fetch ${label} performance history`,
+    "Failed to fetch run performance",
     signal,
   );
-
-export const fetchEvaluatorPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) =>
-  fetchPerformanceHistory(runId, "evaluator", "evaluator", limit, nodeName, signal);
-
-export const fetchSamplerPerformanceHistory = async (runId, limit = 500, nodeName = null, signal) =>
-  fetchPerformanceHistory(runId, "sampler-aggregator", "sampler", limit, nodeName, signal);

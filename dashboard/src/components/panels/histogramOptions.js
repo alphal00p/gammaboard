@@ -135,23 +135,6 @@ export const projectBinsToReferenceBins = (referenceBins, overlayBins) =>
     };
   });
 
-export const buildCdfBinsPreservingNulls = (bins) => {
-  let cumulativeValue = 0;
-  let cumulativeVariance = 0;
-  return asArray(bins).map((bin) => {
-    if (!bin) return null;
-    const value = Number(bin?.value);
-    const error = Math.abs(Number(bin?.error));
-    if (Number.isFinite(value)) cumulativeValue += value;
-    if (Number.isFinite(error)) cumulativeVariance += error * error;
-    return {
-      ...bin,
-      value: cumulativeValue,
-      error: Math.sqrt(cumulativeVariance),
-    };
-  });
-};
-
 export const buildOneMinusRatioPoints = (referenceBins, overlayBins, isDiscrete, xScale) =>
   asArray(referenceBins)
     .map((referenceBin, index) => {

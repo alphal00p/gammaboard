@@ -266,6 +266,10 @@ pub enum PanelState {
         bins: Vec<HistogramBin>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         controls: Option<JsonValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        overlay_alignment: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        overlay_histograms: Vec<JsonValue>,
     },
     Text {
         panel_id: String,

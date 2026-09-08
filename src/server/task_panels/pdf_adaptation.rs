@@ -7,8 +7,9 @@ use crate::core::{
 use crate::sampling::PdfAdaptationImagePersistedOutput;
 use crate::server::panels::{
     HistogramBin, ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState,
-    PanelWidth, PlotPoint, key_value, key_value_panel, panel_spec, progress_panel,
-    scalar_timeseries_panel, select_state_spec, sized_panel_spec, state_option,
+    PanelWidth, PlotPoint, PlotSeries, key_value, key_value_panel, multi_timeseries_panel,
+    panel_spec, progress_panel, scalar_timeseries_panel, select_state_spec, sized_panel_spec,
+    state_option,
 };
 use serde_json::{Value as JsonValue, json};
 
@@ -34,18 +35,7 @@ pub(super) fn projectors(
             geometry.clone(),
             ImageKind::LogPlaneNormalizedPdf,
         ),
-        histogram_projector(
-            "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Reference-normalized integrand",
-            PanelWidth::Half,
-            ImageKind::LogReferenceNormalizedIntegrand,
-        ),
-        histogram_projector(
-            "pdf_adaptation_log_pdf_histogram",
-            "Histogram: Normalized PDF",
-            PanelWidth::Half,
-            ImageKind::LogPlaneNormalizedPdf,
-        ),
+        comparison_histogram_projector(),
         oversampling_metric_projector(),
         image_projector(
             "pdf_adaptation_oversampling",
@@ -117,20 +107,7 @@ pub(super) fn line_projectors(
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(geometry.nr_points(), "Line Progress", "points"),
-        line_projector(
-            "pdf_adaptation_log_integrand_line",
-            "Reference-normalized integrand (1D)",
-            PanelWidth::Half,
-            geometry.clone(),
-            ImageKind::LogReferenceNormalizedIntegrand,
-        ),
-        line_projector(
-            "pdf_adaptation_log_pdf_line",
-            "Normalized PDF (1D)",
-            PanelWidth::Half,
-            geometry.clone(),
-            ImageKind::LogPlaneNormalizedPdf,
-        ),
+        comparison_line_projector(geometry.clone()),
         oversampling_metric_projector(),
         line_projector(
             "pdf_adaptation_oversampling_line",
@@ -139,18 +116,7 @@ pub(super) fn line_projectors(
             geometry,
             ImageKind::Oversampling,
         ),
-        histogram_projector(
-            "pdf_adaptation_log_integrand_histogram",
-            "Histogram: Reference-normalized integrand",
-            PanelWidth::Half,
-            ImageKind::LogReferenceNormalizedIntegrand,
-        ),
-        histogram_projector(
-            "pdf_adaptation_log_pdf_histogram",
-            "Histogram: Normalized PDF",
-            PanelWidth::Half,
-            ImageKind::LogPlaneNormalizedPdf,
-        ),
+        comparison_histogram_projector(),
         histogram_projector(
             "pdf_adaptation_oversampling_histogram",
             "Histogram: Sampling Accuracy",
@@ -275,6 +241,43 @@ fn line_projector(
     )
 }
 
+fn comparison_line_projector(geometry: LineRasterGeometry) -> TaskPanelProjector {
+    derived_projector(
+        "pdf_adaptation_integrand_pdf_line_overlay",
+        "Normalized Integrand vs PDF (1D)",
+        PanelWidth::Full,
+        PanelKind::MultiTimeseries,
+        move |derived, metric| {
+            validate_output_length(geometry.nr_points(), &derived.output)?;
+            Ok(multi_timeseries_panel(
+                "pdf_adaptation_integrand_pdf_line_overlay",
+                vec![
+                    PlotSeries {
+                        id: "integrand".to_string(),
+                        label: "Normalized integrand".to_string(),
+                        color: Some("#005f73".to_string()),
+                        smooth: Some(false),
+                        points: line_points(
+                            &geometry,
+                            &derived.values(ImageKind::LogReferenceNormalizedIntegrand, metric),
+                        ),
+                    },
+                    PlotSeries {
+                        id: "pdf".to_string(),
+                        label: "Normalized PDF".to_string(),
+                        color: Some("#bb3e03".to_string()),
+                        smooth: Some(false),
+                        points: line_points(
+                            &geometry,
+                            &derived.values(ImageKind::LogPlaneNormalizedPdf, metric),
+                        ),
+                    },
+                ],
+            ))
+        },
+    )
+}
+
 fn image_projector(
     panel_id: &'static str,
     label: &'static str,
@@ -304,6 +307,35 @@ fn histogram_projector(
         PanelKind::Histogram,
         move |derived, metric| Ok(histogram_panel(panel_id, derived, image_kind, metric)),
     )
+}
+
+fn comparison_histogram_projector() -> TaskPanelProjector {
+    derived_projector(
+        "pdf_adaptation_integrand_pdf_histogram_overlay",
+        "Histogram: Normalized Integrand vs PDF",
+        PanelWidth::Full,
+        PanelKind::Histogram,
+        move |derived, _metric| Ok(comparison_histogram_panel(derived)),
+    )
+}
+
+fn comparison_histogram_panel(derived: &DerivedValues) -> PanelState {
+    let (bins, overlay_bins) = histogram_bins_on_shared_edges(
+        &derived.log_reference_normalized_integrand,
+        &derived.log_plane_normalized_pdf,
+    );
+    PanelState::Histogram {
+        panel_id: "pdf_adaptation_integrand_pdf_histogram_overlay".to_string(),
+        bins,
+        controls: Some(pdf_adaptation_histogram_controls()),
+        overlay_alignment: Some("shared_edges".to_string()),
+        overlay_histograms: vec![json!({
+            "name": "Normalized PDF",
+            "color": "#bb3e03",
+            "suppress_error_bars": true,
+            "bins": overlay_bins,
+        })],
+    }
 }
 
 fn derived_projector(
@@ -566,6 +598,8 @@ fn histogram_panel(
         panel_id: panel_id.to_string(),
         bins,
         controls: Some(pdf_adaptation_histogram_controls()),
+        overlay_alignment: None,
+        overlay_histograms: Vec::new(),
     }
 }
 
@@ -797,8 +831,9 @@ fn finite_mean(values: impl IntoIterator<Item = f64>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImageKind, OversamplingMetric, build_image_panel, build_line_panel, histogram_bins,
-        oversampling_values,
+        ImageKind, OversamplingMetric, build_image_panel, build_line_panel,
+        comparison_histogram_panel, histogram_bins, line_projectors, oversampling_values,
+        projectors,
     };
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry};
     use crate::sampling::PdfAdaptationImagePersistedOutput;
@@ -956,5 +991,36 @@ mod tests {
         assert!((points[1].x - 1.0).abs() < 1e-12);
         assert!((points[0].y - (1.0_f64 / 1.5).log10()).abs() < 1e-12);
         assert!((points[1].y - (2.0_f64 / 1.5).log10()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn pdf_comparisons_are_backend_owned_panels() {
+        let line_ids = line_projectors(line_geometry(), Default::default())
+            .into_iter()
+            .map(|projector| projector.spec().panel_id.as_str().to_string())
+            .collect::<Vec<_>>();
+        assert!(line_ids.contains(&"pdf_adaptation_integrand_pdf_line_overlay".to_string()));
+        assert!(!line_ids.contains(&"pdf_adaptation_log_integrand_line".to_string()));
+        assert!(!line_ids.contains(&"pdf_adaptation_log_pdf_line".to_string()));
+
+        let plane_ids = projectors(geometry(), Default::default())
+            .into_iter()
+            .map(|projector| projector.spec().panel_id.as_str().to_string())
+            .collect::<Vec<_>>();
+        assert!(plane_ids.contains(&"pdf_adaptation_integrand_pdf_histogram_overlay".to_string()));
+        assert!(!plane_ids.contains(&"pdf_adaptation_log_integrand_histogram".to_string()));
+        assert!(!plane_ids.contains(&"pdf_adaptation_log_pdf_histogram".to_string()));
+
+        let panel = comparison_histogram_panel(&DerivedValues::from_output(output(), None));
+        let PanelState::Histogram {
+            overlay_alignment,
+            overlay_histograms,
+            ..
+        } = panel
+        else {
+            panic!("expected histogram panel");
+        };
+        assert_eq!(overlay_alignment.as_deref(), Some("shared_edges"));
+        assert_eq!(overlay_histograms.len(), 1);
     }
 }

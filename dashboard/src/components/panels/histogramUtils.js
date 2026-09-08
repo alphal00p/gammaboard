@@ -224,6 +224,7 @@ export const buildCdfBins = (bins) => {
   let cumulativeValue = 0;
   let cumulativeVariance = 0;
   return asArray(bins).map((bin) => {
+    if (!bin) return null;
     const value = Number(bin?.value);
     const error = Math.abs(Number(bin?.error));
     if (Number.isFinite(value)) cumulativeValue += value;
@@ -234,61 +235,6 @@ export const buildCdfBins = (bins) => {
       error: Math.sqrt(cumulativeVariance),
     };
   });
-};
-
-const sampleContinuousHistogramAtX = (bins, x) => {
-  const numericX = Number(x);
-  if (!Number.isFinite(numericX)) return null;
-  const epsilon = 1e-12;
-  for (const bin of asArray(bins)) {
-    const start = Number(bin?.start);
-    const stop = Number(bin?.stop);
-    if (!Number.isFinite(start) || !Number.isFinite(stop)) continue;
-    if (numericX + epsilon < start) continue;
-    if (numericX - epsilon > stop) continue;
-    return bin;
-  }
-  return null;
-};
-
-export const projectOverlayHistogramToReferenceBins = (referenceBins, overlayBins, yScale, xScale) => {
-  const referenceCanonical = buildHistogramData(referenceBins);
-  const overlayCanonical = buildHistogramData(overlayBins);
-  const projectedBins = referenceCanonical
-    .map((referenceBin) => {
-      const matched = sampleContinuousHistogramAtX(overlayCanonical, referenceBin.x);
-      if (!matched) return null;
-      return {
-        start: referenceBin.start,
-        stop: referenceBin.stop,
-        value: Number(matched.value),
-        error: Number.isFinite(Number(matched.error)) ? Math.abs(Number(matched.error)) : 0,
-      };
-    })
-    .filter((bin) => Number.isFinite(bin?.start) && Number.isFinite(bin?.stop) && Number.isFinite(bin?.value));
-
-  const valueStep = buildHistogramRenderData(projectedBins, yScale)
-    .map((point) => [Number(point?.x), Number(point?.y)])
-    .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0));
-  const relativeStep = buildRelativeErrorStepData(projectedBins)
-    .map((point) => [Number(point?.x), Number(point?.relative_error)])
-    .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0));
-  const absError = buildHistogramData(projectedBins)
-    .map((bin) => {
-      const x = Number(bin?.x);
-      const y = Number(bin?.value);
-      const err = Number(bin?.error);
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
-      const yLowRaw = y - Math.abs(err);
-      const yHighRaw = y + Math.abs(err);
-      const yLow = yScale === "log" ? signedLog10(yLowRaw) : yLowRaw;
-      const yHigh = yScale === "log" ? signedLog10(yHighRaw) : yHighRaw;
-      if (xScale === "log" && x <= 0) return null;
-      return [x, yLow, yHigh];
-    })
-    .filter(Boolean);
-
-  return { valueStep, relativeStep, absError };
 };
 
 export const buildHistogramStepData = (bins) => {

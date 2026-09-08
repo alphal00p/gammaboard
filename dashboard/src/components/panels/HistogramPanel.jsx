@@ -23,7 +23,6 @@ import {
   normalizeHistogramMode,
   normalizeHistogramSelectionState,
   normalizeHistogramSortMode,
-  projectOverlayHistogramToReferenceBins,
   readHistogramBundleView,
   readHistogramViewIdFromPanelValue,
   readHistogramScaleFromPanelValue,
@@ -54,7 +53,6 @@ import {
 } from "./panelView";
 import {
   binsShareEdges,
-  buildCdfBinsPreservingNulls,
   buildHistogramOption,
   buildOneMinusRatioPoints,
   buildOverlaySeriesFromBins,
@@ -261,7 +259,7 @@ const HistogramPanel = ({
                     })();
               const displayOverlayBins =
                 histogramMode === HISTOGRAM_MODE_CDF
-                  ? buildCdfBinsPreservingNulls(matchedOverlayBins)
+                  ? buildCdfBins(matchedOverlayBins)
                   : matchedOverlayBins;
               const values = displayOverlayBins.map((bin) => {
                 if (!bin) return null;
@@ -304,9 +302,8 @@ const HistogramPanel = ({
             );
             const displayOverlayBins =
               histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
-            const projected = projectOverlayHistogramToReferenceBins(
-              bins,
-              displayOverlayBins,
+            const projected = buildOverlaySeriesFromBins(
+              projectBinsToReferenceBins(bins, displayOverlayBins).filter(Boolean),
               yScale,
               effectiveXScale,
             );
@@ -361,7 +358,7 @@ const HistogramPanel = ({
             const matchedOverlayBins = discreteBaseKeys.map((key) => overlayBinByKey.get(key) || null);
             const displayOverlayBins =
               histogramMode === HISTOGRAM_MODE_CDF
-                ? buildCdfBinsPreservingNulls(matchedOverlayBins)
+                ? buildCdfBins(matchedOverlayBins)
                 : matchedOverlayBins;
             const values = displayOverlayBins.map((bin) => {
               if (!bin) return null;
@@ -407,7 +404,11 @@ const HistogramPanel = ({
           const useSharedEdges = state?.overlay_alignment === "shared_edges" && binsShareEdges(bins, displayOverlayBins);
           const projected = useSharedEdges
             ? buildOverlaySeriesFromBins(displayOverlayBins, yScale, effectiveXScale)
-            : projectOverlayHistogramToReferenceBins(bins, displayOverlayBins, yScale, effectiveXScale);
+            : buildOverlaySeriesFromBins(
+                projectBinsToReferenceBins(bins, displayOverlayBins).filter(Boolean),
+                yScale,
+                effectiveXScale,
+              );
           return {
             id: `embedded-overlay-${overlayIndex}`,
             name: overlayName,

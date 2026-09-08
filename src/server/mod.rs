@@ -784,14 +784,7 @@ fn build_app(state: AppState) -> Router {
         )
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route("/logs", get(get_logs))
-        .route(
-            "/runs/:id/performance/evaluator",
-            get(get_run_evaluator_performance_history),
-        )
-        .route(
-            "/runs/:id/performance/sampler-aggregator",
-            get(get_run_sampler_performance_history),
-        )
+        .route("/runs/:id/performance", get(get_run_performance))
         .route("/histogram-bundle/export", post(export_histogram_bundle))
         .route("/runs", post(create_run))
         .route("/runs/clone", post(clone_run))
@@ -2353,36 +2346,40 @@ fn node_process_log_paths(
         .map_err(|err| ApiError::Internal(format!("failed resolving node log paths: {err}")))
 }
 
-async fn get_run_evaluator_performance_history(
+async fn get_run_performance(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let limit = clamp_limit(params.limit);
-    let scope_id = params.node_name.clone().unwrap_or_else(|| id.to_string());
-    let rows = state
-        .store
-        .get_evaluator_performance_history(id, limit, params.node_name.as_deref())
-        .await?;
-    json_response(build_evaluator_performance_response(
-        Some(scope_id),
-        rows,
-        params.node_name.is_none(),
-    ))
-}
-
-async fn get_run_sampler_performance_history(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<i32>,
-    Query(params): Query<PerformanceHistoryQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let limit = clamp_limit(params.limit);
-    let scope_id = params.node_name.clone().unwrap_or_else(|| id.to_string());
-    let rows = state
-        .store
-        .get_sampler_performance_history(id, limit, params.node_name.as_deref())
-        .await?;
-    json_response(build_sampler_performance_response(Some(scope_id), rows))
+    let (sampler_rows, run_evaluator_rows, evaluator_rows) = tokio::try_join!(
+        state.store.get_sampler_performance_history(id, limit, None),
+        state
+            .store
+            .get_evaluator_performance_history(id, limit, None),
+        async {
+            match params.node_name.as_deref() {
+                Some(node_name) => state
+                    .store
+                    .get_evaluator_performance_history(id, limit, Some(node_name))
+                    .await
+                    .map(Some),
+                None => Ok(None),
+            }
+        },
+    )?;
+    let mut response =
+        build_sampler_performance_response(Some(format!("run:{id}:performance")), sampler_rows);
+    let run_evaluator = build_evaluator_performance_response(None, run_evaluator_rows, true);
+    response.panels.extend(run_evaluator.panels);
+    response.updates.extend(run_evaluator.updates);
+    if let Some(rows) = evaluator_rows {
+        let evaluator = build_evaluator_performance_response(None, rows, false);
+        response.panels.extend(evaluator.panels);
+        response.updates.extend(evaluator.updates);
+    }
+    response.cursor = None;
+    json_response(response)
 }
 
 async fn export_histogram_bundle(

@@ -17,10 +17,11 @@ presentation.
 ```text
 dashboard/src/
   components/       UI components and workspace views
+    runs/            Run actions, dialogs, and run-scoped workspace
   hooks/            Polling/data hooks
   services/         API client
   utils/            Formatting and view-model helpers
-  App.jsx           Main app shell
+  App.jsx           Navigation and top-level selection shell
   index.jsx         Entry point
 ```
 
@@ -32,8 +33,8 @@ Backend panel poll endpoints -> usePanelSource -> PanelCollection -> renderers
 
 - `TaskOutputPanel` renders the selected task from one server-owned poll
   response containing panel specs plus `replace` and `append` updates.
-- `PerformanceWorkspace` renders run-level sampler throughput and selected
-  evaluator worker timing panels through the same panel transport.
+- `PerformanceWorkspace` renders run-level sampler throughput, aggregate
+  evaluator metrics, and selected-worker timing from one panel response.
 - The effective engine config uses one stage-aware panel response for both the
   evaluator and sampler and normally only emits `replace` updates.
 - `usePanelSource` owns cursor tracking and patch application.
@@ -47,16 +48,17 @@ Backend panel poll endpoints -> usePanelSource -> PanelCollection -> renderers
 - `useRunTasks(runId)` polls task state for the selected run.
 - `useTaskOutput({ runId, taskId })` polls selected task panels with the
   server-owned opaque cursor.
-- `useRunPerformancePanels({ runId, evaluatorNodeName })` polls performance
-  panels.
+- `useRunPerformancePanels({ runId, evaluatorNodeName })` polls the combined
+  performance panel endpoint.
 - `useRunPanels({ runId })` polls the backend-generated run summary and
   effective engine config panels.
 - `useWorkerLogs()` fetches log history for the Logs tab.
 
 ## API Routing
 
-The API base URL is fixed to relative `/api` in `dashboard/src/services/api.js`.
-For local development, Vite proxies `/api` to `http://127.0.0.1:4000`.
+The API base URL is the Vite application base followed by `/api`, as defined in
+`dashboard/src/services/api.js`. For local development, Vite proxies `/api` to
+`http://127.0.0.1:4000`.
 
 Server-side node startup requests always go through the generic launch-request
 queue. The frontend does not branch on local vs external spawning.

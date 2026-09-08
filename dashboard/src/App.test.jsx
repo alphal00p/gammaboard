@@ -16,8 +16,7 @@ vi.mock("./services/api", () => ({
   fetchTemplateFile: vi.fn(),
   saveTemplateFile: vi.fn(),
   deleteTemplateFile: vi.fn(),
-  fetchEvaluatorPerformanceHistory: vi.fn(),
-  fetchSamplerPerformanceHistory: vi.fn(),
+  fetchRunPerformance: vi.fn(),
   fetchNodeLaunchRequests: vi.fn(),
   fetchServerStatus: vi.fn(),
   shutdownControlProcess: vi.fn(),
@@ -40,12 +39,7 @@ describe("App Component", () => {
     api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task", panels: [], updates: [] });
     api.fetchTemplateList.mockResolvedValue([]);
     api.fetchTemplateFile.mockResolvedValue({ name: "template.toml", toml: "" });
-    api.fetchEvaluatorPerformanceHistory.mockResolvedValue({
-      source_id: "perf:run:evaluator",
-      panels: [],
-      updates: [],
-    });
-    api.fetchSamplerPerformanceHistory.mockResolvedValue({ source_id: "perf:sampler", panels: [], updates: [] });
+    api.fetchRunPerformance.mockResolvedValue({ source_id: "performance", panels: [], updates: [] });
     api.fetchNodeLaunchRequests.mockResolvedValue([]);
     api.fetchServerStatus.mockResolvedValue({ status: "ok", database: "connected", server_name: "local" });
     api.shutdownControlProcess.mockResolvedValue({ shutdown_requested: true });

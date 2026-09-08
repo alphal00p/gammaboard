@@ -9,10 +9,7 @@ import {
   HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES,
   HISTORY_X_AXIS_MODE_SAMPLER_UPTIME,
   HISTORY_X_AXIS_MODE_WALL_TIME,
-  extractSharedHistoryView,
-  isObject,
   isSharedHistoryTimeseriesPanelSpec,
-  mergeSharedHistoryView,
 } from "./panels/panelView";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
 import { useRunTasks } from "../hooks/useRunTasks";
@@ -77,7 +74,6 @@ const PerformanceWorkspace = ({
       .sort(compareNodesByName);
   }, [nodeActivityFilter, nodeRoleFilter, nodeRunFilter, selectedRun, workers]);
   const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
-  const [panelValues, setPanelValues] = useState({});
   const [historyXAxisMode, setHistoryXAxisMode] = useState(HISTORY_X_AXIS_MODE_SAMPLER_UPTIME);
   const [queueTuningBusy, setQueueTuningBusy] = useState(false);
   const [queueTuningMessage, setQueueTuningMessage] = useState(null);
@@ -111,15 +107,15 @@ const PerformanceWorkspace = ({
     setSelectedEvaluatorNodeName(nodeNameOf(filteredWorkers[0]));
   }, [filteredWorkers, selectedEvaluatorNodeName]);
 
-  const { evaluator, runEvaluator, sampler } = useRunPerformancePanels({
+  const performance = useRunPerformancePanels({
     runId: selectedRun,
     evaluatorNodeName: selectedEvaluatorNodeName,
     limit: 500,
     pollMs: 5000,
   });
+  const { panelSpecs, panelStates, panelValues, setPanelValue } = performance;
 
   useEffect(() => {
-    setPanelValues({});
     setQueueTuningMessage(null);
   }, [selectedRun, selectedEvaluatorNodeName]);
 
@@ -154,87 +150,27 @@ const PerformanceWorkspace = ({
     }
   }, [sampleTask?.id, selectedRun]);
 
-  const knownPanelIds = useMemo(
-    () =>
-      [
-        ...asArray(sampler?.panelSpecs).map((spec) => spec?.panel_id),
-        ...asArray(runEvaluator?.panelSpecs).map((spec) => spec?.panel_id),
-        ...asArray(evaluator?.panelSpecs).map((spec) => spec?.panel_id),
-      ].filter((id) => typeof id === "string"),
-    [evaluator?.panelSpecs, runEvaluator?.panelSpecs, sampler?.panelSpecs],
-  );
   const sharedHistoryPanelIds = useMemo(
     () =>
-      [
-        ...asArray(sampler?.panelSpecs),
-        ...asArray(runEvaluator?.panelSpecs),
-        ...asArray(evaluator?.panelSpecs),
-      ]
+      asArray(panelSpecs)
         .filter((spec) => isSharedHistoryTimeseriesPanelSpec(spec))
         .map((spec) => spec?.panel_id)
         .filter((id) => typeof id === "string"),
-    [evaluator?.panelSpecs, runEvaluator?.panelSpecs, sampler?.panelSpecs],
+    [panelSpecs],
   );
-  const sharedHistoryPanelIdSet = useMemo(() => new Set(sharedHistoryPanelIds), [sharedHistoryPanelIds]);
 
   useEffect(() => {
-    setPanelValues((previous) => {
-      const next = {};
-      let changed = false;
-      for (const panelId of knownPanelIds) {
-        if (panelId in previous) {
-          next[panelId] = previous[panelId];
-        }
-      }
-      if (Object.keys(next).length !== Object.keys(previous).length) changed = true;
-      return changed ? next : previous;
-    });
-  }, [knownPanelIds]);
-
-  useEffect(() => {
-    if (sharedHistoryPanelIds.length === 0) return;
-    setPanelValues((previous) => {
-      const merged = { ...previous };
-      sharedHistoryPanelIds.forEach((panelId) => {
-        merged[panelId] = {
-          ...(isObject(previous?.[panelId]) ? previous[panelId] : {}),
+    sharedHistoryPanelIds.forEach((panelId) => {
+      setPanelValue(
+        panelId,
+        {
+          ...(panelValues?.[panelId] ?? {}),
           xAxisMode: historyXAxisMode,
-        };
-      });
-      return merged;
+        },
+        false,
+      );
     });
-  }, [historyXAxisMode, sharedHistoryPanelIds]);
-
-  const handlePanelValueChange = useCallback((panelId, nextValue) => {
-    setPanelValues((previous) => {
-      if (!sharedHistoryPanelIdSet.has(panelId)) {
-        return {
-          ...previous,
-          [panelId]: nextValue,
-        };
-      }
-      const sharedView = extractSharedHistoryView(nextValue);
-      if (!sharedView) {
-        return {
-          ...previous,
-          [panelId]: nextValue,
-        };
-      }
-      const targetIds = sharedHistoryPanelIds;
-      if (targetIds.length <= 1) {
-        return {
-          ...previous,
-          [panelId]: nextValue,
-        };
-      }
-      const merged = { ...previous };
-      targetIds.forEach((targetId) => {
-        const sourceValue = targetId === panelId ? nextValue : previous[targetId];
-        merged[targetId] = mergeSharedHistoryView(sourceValue, sharedView);
-      });
-      return merged;
-    });
-  }, [sharedHistoryPanelIdSet, sharedHistoryPanelIds]);
+  }, [historyXAxisMode, panelValues, setPanelValue, sharedHistoryPanelIds]);
 
   return (
     <RunScopedWorkspace
@@ -252,138 +188,114 @@ const PerformanceWorkspace = ({
       noSelectionMessage="Pick a run to inspect performance panels."
     >
       <Stack spacing={2}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-            <FormControl size="small" sx={{ maxWidth: 320 }}>
-              <InputLabel id="performance-x-axis-label">X-Axis</InputLabel>
-              <Select
-                labelId="performance-x-axis-label"
-                value={historyXAxisMode}
-                label="X-Axis"
-                onChange={(event) => setHistoryXAxisMode(event.target.value)}
-              >
-                <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Runner Uptime (Default)</MenuItem>
-                <MenuItem value={HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES}>Completed Samples</MenuItem>
-                <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
-              </Select>
-            </FormControl>
-          </Stack>
-          {sampler?.sourceId ? (
-            <PanelCollection
-              title="Run Throughput"
-              panelSpecs={sampler.panelSpecs}
-              panelStates={sampler.panelStates}
-              panelValues={panelValues}
-              onPanelValueChange={handlePanelValueChange}
-            />
-          ) : (
-            <EmptyStateCard
-              title="No run performance snapshots"
-              message="Run throughput panels will appear once the sampler records snapshots."
-            />
-          )}
-          <Stack spacing={1}>
-            {queueTuningMessage ? (
-              <Alert severity={queueTuningMessage.severity}>{queueTuningMessage.text}</Alert>
-            ) : null}
-            <QueueTuningPanel
-              run={currentRun}
-              runId={selectedRun}
-              task={sampleTask}
-              authenticated={authenticated}
-              busy={queueTuningBusy}
-              onSave={saveQueueTuning}
-              onClear={clearQueueTuning}
-            />
-          </Stack>
-          {runEvaluator?.sourceId ? (
-            <PanelCollection
-              title="Evaluator Summary"
-              panelSpecs={runEvaluator.panelSpecs}
-              panelStates={runEvaluator.panelStates}
-              panelValues={panelValues}
-              onPanelValueChange={handlePanelValueChange}
-            />
+        <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+          <FormControl size="small" sx={{ maxWidth: 320 }}>
+            <InputLabel id="performance-x-axis-label">X-Axis</InputLabel>
+            <Select
+              labelId="performance-x-axis-label"
+              value={historyXAxisMode}
+              label="X-Axis"
+              onChange={(event) => setHistoryXAxisMode(event.target.value)}
+            >
+              <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Runner Uptime (Default)</MenuItem>
+              <MenuItem value={HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES}>Completed Samples</MenuItem>
+              <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
+            </Select>
+          </FormControl>
+        </Stack>
+        <Stack spacing={1}>
+          {queueTuningMessage ? (
+            <Alert severity={queueTuningMessage.severity}>{queueTuningMessage.text}</Alert>
           ) : null}
-          <Stack spacing={2}>
-            <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-              <FormControl size="small" sx={{ maxWidth: 260 }}>
-                <InputLabel id="performance-node-run-filter-label">Run</InputLabel>
-                <Select
-                  labelId="performance-node-run-filter-label"
-                  value={nodeRunFilter}
-                  label="Run"
-                  onChange={(event) => setNodeRunFilter(String(event.target.value))}
-                >
-                  {runFilterOptions.map((option) => (
-                    <MenuItem key={option.value} value={option.value}>
-                      {option.label}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              <FormControl size="small" sx={{ maxWidth: 220 }}>
-                <InputLabel id="performance-node-status-filter-label">Status</InputLabel>
-                <Select
-                  labelId="performance-node-status-filter-label"
-                  value={nodeActivityFilter}
-                  label="Status"
-                  onChange={(event) => setNodeActivityFilter(String(event.target.value))}
-                >
-                  <MenuItem value="active">Active</MenuItem>
-                  <MenuItem value="inactive">Inactive</MenuItem>
-                  <MenuItem value="all">All</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl size="small" sx={{ maxWidth: 240 }}>
-                <InputLabel id="performance-node-role-filter-label">Role</InputLabel>
-                <Select
-                  labelId="performance-node-role-filter-label"
-                  value={nodeRoleFilter}
-                  label="Role"
-                  onChange={(event) => setNodeRoleFilter(String(event.target.value))}
-                >
-                  <MenuItem value="evaluator">Evaluator</MenuItem>
-                  <MenuItem value="sampler_aggregator">Sampler</MenuItem>
-                  <MenuItem value="none">None</MenuItem>
-                  <MenuItem value="all">All</MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-            <FormControl size="small" sx={{ maxWidth: 420 }}>
-              <InputLabel id="performance-evaluator-label">Node</InputLabel>
+          <QueueTuningPanel
+            run={currentRun}
+            runId={selectedRun}
+            task={sampleTask}
+            authenticated={authenticated}
+            busy={queueTuningBusy}
+            onSave={saveQueueTuning}
+            onClear={clearQueueTuning}
+          />
+        </Stack>
+        <Stack spacing={2}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+            <FormControl size="small" sx={{ maxWidth: 260 }}>
+              <InputLabel id="performance-node-run-filter-label">Run</InputLabel>
               <Select
-                labelId="performance-evaluator-label"
-                value={selectedEvaluatorNodeName ?? ""}
-                label="Node"
-                onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
+                labelId="performance-node-run-filter-label"
+                value={nodeRunFilter}
+                label="Run"
+                onChange={(event) => setNodeRunFilter(String(event.target.value))}
               >
-                {filteredWorkers.map((worker) => {
-                  const nodeName = nodeNameOf(worker);
-                  return (
-                    <MenuItem key={nodeName} value={nodeName}>
-                      {nodeName}
-                    </MenuItem>
-                  );
-                })}
+                {runFilterOptions.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
               </Select>
             </FormControl>
-            {selectedEvaluatorNodeName == null ? (
-              <Alert severity="info">No node matches the current filters.</Alert>
-            ) : evaluator?.sourceId ? (
-              <PanelCollection
-                title={`Evaluator ${selectedEvaluatorNodeName}`}
-                panelSpecs={evaluator.panelSpecs}
-                panelStates={evaluator.panelStates}
-                panelValues={panelValues}
-                onPanelValueChange={handlePanelValueChange}
-              />
-            ) : (
-              <EmptyStateCard
-                title="No evaluator performance snapshots"
-                message="Evaluator panels will appear once the selected evaluator records snapshots."
-              />
-            )}
+            <FormControl size="small" sx={{ maxWidth: 220 }}>
+              <InputLabel id="performance-node-status-filter-label">Status</InputLabel>
+              <Select
+                labelId="performance-node-status-filter-label"
+                value={nodeActivityFilter}
+                label="Status"
+                onChange={(event) => setNodeActivityFilter(String(event.target.value))}
+              >
+                <MenuItem value="active">Active</MenuItem>
+                <MenuItem value="inactive">Inactive</MenuItem>
+                <MenuItem value="all">All</MenuItem>
+              </Select>
+            </FormControl>
+            <FormControl size="small" sx={{ maxWidth: 240 }}>
+              <InputLabel id="performance-node-role-filter-label">Role</InputLabel>
+              <Select
+                labelId="performance-node-role-filter-label"
+                value={nodeRoleFilter}
+                label="Role"
+                onChange={(event) => setNodeRoleFilter(String(event.target.value))}
+              >
+                <MenuItem value="evaluator">Evaluator</MenuItem>
+                <MenuItem value="sampler_aggregator">Sampler</MenuItem>
+                <MenuItem value="none">None</MenuItem>
+                <MenuItem value="all">All</MenuItem>
+              </Select>
+            </FormControl>
           </Stack>
+          <FormControl size="small" sx={{ maxWidth: 420 }}>
+            <InputLabel id="performance-evaluator-label">Node</InputLabel>
+            <Select
+              labelId="performance-evaluator-label"
+              value={selectedEvaluatorNodeName ?? ""}
+              label="Node"
+              onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
+            >
+              {filteredWorkers.map((worker) => {
+                const nodeName = nodeNameOf(worker);
+                return (
+                  <MenuItem key={nodeName} value={nodeName}>
+                    {nodeName}
+                  </MenuItem>
+                );
+              })}
+            </Select>
+          </FormControl>
+          {selectedEvaluatorNodeName == null ? <Alert severity="info">No node matches the current filters.</Alert> : null}
+        </Stack>
+        {panelStates.length > 0 ? (
+          <PanelCollection
+            title="Performance"
+            panelSpecs={panelSpecs}
+            panelStates={panelStates}
+            panelValues={panelValues}
+            onPanelValueChange={setPanelValue}
+          />
+        ) : (
+          <EmptyStateCard
+            title="No performance snapshots"
+            message="Performance panels will appear once the run records sampler or evaluator snapshots."
+          />
+        )}
       </Stack>
     </RunScopedWorkspace>
   );
