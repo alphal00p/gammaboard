@@ -1,7 +1,6 @@
 import { Alert, FormControl, InputLabel, MenuItem, Select, Stack } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
-import ConnectionStatus from "./ConnectionStatus";
 import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
 import QueueTuningPanel from "./runs/QueueTuningPanel";
@@ -248,12 +247,11 @@ const PerformanceWorkspace = ({
       loadMoreRuns={loadMoreRuns}
       isLoadingMoreRuns={isLoadingMoreRuns}
       isConnected={isConnected}
+      serverName={serverName}
       noRunsMessage="Create a run to inspect persisted performance history."
       noSelectionMessage="Pick a run to inspect performance panels."
     >
-      <ConnectionStatus isConnected={isConnected} lastUpdate={null} serverName={serverName} />
-      {selectedRun == null ? null : (
-        <Stack spacing={2}>
+      <Stack spacing={2}>
           <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
             <FormControl size="small" sx={{ maxWidth: 320 }}>
               <InputLabel id="performance-x-axis-label">X-Axis</InputLabel>
@@ -386,8 +384,7 @@ const PerformanceWorkspace = ({
               />
             )}
           </Stack>
-        </Stack>
-      )}
+      </Stack>
     </RunScopedWorkspace>
   );
 };

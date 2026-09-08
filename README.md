@@ -98,6 +98,10 @@ workers that can come and go.
 - A node is a live worker process registered in PostgreSQL by `name` plus
   process `uuid`. Nodes receive desired role assignments from the control plane:
   sampler aggregator, evaluator, or supervisor.
+- CPU-hours measure allocated sampler/evaluator worker core-time: assignment
+  wall time multiplied by the node's declared `cpus` capability, or one CPU when
+  omitted. Task counters persist across reassignment and completion; controller
+  tasks and parent runs include all descendant child-run CPU-hours.
 - The supervisor leader activates pending tasks, runs controller tasks, and
   updates node assignments. It does not consume evaluator/sampler compute slots.
 - Sampler aggregators own sample production. They decide when to produce work,

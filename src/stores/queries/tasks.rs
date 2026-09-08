@@ -4,7 +4,7 @@ use crate::core::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 #[derive(sqlx::FromRow)]
 struct RunTaskRow {
@@ -18,6 +18,7 @@ struct RunTaskRow {
     state: String,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
+    cpu_seconds: f64,
     failure_reason: Option<String>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
@@ -38,6 +39,7 @@ const RUN_TASK_COLUMNS: &str = r#"
     state,
     nr_produced_samples,
     nr_completed_samples,
+    cpu_seconds,
     failure_reason,
     started_at,
     completed_at,
@@ -78,6 +80,8 @@ fn decode_task_row(row: RunTaskRow) -> Result<RunTask, sqlx::Error> {
         nr_completed_samples: row.nr_completed_samples,
         nr_produced_samples_including_children: row.nr_produced_samples,
         nr_completed_samples_including_children: row.nr_completed_samples,
+        cpu_seconds: row.cpu_seconds,
+        cpu_seconds_including_children: row.cpu_seconds,
         failure_reason: row.failure_reason,
         started_at: row.started_at,
         completed_at: row.completed_at,
@@ -169,11 +173,11 @@ pub(crate) async fn list_run_tasks(
         .into_iter()
         .map(decode_task_row)
         .collect::<Result<Vec<_>, _>>()?;
-    apply_child_task_sample_totals(pool, run_id, &mut tasks).await?;
+    apply_child_task_totals(pool, run_id, &mut tasks).await?;
     Ok(tasks)
 }
 
-async fn apply_child_task_sample_totals(
+async fn apply_child_task_totals(
     pool: &PgPool,
     run_id: i32,
     tasks: &mut [RunTask],
@@ -181,7 +185,7 @@ async fn apply_child_task_sample_totals(
     if tasks.is_empty() {
         return Ok(());
     }
-    let rows = sqlx::query_as::<_, (i64, i64, i64)>(
+    let rows = sqlx::query_as::<_, (i64, i64, i64, f64)>(
         r#"
         WITH RECURSIVE descendants(parent_task_id, run_id) AS (
             SELECT parent_task_id, id
@@ -196,7 +200,8 @@ async fn apply_child_task_sample_totals(
         SELECT
             descendants.parent_task_id,
             COALESCE(SUM(run_tasks.nr_produced_samples), 0)::BIGINT AS nr_produced_samples,
-            COALESCE(SUM(run_tasks.nr_completed_samples), 0)::BIGINT AS nr_completed_samples
+            COALESCE(SUM(run_tasks.nr_completed_samples), 0)::BIGINT AS nr_completed_samples,
+            COALESCE(SUM(run_tasks.cpu_seconds), 0.0)::DOUBLE PRECISION AS cpu_seconds
         FROM descendants
         JOIN run_tasks ON run_tasks.run_id = descendants.run_id
         GROUP BY descendants.parent_task_id
@@ -208,14 +213,17 @@ async fn apply_child_task_sample_totals(
 
     let child_totals = rows
         .into_iter()
-        .map(|(task_id, produced, completed)| (task_id, (produced, completed)))
+        .map(|(task_id, produced, completed, cpu_seconds)| {
+            (task_id, (produced, completed, cpu_seconds))
+        })
         .collect::<std::collections::HashMap<_, _>>();
     for task in tasks {
-        if let Some((produced, completed)) = child_totals.get(&task.id) {
+        if let Some((produced, completed, cpu_seconds)) = child_totals.get(&task.id) {
             task.nr_produced_samples_including_children =
                 task.nr_produced_samples.saturating_add(*produced);
             task.nr_completed_samples_including_children =
                 task.nr_completed_samples.saturating_add(*completed);
+            task.cpu_seconds_including_children += *cpu_seconds;
         }
     }
     Ok(())
@@ -416,7 +424,34 @@ pub(crate) async fn set_run_task_spawn_origin(
     Ok(())
 }
 
+async fn flush_task_cpu_time(
+    connection: &mut PgConnection,
+    task_id: i64,
+) -> Result<(), sqlx::Error> {
+    // The node trigger accounts the interval since each worker's last heartbeat.
+    // Touching assigned nodes before the state transition closes the task's final
+    // accounting interval instead of losing it when no active task remains.
+    sqlx::query(
+        r#"
+        UPDATE nodes
+        SET cpu_time_accounted_at = cpu_time_accounted_at
+        WHERE active_run_id = (
+            SELECT run_id
+            FROM run_tasks
+            WHERE id = $1
+              AND state = 'active'
+        )
+        "#,
+    )
+    .bind(task_id)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn complete_run_task(pool: &PgPool, task_id: i64) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    flush_task_cpu_time(&mut tx, task_id).await?;
     sqlx::query(
         r#"
         UPDATE run_tasks
@@ -430,8 +465,9 @@ pub(crate) async fn complete_run_task(pool: &PgPool, task_id: i64) -> Result<(),
         "#,
     )
     .bind(task_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -486,6 +522,8 @@ pub(crate) async fn fail_run_task(
     task_id: i64,
     reason: &str,
 ) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    flush_task_cpu_time(&mut tx, task_id).await?;
     sqlx::query(
         r#"
         UPDATE run_tasks
@@ -499,7 +537,8 @@ pub(crate) async fn fail_run_task(
     )
     .bind(task_id)
     .bind(reason)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }

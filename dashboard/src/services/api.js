@@ -158,6 +158,7 @@ const normalizeRunEntry = (entry) => {
     root_stage_snapshot_id: rootStageSnapshotId,
     lifecycle_state: typeof entry.lifecycle_state === "string" ? entry.lifecycle_state : "unknown",
     nr_completed_samples_including_children: numberOr(entry.nr_completed_samples_including_children, 0),
+    cpu_hours_including_children: numberOr(entry.cpu_hours_including_children, 0),
     queue_tuning_defaults: entry.queue_tuning_defaults ?? {},
   };
 };
@@ -179,6 +180,7 @@ const normalizeRunTaskEntry = (entry) => {
     latest_stage_snapshot_id: entry.latest_stage_snapshot_id == null ? null : String(entry.latest_stage_snapshot_id),
     root_stage_snapshot_id: entry.root_stage_snapshot_id == null ? null : String(entry.root_stage_snapshot_id),
     nr_completed_samples_including_children: numberOr(entry.nr_completed_samples_including_children, 0),
+    cpu_hours_including_children: numberOr(entry.cpu_hours_including_children, 0),
   };
 };
 

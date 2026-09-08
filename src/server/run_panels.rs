@@ -162,6 +162,11 @@ fn panel_states(
                     "Completed Samples",
                     run.nr_completed_samples_including_children,
                 ),
+                key_value(
+                    "cpu_hours",
+                    "CPU Hours",
+                    run.cpu_seconds_including_children / 3600.0,
+                ),
                 key_value("completion_rate", "Completion Rate", run.completion_rate),
             ],
         ),

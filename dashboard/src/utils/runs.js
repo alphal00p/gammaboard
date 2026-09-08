@@ -1,3 +1,5 @@
+import { formatCompactNumber } from "./formatters";
+
 export const formatRunLabel = (run) => {
   if (!run) return "Unknown run";
   const label = run.run_name ? run.run_name : "Unnamed run";
@@ -12,6 +14,7 @@ export const formatRunSecondaryLabel = (run) =>
     run?.parent_run_id != null ? `child of #${run.parent_run_id}` : null,
     deriveRunLifecycle(run),
     `completed samples ${Number(run?.nr_completed_samples_including_children ?? 0).toLocaleString()}`,
+    `CPU hours ${formatCompactNumber(run?.cpu_hours_including_children ?? 0)}`,
   ]
     .filter(Boolean)
     .join(" | ");

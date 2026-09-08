@@ -68,6 +68,7 @@ struct RunProgressBaseRow {
     target: Option<JsonValue>,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
+    cpu_seconds: f64,
     sampler_runner_uptime_ms: f64,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
@@ -120,6 +121,8 @@ impl RunProgressBaseRow {
             nr_completed_samples: self.nr_completed_samples,
             nr_produced_samples_including_children: self.nr_produced_samples,
             nr_completed_samples_including_children: self.nr_completed_samples,
+            cpu_seconds: self.cpu_seconds,
+            cpu_seconds_including_children: self.cpu_seconds,
             sampler_runner_uptime_ms: self.sampler_runner_uptime_ms,
             started_at: self.started_at,
             completed_at: self.completed_at,
@@ -413,12 +416,18 @@ fn run_progress_sql(run_where_clause: &str) -> String {
             r.target,
             r.nr_produced_samples,
             r.nr_completed_samples,
+            COALESCE(task_cpu.cpu_seconds, 0.0)::DOUBLE PRECISION AS cpu_seconds,
             r.sampler_runner_uptime_ms,
             r.started_at,
             r.completed_at,
             r.batches_completed
         FROM runs r
         LEFT JOIN assignment_stats a ON r.id = a.run_id
+        LEFT JOIN (
+            SELECT run_id, SUM(cpu_seconds) AS cpu_seconds
+            FROM run_tasks
+            GROUP BY run_id
+        ) task_cpu ON r.id = task_cpu.run_id
         LEFT JOIN (
             {root_stage_snapshot_subquery}
         ) root ON r.id = root.run_id
@@ -504,7 +513,7 @@ pub(crate) async fn get_all_runs(pool: &PgPool) -> Result<Vec<RunProgress>, sqlx
             row.into_run_progress(stats)
         })
         .collect::<Vec<_>>();
-    apply_child_run_sample_totals(&mut runs);
+    apply_child_run_totals(&mut runs);
     Ok(runs)
 }
 
@@ -631,7 +640,7 @@ async fn load_run_progress_for_targets(
             row.into_run_progress(stats)
         })
         .collect::<Vec<_>>();
-    apply_child_run_sample_totals(&mut runs);
+    apply_child_run_totals(&mut runs);
 
     let mut by_id = runs
         .into_iter()
@@ -643,29 +652,31 @@ async fn load_run_progress_for_targets(
         .collect())
 }
 
-fn apply_child_run_sample_totals(runs: &mut [RunProgress]) {
+fn apply_child_run_totals(runs: &mut [RunProgress]) {
     fn accumulate(
         index: usize,
         runs: &[RunProgress],
         children_by_parent: &HashMap<i32, Vec<usize>>,
-        totals: &mut HashMap<i32, (i64, i64)>,
-    ) -> (i64, i64) {
+        totals: &mut HashMap<i32, (i64, i64, f64)>,
+    ) -> (i64, i64, f64) {
         let run = &runs[index];
         if let Some(total) = totals.get(&run.run_id) {
             return *total;
         }
         let mut produced = run.nr_produced_samples;
         let mut completed = run.nr_completed_samples;
+        let mut cpu_seconds = run.cpu_seconds;
         if let Some(children) = children_by_parent.get(&run.run_id) {
             for &child_index in children {
-                let (child_produced, child_completed) =
+                let (child_produced, child_completed, child_cpu_seconds) =
                     accumulate(child_index, runs, children_by_parent, totals);
                 produced = produced.saturating_add(child_produced);
                 completed = completed.saturating_add(child_completed);
+                cpu_seconds += child_cpu_seconds;
             }
         }
-        totals.insert(run.run_id, (produced, completed));
-        (produced, completed)
+        totals.insert(run.run_id, (produced, completed, cpu_seconds));
+        (produced, completed, cpu_seconds)
     }
 
     let mut children_by_parent: HashMap<i32, Vec<usize>> = HashMap::new();
@@ -680,9 +691,11 @@ fn apply_child_run_sample_totals(runs: &mut [RunProgress]) {
 
     let mut totals = HashMap::new();
     for index in 0..runs.len() {
-        let (produced, completed) = accumulate(index, runs, &children_by_parent, &mut totals);
+        let (produced, completed, cpu_seconds) =
+            accumulate(index, runs, &children_by_parent, &mut totals);
         runs[index].nr_produced_samples_including_children = produced;
         runs[index].nr_completed_samples_including_children = completed;
+        runs[index].cpu_seconds_including_children = cpu_seconds;
     }
 }
 

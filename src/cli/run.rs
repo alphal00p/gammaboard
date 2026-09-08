@@ -336,7 +336,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
             }
             for task in tasks {
                 println!(
-                    "run_id={} task_id={} name={} state={} kind={} produced={} completed={} sampler_source={} accumulator_source={} spawned_from={} failure_reason={}",
+                    "run_id={} task_id={} name={} state={} kind={} produced={} completed={} cpu_hours={:.6} sampler_source={} accumulator_source={} spawned_from={} failure_reason={}",
                     task.run_id,
                     task.id,
                     task.name,
@@ -344,6 +344,7 @@ async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
                     task.task.kind_str(),
                     task.nr_produced_samples,
                     task.nr_completed_samples_including_children,
+                    task.cpu_seconds_including_children / 3600.0,
                     format_task_source_ref(
                         &task.task,
                         task.task.sample_sampler_source(),
@@ -396,6 +397,7 @@ fn print_run_table(runs: Vec<gammaboard::stores::RunProgress>) {
         Cell::new("State").set_alignment(CellAlignment::Center),
         Cell::new("Produced").set_alignment(CellAlignment::Center),
         Cell::new("Completed").set_alignment(CellAlignment::Center),
+        Cell::new("CPU Hours").set_alignment(CellAlignment::Center),
     ]);
 
     for run in runs {
@@ -405,6 +407,7 @@ fn print_run_table(runs: Vec<gammaboard::stores::RunProgress>) {
             run.lifecycle_state.as_str().to_string(),
             run.nr_produced_samples.to_string(),
             run.nr_completed_samples_including_children.to_string(),
+            format!("{:.6}", run.cpu_seconds_including_children / 3600.0),
         ]);
     }
 

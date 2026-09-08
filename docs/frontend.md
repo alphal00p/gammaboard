@@ -47,10 +47,10 @@ Backend panel poll endpoints -> usePanelSource -> PanelCollection -> renderers
 - `useRunTasks(runId)` polls task state for the selected run.
 - `useTaskOutput({ runId, taskId })` polls selected task panels with the
   server-owned opaque cursor.
-- `useRunPerformancePanels({ runId, evaluatorNodeId })` polls performance
+- `useRunPerformancePanels({ runId, evaluatorNodeName })` polls performance
   panels.
-- `useRunConfigPanels({ runId })` polls the backend-generated effective engine
-  config panels.
+- `useRunPanels({ runId })` polls the backend-generated run summary and
+  effective engine config panels.
 - `useWorkerLogs()` fetches log history for the Logs tab.
 
 ## API Routing

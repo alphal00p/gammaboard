@@ -61,6 +61,8 @@ pub struct RunProgress {
     pub nr_completed_samples: i64,
     pub nr_produced_samples_including_children: i64,
     pub nr_completed_samples_including_children: i64,
+    pub cpu_seconds: f64,
+    pub cpu_seconds_including_children: f64,
     pub sampler_runner_uptime_ms: f64,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,

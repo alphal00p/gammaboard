@@ -786,6 +786,8 @@ mod tests {
             nr_completed_samples: 4,
             nr_produced_samples_including_children: 4,
             nr_completed_samples_including_children: 4,
+            cpu_seconds: 0.0,
+            cpu_seconds_including_children: 0.0,
             failure_reason: None,
             started_at: None,
             completed_at: None,

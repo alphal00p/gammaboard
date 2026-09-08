@@ -10,6 +10,7 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
+import { formatCompactNumber } from "../utils/formatters";
 
 const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null }) => {
   return (
@@ -30,6 +31,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                   <TableCell>Failure</TableCell>
                   <TableCell align="right">Goal</TableCell>
                   <TableCell align="right">Completed</TableCell>
+                  <TableCell align="right">CPU Hours</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -57,6 +59,9 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                       </TableCell>
                       <TableCell align="right">
                         {Number(task.nr_completed_samples_including_children ?? 0).toLocaleString()}
+                      </TableCell>
+                      <TableCell align="right">
+                        {formatCompactNumber(task.cpu_hours_including_children ?? 0)}
                       </TableCell>
                     </TableRow>
                   );

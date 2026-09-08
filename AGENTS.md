@@ -21,6 +21,9 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Runs are driven by persisted `run_tasks`; snapshots are the branchable state timeline.
 - Run names are human-facing and not unique; ambiguous CLI name references must fail.
 - Node identity is `name` plus live-process `uuid`; desired/current assignments live on `nodes`.
+- Task CPU time is persisted allocated worker core-time. Node updates charge the
+  active task by elapsed assignment time times the node `cpus` capability
+  (default one); controller task and run read models recursively include child runs.
 - Run layout uses `Domain`; concrete evaluator batches are `Vec<Point>`.
 - Evaluator runners validate concrete materialized/transformed batches against
   the run `Domain` before calling the evaluator.

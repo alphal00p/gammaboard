@@ -1,4 +1,4 @@
-import { Alert, Box } from "@mui/material";
+import { Alert } from "@mui/material";
 import PanelCollection from "./panels/PanelCollection";
 import { useTaskOutput } from "../hooks/useTaskOutput";
 
@@ -20,26 +20,20 @@ const TaskOutputPanel = ({
   }
 
   if (error) {
-    return (
-      <Box>
-        <Alert severity="error">{error}</Alert>
-      </Box>
-    );
+    return <Alert severity="error">{error}</Alert>;
   }
 
   if (panelSpecs.length === 0) return null;
 
   return (
-    <Box>
-      <PanelCollection
-        title={title}
-        panelSpecs={panelSpecs}
-        panelStates={panelStates}
-        panelValues={panelValues}
-        onPanelValueChange={setPanelValue}
-        onSelectRun={onSelectRun}
-      />
-    </Box>
+    <PanelCollection
+      title={title}
+      panelSpecs={panelSpecs}
+      panelStates={panelStates}
+      panelValues={panelValues}
+      onPanelValueChange={setPanelValue}
+      onSelectRun={onSelectRun}
+    />
   );
 };
 

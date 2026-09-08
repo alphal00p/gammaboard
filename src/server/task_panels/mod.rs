@@ -284,6 +284,11 @@ fn build_task_summary_entries(
     let mut entries = vec![
         key_value("state", "State", task.state.as_str()),
         key_value("kind", "Kind", task.task.kind_str()),
+        key_value(
+            "cpu_hours",
+            "CPU Hours",
+            task.cpu_seconds_including_children / 3600.0,
+        ),
     ];
 
     if let Some(reason) = task.failure_reason.as_deref()
@@ -1044,6 +1049,8 @@ mod tests {
             nr_completed_samples: 3,
             nr_produced_samples_including_children: 3,
             nr_completed_samples_including_children: 3,
+            cpu_seconds: 0.0,
+            cpu_seconds_including_children: 0.0,
             failure_reason: None,
             started_at: None,
             completed_at: None,

@@ -541,6 +541,7 @@ struct RunSummaryResponse {
     root_stage_snapshot_id: Option<String>,
     lifecycle_state: RunLifecycleState,
     nr_completed_samples_including_children: i64,
+    cpu_hours_including_children: f64,
     queue_tuning_defaults: Option<JsonValue>,
 }
 
@@ -559,6 +560,7 @@ impl From<RunProgress> for RunSummaryResponse {
             root_stage_snapshot_id: run.root_stage_snapshot_id,
             lifecycle_state: run.lifecycle_state,
             nr_completed_samples_including_children: run.nr_completed_samples_including_children,
+            cpu_hours_including_children: run.cpu_seconds_including_children / 3600.0,
             queue_tuning_defaults,
         }
     }
@@ -701,6 +703,7 @@ struct RunTaskResponse {
     queue_tuning: Option<SamplerQueueTuning>,
     state: RunTaskState,
     nr_completed_samples_including_children: i64,
+    cpu_hours_including_children: f64,
     failure_reason: Option<String>,
     #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
     latest_stage_snapshot_id: Option<i64>,
@@ -738,6 +741,7 @@ impl RunTaskResponse {
             queue_tuning,
             state: task.state,
             nr_completed_samples_including_children: task.nr_completed_samples_including_children,
+            cpu_hours_including_children: task.cpu_seconds_including_children / 3600.0,
             failure_reason: task.failure_reason,
             latest_stage_snapshot_id,
             root_stage_snapshot_id,
@@ -1192,23 +1196,6 @@ async fn get_run_task_output(
     };
     let panel_source = TaskPanelSource::new(&task.task, effective_accumulator_config)
         .map_err(|err| ApiError::Internal(err.to_string()))?;
-    if !matches!(task.state, crate::core::RunTaskState::Active)
-        && request.request.panel_actions.is_empty()
-        && cursor.snapshot_id.is_some()
-        && latest_persisted_snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.id.parse::<i64>().ok())
-            == cursor.snapshot_id
-    {
-        return json_response(crate::server::panels::PanelResponse {
-            source_id: format!("run:{run_id}:task:{}", task.id),
-            cursor: request.request.cursor.clone(),
-            reset_required: false,
-            panels: Vec::new(),
-            updates: Vec::new(),
-            poll_after_ms: None,
-        });
-    }
     let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
             .store
@@ -2042,6 +2029,8 @@ mod tests {
             nr_completed_samples: 9,
             nr_produced_samples_including_children: 11,
             nr_completed_samples_including_children: 9,
+            cpu_seconds: 1800.0,
+            cpu_seconds_including_children: 3600.0,
             failure_reason: None,
             started_at: None,
             completed_at: None,
@@ -2054,6 +2043,7 @@ mod tests {
         let value = serde_json::to_value(RunTaskResponse::new(task, Some(8), Some(2))).unwrap();
 
         assert_eq!(value["id"], "7");
+        assert_eq!(value["cpu_hours_including_children"], 1.0);
         assert_eq!(value["task_kind"], "set_accumulator");
         assert_eq!(value["goal_label"], "-");
         assert_eq!(value["is_sample"], false);
@@ -2062,6 +2052,8 @@ mod tests {
             "task_toml",
             "nr_produced_samples",
             "nr_completed_samples",
+            "cpu_seconds",
+            "cpu_seconds_including_children",
             "started_at",
             "completed_at",
             "created_at",

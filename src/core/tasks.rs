@@ -1973,6 +1973,10 @@ pub struct RunTask {
     pub nr_produced_samples_including_children: i64,
     #[serde(default)]
     pub nr_completed_samples_including_children: i64,
+    #[serde(default)]
+    pub cpu_seconds: f64,
+    #[serde(default)]
+    pub cpu_seconds_including_children: f64,
     pub failure_reason: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,

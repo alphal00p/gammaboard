@@ -46,8 +46,6 @@ const TaskQueuePanel = lazy(() => import("./components/TaskQueuePanel"));
 const TomlActionDialog = lazy(() => import("./components/runs/TomlActionDialog"));
 const WorkersWorkspace = lazy(() => import("./components/WorkersWorkspace"));
 
-const DEFAULT_CREATE_RUN_TOML = "";
-const DEFAULT_ADD_TASKS_TOML = "";
 const EVALUATOR_COUNT_STORAGE_KEY = "runs.evaluator_count";
 const CREATE_RUN_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.create_run.selected_template";
 const ADD_TASKS_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.add_tasks.selected_template";
@@ -407,7 +405,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
         title="Add Tasks"
         label="Task Queue TOML"
         submitLabel="Add Tasks"
-        initialValue={DEFAULT_ADD_TASKS_TOML}
+        initialValue=""
         helperText='Submit one or more [[task_queue]] entries using sampler_aggregator / accumulator sources: omitted = latest, or { from_name = "..." }, or { config = ... }.'
         templateKind="tasks"
         allowTemplateDelete
@@ -539,7 +537,7 @@ const RunsWorkspace = ({
         title="Create Run"
         label="Run TOML"
         submitLabel="Create Run"
-        initialValue={DEFAULT_CREATE_RUN_TOML}
+        initialValue=""
         helperText="Enter a run config. The backend merges this with the built-in default run template."
         templateKind="runs"
         onTemplateSaved={(response, name) => {

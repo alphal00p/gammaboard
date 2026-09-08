@@ -1,13 +1,14 @@
 use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{
-    AccumulatorMetricName, BatchFailOutcome, ControlPlaneStore, RunTaskInput, RunTaskSpec,
-    RunTaskStore, SampleStopCondition, StoreError, TaskMeasurementOutput, WorkQueueStore,
-    WorkerRole, next_batch_ids,
+    AccumulatorMetricName, BatchFailOutcome, ControlPlaneStore, RunReadStore, RunTaskInput,
+    RunTaskSpec, RunTaskStore, SampleStopCondition, StoreError, TaskMeasurementOutput,
+    WorkQueueStore, WorkerRole, next_batch_ids,
 };
 use gammaboard::{Batch, LatentBatchSpec, MeasurementResult, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 
 static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
@@ -46,6 +47,189 @@ async fn insert_completed_pause_task(store: &PgStore, run_id: i32) -> i64 {
     .fetch_one(store.pool())
     .await
     .expect("insert run task")
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn active_task_accumulates_declared_cpu_time() {
+    let Some((_test_guard, store)) = locked_test_store().await else {
+        return;
+    };
+    let node_name = unique_id("cpu-node");
+    let node_uuid = unique_id("cpu-uuid");
+    let run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (name, integration_params, point_spec)
+        VALUES ('cpu-time', '{}'::jsonb, '{"continuous":{"dims":1}}'::jsonb)
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert run");
+    let task = store
+        .append_run_tasks(
+            run_id,
+            &[RunTaskInput {
+                name: Some("sample".to_string()),
+                task: RunTaskSpec::Sample {
+                    stop_condition: SampleStopCondition {
+                        max_samples: Some(1),
+                        ..Default::default()
+                    },
+                    measurement: None,
+                    evaluator: None,
+                    sampler_aggregator: None,
+                    accumulator: None,
+                    queue_tuning: None,
+                    batch_transforms: None,
+                },
+            }],
+        )
+        .await
+        .expect("append task")
+        .remove(0);
+    store
+        .activate_next_run_task(run_id)
+        .await
+        .expect("activate task");
+
+    let capabilities = [("cpus".to_string(), 2)].into_iter().collect();
+    store
+        .announce_node(&node_name, &node_uuid, &capabilities)
+        .await
+        .expect("announce node");
+    store
+        .set_current_assignment(&node_uuid, WorkerRole::Evaluator, run_id)
+        .await
+        .expect("assign node");
+    sleep(Duration::from_millis(50)).await;
+    store
+        .announce_node(&node_name, &node_uuid, &capabilities)
+        .await
+        .expect("account heartbeat");
+    store
+        .complete_run_task(task.id)
+        .await
+        .expect("complete task");
+
+    let completed = store
+        .load_run_task(task.id)
+        .await
+        .expect("load task")
+        .expect("task exists");
+    assert!(
+        completed.cpu_seconds >= 0.08,
+        "two allocated CPUs should accumulate about twice the elapsed wall time: {}",
+        completed.cpu_seconds
+    );
+    let accounted = completed.cpu_seconds;
+    sleep(Duration::from_millis(20)).await;
+    store
+        .announce_node(&node_name, &node_uuid, &capabilities)
+        .await
+        .expect("post-completion heartbeat");
+    let unchanged = store
+        .load_run_task(task.id)
+        .await
+        .expect("load completed task")
+        .expect("task exists");
+    assert_eq!(unchanged.cpu_seconds, accounted);
+    let run = store
+        .get_run_progress(run_id)
+        .await
+        .expect("load run")
+        .expect("run exists");
+    assert_eq!(run.cpu_seconds, accounted);
+    assert_eq!(run.cpu_seconds_including_children, accounted);
+
+    store.remove_run(run_id).await.expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn parent_task_and_run_include_child_cpu_time() {
+    let Some((_test_guard, store)) = locked_test_store().await else {
+        return;
+    };
+    let parent_run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (name, integration_params, point_spec)
+        VALUES ('cpu-parent', '{}'::jsonb, '{"continuous":{"dims":1}}'::jsonb)
+        RETURNING id
+        "#,
+    )
+    .fetch_one(store.pool())
+    .await
+    .expect("insert parent run");
+    let parent_task_id = store
+        .append_run_tasks(
+            parent_run_id,
+            &[RunTaskInput {
+                name: Some("controller".to_string()),
+                task: RunTaskSpec::SetAccumulator {
+                    accumulator: gammaboard::core::AccumulatorConfig::Empty,
+                },
+            }],
+        )
+        .await
+        .expect("append parent task")[0]
+        .id;
+    sqlx::query("UPDATE run_tasks SET state = 'completed', cpu_seconds = 60.0 WHERE id = $1")
+        .bind(parent_task_id)
+        .execute(store.pool())
+        .await
+        .expect("complete parent task");
+    let child_run_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO runs (
+            name, integration_params, point_spec, parent_run_id, parent_task_id
+        ) VALUES (
+            'cpu-child', '{}'::jsonb, '{"continuous":{"dims":1}}'::jsonb, $1, $2
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(parent_run_id)
+    .bind(parent_task_id)
+    .fetch_one(store.pool())
+    .await
+    .expect("insert child run");
+    let child_task_id = store
+        .append_run_tasks(
+            child_run_id,
+            &[RunTaskInput {
+                name: Some("child-task".to_string()),
+                task: RunTaskSpec::SetAccumulator {
+                    accumulator: gammaboard::core::AccumulatorConfig::Empty,
+                },
+            }],
+        )
+        .await
+        .expect("append child task")[0]
+        .id;
+    sqlx::query("UPDATE run_tasks SET state = 'completed', cpu_seconds = 120.0 WHERE id = $1")
+        .bind(child_task_id)
+        .execute(store.pool())
+        .await
+        .expect("complete child task");
+
+    let parent_task = store
+        .list_run_tasks(parent_run_id)
+        .await
+        .expect("list parent tasks")
+        .remove(0);
+    assert_eq!(parent_task.cpu_seconds, 60.0);
+    assert_eq!(parent_task.cpu_seconds_including_children, 180.0);
+    let parent_run = store
+        .get_run_progress(parent_run_id)
+        .await
+        .expect("load parent run")
+        .expect("parent run exists");
+    assert_eq!(parent_run.cpu_seconds, 60.0);
+    assert_eq!(parent_run.cpu_seconds_including_children, 180.0);
+
+    store.remove_run(parent_run_id).await.expect("cleanup runs");
 }
 
 #[tokio::test]
