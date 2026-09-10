@@ -626,7 +626,11 @@ impl FullStackHarness {
             anyhow::bail!("failed to send SIGTERM to child process {label}");
         }
 
-        let _ = tokio::time::timeout(Duration::from_secs(10), managed.child.wait()).await;
+        let status = tokio::time::timeout(Duration::from_secs(10), managed.child.wait()).await??;
+        anyhow::ensure!(
+            status.success(),
+            "child {label} failed graceful shutdown: {status}"
+        );
         Ok(())
     }
 
@@ -3105,6 +3109,7 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
             .arg("--database-url")
             .arg(database_url)
             .arg("deploy")
+            .arg("--resume-workers")
             .arg("--server-config")
             .arg(deploy_config_path)
             .arg("--api-port")

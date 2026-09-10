@@ -150,3 +150,5 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - All process roles use `ProcessWorker::spawn` for consistent launch diagnostics.
   Bound malformed frame excerpts and stderr tails; redact credentials before
   emitting tracing events or writing the per-process stderr log.
+- Deploy initializes its store and tracing once, then reuses that store for both
+  worker resumption and graceful shutdown. Shutdown tests must check exit status.
