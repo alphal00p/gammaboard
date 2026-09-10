@@ -163,6 +163,9 @@ the dashboard. The maximum batch size and queue/I/O limits remain independent
 safety bounds; increasing the pending buffer cannot make an adaptive sampler
 produce past its training boundary.
 
+Fresh batches give evaluators without work priority over speculative prefetch
+for up to 250 ms; older work remains claimable if a peer is unresponsive.
+
 The run domain is authoritative throughout this path. Samplers produce points in
 that domain, materializers and transforms must preserve a valid concrete batch,
 and evaluator workers validate materialized/transformed batches before calling

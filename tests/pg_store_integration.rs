@@ -1215,3 +1215,68 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
 
     store.remove_run(run_id).await.expect("cleanup run");
 }
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
+    let Some((_guard, store)) = locked_test_store().await else {
+        return;
+    };
+    let run_id: i32 = sqlx::query_scalar(
+        "INSERT INTO runs (name,integration_params,point_spec) VALUES ('fair-prefetch','{}','{\"continuous\":{\"dims\":1}}') RETURNING id"
+    ).fetch_one(store.pool()).await.unwrap();
+    let a = unique_id("fair-a");
+    let b = unique_id("fair-b");
+    for node in [&a, &b] {
+        store
+            .announce_node(node, node, &Default::default())
+            .await
+            .unwrap();
+        store
+            .set_current_assignment(node, WorkerRole::Evaluator, run_id)
+            .await
+            .unwrap();
+    }
+    let task_id = insert_completed_pause_task(&store, run_id).await;
+    let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).unwrap();
+    let batches = vec![LatentBatchSpec::from_batch(&batch).build(); 5];
+    store
+        .insert_batches(run_id, task_id, false, &next_batch_ids(5), &batches)
+        .await
+        .unwrap();
+    // Freeze the fresh-batch condition rather than making a wall-clock-sensitive test.
+    sqlx::query("UPDATE batches SET created_at=now()+interval '1 hour' WHERE run_id=$1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_none());
+    assert!(store.claim_batch(run_id, &b).await.unwrap().is_some());
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    store
+        .release_claimed_batches_for_worker(run_id, &b)
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_none());
+    // A live but unresponsive peer cannot indefinitely prevent prefetch.
+    sqlx::query("UPDATE batches SET created_at=now()-interval '1 second' WHERE run_id=$1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    // Expired peers should not delay even newly inserted work.
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE uuid=$1")
+        .bind(&b)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE batches SET created_at=now()+interval '1 hour' WHERE run_id=$1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    store.remove_run(run_id).await.unwrap();
+}

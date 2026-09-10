@@ -152,3 +152,6 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   emitting tracing events or writing the per-process stderr log.
 - Deploy initializes its store and tracing once, then reuses that store for both
   worker resumption and graceful shutdown. Shutdown tests must check exit status.
+
+- Fresh batch claims yield speculative prefetch to live evaluators with no claimed
+  work, bounded by a 250 ms batch-age grace period in the shared PostgreSQL claim.
