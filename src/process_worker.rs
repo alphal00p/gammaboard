@@ -25,6 +25,7 @@ pub(crate) type ProcessStderrTail = Arc<Mutex<VecDeque<String>>>;
 
 pub(crate) struct ProcessWorker {
     label: String,
+    activity: Option<crate::runners::activity::Handle>,
     child: Child,
     stdin: Option<BufWriter<ChildStdin>>,
     stdout: BufReader<ChildStdout>,
@@ -69,6 +70,7 @@ impl ProcessWorker {
     ) -> Self {
         Self {
             label: label.into(),
+            activity: crate::runners::activity::current(),
             child,
             stdin: Some(BufWriter::new(stdin)),
             stdout: BufReader::new(stdout),
@@ -94,6 +96,14 @@ impl ProcessWorker {
         params: Value,
         binary: &[u8],
     ) -> Result<(Value, Vec<u8>), String> {
+        let _activity = crate::runners::activity::PhaseGuard::enter(
+            self.activity.clone(),
+            if self.label.contains("sampler") {
+                "waiting for sampler response"
+            } else {
+                "waiting for process response"
+            },
+        );
         let id = self.allocate_request_id();
         let request = serde_json::json!({
             "jsonrpc": JSON_RPC_VERSION,
@@ -149,23 +159,34 @@ impl ProcessWorker {
         expected_id: u64,
         deadline: Instant,
     ) -> Result<(Value, Vec<u8>), String> {
-        let Some((content_len, binary_len)) = self.read_frame_header(deadline)? else {
-            return Err(self.worker_terminated_message(&format!(
-                "{} worker terminated before responding",
-                self.label
-            )));
-        };
-        let payload = self.read_frame_bytes(content_len, "frame payload", deadline)?;
-        let binary = self.read_frame_bytes(binary_len, "binary payload", deadline)?;
-        let response = serde_json::from_slice::<Value>(&payload).map_err(|error| {
-            format!(
-                "failed to parse {} response frame as JSON: {error}; payload='{}'",
-                self.label,
-                String::from_utf8_lossy(&payload)
-            )
-        })?;
-        validate_response_envelope(&self.label, &response, expected_id)?;
-        Ok((response, binary))
+        loop {
+            let Some((content_len, binary_len)) = self.read_frame_header(deadline)? else {
+                return Err(self.worker_terminated_message(&format!(
+                    "{} worker terminated before responding",
+                    self.label
+                )));
+            };
+            let payload = self.read_frame_bytes(content_len, "frame payload", deadline)?;
+            let binary = self.read_frame_bytes(binary_len, "binary payload", deadline)?;
+            let response = serde_json::from_slice::<Value>(&payload).map_err(|error| {
+                format!(
+                    "failed to parse {} response frame as JSON: {error}; payload='{}'",
+                    self.label,
+                    String::from_utf8_lossy(&payload)
+                )
+            })?;
+            if response.get("id").is_none()
+                && response.get("method").and_then(Value::as_str) == Some("progress")
+            {
+                let phase = response["params"]["activity"]
+                    .as_str()
+                    .ok_or("progress notification requires params.activity")?;
+                crate::runners::activity::report_progress(self.activity.as_ref(), phase)?;
+                continue;
+            }
+            validate_response_envelope(&self.label, &response, expected_id)?;
+            return Ok((response, binary));
+        }
     }
 
     /// Reads a frame header block, returning `(content_length, binary_length)`.
@@ -698,6 +719,28 @@ mod tests {
             .expect_err("result+error should fail")
             .contains("exactly one")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn progress_notifications_are_consumed_before_the_response() {
+        let progress =
+            json!({"jsonrpc":"2.0","method":"progress","params":{"activity":"updating sampler"}})
+                .to_string();
+        let response = json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}}).to_string();
+        let script = format!(
+            "printf 'Content-Length: {}\\r\\n\\r\\n{}Content-Length: {}\\r\\n\\r\\n{}'; cat >/dev/null",
+            progress.len(),
+            progress,
+            response.len(),
+            response
+        );
+        let (mut worker, _) = test_worker(
+            &script,
+            Duration::from_millis(20),
+            Duration::from_millis(20),
+        );
+        assert_eq!(worker.request("sample", json!({})).unwrap()["ok"], true);
     }
 
     #[test]

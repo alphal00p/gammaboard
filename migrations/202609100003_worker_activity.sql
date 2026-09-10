@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN activity JSONB NOT NULL DEFAULT '{}'::jsonb;

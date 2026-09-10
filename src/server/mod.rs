@@ -791,7 +791,10 @@ async fn get_node_panels(
         .get_registered_worker(&node_name)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("node {node_name} not found")))?;
-    json_response(build_worker_panel_response(&worker))
+    let activity = state.store.worker_activity(&worker.node_name).await?;
+    let mut response = build_worker_panel_response(&worker);
+    crate::server::worker_panels::append_activity_panel(&mut response, &activity);
+    json_response(response)
 }
 
 async fn get_run_repro_toml(

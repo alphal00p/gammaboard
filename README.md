@@ -262,3 +262,15 @@ status, the saved task and sample count, and the last restore time and worker.
 A successful save is reported only after the checkpoint transaction commits.
 Checkpoint decode errors fail activation; completed work without a resume
 checkpoint is not silently restarted from fresh sampler state.
+
+Worker details include the current activity, its start time, and the age of the
+last completed batch. The lease heartbeat publishes activity independently of
+blocked sampler/evaluator calls. Updates are capped at the heartbeat frequency.
+Throughput is a 60-second active runner wall-time window, including waits.
+
+Process workers may send framed JSON-RPC notifications before their response:
+`{"jsonrpc":"2.0","method":"progress","params":{"activity":"updating sampler"}}`.
+Supported activities are `waiting`, `materializing`, `evaluating`, `updating sampler`,
+`saving checkpoint`, and `shutdown`. Notifications do not extend the request
+timeout. Without notifications, a process sampler reports “waiting for sampler
+response”; GammaBoard does not infer Python training activity from timing.

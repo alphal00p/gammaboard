@@ -169,3 +169,34 @@ fn json_has_object_fields(value: Option<&JsonValue>) -> bool {
         .and_then(JsonValue::as_object)
         .is_some_and(|object| !object.is_empty())
 }
+
+pub fn append_activity_panel(response: &mut PanelResponse, activity: &JsonValue) {
+    response.panels.push(sized_panel_spec(
+        "worker_activity",
+        "Current activity",
+        PanelKind::KeyValue,
+        PanelHistoryMode::None,
+        PanelWidth::Half,
+    ));
+    let age = activity["last_completed_batch_at"]
+        .as_str()
+        .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+        .map(|t| {
+            (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0)
+        });
+    response.updates.push(replace_panel(key_value_panel(
+        "worker_activity",
+        vec![
+            key_value("activity", "Activity", &activity["activity"]),
+            key_value("since", "Since", &activity["since"]),
+            key_value("last_batch_age", "Seconds since last completed batch", age),
+            key_value(
+                "rate_interval",
+                "Throughput interval",
+                "60 seconds of active runner wall time (includes waits)",
+            ),
+        ],
+    )));
+}

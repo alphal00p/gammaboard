@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod controller_child;
 pub mod evaluator;
 pub mod hyperparameter_tuning;

@@ -903,6 +903,8 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
+        crate::runners::activity::context(self.run_id, self.task.id);
+        crate::runners::activity::set("waiting");
         self.refresh_live_queue_tuning().await?;
         let tick_started = Instant::now();
         let QueueTickResult {
@@ -931,7 +933,12 @@ where
             &mut self.window_state.queue_counts_ms,
             queue_snapshot_duration,
         );
+        crate::runners::activity::set("updating sampler");
         let ingest_stats = self.process_completed_batches(completed).await?;
+        if ingest_stats.completed_batches > 0 {
+            crate::runners::activity::completed_batch();
+        }
+        crate::runners::activity::set("producing samples");
         let queue_before_produce = crate::core::BatchQueueCounts {
             pending: queue_before_tick.pending,
             claimed: queue_before_tick.claimed,
@@ -968,6 +975,7 @@ where
             performance_sync_started.elapsed(),
         );
         self.sync_tick_busy_time += tick_started.elapsed();
+        crate::runners::activity::set("waiting");
         self.check_tick_terminal_state(
             queue_before_produce,
             ingest_stats.completed_batches,
@@ -1093,6 +1101,7 @@ where
     }
 
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
+        crate::runners::activity::set("saving checkpoint");
         self.store.record_checkpoint_status(self.run_id, &serde_json::json!({
             "state":"saving", "task_id":self.task.id, "save_started_at":chrono::Utc::now(), "error":null
         })).await?;

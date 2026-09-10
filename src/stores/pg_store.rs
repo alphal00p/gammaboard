@@ -40,6 +40,15 @@ impl PgStore {
         Ok(status.unwrap_or_else(|| serde_json::json!({})))
     }
 
+    pub async fn worker_activity(&self, node_name: &str) -> Result<JsonValue, StoreError> {
+        let value: Option<JsonValue> =
+            sqlx::query_scalar("SELECT activity FROM nodes WHERE name=$1")
+                .bind(node_name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        Ok(value.unwrap_or_default())
+    }
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
@@ -225,6 +234,16 @@ fn decode_node_assignment(
 
 #[async_trait::async_trait]
 impl ControlPlaneStore for PgStore {
+    async fn record_worker_activity(
+        &self,
+        node_uuid: &str,
+        activity: &JsonValue,
+    ) -> Result<(), StoreError> {
+        sqlx::query("UPDATE nodes SET activity=$2 WHERE uuid=$1 AND lease_expires_at>now() AND activity IS DISTINCT FROM $2")
+            .bind(node_uuid).bind(activity).execute(&self.pool).await.map_err(map_sqlx)?;
+        Ok(())
+    }
+
     async fn upsert_desired_assignment(
         &self,
         node_name: &str,

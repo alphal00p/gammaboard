@@ -377,6 +377,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
 
+        crate::runners::activity::context(worker.run_id, task.id);
+        crate::runners::activity::set("initializing runtime");
         let latest_snapshot = role_store.load_sampler_checkpoint(worker.run_id).await?;
         let initial_batch_size_hint = latest_snapshot
             .as_ref()

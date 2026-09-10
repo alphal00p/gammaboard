@@ -583,6 +583,7 @@ where
     }
 
     pub async fn tick(&mut self) -> Result<(), EvaluatorRunnerError> {
+        crate::runners::activity::set("waiting");
         self.consume_finished_submit().await?;
 
         self.counters.fetch_attempts += 1;
@@ -601,8 +602,11 @@ where
         if pop.stalled {
             self.counters.fetch_stalls += 1;
         }
+        crate::runners::activity::context(self.run_id, claimed.task_id);
+        crate::runners::activity::set("initializing runtime");
         self.ensure_task_context(claimed.task_id).await?;
 
+        crate::runners::activity::set("materializing");
         let materialization_started = Instant::now();
         let materializer = self.materializer.as_mut().ok_or_else(|| {
             EvaluatorRunnerError::Store(StoreError::store(format!(
@@ -651,6 +655,7 @@ where
                 .await;
         }
         let started = Instant::now();
+        crate::runners::activity::set("evaluating");
         let eval_result = Self::call_with_panic_guard("evaluator.eval_batch", || {
             self.evaluator
                 .eval_batch(
@@ -808,6 +813,8 @@ where
         submit_stall_time_ms: f64,
     ) {
         self.batches_completed_total += 1;
+        crate::runners::activity::completed_batch();
+        crate::runners::activity::set("waiting");
         self.samples_evaluated_total += samples as i64;
         if samples > 0 {
             let samples = samples as f64;

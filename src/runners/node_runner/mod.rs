@@ -225,6 +225,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let announce_interval = self.config.announce_interval;
         let announce_retry_interval = self.config.announce_retry_interval;
         let announce_failure_timeout = self.config.announce_failure_timeout;
+        let activity = crate::runners::activity::current();
         let join_handle = tokio::spawn(async move {
             let mut startup = true;
             let mut announce_failures = 0u32;
@@ -235,6 +236,14 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                     .await
                 {
                     Ok(()) => {
+                        if let Some(handle) = &activity {
+                            let snapshot = crate::runners::activity::snapshot(handle);
+                            if let Err(error) =
+                                store.record_worker_activity(&node_uuid, &snapshot).await
+                            {
+                                warn!(%error,"failed to persist worker activity");
+                            }
+                        }
                         if announce_failures > 0 {
                             info!(
                                 startup,
@@ -410,125 +419,157 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             node_name = %self.node_name,
             node_uuid = %self.node_uuid
         );
-        async move {
-            let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
-            #[cfg(unix)]
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(
-                    |err| StoreError::store(format!("failed to install SIGTERM handler: {err}")),
-                )?;
-            let mut lease_renewal = self.spawn_lease_renewal_task();
-            let (task_control_shutdown, task_control_rx) = watch::channel(false);
-            let task_control = tokio::spawn(
-                TaskControlLoop::new(
-                    self.store.clone(),
-                    TaskControlLoopConfig::default(),
-                    self.node_name.clone(),
-                )
-                .run(task_control_rx),
-            );
+        let activity = crate::runners::activity::new(self.node_name.clone());
+        crate::runners::activity::CURRENT
+            .scope(
+                activity,
+                async move {
+                    let mut shutdown = std::pin::pin!(tokio::signal::ctrl_c());
+                    #[cfg(unix)]
+                    let mut sigterm =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                            .map_err(|err| {
+                            StoreError::store(format!("failed to install SIGTERM handler: {err}"))
+                        })?;
+                    let mut lease_renewal = self.spawn_lease_renewal_task();
+                    let (task_control_shutdown, task_control_rx) = watch::channel(false);
+                    let task_control = tokio::spawn(
+                        TaskControlLoop::new(
+                            self.store.clone(),
+                            TaskControlLoopConfig::default(),
+                            self.node_name.clone(),
+                        )
+                        .run(task_control_rx),
+                    );
 
-            #[cfg(unix)]
-            let startup_announced = Self::wait_for_initial_lease(
-                &mut lease_renewal.events,
-                &mut shutdown,
-                &mut sigterm,
-            )
-            .await?;
-            #[cfg(not(unix))]
-            let startup_announced =
-                Self::wait_for_initial_lease(&mut lease_renewal.events, &mut shutdown).await?;
+                    #[cfg(unix)]
+                    let startup_announced = Self::wait_for_initial_lease(
+                        &mut lease_renewal.events,
+                        &mut shutdown,
+                        &mut sigterm,
+                    )
+                    .await?;
+                    #[cfg(not(unix))]
+                    let startup_announced =
+                        Self::wait_for_initial_lease(&mut lease_renewal.events, &mut shutdown)
+                            .await?;
 
-            if !startup_announced {
-                Self::stop_lease_renewal_task(lease_renewal).await;
-                let _ = task_control_shutdown.send(true);
-                let _ = task_control.await;
-                if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
-                    warn!("failed to expire node lease on shutdown: {err}");
-                }
-                return Ok(());
-            }
-
-            loop {
-                let tick_started = Instant::now();
-                if Self::poll_lease_failure(&mut lease_renewal.events).await? {
-                    break;
-                }
-
-                let shutdown_requested = match self
-                    .store
-                    .consume_node_shutdown_request(&self.node_uuid)
-                    .await
-                {
-                    Ok(value) => value,
-                    Err(err) if err.is_database_error() => {
-                        self.sleep_after_database_error(&err).await;
-                        continue;
-                    }
-                    Err(err) => return Err(err),
-                };
-                if shutdown_requested {
-                    info!("node shutdown requested by control-plane");
-                    break;
-                }
-
-                let desired_target = match self.resolve_desired_target().await {
-                    Ok(value) => value,
-                    Err(err) if err.is_database_error() => {
-                        self.sleep_after_database_error(&err).await;
-                        continue;
-                    }
-                    Err(err) => return Err(err),
-                };
-                if let Err(err) = self.reconcile(desired_target).await {
-                    if err.is_database_error() {
-                        self.sleep_after_database_error(&err).await;
-                        continue;
-                    }
-                    return Err(err);
-                }
-
-                if self.active_runner.is_some() {
-                    let tick_outcome = {
-                        let active_runner = self.active_runner.as_mut().expect("checked above");
-                        let target = active_runner.target;
-                        let result = active_runner
-                            .runner
-                            .tick()
-                            .instrument(active_runner.context_span.clone())
-                            .await;
-                        (target, result)
-                    };
-                    let (target, result) = tick_outcome;
-                    let done = match result {
-                        Ok(done) => done,
-                        Err(err) if err.is_database_error() => {
-                            self.sleep_after_database_error(&err).await;
-                            false
+                    if !startup_announced {
+                        Self::stop_lease_renewal_task(lease_renewal).await;
+                        let _ = task_control_shutdown.send(true);
+                        let _ = task_control.await;
+                        if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
+                            warn!("failed to expire node lease on shutdown: {err}");
                         }
-                        Err(err) => {
-                            warn!("role runner tick failed: {err}");
-                            self.fail_current_assignment(target, &err).await?;
-                            self.reset_reconcile_backoff();
-                            false
+                        return Ok(());
+                    }
+
+                    loop {
+                        let tick_started = Instant::now();
+                        if Self::poll_lease_failure(&mut lease_renewal.events).await? {
+                            break;
                         }
-                    };
-                    if done {
-                        self.finish_current_assignment().await?;
-                        self.reset_reconcile_backoff();
-                        continue;
-                    }
-                    if self.active_runner.is_none() {
-                        self.reset_reconcile_backoff();
-                        continue;
-                    }
-                    let elapsed = tick_started.elapsed();
-                    let min_tick_time = self
-                        .active_runner
-                        .as_ref()
-                        .map(|runner| runner.runner.min_tick_time())
-                        .unwrap_or_default();
-                    if elapsed < min_tick_time {
+
+                        let shutdown_requested = match self
+                            .store
+                            .consume_node_shutdown_request(&self.node_uuid)
+                            .await
+                        {
+                            Ok(value) => value,
+                            Err(err) if err.is_database_error() => {
+                                self.sleep_after_database_error(&err).await;
+                                continue;
+                            }
+                            Err(err) => return Err(err),
+                        };
+                        if shutdown_requested {
+                            info!("node shutdown requested by control-plane");
+                            break;
+                        }
+
+                        let desired_target = match self.resolve_desired_target().await {
+                            Ok(value) => value,
+                            Err(err) if err.is_database_error() => {
+                                self.sleep_after_database_error(&err).await;
+                                continue;
+                            }
+                            Err(err) => return Err(err),
+                        };
+                        if let Err(err) = self.reconcile(desired_target).await {
+                            if err.is_database_error() {
+                                self.sleep_after_database_error(&err).await;
+                                continue;
+                            }
+                            return Err(err);
+                        }
+
+                        if self.active_runner.is_some() {
+                            let tick_outcome = {
+                                let active_runner =
+                                    self.active_runner.as_mut().expect("checked above");
+                                let target = active_runner.target;
+                                let result = active_runner
+                                    .runner
+                                    .tick()
+                                    .instrument(active_runner.context_span.clone())
+                                    .await;
+                                (target, result)
+                            };
+                            let (target, result) = tick_outcome;
+                            let done = match result {
+                                Ok(done) => done,
+                                Err(err) if err.is_database_error() => {
+                                    self.sleep_after_database_error(&err).await;
+                                    false
+                                }
+                                Err(err) => {
+                                    warn!("role runner tick failed: {err}");
+                                    self.fail_current_assignment(target, &err).await?;
+                                    self.reset_reconcile_backoff();
+                                    false
+                                }
+                            };
+                            if done {
+                                self.finish_current_assignment().await?;
+                                self.reset_reconcile_backoff();
+                                continue;
+                            }
+                            if self.active_runner.is_none() {
+                                self.reset_reconcile_backoff();
+                                continue;
+                            }
+                            let elapsed = tick_started.elapsed();
+                            let min_tick_time = self
+                                .active_runner
+                                .as_ref()
+                                .map(|runner| runner.runner.min_tick_time())
+                                .unwrap_or_default();
+                            if elapsed < min_tick_time {
+                                #[cfg(unix)]
+                                tokio::select! {
+                                    _ = &mut shutdown => {
+                                        info!("stopping node-runner");
+                                        break;
+                                    }
+                                    _ = sigterm.recv() => {
+                                        info!("stopping node-runner (SIGTERM)");
+                                        break;
+                                    }
+                                    _ = sleep(min_tick_time - elapsed) => {}
+                                }
+                                #[cfg(not(unix))]
+                                tokio::select! {
+                                    _ = &mut shutdown => {
+                                        info!("stopping node-runner");
+                                        break;
+                                    }
+                                    _ = sleep(min_tick_time - elapsed) => {}
+                                }
+                                continue;
+                            }
+                            continue;
+                        }
+
                         #[cfg(unix)]
                         tokio::select! {
                             _ = &mut shutdown => {
@@ -539,7 +580,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                                 info!("stopping node-runner (SIGTERM)");
                                 break;
                             }
-                            _ = sleep(min_tick_time - elapsed) => {}
+                            _ = sleep(self.next_reconcile_sleep()) => {}
                         }
                         #[cfg(not(unix))]
                         tokio::select! {
@@ -547,45 +588,22 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                                 info!("stopping node-runner");
                                 break;
                             }
-                            _ = sleep(min_tick_time - elapsed) => {}
+                            _ = sleep(self.next_reconcile_sleep()) => {}
                         }
-                        continue;
                     }
-                    continue;
-                }
 
-                #[cfg(unix)]
-                tokio::select! {
-                    _ = &mut shutdown => {
-                        info!("stopping node-runner");
-                        break;
+                    crate::runners::activity::set("shutdown");
+                    self.stop_current().await;
+                    Self::stop_lease_renewal_task(lease_renewal).await;
+                    let _ = task_control_shutdown.send(true);
+                    let _ = task_control.await;
+                    if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
+                        warn!("failed to expire node lease on shutdown: {err}");
                     }
-                    _ = sigterm.recv() => {
-                        info!("stopping node-runner (SIGTERM)");
-                        break;
-                    }
-                    _ = sleep(self.next_reconcile_sleep()) => {}
+                    Ok(())
                 }
-                #[cfg(not(unix))]
-                tokio::select! {
-                    _ = &mut shutdown => {
-                        info!("stopping node-runner");
-                        break;
-                    }
-                    _ = sleep(self.next_reconcile_sleep()) => {}
-                }
-            }
-
-            self.stop_current().await;
-            Self::stop_lease_renewal_task(lease_renewal).await;
-            let _ = task_control_shutdown.send(true);
-            let _ = task_control.await;
-            if let Err(err) = self.store.expire_node_lease(&self.node_uuid).await {
-                warn!("failed to expire node lease on shutdown: {err}");
-            }
-            Ok(())
-        }
-        .instrument(span)
-        .await
+                .instrument(span),
+            )
+            .await
     }
 }

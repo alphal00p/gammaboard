@@ -144,3 +144,6 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   from runtime capabilities or substitute local processes for external workers.
 - Checkpoint status is lightweight persisted run metadata. Update successful-save
   metadata in the checkpoint transaction; report restore only after runtime initialization.
+- Worker activity changes stay in memory within the node's task-local context;
+  the independent lease heartbeat persists snapshots, at most once per heartbeat.
+  Optional framed process `progress` notifications share the original request deadline.

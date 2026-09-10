@@ -29,6 +29,14 @@ pub trait RunSpecStore: Send + Sync {
 /// Desired-state control-plane operations for node assignments and run steering.
 #[async_trait]
 pub trait ControlPlaneStore: Send + Sync {
+    async fn record_worker_activity(
+        &self,
+        _node_uuid: &str,
+        _activity: &JsonValue,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     async fn upsert_desired_assignment(
         &self,
         node_name: &str,
