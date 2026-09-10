@@ -155,3 +155,5 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 
 - Fresh batch claims yield speculative prefetch to live evaluators with no claimed
   work, bounded by a 250 ms batch-age grace period in the shared PostgreSQL claim.
+- Finite training windows cap batch sizes for four chunks per evaluator; retain
+  that cap as the window drains.

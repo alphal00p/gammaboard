@@ -166,6 +166,9 @@ produce past its training boundary.
 Fresh batches give evaluators without work priority over speculative prefetch
 for up to 250 ms; older work remains claimable if a peer is unresponsive.
 
+Finite training windows aim for at least four chunks per evaluator, subject to
+minimum batch size and queue limits. The chunk cap stays fixed as a window drains.
+
 The run domain is authoritative throughout this path. Samplers produce points in
 that domain, materializers and transforms must preserve a valid concrete batch,
 and evaluator workers validate materialized/transformed batches before calling

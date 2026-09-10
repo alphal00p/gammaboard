@@ -118,8 +118,43 @@ pub struct SamplerQueue<S> {
     batch_size_current: usize,
     batch_size_tune_cooldown_remaining: u32,
     eval_ms_per_sample: RollingMetric,
+    training_batch_sizing: TrainingBatchSizing,
     metrics: QueueMetricsState,
     utilization: QueueUtilizationState,
+}
+
+/// Keep a finite training window divisible across workers, without recursively
+/// shrinking chunks as its remaining sample count decreases.
+#[derive(Default)]
+struct TrainingBatchSizing {
+    previous_remaining: Option<usize>,
+    cap: Option<usize>,
+}
+
+impl TrainingBatchSizing {
+    fn batch_size(&mut self, target: usize, remaining: Option<usize>, evaluators: usize) -> usize {
+        match remaining {
+            Some(remaining) if remaining > 0 && evaluators > 0 => {
+                if self
+                    .previous_remaining
+                    .is_none_or(|previous| remaining > previous)
+                {
+                    self.cap = Some(
+                        remaining
+                            .div_ceil(evaluators.saturating_mul(4))
+                            .max(MIN_BATCH_SIZE),
+                    );
+                }
+                self.previous_remaining = Some(remaining);
+                target.min(self.cap.unwrap_or(target))
+            }
+            _ => {
+                self.previous_remaining = None;
+                self.cap = None;
+                target
+            }
+        }
+    }
 }
 
 const fn default_batch_size_deadband_ratio() -> f64 {
@@ -257,6 +292,7 @@ where
             batch_size_current,
             batch_size_tune_cooldown_remaining: 0,
             eval_ms_per_sample: RollingMetric::default(),
+            training_batch_sizing: TrainingBatchSizing::default(),
             metrics: QueueMetricsState::default(),
             utilization: QueueUtilizationState::new(now),
         }
@@ -465,6 +501,7 @@ where
     pub async fn plan_production(
         &mut self,
         max_producable: Option<usize>,
+        training_remaining: Option<usize>,
         queue_counts: BatchQueueCounts,
     ) -> Result<Vec<usize>, StoreError> {
         let active_evaluator_count = self
@@ -474,11 +511,16 @@ where
             .max(0) as usize;
         self.cached_active_evaluator_count = Some(active_evaluator_count);
         self.cached_tick_queue_counts = Some(queue_counts);
+        let batch_size = self.training_batch_sizing.batch_size(
+            self.batch_size_current,
+            training_remaining,
+            active_evaluator_count,
+        );
         Ok(self.get_sample(
             max_producable,
             queue_counts,
             active_evaluator_count,
-            self.batch_size_current,
+            batch_size,
         ))
     }
 
@@ -1683,11 +1725,9 @@ mod tests {
         LatentBatchSpec::from_batch(&batch).build()
     }
 
-    #[tokio::test]
-    async fn concurrent_insert_tasks_keep_batch_ids_in_production_order() {
-        let store = RecordingStore::default();
-        let mut queue = SamplerQueue::new(
-            store.clone(),
+    fn recording_queue(store: RecordingStore) -> SamplerQueue<RecordingStore> {
+        SamplerQueue::new(
+            store,
             1,
             1,
             true,
@@ -1709,7 +1749,13 @@ mod tests {
             },
             SamplerQueueCheckpoint::default(),
             128,
-        );
+        )
+    }
+
+    #[tokio::test]
+    async fn concurrent_insert_tasks_keep_batch_ids_in_production_order() {
+        let store = RecordingStore::default();
+        let mut queue = recording_queue(store.clone());
 
         queue.ingest(vec![
             latent_batch_with_weight(1.0),
@@ -1746,30 +1792,7 @@ mod tests {
     #[tokio::test]
     async fn get_processed_ready_does_not_start_completed_fetch() {
         let store = RecordingStore::default();
-        let mut queue = SamplerQueue::new(
-            store.clone(),
-            1,
-            1,
-            true,
-            SamplerQueueConfig {
-                queue_buffer: 1.0,
-                target_batch_eval_ms: 500.0,
-                batch_size_deadband_ratio: 0.15,
-                batch_size_cooldown_ticks: 3,
-                pending_refill_low_ratio: 0.85,
-                pending_refill_high_ratio: 1.15,
-                max_batch_size: 4096,
-                local_pending_buffer_multiplier: 1.0,
-                max_queue_size: 16,
-                max_batches_per_tick: 16,
-                max_insert_bundle_size: 1,
-                max_concurrent_insert_tasks: 2,
-                completed_batch_fetch_limit: 16,
-                max_batch_retries: 3,
-            },
-            SamplerQueueCheckpoint::default(),
-            128,
-        );
+        let mut queue = recording_queue(store.clone());
 
         let processed = queue
             .get_processed_ready()
@@ -1778,5 +1801,19 @@ mod tests {
 
         assert!(processed.is_empty());
         assert_eq!(store.fetch_completed_calls(), 0);
+    }
+    #[test]
+    fn training_chunks_cover_workers_without_shrinking_the_tail() {
+        let mut sizing = TrainingBatchSizing::default();
+        assert_eq!(sizing.batch_size(5000, Some(10000), 2), 1250);
+        assert_eq!(sizing.batch_size(5000, Some(7500), 2), 1250);
+        assert_eq!(sizing.batch_size(5000, Some(100), 2), 1250);
+        assert_eq!(sizing.batch_size(500, Some(100), 2), 500);
+        assert_eq!(sizing.batch_size(5000, Some(20000), 2), 2500);
+        assert_eq!(sizing.batch_size(5000, None, 2), 5000);
+        assert_eq!(sizing.batch_size(5000, Some(10000), 4), 625);
+        sizing.batch_size(5000, Some(0), 4);
+        assert_eq!(sizing.batch_size(5000, Some(8), 4), MIN_BATCH_SIZE);
+        assert_eq!(sizing.batch_size(5000, Some(8), 0), 5000);
     }
 }

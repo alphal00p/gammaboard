@@ -95,7 +95,10 @@ enum AccumulatorCheckpointState {
 enum ProduceDecision {
     None,
     InitialRoundTrip(usize),
-    PlannedByQueue(Option<usize>),
+    PlannedByQueue {
+        max_samples: Option<usize>,
+        training_remaining: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1457,9 +1460,12 @@ where
         let batch_plan = match decision {
             ProduceDecision::None => Vec::new(),
             ProduceDecision::InitialRoundTrip(nr_samples) => vec![nr_samples],
-            ProduceDecision::PlannedByQueue(max_samples) => self
+            ProduceDecision::PlannedByQueue {
+                max_samples,
+                training_remaining,
+            } => self
                 .queue
-                .plan_production(max_samples, queue_before_produce)
+                .plan_production(max_samples, training_remaining, queue_before_produce)
                 .await
                 .map_err(RunnerError::from)?,
         };
@@ -1510,7 +1516,10 @@ where
                 }
                 ProduceDecision::None
             }
-            AccumulatorCheckpointState::Ready => ProduceDecision::PlannedByQueue(max_samples),
+            AccumulatorCheckpointState::Ready => ProduceDecision::PlannedByQueue {
+                max_samples,
+                training_remaining: training_samples_remaining,
+            },
         })
     }
 
