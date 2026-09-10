@@ -15,6 +15,22 @@ The extension protocol is `gammaboard-jsonrpc-v2`.
 - Arguments: run TOML `args = { ... }` is passed unchanged in `initialize`.
 - Stability: adding optional fields is allowed; changing/removing fields or changing method semantics requires a new protocol string.
 
+## Lifecycle
+
+On Unix, GammaBoard starts each process runtime in an isolated process group, so
+terminal signals sent to GammaBoard do not interrupt external workers directly.
+Shutdown is owned by GammaBoard: it stops issuing requests, closes the worker's
+stdin, and waits for the process to exit on EOF. If it remains alive for
+`shutdown_grace_seconds` (default `30`), GammaBoard sends `SIGTERM` to the
+process group, waits five more seconds, and then uses `SIGKILL` as a final
+fallback. `shutdown_grace_seconds` is an optional field on every
+`process_evaluator`, `process_sampler`, `process_batch_transform`, and
+`process_materializer` config.
+
+Requests remain synchronous. A request already being handled is allowed to
+return before the owning runner begins this shutdown sequence, subject to the
+normal request timeout.
+
 Frame shape:
 
 ```text

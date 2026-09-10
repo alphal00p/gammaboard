@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -113,9 +115,17 @@ pub(crate) fn build_process_worker_command(
     let mut command = Command::new(program);
     command.current_dir(&workdir);
     command.args(&resolved_args);
+    // Process workers must not receive terminal signals intended for GammaBoard.
+    // GammaBoard owns their lifecycle and shuts down the isolated process group.
+    isolate_process_command(&mut command);
     command.env("GAMMABOARD_PROCESS_RUNTIME", "command");
     command.env("GAMMABOARD_PROCESS_WORKER", label);
     Ok(command)
+}
+
+fn isolate_process_command(command: &mut Command) {
+    #[cfg(unix)]
+    command.process_group(0);
 }
 
 fn expand_runtime_path(raw: &str, resources_root: &Path) -> Result<PathBuf, BuildError> {
@@ -140,8 +150,10 @@ fn absolute_path(path: &Path) -> Result<PathBuf, BuildError> {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_runtime_value;
+    use super::{expand_runtime_value, isolate_process_command};
     use std::path::Path;
+    #[cfg(unix)]
+    use std::process::Command;
 
     #[test]
     fn expands_resources_placeholder_only() {
@@ -159,5 +171,20 @@ mod tests {
             expand_runtime_value("/opt/worker.py", resources),
             "/opt/worker.py"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_commands_start_in_an_isolated_process_group() {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg("sleep 10");
+        isolate_process_command(&mut command);
+        let mut child = command.spawn().expect("spawn isolated worker");
+        let pid = child.id() as libc::pid_t;
+
+        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
+
+        let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+        let _ = child.wait();
     }
 }

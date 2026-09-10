@@ -10,7 +10,9 @@ use crate::evaluation::{Batch, BatchTransform, Point};
 use crate::process_runtime::{
     build_process_worker_command, default_process_args, parse_process_offsets,
 };
-use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
+use crate::process_worker::{
+    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, pipe_process_stderr,
+};
 use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -19,6 +21,8 @@ pub struct ProcessBatchTransformParams {
     pub cwd: Option<String>,
     #[serde(default = "default_process_args")]
     pub args: Value,
+    #[serde(default = "default_process_shutdown_grace_seconds")]
+    pub shutdown_grace_seconds: u64,
 }
 
 pub struct ProcessBatchTransform {
@@ -118,6 +122,7 @@ impl ProcessBatchTransformWorker {
                 stdin,
                 stdout,
                 stderr_tail,
+                params.shutdown_grace_seconds,
             ),
             domain,
         };
@@ -387,6 +392,7 @@ args = { scale = 2.0 }
         let python =
             std::env::var("GAMMABOARD_TEST_PYTHON").unwrap_or_else(|_| "python3".to_string());
         let params = ProcessBatchTransformParams {
+            shutdown_grace_seconds: 30,
             command: vec![
                 python,
                 "-u".to_string(),

@@ -8,7 +8,9 @@ use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
 };
 use crate::process_runtime::{build_process_worker_command, default_process_args};
-use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
+use crate::process_worker::{
+    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, pipe_process_stderr,
+};
 use crate::utils::domain::Domain;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -31,6 +33,8 @@ pub struct ProcessEvaluatorParams {
     pub accumulator: ProcessAccumulatorKind,
     #[serde(default = "default_process_args")]
     pub args: Value,
+    #[serde(default = "default_process_shutdown_grace_seconds")]
+    pub shutdown_grace_seconds: u64,
 }
 
 pub struct ProcessEvaluator {
@@ -249,7 +253,14 @@ impl ProcessRuntimeWorker {
         let stderr_tail = pipe_process_stderr("process evaluator", stderr);
 
         let mut worker = Self {
-            process: ProcessWorker::new("process evaluator", child, stdin, stdout, stderr_tail),
+            process: ProcessWorker::new(
+                "process evaluator",
+                child,
+                stdin,
+                stdout,
+                stderr_tail,
+                params.shutdown_grace_seconds,
+            ),
             domain,
             components: params.components.clone(),
             accumulator_kind: params.accumulator.clone(),
@@ -574,6 +585,7 @@ domain = { discrete = { axis_label = "d0", branches = [
             ECHO_EVALUATOR_WORKER.to_string(),
         ];
         let params = ProcessEvaluatorParams {
+            shutdown_grace_seconds: 30,
             command,
             cwd: None,
             domain: crate::utils::domain::Domain::continuous(2),

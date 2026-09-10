@@ -134,7 +134,8 @@ the configured evaluator.
 External evaluators, samplers, transforms, and materializers speak framed
 JSON-RPC over stdin/stdout. The protocol is in
 [docs/process-runtime.md](docs/process-runtime.md); the Python helpers and
-working runtimes are in [process_api](process_api).
+working runtimes are in [process_api](process_api). GammaBoard isolates these
+workers from terminal signals and owns their EOF-first, bounded shutdown.
 
 ## Controller results
 

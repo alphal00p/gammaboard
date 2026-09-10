@@ -16,18 +16,24 @@ const MAX_FRAME_HEADER_LINE_BYTES: usize = 8 * 1024;
 const MAX_JSON_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BINARY_FRAME_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_SHUTDOWN_GRACE_SECONDS: u64 = 30;
+const DEFAULT_TERMINATE_GRACE: Duration = Duration::from_secs(5);
+const EXIT_STATUS_GRACE: Duration = Duration::from_millis(50);
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub(crate) type ProcessStderrTail = Arc<Mutex<VecDeque<String>>>;
 
 pub(crate) struct ProcessWorker {
     label: String,
     child: Child,
-    stdin: BufWriter<ChildStdin>,
+    stdin: Option<BufWriter<ChildStdin>>,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
     stdout_log_bytes_before_frame: usize,
     stderr_tail: ProcessStderrTail,
     request_timeout: Duration,
+    shutdown_grace: Duration,
+    terminate_grace: Duration,
 }
 
 impl ProcessWorker {
@@ -37,34 +43,41 @@ impl ProcessWorker {
         stdin: ChildStdin,
         stdout: ChildStdout,
         stderr_tail: ProcessStderrTail,
+        shutdown_grace_seconds: u64,
     ) -> Self {
-        Self::with_request_timeout(
+        Self::with_timeouts(
             label,
             child,
             stdin,
             stdout,
             stderr_tail,
             DEFAULT_REQUEST_TIMEOUT,
+            Duration::from_secs(shutdown_grace_seconds),
+            DEFAULT_TERMINATE_GRACE,
         )
     }
 
-    fn with_request_timeout(
+    fn with_timeouts(
         label: impl Into<String>,
         child: Child,
         stdin: ChildStdin,
         stdout: ChildStdout,
         stderr_tail: ProcessStderrTail,
         request_timeout: Duration,
+        shutdown_grace: Duration,
+        terminate_grace: Duration,
     ) -> Self {
         Self {
             label: label.into(),
             child,
-            stdin: BufWriter::new(stdin),
+            stdin: Some(BufWriter::new(stdin)),
             stdout: BufReader::new(stdout),
             next_id: 1,
             stdout_log_bytes_before_frame: 0,
             stderr_tail,
             request_timeout,
+            shutdown_grace,
+            terminate_grace,
         }
     }
 
@@ -102,28 +115,33 @@ impl ProcessWorker {
     }
 
     fn write_frame(&mut self, value: &Value, binary: &[u8]) -> Result<(), String> {
+        let label = self.label.clone();
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| format!("{label} worker stdin is closed"))?;
         let payload = serde_json::to_vec(value)
-            .map_err(|error| format!("failed to serialize {} request: {error}", self.label))?;
-        write!(self.stdin, "Content-Length: {}\r\n", payload.len())
-            .map_err(|error| format!("failed writing {} frame header: {error}", self.label))?;
+            .map_err(|error| format!("failed to serialize {label} request: {error}"))?;
+        write!(stdin, "Content-Length: {}\r\n", payload.len())
+            .map_err(|error| format!("failed writing {label} frame header: {error}"))?;
         if !binary.is_empty() {
-            write!(self.stdin, "Binary-Length: {}\r\n", binary.len())
-                .map_err(|error| format!("failed writing {} frame header: {error}", self.label))?;
+            write!(stdin, "Binary-Length: {}\r\n", binary.len())
+                .map_err(|error| format!("failed writing {label} frame header: {error}"))?;
         }
-        self.stdin
+        stdin
             .write_all(b"\r\n")
-            .map_err(|error| format!("failed writing {} frame header: {error}", self.label))?;
-        self.stdin
+            .map_err(|error| format!("failed writing {label} frame header: {error}"))?;
+        stdin
             .write_all(&payload)
-            .map_err(|error| format!("failed writing {} frame payload: {error}", self.label))?;
+            .map_err(|error| format!("failed writing {label} frame payload: {error}"))?;
         if !binary.is_empty() {
-            self.stdin.write_all(binary).map_err(|error| {
-                format!("failed writing {} binary payload: {error}", self.label)
-            })?;
+            stdin
+                .write_all(binary)
+                .map_err(|error| format!("failed writing {label} binary payload: {error}"))?;
         }
-        self.stdin
+        stdin
             .flush()
-            .map_err(|error| format!("failed flushing {} request: {error}", self.label))
+            .map_err(|error| format!("failed flushing {label} request: {error}"))
     }
 
     fn read_response(
@@ -327,7 +345,7 @@ impl ProcessWorker {
     }
 
     fn request_timeout_message(&mut self) -> String {
-        let _ = self.child.kill();
+        self.force_kill();
         let status = self
             .child
             .wait()
@@ -369,10 +387,7 @@ impl ProcessWorker {
 
     pub(crate) fn worker_terminated_message(&mut self, context: &str) -> String {
         let status = self
-            .child
-            .try_wait()
-            .ok()
-            .flatten()
+            .wait_for_exit(EXIT_STATUS_GRACE)
             .map(|s| s.to_string())
             .unwrap_or_else(|| "running".to_string());
         let stderr_tail = self.stderr_tail();
@@ -389,12 +404,70 @@ impl ProcessWorker {
         };
         lines.iter().cloned().collect::<Vec<_>>().join("\n")
     }
+
+    fn wait_for_exit(&mut self, timeout: Duration) -> Option<std::process::ExitStatus> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return Some(status);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(
+                EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn signal_process(&mut self, signal: libc::c_int) {
+        let pid = self.child.id() as libc::pid_t;
+        // Production workers are process-group leaders. Retain a direct-child
+        // fallback for tests and for a failed platform-specific group setup.
+        let is_group_leader = unsafe { libc::getpgid(pid) } == pid;
+        if !is_group_leader || unsafe { libc::kill(-pid, signal) } != 0 {
+            let _ = unsafe { libc::kill(pid, signal) };
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn signal_process(&mut self, _signal: i32) {
+        let _ = self.child.kill();
+    }
+
+    fn force_kill(&mut self) {
+        #[cfg(unix)]
+        self.signal_process(libc::SIGKILL);
+        #[cfg(not(unix))]
+        self.signal_process(0);
+    }
+
+    fn shutdown(&mut self) {
+        // EOF is the process protocol's graceful shutdown signal.
+        drop(self.stdin.take());
+        if self.wait_for_exit(self.shutdown_grace).is_some() {
+            return;
+        }
+        #[cfg(unix)]
+        self.signal_process(libc::SIGTERM);
+        #[cfg(not(unix))]
+        self.signal_process(0);
+        if self.wait_for_exit(self.terminate_grace).is_some() {
+            return;
+        }
+        self.force_kill();
+        let _ = self.child.wait();
+    }
+}
+
+pub(crate) const fn default_process_shutdown_grace_seconds() -> u64 {
+    DEFAULT_SHUTDOWN_GRACE_SECONDS
 }
 
 impl Drop for ProcessWorker {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.shutdown();
     }
 }
 
@@ -563,8 +636,10 @@ mod tests {
         pipe_process_stderr, read_le_f64, read_le_i64, validate_response_envelope,
     };
     use serde_json::json;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn structured_worker_log_is_unwrapped_for_tail() {
@@ -652,12 +727,14 @@ mod tests {
         let stdin = child.stdin.take().expect("worker stdin");
         let stdout = child.stdout.take().expect("worker stdout");
         let stderr = child.stderr.take().expect("worker stderr");
-        let mut worker = ProcessWorker::with_request_timeout(
+        let mut worker = ProcessWorker::with_timeouts(
             "test worker",
             child,
             stdin,
             stdout,
             pipe_process_stderr("test worker", stderr),
+            Duration::from_millis(20),
+            Duration::from_millis(20),
             Duration::from_millis(20),
         );
 
@@ -667,5 +744,68 @@ mod tests {
                 .expect_err("stalled request must fail")
                 .contains("timed out")
         );
+    }
+
+    #[cfg(unix)]
+    fn test_worker(
+        command: &str,
+        shutdown_grace: Duration,
+        terminate_grace: Duration,
+    ) -> (ProcessWorker, u32) {
+        let mut child = Command::new("sh")
+            .args(["-c", command])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .expect("spawn test worker");
+        let pid = child.id();
+        let stdin = child.stdin.take().expect("worker stdin");
+        let stdout = child.stdout.take().expect("worker stdout");
+        let stderr = child.stderr.take().expect("worker stderr");
+        (
+            ProcessWorker::with_timeouts(
+                "test worker",
+                child,
+                stdin,
+                stdout,
+                pipe_process_stderr("test worker", stderr),
+                Duration::from_secs(1),
+                shutdown_grace,
+                terminate_grace,
+            ),
+            pid,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_shutdown_closes_stdin_and_reaps_clean_exit() {
+        let (worker, pid) = test_worker(
+            "while read -r _; do :; done",
+            Duration::from_secs(1),
+            Duration::from_millis(20),
+        );
+
+        drop(worker);
+
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_shutdown_escalates_after_bounded_grace_periods() {
+        let (worker, pid) = test_worker(
+            "trap '' TERM; while :; do :; done",
+            Duration::from_millis(20),
+            Duration::from_millis(20),
+        );
+        let started = Instant::now();
+
+        drop(worker);
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
     }
 }

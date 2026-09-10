@@ -51,6 +51,9 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   non-sampled inputs. `i`/`I` are built-in imaginary-unit constants. Purely real
   results work with scalar accumulators, while complex results require
   vector/full-vector components `real` and `imag`.
+- On Unix, external process workers run in isolated process groups. GammaBoard
+  owns shutdown: close stdin, wait `shutdown_grace_seconds`, then escalate from
+  `SIGTERM` to `SIGKILL` for the whole worker process group.
 - `image2d` panels are rendered by the generic canvas heatmap path. Complex
   image tasks can use `display = "complex_phase"` to draw phase as hue and
   magnitude as saturation.

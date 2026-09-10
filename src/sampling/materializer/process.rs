@@ -9,7 +9,9 @@ use crate::evaluation::{Batch, Materializer, Point};
 use crate::process_runtime::{
     build_process_worker_command, default_process_args, parse_process_offsets,
 };
-use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker, pipe_process_stderr};
+use crate::process_worker::{
+    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, pipe_process_stderr,
+};
 use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
 
@@ -19,6 +21,8 @@ pub struct ProcessMaterializerParams {
     pub cwd: Option<String>,
     #[serde(default = "default_process_args")]
     pub args: Value,
+    #[serde(default = "default_process_shutdown_grace_seconds")]
+    pub shutdown_grace_seconds: u64,
 }
 
 pub struct ProcessMaterializer {
@@ -105,7 +109,14 @@ impl ProcessMaterializerWorker {
         let stderr_tail = pipe_process_stderr("process materializer", stderr);
 
         let mut worker = Self {
-            process: ProcessWorker::new("process materializer", child, stdin, stdout, stderr_tail),
+            process: ProcessWorker::new(
+                "process materializer",
+                child,
+                stdin,
+                stdout,
+                stderr_tail,
+                params.shutdown_grace_seconds,
+            ),
             domain,
         };
         worker.send_init(params.args.clone())?;
@@ -342,6 +353,7 @@ args = { scale = 2.0 }
         let python =
             std::env::var("GAMMABOARD_TEST_PYTHON").unwrap_or_else(|_| "python3".to_string());
         let params = ProcessMaterializerParams {
+            shutdown_grace_seconds: 30,
             command: vec![
                 python,
                 "-u".to_string(),

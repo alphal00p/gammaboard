@@ -11,7 +11,8 @@ use crate::process_runtime::{
     build_process_worker_command, default_process_args, parse_process_offsets,
 };
 use crate::process_worker::{
-    PROCESS_PROTOCOL, ProcessWorker, extend_le_f64, pipe_process_stderr, read_le_f64, read_le_i64,
+    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, extend_le_f64,
+    pipe_process_stderr, read_le_f64, read_le_i64,
 };
 use crate::sampling::{
     DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
@@ -27,6 +28,8 @@ pub struct ProcessSamplerParams {
     pub requires_training_values: bool,
     #[serde(default = "default_process_args")]
     pub args: Value,
+    #[serde(default = "default_process_shutdown_grace_seconds")]
+    pub shutdown_grace_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,7 +226,14 @@ impl ProcessSamplerWorker {
         let stderr_tail = pipe_process_stderr("process sampler", stderr);
 
         let mut worker = Self {
-            process: ProcessWorker::new("process sampler", child, stdin, stdout, stderr_tail),
+            process: ProcessWorker::new(
+                "process sampler",
+                child,
+                stdin,
+                stdout,
+                stderr_tail,
+                params.shutdown_grace_seconds,
+            ),
             domain,
         };
         worker.send_init(params.args.clone(), snapshot, evaluator_metadata)?;
@@ -600,6 +610,7 @@ args = { seed = 0 }
     #[test]
     fn process_sampler_params_no_longer_define_domain_shape() {
         let params = ProcessSamplerParams {
+            shutdown_grace_seconds: 30,
             command: vec!["worker".to_string()],
             cwd: None,
             requires_training_values: false,
@@ -621,6 +632,7 @@ args = { seed = 0 }
         let python =
             std::env::var("GAMMABOARD_TEST_PYTHON").unwrap_or_else(|_| "python3".to_string());
         let params = ProcessSamplerParams {
+            shutdown_grace_seconds: 30,
             command: vec![
                 python,
                 "-u".to_string(),
