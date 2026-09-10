@@ -163,11 +163,13 @@ the dashboard. The maximum batch size and queue/I/O limits remain independent
 safety bounds; increasing the pending buffer cannot make an adaptive sampler
 produce past its training boundary.
 
-Fresh batches give evaluators without work priority over speculative prefetch
-for up to 250 ms; older work remains claimable if a peer is unresponsive.
-
 Finite training windows aim for at least four chunks per evaluator, subject to
-minimum batch size and queue limits. The chunk cap stays fixed as a window drains.
+minimum batch size and queue limits. Fresh batches give evaluators without work
+priority over speculative prefetch for up to 250 ms; older work remains claimable
+if a peer is unresponsive. Evaluation-time smoothing uses an EWMA weight of 0.2
+per 1,000 samples, retaining history across normal-sized batches. These defaults
+are starting points: adapters with substantial per-batch setup can benefit from
+longer batches, while finite training windows need enough chunks for parallelism.
 
 The run domain is authoritative throughout this path. Samplers produce points in
 that domain, materializers and transforms must preserve a valid concrete batch,

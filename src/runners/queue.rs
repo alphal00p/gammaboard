@@ -14,6 +14,8 @@ const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
 const MIN_BATCH_SIZE: usize = 16;
+// One EWMA observation per 1,000 samples, rather than per individual point.
+const EVAL_TIMING_REFERENCE_SAMPLES: f64 = 1000.0;
 const DEFAULT_BATCH_SIZE_DEADBAND_RATIO: f64 = 0.15;
 const DEFAULT_BATCH_SIZE_COOLDOWN_TICKS: u32 = 3;
 const DEFAULT_PENDING_REFILL_LOW_RATIO: f64 = 0.85;
@@ -326,8 +328,10 @@ where
         if batch_size == 0 || !total_eval_time_ms.is_finite() || total_eval_time_ms <= 0.0 {
             return;
         }
-        self.eval_ms_per_sample
-            .observe_weighted(total_eval_time_ms / batch_size as f64, batch_size as f64);
+        self.eval_ms_per_sample.observe_weighted(
+            total_eval_time_ms / batch_size as f64,
+            batch_size as f64 / EVAL_TIMING_REFERENCE_SAMPLES,
+        );
         self.tune_batch_size();
     }
 
@@ -1815,5 +1819,22 @@ mod tests {
         sizing.batch_size(5000, Some(0), 4);
         assert_eq!(sizing.batch_size(5000, Some(8), 4), MIN_BATCH_SIZE);
         assert_eq!(sizing.batch_size(5000, Some(8), 0), 5000);
+    }
+    #[test]
+    fn timing_smoothing_preserves_history_and_is_batch_partition_invariant() {
+        let mut whole = recording_queue(RecordingStore::default());
+        let mut split = recording_queue(RecordingStore::default());
+        whole.observe_completed_eval_batch(5000, 5000.0);
+        split.observe_completed_eval_batch(5000, 5000.0);
+        whole.observe_completed_eval_batch(5000, 10000.0);
+        for _ in 0..10 {
+            split.observe_completed_eval_batch(500, 1000.0);
+        }
+        let mean = whole.eval_ms_per_sample.value().unwrap();
+        assert!(
+            mean > 1.0 && mean < 2.0,
+            "large batches must retain timing history"
+        );
+        assert!((mean - split.eval_ms_per_sample.value().unwrap()).abs() < 1e-12);
     }
 }
