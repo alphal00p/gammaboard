@@ -20,6 +20,12 @@ pub struct RunArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
+    /// Validate a run without creating database records; optionally initialize runtimes
+    Validate {
+        config_file: PathBuf,
+        #[arg(long)]
+        probe: bool,
+    },
     /// Create a run from a run TOML file
     Create { config_file: PathBuf },
     /// Clone a run from a persisted stage snapshot
@@ -76,6 +82,12 @@ pub async fn run_run_commands(
     config: &RuntimeConfig,
     quiet: bool,
 ) -> Result<()> {
+    if let RunCommand::Validate { config_file, probe } = &command {
+        let config = run_api::load_run_add_config_file(config_file)?;
+        let report = run_api::validate_run(config, *probe)?;
+        print_json(&report);
+        return Ok(());
+    }
     with_control_store(
         config,
         10,
@@ -83,6 +95,7 @@ pub async fn run_run_commands(
         run_command_name(&command),
         |store| async move {
             match command {
+                RunCommand::Validate { .. } => unreachable!(),
                 RunCommand::Create { config_file } => run_create(&store, &config_file).await?,
                 RunCommand::Clone {
                     source_run,
@@ -109,6 +122,7 @@ pub async fn run_run_commands(
 
 fn run_command_name(command: &RunCommand) -> &'static str {
     match command {
+        RunCommand::Validate { .. } => "run_validate",
         RunCommand::Create { .. } => "run_create",
         RunCommand::Clone { .. } => "run_clone",
         RunCommand::List { .. } => "run_list",

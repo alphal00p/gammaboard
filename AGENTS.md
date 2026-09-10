@@ -135,3 +135,5 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Update `README.md` for setup/operator workflow changes.
 - If Rust code changes: run `cargo fmt`, `cargo check -q`, `cargo test -q`. Run `just test-e2e` only for larger changes touching relevant code.
 - After a coherent stage, provide a commit message as a bare fenced `text` block.
+- `run validate` shares run-creation preflight and requires no database; `--probe`
+  initializes runtimes without producing samples or creating a run.

@@ -37,6 +37,7 @@ pub struct RunAddConfig {
 }
 
 pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, BuildError> {
+    crate::services::validation::validate_resources(&config)?;
     let resolved_task_queue = config.task_queue.clone();
     if let Some(tasks) = resolved_task_queue.as_ref() {
         for task in tasks {

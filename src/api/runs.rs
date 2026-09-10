@@ -178,6 +178,66 @@ pub fn load_task_queue_file(path: &Path) -> Result<TaskQueueFile, ApiError> {
     parse_task_queue_toml(&raw)
 }
 
+#[derive(Debug, Serialize)]
+pub struct RunValidation {
+    pub name: String,
+    pub tasks_validated: usize,
+    pub runtime_probes: usize,
+}
+
+/// Validate using the same preflight as creation, without touching the database.
+pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, ApiError> {
+    let processed = preprocess_run_add(config)?;
+    let domain = processed.domain.clone().expect("preflight resolves domain");
+    let mut context = TaskPreflightContext::from_existing_tasks(
+        &[],
+        processed.integration_params.evaluator.clone(),
+        domain.clone(),
+    )?;
+    let tasks = processed.resolved_task_queue.as_deref().unwrap_or_default();
+    let mut probes = 0;
+    for (index, task) in tasks.iter().enumerate() {
+        context.validate_task(task)?;
+        if probe && task.task.runs_on_sampler_worker() {
+            let evaluator = context
+                .current_evaluator
+                .as_ref()
+                .ok_or_else(|| ApiError::BadRequest(format!("task_queue[{index}]: no evaluator")))?
+                .build()
+                .map_err(|err| {
+                    ApiError::BadRequest(format!("task_queue[{index}].evaluator probe: {err}"))
+                })?;
+            if evaluator.get_domain() != domain {
+                return Err(ApiError::BadRequest(format!(
+                    "task_queue[{index}]: probed evaluator domain differs from run domain"
+                )));
+            }
+            if let Some(sampler) = task
+                .task
+                .sample_sampler_config()
+                .or_else(|| task.task.sampler_config())
+            {
+                let _runtime = sampler
+                    .build(domain.clone(), None, None, evaluator.metadata())
+                    .map_err(|err| {
+                        ApiError::BadRequest(format!("task_queue[{index}].sampler probe: {err}"))
+                    })?;
+                let materializer = sampler.build_materializer(&domain, None)?;
+                materializer.validate_domain(&domain)?;
+            }
+            for transform in task.task.batch_transforms_config().unwrap_or_default() {
+                transform.build()?.validate_domain(&domain)?;
+            }
+            probes += 1;
+        }
+    }
+    Ok(RunValidation {
+        name: processed.name,
+        tasks_validated: tasks.len(),
+        runtime_probes: probes,
+    })
+}
+
 /// Creates a run, persists the root stage snapshot, and appends initial tasks if provided.
 pub async fn create_run(
     store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),

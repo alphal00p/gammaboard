@@ -66,6 +66,19 @@ GAMMABOARD_PROFILE=release ./gammaboard \
 For UBELIX Slurm/Apptainer operation, use
 [ops/ubelix/README.md](ops/ubelix/README.md).
 
+Validate an example before allocating workers:
+
+```bash
+./gammaboard run validate example.toml
+./gammaboard run validate example.toml --probe
+```
+
+Validation shares creation's task/domain checks and checks process executables,
+working directories and generated state artifacts on the current host. `--probe`
+also initializes configured runtimes (including requested GPU initialization)
+without creating a run or producing samples. Run it in the worker environment
+when its executables or resource mounts differ from the control host.
+
 ## Core Commands
 
 - `gammaboard deploy`: supervise local Postgres, backend API, and nginx/frontend in one foreground process.
