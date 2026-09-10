@@ -41,6 +41,16 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(variants[0][1].read_bytes(),b'first build')
             self.assertEqual(metadata['A']['sha256'],bench.identity(variants[0][1])['sha256'])
 
+    def test_completed_record_journal_round_trip(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output=Path(temp)
+            self.assertEqual(bench.load_records(output),[])
+            a=dict(variant='A',repetition=0,samples_per_second=100)
+            b=dict(variant='B',repetition=0,samples_per_second=110)
+            bench.append_record(output,a)
+            bench.append_record(output,b)
+            self.assertEqual(bench.load_records(output),[a,b])
+
     def test_summary_retains_repetition_variation(self):
         case=dict(evaluators=1,rate=1000,regime='inference')
         rows=[dict(case=case,variant='A',samples_per_second=r) for r in [100,120,140]]

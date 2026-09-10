@@ -78,7 +78,7 @@ references. Use more repetitions to resolve small changes.
 `manifest.json` records suite parameters, host, working-tree commit/dirty state,
 and hashes of the actual binaries (the working-tree commit does not establish
 the provenance of an arbitrary prebuilt binary). Every case preserves its TOML,
-raw observations and deployment log. `results.json` includes throughput, fraction
+raw observations and deployment log. `results.jsonl` includes throughput, fraction
 of the compute ceiling, samples per evaluator-second, actual mean batch size,
 rolling utilization, peak queue occupancy, recorded training-barrier time and
 final engine timing diagnostics. Barrier time measures production blocking from
@@ -184,3 +184,16 @@ cargo test --test full_stack_cli full_stack_synthetic_training_windows_and_infer
 Timing unit tests inject a waiter instead of sleeping. Full-stack tests use small
 real delays and assert progress, exact training update counts and diagnostics;
 ordinary CI does not assert tight performance thresholds.
+
+## Continuing an interrupted benchmark
+
+The full default run takes at least ten hours (80 cases × 3 repetitions ×
+150 seconds), plus worker startup and shutdown. Completed cases are appended to
+`results.jsonl`; summary files are derived from that journal. Repeat the original
+command with `--resume` and the same options to skip completed cases. The runner
+checks workload settings, host, thread limits, runner/suite hashes and binary
+hashes, and uses the saved executable copies. An incomplete case starts again in
+a fresh deployment directory; its earlier raw observations remain available.
+An occupied port still fails explicitly: finish shutting down an interrupted
+benchmark deployment before resuming. Do not combine records from different
+binaries or measurement settings to make a baseline.

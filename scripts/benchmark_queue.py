@@ -126,7 +126,7 @@ class Deployment:
 
     def sql(self, query):
         return command(['psql', self.url, '-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1'],
-                       input=query, stderr=subprocess.DEVNULL).strip()
+                       input=query, stderr=self.log).strip()
 
     def __enter__(self):
         for port in (8080 + self.offset, 4000 + self.offset, 5400 + self.offset):
@@ -279,6 +279,22 @@ def snapshot_binaries(variants, output):
     return snapshots, metadata
 
 
+def load_records(output):
+    path = output / 'results.jsonl'
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def append_record(output, record):
+    # Only finished, cleaned-up cases are durable checkpoints. Raw observations
+    # from an interrupted case are retained in its separate attempt directory.
+    with (output / 'results.jsonl').open('a') as stream:
+        stream.write(json.dumps(record, allow_nan=False) + '\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def summary(records):
     groups = {}
     for r in records:
@@ -308,6 +324,7 @@ def main():
     parser.add_argument('--baseline', type=Path)
     parser.add_argument('--candidate', type=Path)
     parser.add_argument('--smoke', action='store_true')
+    parser.add_argument('--resume', action='store_true', help='continue an existing run with the same settings and saved binaries')
     parser.add_argument('--evaluators', type=int, nargs='+')
     parser.add_argument('--rates', type=int, nargs='+')
     parser.add_argument('--regimes', nargs='+')
@@ -337,7 +354,8 @@ def main():
     requested_variants = [] if args.action == 'generate' else ([('run',args.binary)] if args.action == 'run' else [('A',args.baseline),('B',args.candidate)])
     if any(p is None or not p.is_file() or not os.access(p,os.X_OK) for _,p in requested_variants): parser.error('supply executable --binary, or --baseline and --candidate files')
     args.output = args.output.resolve()
-    args.output.mkdir(parents=True, exist_ok=False)
+    if args.resume and args.action == 'generate': parser.error('generate cannot be resumed')
+    args.output.mkdir(parents=True, exist_ok=args.resume)
     manifest = dict(suite=suite, cases=matrix, warmup=warmup, duration=duration, repetitions=repeats,
                     host=platform.node(), platform=platform.platform(), cpu_count=os.cpu_count(), port_offset=args.port_offset,
                     cpu_affinity=sorted(os.sched_getaffinity(0)) if hasattr(os,'sched_getaffinity') else None,
@@ -347,31 +365,48 @@ def main():
                     started_unix=time.time(),
                     runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     suite_sha256=hashlib.sha256(args.suite.read_bytes()).hexdigest(), description='Synthetic compute ceilings exclude batch overhead, sampler costs and barriers.')
-    (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
     if args.action == 'generate':
+        (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
         for case in matrix:
             (args.output/(case_id(case)+'.toml')).write_text(run_card(case,1234,'synthetic-'+case_id(case),math.ceil(case['rate']*(warmup+duration+60)*2)))
         print(f'Generated {len(matrix)} run cards in {args.output}')
         return
-    variants, manifest['binaries'] = snapshot_binaries(requested_variants,args.output)
-    (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
-    records=[]
+    if args.resume:
+        saved = json.loads((args.output/'manifest.json').read_text())
+        for key in ('cases','warmup','duration','repetitions','host','cpu_affinity','thread_limits','port_offset','runner_sha256','suite_sha256'):
+            if saved[key] != manifest[key]: parser.error(f'resume mismatch: {key}')
+        variants = []
+        if set(saved['binaries']) != {label for label, _ in requested_variants}:
+            parser.error('resume mismatch: variants')
+        for label, source in requested_variants:
+            binary = saved['binaries'][label]
+            if identity(source)['sha256'] != binary['sha256'] or identity(binary['binary'])['sha256'] != binary['sha256']:
+                parser.error(f'resume mismatch: binary {label}')
+            variants.append((label,Path(binary['binary'])))
+    else:
+        variants, manifest['binaries'] = snapshot_binaries(requested_variants,args.output)
+        (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
+    records = load_records(args.output)
+    completed = {(r['variant'],r['repetition'],case_id(r['case'])) for r in records}
     for repeat in range(repeats):
         # Alternate A/B deployment order; each pair receives identical workload seeds.
         order = variants if repeat%2==0 else list(reversed(variants))
         for label,binary in order:
-            directory = args.output/f'{label}-{repeat}'
+            remaining = [case for case in matrix if (label,repeat,case_id(case)) not in completed]
+            if not remaining: continue
+            directory = args.output/f'{label}-{repeat}-{uuid.uuid4().hex[:8]}'
             with Deployment(binary,args.port_offset,directory) as deployment:
-                for case in matrix:
+                for case in remaining:
                     cid=case_id(case)
                     seed=1234+repeat
                     print(f'{label} repetition {repeat+1}: {cid}',flush=True)
                     result=deployment.measure(case,seed,warmup,duration,directory/cid)
                     result.update(variant=label,repetition=repeat)
+                    append_record(args.output,result)
                     records.append(result)
-                    (args.output/'results.json').write_text(json.dumps(records,indent=2))
                     write_summary(args.output,records)
                     print(f'  {result["samples_per_second"]:.1f} samples/s',flush=True)
+    write_summary(args.output,records)
     if args.action=='ab':
         pairs=[]
         for case in matrix:
