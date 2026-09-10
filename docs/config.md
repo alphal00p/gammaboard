@@ -169,9 +169,10 @@ GammaBoard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 
 `[evaluator.preprocessing]` is optional and runs GammaLoop commands after loading
 the state and before integrand selection. `read_only = true` is the default and
-records the intended mode in logs; GammaLoop's current state-loading API does
-not yet accept that setting. Commands are executed in order and may be any
-GammaLoop command.
+enables GammaLoop's protection against preprocessing commands writing into the
+active state folder. In-memory changes and exports outside that folder remain
+allowed by GammaLoop. Set `read_only = false` explicitly when preprocessing
+must modify files in the loaded state. Commands are executed in order.
 
 ### Process Evaluator
 

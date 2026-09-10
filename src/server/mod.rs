@@ -476,6 +476,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
             ApiError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message),
+            ApiError::Forbidden(message) => (StatusCode::FORBIDDEN, message),
             ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
             ApiError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
         };
@@ -492,7 +493,7 @@ fn log_control_api_error(action: &str, err: &ApiError) {
             error = %message,
             "dashboard action rejected"
         ),
-        ApiError::Unauthorized(message) => tracing::warn!(
+        ApiError::Unauthorized(message) | ApiError::Forbidden(message) => tracing::warn!(
             source = "control",
             control_surface = "dashboard",
             action,
@@ -793,8 +794,9 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 async fn get_session_status(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-) -> Json<SessionStatus> {
-    Json(auth::auth_status_from_headers(&state, &headers))
+) -> Result<Json<SessionStatus>, ApiError> {
+    auth::validate_origin(&headers, &state.allowed_origins)?;
+    Ok(Json(auth::auth_status_from_headers(&state, &headers)))
 }
 
 async fn get_runs(

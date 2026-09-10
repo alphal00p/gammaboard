@@ -1,4 +1,5 @@
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -166,10 +167,27 @@ function AppContent() {
   );
 }
 
+function SessionGate({ children }) {
+  const { ready, sessionError, refreshSession } = useAuth();
+  if (!ready || sessionError) {
+    return (
+      <Container maxWidth="xl" sx={{ py: 3 }}>
+        <Typography variant="h5" sx={{ mb: 2 }}>GammaBoard</Typography>
+        {!ready ? <LoadingPanel label="Checking browser access..." /> : (
+          <Alert severity="error" action={<Button color="inherit" onClick={refreshSession}>Retry</Button>}>
+            {sessionError}
+          </Alert>
+        )}
+      </Container>
+    );
+  }
+  return children;
+}
+
 function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <SessionGate><AppContent /></SessionGate>
     </AuthProvider>
   );
 }

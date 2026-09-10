@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
 import * as api from "./services/api";
@@ -65,4 +65,19 @@ describe("App Component", () => {
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
     expect(await screen.findByText(/No runs available/i)).toBeInTheDocument();
   });
+  test("checks browser access before fetching workspaces and recovers after retry", async () => {
+    const message = "Browser origin http://localhost:39491 is not allowed. Restart with --allowed-origin 'http://localhost:39491'";
+    api.fetchSession.mockRejectedValueOnce(Object.assign(new Error(message), { status: 403 }));
+    render(<App />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(api.fetchRuns).not.toHaveBeenCalled();
+    expect(api.fetchRunTaskPanels).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: "Runs" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("tab", { name: "Runs" })).toBeInTheDocument();
+    await waitFor(() => expect(api.fetchRuns).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
 });

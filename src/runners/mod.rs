@@ -11,6 +11,7 @@ pub(crate) mod rolling_metric;
 pub mod sampler_aggregator;
 pub(crate) mod stage_context;
 pub mod task_control;
+pub(crate) mod wall_time_rate;
 pub(crate) mod window_metric;
 
 pub use evaluator::{EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams};

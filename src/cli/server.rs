@@ -14,6 +14,7 @@ pub struct ServerArgs {
     server_config: PathBuf,
     #[arg(long = "api-port")]
     api_port: Option<u16>,
+    /// Additional browser origin, including the external port when using port forwarding.
     #[arg(long = "allowed-origin", value_name = "ORIGIN")]
     allowed_origins: Vec<String>,
 }

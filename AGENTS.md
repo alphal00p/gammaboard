@@ -112,6 +112,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   compute tasks.
 - Persist/API payloads must be JSON-safe
 - Backend owns panel/read-model semantics; frontend should render generic panel payloads.
+- Task throughput/ETA and evaluator utilization use 60-second active runner
+  wall-time windows, including waits between ticks; reset windows on activation.
+- Dashboard startup validates its browser Origin through `POST /api/auth/session`
+  before mounting workspaces. Origin rejection is 403, distinct from missing login.
 - Run performance is exposed as one panel response containing sampler,
   run-evaluator, and optional selected-evaluator panels.
 

@@ -5,7 +5,10 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 pub(super) fn build_app(state: AppState) -> Router {
     let public = Router::new()
         .route("/health", get(health_check))
-        .route("/auth/session", get(get_session_status))
+        .route(
+            "/auth/session",
+            get(get_session_status).post(get_session_status),
+        )
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout));
 

@@ -84,6 +84,20 @@ configuration. Pass `./gammaboard deploy --rebuild-frontend` to force a rebuild.
 Set `GAMMABOARD_FRONTEND_BASE=/board/` when building the dashboard for a
 reverse-proxy mount below a URL path instead of at `/`.
 
+When opening the dashboard through a forwarded port or a different hostname,
+allow the origin visible in your browser (scheme, host, and port, without a path):
+
+```bash
+./gammaboard deploy --allowed-origin http://localhost:39491
+```
+
+The option is repeatable and also available on `gammaboard server`. For a
+persistent deployment, add the origin to `server.allowed_origins` in
+`server.toml`. A changed external port needs an updated origin. CLI origins are
+added after `--port-offset` is applied; configured local origins with explicit
+ports are shifted by that offset. The dashboard checks browser access before
+loading workspaces and shows a configuration remedy if the origin is rejected.
+
 ## Core Ideas
 
 GammaBoard separates integration into a persisted control plane and replaceable
@@ -115,6 +129,12 @@ workers that can come and go.
 - Evaluators consume concrete batches, validate them against the run domain,
   evaluate the integrand, and return accumulator updates plus optional scalar
   training values for adaptive samplers.
+- Task rate and ETA use completed samples over the last 60 seconds of active
+  sampler wall time, including training and queue waits. Evaluator Busy measures
+  materialization/evaluation time over a 60-second worker wall-time window,
+  including polling sleeps; it is not operating-system CPU utilization. Windows
+  start fresh on runner activation. Throughput history still reports completed
+  batches per snapshot interval, so its chart can show spikes while workers are busy.
 - Accumulators own observable semantics: scalar/vector/full-vector/GammaLoop
   state, error estimates, moments, projections, and panel-ready metrics.
 

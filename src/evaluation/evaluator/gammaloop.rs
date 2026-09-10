@@ -132,9 +132,6 @@ impl GammaLoopEvaluator {
             ))
         })?;
         _ = initialise();
-        // TODO: once GammaLoop exposes read-only state loading, pass
-        // params.preprocessing.read_only here instead of treating it as
-        // documentation of the intended preprocessing mode.
         let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
             BuildError::build(format!(
                 "failed to load state from {}: {err:#}",
@@ -419,6 +416,7 @@ impl GammaLoopEvaluator {
         let mut run_history = RunHistory::default();
         let mut cli_settings = CLISettings::default();
         cli_settings.state.folder = params.state_folder.clone();
+        cli_settings.session.read_only_state = params.preprocessing.read_only;
         let mut default_runtime_settings = RuntimeSettings::default();
 
         for (index, raw_command) in params.preprocessing.commands.iter().enumerate() {
@@ -881,5 +879,28 @@ impl Evaluator for GammaLoopEvaluator {
             },
         };
         Ok(BatchResult::new(weighted_values, observable_state))
+    }
+}
+
+#[cfg(test)]
+mod preprocessing_tests {
+    use super::*;
+
+    #[test]
+    fn read_only_preprocessing_rejects_saving_into_the_active_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_folder = temp.path().join("state");
+        let params = GammaLoopParams {
+            state_folder: state_folder.clone(),
+            preprocessing: GammaLoopPreprocessing {
+                commands: vec!["save state".to_string()],
+                read_only: true,
+            },
+            ..GammaLoopParams::default()
+        };
+        let mut state = State::new_test();
+        let err = GammaLoopEvaluator::run_preprocessing(&params, &mut state).unwrap_err();
+        assert!(err.to_string().contains("--read-only-state"), "{err}");
+        assert!(!state_folder.exists());
     }
 }
