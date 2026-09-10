@@ -1,34 +1,22 @@
-use serde::{Deserialize, Serialize};
-
 /// Lightweight EWMA helper for non-negative timing/capacity metrics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct RollingMetric {
     mean: Option<f64>,
     variance: f64,
-    observations: u64,
-    alpha: f64,
-}
-
-impl Default for RollingMetric {
-    fn default() -> Self {
-        Self {
-            mean: None,
-            variance: 0.0,
-            observations: 0,
-            alpha: 0.2,
-        }
-    }
 }
 
 impl RollingMetric {
-    pub(crate) fn observe_weighted(&mut self, observation: f64, weight: f64) {
+    /// Smooth milliseconds per sample with alpha=0.2 per 1,000 samples.
+    /// Applying this conversion here keeps queue and evaluator timings consistent.
+    pub(crate) fn observe_batch(&mut self, total_ms: f64, samples: usize) {
+        if samples == 0 {
+            return;
+        }
+        let observation = total_ms / samples as f64;
         if !observation.is_finite() || observation < 0.0 {
             return;
         }
-        if !weight.is_finite() || weight <= 0.0 {
-            return;
-        }
-        let effective_alpha = 1.0 - (1.0 - self.alpha).powf(weight);
+        let effective_alpha = 1.0 - 0.8_f64.powf(samples as f64 / 1000.0);
         let effective_alpha = effective_alpha.clamp(0.0, 1.0);
         match self.mean {
             Some(current_mean) => {
@@ -45,7 +33,6 @@ impl RollingMetric {
                 self.variance = 0.0;
             }
         }
-        self.observations += 1;
     }
 
     pub(crate) fn value(&self) -> Option<f64> {

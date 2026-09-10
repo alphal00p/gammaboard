@@ -74,7 +74,7 @@ struct TaskRuntimeContext {
     batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Default)]
 struct EvaluatorRollingAverages {
     total_ms_per_sample: RollingMetric,
     fetch_ms_per_sample: RollingMetric,
@@ -816,44 +816,27 @@ where
         crate::runners::activity::completed_batch();
         crate::runners::activity::set("waiting");
         self.samples_evaluated_total += samples as i64;
-        if samples > 0 {
-            let samples = samples as f64;
-            if total_time_ms.is_finite() && total_time_ms >= 0.0 {
-                self.rolling
-                    .total_ms_per_sample
-                    .observe_weighted(total_time_ms / samples, samples);
-            }
-            if fetch_time_ms.is_finite() && fetch_time_ms >= 0.0 {
-                self.rolling
-                    .fetch_ms_per_sample
-                    .observe_weighted(fetch_time_ms / samples, samples);
-            }
-            if fetch_stall_time_ms.is_finite() && fetch_stall_time_ms >= 0.0 {
-                self.rolling
-                    .fetch_stall_ms_per_sample
-                    .observe_weighted(fetch_stall_time_ms / samples, samples);
-            }
-            if materialization_time_ms.is_finite() && materialization_time_ms >= 0.0 {
-                self.rolling
-                    .materialization_ms_per_sample
-                    .observe_weighted(materialization_time_ms / samples, samples);
-            }
-            if eval_time_ms.is_finite() && eval_time_ms >= 0.0 {
-                self.rolling
-                    .evaluate_ms_per_sample
-                    .observe_weighted(eval_time_ms / samples, samples);
-            }
-            if submit_time_ms.is_finite() && submit_time_ms >= 0.0 {
-                self.rolling
-                    .submit_ms_per_sample
-                    .observe_weighted(submit_time_ms / samples, samples);
-            }
-            if submit_stall_time_ms.is_finite() && submit_stall_time_ms >= 0.0 {
-                self.rolling
-                    .submit_stall_ms_per_sample
-                    .observe_weighted(submit_stall_time_ms / samples, samples);
-            }
-        }
+        self.rolling
+            .total_ms_per_sample
+            .observe_batch(total_time_ms, samples);
+        self.rolling
+            .fetch_ms_per_sample
+            .observe_batch(fetch_time_ms, samples);
+        self.rolling
+            .fetch_stall_ms_per_sample
+            .observe_batch(fetch_stall_time_ms, samples);
+        self.rolling
+            .materialization_ms_per_sample
+            .observe_batch(materialization_time_ms, samples);
+        self.rolling
+            .evaluate_ms_per_sample
+            .observe_batch(eval_time_ms, samples);
+        self.rolling
+            .submit_ms_per_sample
+            .observe_batch(submit_time_ms, samples);
+        self.rolling
+            .submit_stall_ms_per_sample
+            .observe_batch(submit_stall_time_ms, samples);
     }
 
     fn observe_idle_ratio(&mut self, compute_time_ms: f64) {

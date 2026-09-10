@@ -171,7 +171,8 @@ Finite training windows aim for at least four chunks per evaluator, subject to
 minimum batch size and queue limits. Fresh batches give evaluators without work
 priority over speculative prefetch for up to 250 ms; older work remains claimable
 if a peer is unresponsive. Evaluation-time smoothing uses an EWMA weight of 0.2
-per 1,000 samples, retaining history across normal-sized batches. These defaults
+per 1,000 samples for both queue sizing and evaluator timing statistics, retaining
+history across normal-sized batches. These defaults
 are starting points: adapters with substantial per-batch setup can benefit from
 longer batches, while finite training windows need enough chunks for parallelism.
 

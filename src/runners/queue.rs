@@ -14,8 +14,6 @@ const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
 pub(crate) const MIN_BATCH_SIZE: usize = 16;
-// One EWMA observation per 1,000 samples, rather than per individual point.
-const EVAL_TIMING_REFERENCE_SAMPLES: f64 = 1000.0;
 const DEFAULT_BATCH_SIZE_DEADBAND_RATIO: f64 = 0.15;
 const DEFAULT_BATCH_SIZE_COOLDOWN_TICKS: u32 = 3;
 const DEFAULT_PENDING_REFILL_LOW_RATIO: f64 = 0.85;
@@ -318,10 +316,8 @@ where
         if batch_size == 0 || !total_eval_time_ms.is_finite() || total_eval_time_ms <= 0.0 {
             return;
         }
-        self.eval_ms_per_sample.observe_weighted(
-            total_eval_time_ms / batch_size as f64,
-            batch_size as f64 / EVAL_TIMING_REFERENCE_SAMPLES,
-        );
+        self.eval_ms_per_sample
+            .observe_batch(total_eval_time_ms, batch_size);
         self.tune_batch_size();
     }
 
