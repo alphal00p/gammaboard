@@ -114,6 +114,9 @@ host and saved binaries. Incomplete attempts keep their raw observations and
 restart in a fresh deployment directory. Finish shutting down any interrupted
 deployment before resuming. Each invocation retains its five-minute budget.
 
+A recorded run and its repeatability checks are in the
+[compact baseline report](baselines/9ee7828.md).
+
 ## Shared synthetic engines
 
 The user-facing `unit` evaluator accepts `timing`. `naive_monte_carlo` accepts

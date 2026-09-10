@@ -1,0 +1,337 @@
+{
+  "benchmark_commit": "9ee78284bb4d64bd609b5b3e5c3e78d733dd6cf4",
+  "engine_commit": "0ea7f0878d09def17418462a3c721d7c2fac653b",
+  "binary_sha256": "c3b61152ca5b1da75743b9e0fc7d7c49a88908e3a64aedaca53a18feb94b19f0",
+  "build": {
+    "profile": "dev-optim",
+    "default_features": false,
+    "locked": true
+  },
+  "host": {
+    "description": "shared Linux development host; GL26 paused for baseline and focused comparison",
+    "cpu_count": 384,
+    "cpu_affinity_count": 384,
+    "thread_limits": {
+      "OMP_NUM_THREADS": "8",
+      "RAYON_NUM_THREADS": "8"
+    }
+  },
+  "suite": {
+    "evaluators": [
+      1,
+      4,
+      16,
+      64
+    ],
+    "rates": [
+      1000,
+      2000000
+    ],
+    "regimes": [
+      "inference",
+      "training_burst"
+    ],
+    "continuous_dims": 6,
+    "noise_fraction": 0.0,
+    "warmup_seconds": 0.5,
+    "measurement_seconds": 4,
+    "repetitions": 1
+  },
+  "batch_target_ms": 100,
+  "observation_interval_ms": 100,
+  "completion": {
+    "elapsed_seconds": 99.10314496501815,
+    "measurements": 16,
+    "expected_measurements": 16,
+    "within_budget": true
+  },
+  "results": [
+    {
+      "case": {
+        "evaluators": 1,
+        "rate": 1000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 4.0390858630416915,
+      "samples_per_second": 967.0504991588692,
+      "compute_ceiling_fraction": 0.9670504991588692,
+      "mean_busy": 0.8615630561386399,
+      "mean_batch_size": 93.0,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 1,
+        "rate": 1000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 4.0452175753889605,
+      "samples_per_second": 291.455274784975,
+      "compute_ceiling_fraction": 0.291455274784975,
+      "mean_busy": 0.3085328062281107,
+      "mean_batch_size": 62.529411764705884,
+      "training_updates": 5,
+      "mean_update_seconds": 0.5000844720000001
+    },
+    {
+      "case": {
+        "evaluators": 1,
+        "rate": 2000000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.932600857457146,
+      "samples_per_second": 616951.500531589,
+      "compute_ceiling_fraction": 0.3084757502657945,
+      "mean_busy": 0.22345082587014656,
+      "mean_batch_size": 93316.30769230769,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 1,
+        "rate": 2000000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.934080916456878,
+      "samples_per_second": 107573.53724720694,
+      "compute_ceiling_fraction": 0.05378676862360347,
+      "mean_busy": 0.06535794041559986,
+      "mean_batch_size": 23660.15,
+      "training_updates": 4,
+      "mean_update_seconds": 0.5000935295
+    },
+    {
+      "case": {
+        "evaluators": 4,
+        "rate": 1000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.936134682968259,
+      "samples_per_second": 990.819754434569,
+      "compute_ceiling_fraction": 0.9908197544345689,
+      "mean_busy": 0.7747985537197988,
+      "mean_batch_size": 25.0,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 4,
+        "rate": 1000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.9360275825019926,
+      "samples_per_second": 274.38832105782205,
+      "compute_ceiling_fraction": 0.27438832105782207,
+      "mean_busy": 0.25864085916199475,
+      "mean_batch_size": 15.647058823529411,
+      "training_updates": 4,
+      "mean_update_seconds": 0.500093832
+    },
+    {
+      "case": {
+        "evaluators": 4,
+        "rate": 2000000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.938909630989656,
+      "samples_per_second": 611518.4722820887,
+      "compute_ceiling_fraction": 0.30575923614104433,
+      "mean_busy": 0.25740379234152855,
+      "mean_batch_size": 44555.81481481482,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 4,
+        "rate": 2000000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.9353063110029325,
+      "samples_per_second": 97839.9061144171,
+      "compute_ceiling_fraction": 0.04891995305720855,
+      "mean_busy": 0.06134970296036785,
+      "mean_batch_size": 6250.0,
+      "training_updates": 4,
+      "mean_update_seconds": 0.5000832895
+    },
+    {
+      "case": {
+        "evaluators": 16,
+        "rate": 1000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.96167472563684,
+      "samples_per_second": 949.0935678460021,
+      "compute_ceiling_fraction": 0.9490935678460021,
+      "mean_busy": 0.6827973716615388,
+      "mean_batch_size": 16.0,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 16,
+        "rate": 1000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.958163345581852,
+      "samples_per_second": 271.3379682015426,
+      "compute_ceiling_fraction": 0.2713379682015426,
+      "mean_busy": 0.2475097101143591,
+      "mean_batch_size": 15.625,
+      "training_updates": 5,
+      "mean_update_seconds": 0.5000779066
+    },
+    {
+      "case": {
+        "evaluators": 16,
+        "rate": 2000000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.9636686064768583,
+      "samples_per_second": 522532.07965359004,
+      "compute_ceiling_fraction": 0.261266039826795,
+      "mean_busy": 0.20938821639024102,
+      "mean_batch_size": 10676.0,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 16,
+        "rate": 2000000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.9691519076004624,
+      "samples_per_second": 86405.10819031169,
+      "compute_ceiling_fraction": 0.043202554095155846,
+      "mean_busy": 0.05823184189326813,
+      "mean_batch_size": 1562.5247524752476,
+      "training_updates": 4,
+      "mean_update_seconds": 0.50007364475
+    },
+    {
+      "case": {
+        "evaluators": 64,
+        "rate": 1000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.983712723478675,
+      "samples_per_second": 582.3713106436348,
+      "compute_ceiling_fraction": 0.5823713106436348,
+      "mean_busy": 0.6068432926271947,
+      "mean_batch_size": 16.0,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 64,
+        "rate": 1000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.9701963855186477,
+      "samples_per_second": 121.90832719645745,
+      "compute_ceiling_fraction": 0.12190832719645744,
+      "mean_busy": 0.32663114784558755,
+      "mean_batch_size": 15.617021276595745,
+      "training_updates": 2,
+      "mean_update_seconds": 0.5000668495
+    },
+    {
+      "case": {
+        "evaluators": 64,
+        "rate": 2000000,
+        "regime": "inference",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.965102516580373,
+      "samples_per_second": 661714.0386732839,
+      "compute_ceiling_fraction": 0.33085701933664197,
+      "mean_busy": 0.314603326131713,
+      "mean_batch_size": 3058.0,
+      "training_updates": 0,
+      "mean_update_seconds": null
+    },
+    {
+      "case": {
+        "evaluators": 64,
+        "rate": 2000000,
+        "regime": "training_burst",
+        "continuous_dims": 6,
+        "noise_fraction": 0.0
+      },
+      "seconds": 3.973227454465814,
+      "samples_per_second": 78334.80553703799,
+      "compute_ceiling_fraction": 0.039167402768518995,
+      "mean_busy": 0.05163081059193865,
+      "mean_batch_size": 390.6453201970443,
+      "training_updates": 4,
+      "mean_update_seconds": 0.5000658800000001
+    }
+  ],
+  "same_binary_full_suite": {
+    "completion": {
+      "elapsed_seconds": 206.31849682494067,
+      "measurements": 32,
+      "expected_measurements": 32,
+      "within_budget": true
+    },
+    "minimum_ratio": 0.6985436225425273,
+    "maximum_ratio": 1.1475901560009425
+  },
+  "same_binary_focused_burst": {
+    "completion": {
+      "elapsed_seconds": 153.60006266797427,
+      "measurements": 6,
+      "expected_measurements": 6,
+      "within_budget": true
+    },
+    "warmup_seconds": 2,
+    "measurement_seconds": 20,
+    "repetitions": 3,
+    "comparison": {
+      "case": "training_burst-e4-r1000",
+      "paired_ratios": [
+        1.001027644065673,
+        0.9989903921777089,
+        1.006668502182493
+      ],
+      "mean_ratio": 1.0022288461419584,
+      "stdev_ratio": 0.003977500236636798
+    }
+  }
+}
