@@ -1,5 +1,3 @@
-use std::process::Stdio;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -9,7 +7,7 @@ use crate::evaluation::{
 };
 use crate::process_runtime::{build_process_worker_command, default_process_args};
 use crate::process_worker::{
-    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, pipe_process_stderr,
+    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds,
 };
 use crate::utils::domain::Domain;
 
@@ -229,38 +227,13 @@ impl ProcessRuntimeWorker {
     fn spawn(params: &ProcessEvaluatorParams, domain: Domain) -> Result<Self, BuildError> {
         let mut command =
             build_process_worker_command(&params.command, params.cwd.as_deref(), "evaluator")?;
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command.spawn().map_err(|error| {
-            BuildError::build(format!("failed to start process evaluator worker: {error}"))
-        })?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| BuildError::build("process worker stdin not available"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| BuildError::build("process worker stdout not available"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| BuildError::build("process worker stderr not available"))?;
-        let stderr_tail = pipe_process_stderr("process evaluator", stderr);
-
+        let process = ProcessWorker::spawn(
+            &mut command,
+            "process evaluator",
+            params.shutdown_grace_seconds,
+        )?;
         let mut worker = Self {
-            process: ProcessWorker::new(
-                "process evaluator",
-                child,
-                stdin,
-                stdout,
-                stderr_tail,
-                params.shutdown_grace_seconds,
-            ),
+            process,
             domain,
             components: params.components.clone(),
             accumulator_kind: params.accumulator.clone(),

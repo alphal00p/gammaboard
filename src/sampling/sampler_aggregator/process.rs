@@ -1,5 +1,4 @@
 use crate::core::EngineResultExt;
-use std::process::Stdio;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -12,7 +11,7 @@ use crate::process_runtime::{
 };
 use crate::process_worker::{
     PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, extend_le_f64,
-    pipe_process_stderr, read_le_f64, read_le_i64,
+    read_le_f64, read_le_i64,
 };
 use crate::sampling::{
     DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
@@ -202,40 +201,12 @@ impl ProcessSamplerWorker {
     ) -> Result<Self, BuildError> {
         let mut command =
             build_process_worker_command(&params.command, params.cwd.as_deref(), "sampler")?;
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command.spawn().map_err(|error| {
-            BuildError::build(format!("failed to start process sampler worker: {error}"))
-        })?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| BuildError::build("process sampler worker stdin not available"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| BuildError::build("process sampler worker stdout not available"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| BuildError::build("process sampler worker stderr not available"))?;
-        let stderr_tail = pipe_process_stderr("process sampler", stderr);
-
-        let mut worker = Self {
-            process: ProcessWorker::new(
-                "process sampler",
-                child,
-                stdin,
-                stdout,
-                stderr_tail,
-                params.shutdown_grace_seconds,
-            ),
-            domain,
-        };
+        let process = ProcessWorker::spawn(
+            &mut command,
+            "process sampler",
+            params.shutdown_grace_seconds,
+        )?;
+        let mut worker = Self { process, domain };
         worker.send_init(params.args.clone(), snapshot, evaluator_metadata)?;
         Ok(worker)
     }

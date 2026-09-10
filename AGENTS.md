@@ -147,3 +147,6 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Worker activity changes stay in memory within the node's task-local context;
   the independent lease heartbeat persists snapshots, at most once per heartbeat.
   Optional framed process `progress` notifications share the original request deadline.
+- All process roles use `ProcessWorker::spawn` for consistent launch diagnostics.
+  Bound malformed frame excerpts and stderr tails; redact credentials before
+  emitting tracing events or writing the per-process stderr log.

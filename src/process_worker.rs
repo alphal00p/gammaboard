@@ -25,6 +25,8 @@ pub(crate) type ProcessStderrTail = Arc<Mutex<VecDeque<String>>>;
 
 pub(crate) struct ProcessWorker {
     label: String,
+    diagnostic_context: String,
+    stderr_log_path: Option<std::path::PathBuf>,
     activity: Option<crate::runners::activity::Handle>,
     child: Child,
     stdin: Option<BufWriter<ChildStdin>>,
@@ -38,6 +40,50 @@ pub(crate) struct ProcessWorker {
 }
 
 impl ProcessWorker {
+    pub(crate) fn spawn(
+        command: &mut std::process::Command,
+        label: &'static str,
+        grace: u64,
+    ) -> Result<Self, crate::core::BuildError> {
+        use crate::core::BuildError;
+        use std::process::Stdio;
+        let context = format!(
+            "executable={} cwd={}",
+            command.get_program().to_string_lossy(),
+            command
+                .get_current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| ".".into())
+        );
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|e| {
+            BuildError::build(redact_diagnostic(&format!(
+                "{label}: operation=spawn {context}; {}; {e}",
+                current_worker_context()
+            )))
+        })?;
+        let stdin = child.stdin.take().expect("piped stdin");
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let log_path = crate::resources::primary_resource_root().ok().map(|root| {
+            let dir = root.join("logs/processes");
+            let _ = std::fs::create_dir_all(&dir);
+            dir.join(format!(
+                "{}-{}.stderr.log",
+                child.id(),
+                chrono::Utc::now().timestamp_micros()
+            ))
+        });
+        let tail = pipe_process_stderr_to_file(label, stderr, log_path.clone());
+        let mut worker = Self::new(label, child, stdin, stdout, tail, grace);
+        worker.diagnostic_context = redact_diagnostic(&context);
+        worker.stderr_log_path = log_path;
+        Ok(worker)
+    }
+
     pub(crate) fn new(
         label: impl Into<String>,
         child: Child,
@@ -70,6 +116,8 @@ impl ProcessWorker {
     ) -> Self {
         Self {
             label: label.into(),
+            diagnostic_context: String::new(),
+            stderr_log_path: None,
             activity: crate::runners::activity::current(),
             child,
             stdin: Some(BufWriter::new(stdin)),
@@ -104,24 +152,33 @@ impl ProcessWorker {
                 "waiting for process response"
             },
         );
-        let id = self.allocate_request_id();
-        let request = serde_json::json!({
-            "jsonrpc": JSON_RPC_VERSION,
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-        self.write_frame(&request, binary)?;
-        let deadline = Instant::now() + self.request_timeout;
-        let (response, response_binary) = self.read_response(id, deadline)?;
-        if let Some(error) = response.get("error") {
-            return Err(format_json_rpc_error(error));
-        }
-        let result = response
-            .get("result")
-            .cloned()
-            .ok_or_else(|| format!("{} response missing 'result'", self.label))?;
-        Ok((result, response_binary))
+        let outcome = (|| {
+            let id = self.allocate_request_id();
+            let request = serde_json::json!({
+                "jsonrpc": JSON_RPC_VERSION,
+                "id": id,
+                "method": method,
+                "params": params,
+            });
+            self.write_frame(&request, binary)?;
+            let deadline = Instant::now() + self.request_timeout;
+            let (response, response_binary) = self.read_response(id, deadline)?;
+            if let Some(error) = response.get("error") {
+                return Err(format_json_rpc_error(error));
+            }
+            let result = response
+                .get("result")
+                .cloned()
+                .ok_or_else(|| format!("{} response missing 'result'", self.label))?;
+            Ok((result, response_binary))
+        })();
+        outcome.map_err(|error:String| {
+            let status=self.child.try_wait().ok().flatten().map(|s|s.to_string()).unwrap_or_else(|| "running or unavailable".into());
+            let context=self.activity.as_ref().map(crate::runners::activity::snapshot).unwrap_or_default();
+            let log=self.stderr_log_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "unavailable".into());
+            let tail=if error.contains("recent stderr:") { String::new() } else { self.stderr_tail() };
+            redact_diagnostic(&format!("{}: operation={method} {}; worker={} run={} task={} status={status}; stderr_log={log}; {error}; recent stderr:\n{tail}",self.label,self.diagnostic_context,context["node_name"],context["run_id"],context["task_id"]))
+        })
     }
 
     fn write_frame(&mut self, value: &Value, binary: &[u8]) -> Result<(), String> {
@@ -172,7 +229,7 @@ impl ProcessWorker {
                 format!(
                     "failed to parse {} response frame as JSON: {error}; payload='{}'",
                     self.label,
-                    String::from_utf8_lossy(&payload)
+                    bounded_diagnostic(&String::from_utf8_lossy(&payload), 1024)
                 )
             })?;
             if response.get("id").is_none()
@@ -563,29 +620,144 @@ fn checked_binary_end(byte_offset: usize, count: usize) -> Result<usize, String>
         .ok_or_else(|| "binary byte offset is too large".to_string())
 }
 
+#[cfg(test)]
 pub(crate) fn pipe_process_stderr(
     label: &'static str,
     stderr: impl std::io::Read + Send + 'static,
 ) -> ProcessStderrTail {
+    pipe_process_stderr_to_file(label, stderr, None)
+}
+
+fn pipe_process_stderr_to_file(
+    label: &'static str,
+    stderr: impl std::io::Read + Send + 'static,
+    log_path: Option<std::path::PathBuf>,
+) -> ProcessStderrTail {
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_STDERR_TAIL_LINES)));
     let tail_for_thread = Arc::clone(&tail);
-    // Capture the caller's span (carries run_id/node_name/node_uuid) and re-enter
-    // it on the detached reader thread, which otherwise has no span context.
     let context_span = tracing::Span::current();
     std::thread::spawn(move || {
         let _entered = context_span.enter();
-        let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            let display = emit_worker_stderr_line(label, &line);
+        let mut file = log_path
+            .as_ref()
+            .and_then(|p| std::fs::File::create(p).ok());
+        let mut reader = BufReader::new(stderr);
+        loop {
+            // A worker can print an unlimited line; never allocate it in memory.
+            let mut bytes = Vec::new();
+            let count = std::io::Read::take(&mut reader, 4096)
+                .read_until(b'\n', &mut bytes)
+                .unwrap_or(0);
+            if count == 0 {
+                break;
+            }
+            let line = redact_diagnostic(&String::from_utf8_lossy(&bytes));
+            if let Some(file) = &mut file {
+                let _ = file.write_all(line.as_bytes());
+            }
+            let display = emit_worker_stderr_line(label, line.trim_end());
             if let Ok(mut lines) = tail_for_thread.lock() {
                 if lines.len() == MAX_STDERR_TAIL_LINES {
                     lines.pop_front();
                 }
                 lines.push_back(display);
+                while lines.iter().map(String::len).sum::<usize>() > 8192 {
+                    lines.pop_front();
+                }
             }
         }
     });
     tail
+}
+
+fn current_worker_context() -> String {
+    crate::runners::activity::current()
+        .map(|h| {
+            let a = crate::runners::activity::snapshot(&h);
+            format!(
+                "worker={} run={} task={}",
+                a["node_name"], a["run_id"], a["task_id"]
+            )
+        })
+        .unwrap_or_else(|| "worker=validation".into())
+}
+
+fn bounded_diagnostic(value: &str, max: usize) -> String {
+    let mut result = value.chars().take(max).collect::<String>();
+    if value.chars().count() > max {
+        result.push_str("… [truncated]");
+    }
+    redact_diagnostic(&result)
+}
+
+fn redact_diagnostic(value: &str) -> String {
+    let mut result = value.to_string();
+    for (key, value) in std::env::vars() {
+        let key = key.to_ascii_lowercase();
+        if value.len() >= 4
+            && [
+                "license", "password", "token", "secret", "api_key", "apikey",
+            ]
+            .iter()
+            .any(|word| key.contains(word))
+        {
+            result = result.replace(&value, "[REDACTED]");
+        }
+    }
+    for key in [
+        "password",
+        "token",
+        "secret",
+        "license",
+        "api_key",
+        "apikey",
+        "authorization",
+    ] {
+        let mut start = 0;
+        while let Some(offset) = result[start..].to_ascii_lowercase().find(key) {
+            let end = start + offset + key.len();
+            let rest = &result[end..];
+            let skipped = rest.len() - rest.trim_start_matches(['\"', '\'', ' ', '\t']).len();
+            let delimiter = end + skipped;
+            if matches!(result.as_bytes().get(delimiter), Some(b'=') | Some(b':')) {
+                let begin = delimiter + 1;
+                let rest = &result[begin..];
+                let skip = rest.len() - rest.trim_start_matches(['\"', '\'', ' ', '\t']).len();
+                let begin = begin + skip;
+                let finish = result[begin..]
+                    .find(|c: char| c.is_whitespace() || matches!(c, '\"' | '\'' | ',' | '}'))
+                    .map(|i| begin + i)
+                    .unwrap_or(result.len());
+                if finish > begin {
+                    result.replace_range(begin..finish, "[REDACTED]");
+                    start = begin + 10;
+                    continue;
+                }
+            }
+            start = end;
+        }
+    }
+    // User-info in URLs is never useful diagnostic context.
+    let words = result
+        .split_whitespace()
+        .map(|word| {
+            if let Some(scheme) = word.find("://") {
+                if let Some(at) = word[scheme + 3..].find('@') {
+                    return format!(
+                        "{}[REDACTED]@{}",
+                        &word[..scheme + 3],
+                        &word[scheme + 3 + at + 1..]
+                    );
+                }
+            }
+            word.to_string()
+        })
+        .collect::<Vec<_>>();
+    if result.contains("://") {
+        words.join(" ")
+    } else {
+        result
+    }
 }
 
 /// Sentinel prefix for structured worker logs on stderr. Must match `_SENTINEL`
@@ -741,6 +913,64 @@ mod tests {
             Duration::from_millis(20),
         );
         assert_eq!(worker.request("sample", json!({})).unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn credential_values_are_redacted_from_diagnostics() {
+        let text = super::redact_diagnostic(
+            "password=abc123 token: xyz987 https://user:pass@example.org/path",
+        );
+        for secret in ["abc123", "xyz987", "user:pass"] {
+            assert!(!text.contains(secret));
+        }
+        assert!(text.contains("example.org/path"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_executable_reports_command_workdir_and_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = Command::new("gammaboard-definitely-missing-executable");
+        command.current_dir(dir.path());
+        let error = match ProcessWorker::spawn(&mut command, "process sampler", 0) {
+            Ok(_) => panic!("unexpected executable"),
+            Err(e) => e.to_string(),
+        };
+        assert!(error.contains("operation=spawn"));
+        assert!(error.contains("gammaboard-definitely-missing-executable"));
+        assert!(error.contains(&dir.path().display().to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn crash_reports_exit_and_bounded_stderr() {
+        let (mut worker, _) = test_worker(
+            "head -c 200000 /dev/zero | tr '\\000' x >&2; echo ' token=do-not-expose' >&2; exit 23",
+            Duration::from_millis(20),
+            Duration::from_millis(20),
+        );
+        let error = worker.request("initialize", json!({})).unwrap_err();
+        assert!(error.contains("23"));
+        assert!(error.contains("operation=initialize"));
+        assert!(!error.contains("do-not-expose"));
+        assert!(
+            error.len() < 18000,
+            "diagnostic exceeded bounded tail: {}",
+            error.len()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_response_includes_operation_and_does_not_panic() {
+        let (mut worker, _) = test_worker(
+            "printf 'Content-Length: 5\\r\\n\\r\\nbogus'; cat >/dev/null",
+            Duration::from_millis(20),
+            Duration::from_millis(20),
+        );
+        let error = worker.request("sample", json!({})).unwrap_err();
+        assert!(error.contains("operation=sample"));
+        assert!(error.contains("parse"));
     }
 
     #[test]

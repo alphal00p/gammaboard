@@ -274,3 +274,10 @@ Supported activities are `waiting`, `materializing`, `evaluating`, `updating sam
 `saving checkpoint`, and `shutdown`. Notifications do not extend the request
 timeout. Without notifications, a process sampler reports “waiting for sampler
 response”; GammaBoard does not infer Python training activity from timing.
+
+Process failures include the executable, working directory, operation, worker,
+run/task, exit status, and a bounded stderr excerpt. `stderr_log` points to the
+process's full stderr log under `resources/logs/processes/`. Credentials are
+redacted from diagnostics and logs; command arguments and request payloads are
+not included. Python traceback output on stderr remains separate from the framed
+JSON-RPC protocol on stdout.
