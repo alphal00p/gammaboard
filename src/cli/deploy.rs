@@ -20,6 +20,9 @@ use super::shared::with_control_store;
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
+    /// Recreate workers saved at graceful shutdown through their original launch backend.
+    #[arg(long)]
+    resume_workers: bool,
     #[arg(long = "server-config", default_value = DEFAULT_SERVER_CONFIG_PATH, value_name = "PATH")]
     server_config: PathBuf,
     #[arg(long)]
@@ -97,6 +100,25 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
         return Err(err);
     }
 
+    if args.resume_workers {
+        let resumed = with_control_store(
+            runtime_config,
+            10,
+            true,
+            "resume_workers",
+            |store| async move {
+                let count = store.enqueue_resumed_workers().await?;
+                gammaboard::api::node_launch::resolve_local_requests(&store, runtime).await?;
+                Ok(count)
+            },
+        )
+        .await;
+        if let Err(error) = resumed {
+            cleanup_deploy(&server_config, runtime_config, &mut backend, &mut nginx).await?;
+            return Err(error);
+        }
+        println!("enqueued saved workers: {}", resumed.unwrap());
+    }
     println!("deploy running");
     println!("server_config: {}", args.server_config.display());
     println!("frontend_build_dir: {}", server_config.frontend.build_dir);
@@ -371,7 +393,7 @@ async fn cleanup_deploy(
         true,
         "deploy_stop_all_nodes_gracefully",
         |store| async move {
-            let stopped = node_api::stop_all_nodes_gracefully(
+            let stopped = node_api::suspend_nodes_gracefully(
                 &store,
                 node_api::GracefulNodeShutdownParams {
                     sampler_drain_timeout: Duration::from_secs(

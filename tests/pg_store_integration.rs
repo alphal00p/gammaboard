@@ -22,10 +22,12 @@ fn unique_id(prefix: &str) -> String {
 
 async fn locked_test_store() -> Option<(tokio::sync::MutexGuard<'static, ()>, PgStore)> {
     let guard = TEST_LOCK.lock().await;
-    let db_url = RuntimeConfig::load("ops/local/config/runtime.toml")
-        .ok()?
-        .database
-        .url;
+    let db_url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap_or(
+        RuntimeConfig::load("ops/local/config/runtime.toml")
+            .ok()?
+            .database
+            .url,
+    );
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&db_url)

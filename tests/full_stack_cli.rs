@@ -112,9 +112,11 @@ struct TestDatabase {
 
 impl TestDatabase {
     async fn create() -> anyhow::Result<Self> {
-        let base_url = RuntimeConfig::load("ops/local/config/runtime.toml")?
-            .database
-            .url;
+        let base_url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap_or(
+            RuntimeConfig::load("ops/local/config/runtime.toml")?
+                .database
+                .url,
+        );
 
         let mut admin_url = Url::parse(&base_url)?;
         admin_url.set_path("/postgres");
@@ -6041,5 +6043,51 @@ stop_condition = { max_samples = 16 }
     );
 
     harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn worker_resume_is_durable_backend_neutral_and_consumed_once() -> anyhow::Result<()> {
+    use gammaboard::core::ControlPlaneStore;
+    let db = TestDatabase::create().await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&db.database_url)
+        .await?;
+    let store = gammaboard::PgStore::new(pool.clone());
+    let group = serde_json::json!({"count":2,"name_prefix":"resume","max_start_failures":7,"config":{"partition":"gpu","cpus":4,"gres":"gpu:a100:1"}});
+    let id = store.reserve_worker_launch("external", vec![group]).await?;
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM nodes ORDER BY name")
+        .fetch_all(&pool)
+        .await?;
+    store
+        .announce_node(&names[0], "first", &Default::default())
+        .await?;
+    assert_eq!(store.suspend_workers().await?, 1); // Pending scheduler jobs are not saved.
+    store.expire_node_lease("first").await?;
+    let saved: bool = sqlx::query_scalar("SELECT resume_requested FROM nodes WHERE name=$1")
+        .bind(&names[0])
+        .fetch_one(&pool)
+        .await?;
+    assert!(saved);
+    assert_eq!(store.enqueue_resumed_workers().await?, 1);
+    assert_eq!(store.enqueue_resumed_workers().await?, 0);
+    let requests = store.list_node_launch_requests().await?;
+    let resumed = requests.iter().find(|r| r.id != id).unwrap();
+    assert_eq!(resumed.backend, "external");
+    assert_eq!(resumed.args["groups"][0]["config"]["partition"], "gpu");
+    assert_eq!(resumed.args["groups"][0]["max_start_failures"], 7);
+    assert_eq!(resumed.args["groups"][0]["node_names"][0], names[0]);
+    assert!(store.claim_local_worker_launch().await?.is_none());
+    store
+        .announce_node(&names[0], "second", &Default::default())
+        .await?;
+    store.suspend_workers().await?;
+    store.expire_node_lease("second").await?;
+    store.request_node_shutdown(&names[0]).await?;
+    assert_eq!(store.enqueue_resumed_workers().await?, 0);
+    pool.close().await;
+    db.cleanup().await?;
     Ok(())
 }

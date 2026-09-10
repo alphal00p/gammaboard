@@ -1,3 +1,4 @@
+pub mod node_launch;
 pub mod nodes;
 pub mod runs;
 pub mod templates;

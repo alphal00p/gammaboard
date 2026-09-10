@@ -67,6 +67,8 @@ if [[ "${SINGLE_NODE}" == "0" ]]; then
   postgres_args+=(--postgres-trusted-network)
 fi
 
+RESUME_ARGS=()
+if [[ "${GAMMABOARD_RESUME_WORKERS:-0}" == "1" ]]; then RESUME_ARGS+=(--resume-workers); fi
 exec env -u PGTZ -u PGOPTIONS \
 APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
 APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
@@ -75,4 +77,4 @@ apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
   gammaboard --resource-root "${WORKSPACE_ROOT}/resources" \
   --port-offset "${PORT_OFFSET}" \
   "${postgres_args[@]}" \
-  deploy --server-config "${SERVER_CFG}"
+  deploy --server-config "${SERVER_CFG}" "${RESUME_ARGS[@]}"

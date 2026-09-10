@@ -12,7 +12,6 @@ use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{ControlPlaneStore, NodeCapabilities, RegisteredNode, WorkerRole};
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
 use gammaboard::runtime_context::RuntimeContext;
-use std::{fs::File, process::Stdio};
 
 #[derive(Debug, Args)]
 pub struct NodeArgs {
@@ -207,60 +206,30 @@ async fn run_auto_run_command(
     runtime: &RuntimeContext,
     quiet: bool,
 ) -> Result<()> {
-    let config = runtime.runtime_config();
-    let planned = with_control_store(config, 10, quiet, "node_auto_run", |store| async move {
-        Ok(node_api::plan_auto_run_nodes(&store, args.count).await?)
-    })
-    .await?;
-
-    let binary = std::env::current_exe()?;
-    for node_name in &planned.node_names {
-        let (stdout_log_path, stderr_log_path) = runtime.node_log_paths(node_name)?;
-        let stdout_log = File::create(&stdout_log_path)?;
-        let stderr_log = File::create(&stderr_log_path)?;
-        let mut command = std::process::Command::new(&binary);
-        command
-            .args(runtime.runtime_cli_args())
-            .args(node_api::node_run_cli_args(
-                node_name,
-                args.max_start_failures,
-                &NodeCapabilities::default(),
-            ))
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(stdout_log))
-            .stderr(Stdio::from(stderr_log));
-        let mut child = command.spawn()?;
-        let name = node_name.clone();
-        std::thread::spawn(move || match child.wait() {
-            Ok(status) if !status.success() => {
-                eprintln!(
-                    "spawned node process exited unsuccessfully: node_name={} exit_status={} stdout_log={} stderr_log={}",
-                    name,
-                    status,
-                    stdout_log_path.display(),
-                    stderr_log_path.display()
-                );
-            }
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!(
-                    "spawned node process wait failed: node_name={} error={} stdout_log={} stderr_log={}",
-                    name,
-                    err,
-                    stdout_log_path.display(),
-                    stderr_log_path.display()
-                );
-            }
-        });
-    }
-
-    println!(
-        "started node processes: requested={} started={} node_names={}",
-        planned.requested_count,
-        planned.node_names.len(),
-        planned.node_names.join(",")
-    );
-    Ok(())
+    with_control_store(
+        runtime.runtime_config(),
+        10,
+        quiet,
+        "node_auto_run",
+        |store| async move {
+            let result = gammaboard::api::node_launch::launch(
+                &store,
+                runtime,
+                true,
+                gammaboard::api::node_launch::AutoRunNodesRequest {
+                    toml: None,
+                    count: Some(args.count),
+                    max_start_failures: Some(args.max_start_failures),
+                    args: serde_json::json!({}),
+                    name_prefix: None,
+                },
+            )
+            .await?;
+            print_json(&result);
+            Ok(())
+        },
+    )
+    .await
 }
 
 async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {

@@ -64,8 +64,8 @@ async fn clear_expired_assignments(pool: &PgPool) -> Result<(), sqlx::Error> {
         r#"
         UPDATE nodes
         SET
-            desired_run_id = NULL,
-            desired_role = NULL,
+            desired_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_run_id ELSE NULL END,
+            desired_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_role ELSE NULL END,
             active_run_id = NULL,
             active_role = NULL,
             updated_at = now()
@@ -190,12 +190,12 @@ pub(crate) async fn announce_node(
             last_seen = EXCLUDED.last_seen,
             updated_at = EXCLUDED.updated_at,
             desired_run_id = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.desired_run_id
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_run_id
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_run_id
             END,
             desired_role = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.desired_role
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_role
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_role
             END,
@@ -654,6 +654,7 @@ pub(crate) async fn request_node_shutdown(
             ($1, '', to_timestamp(0), NULL, NULL, now(), now())
         ON CONFLICT (name) DO UPDATE
         SET
+            resume_requested = false,
             desired_run_id = NULL,
             desired_role = NULL,
             shutdown_requested_at = now(),
@@ -672,11 +673,12 @@ pub(crate) async fn request_all_nodes_shutdown(pool: &PgPool) -> Result<u64, sql
         r#"
         UPDATE nodes
         SET
+            resume_requested = false,
             desired_run_id = NULL,
             desired_role = NULL,
             shutdown_requested_at = now(),
             updated_at = now()
-        WHERE lease_expires_at > now()
+        WHERE lease_expires_at > now() OR resume_requested
         "#,
     )
     .execute(pool)
@@ -716,8 +718,8 @@ pub(crate) async fn expire_node_lease(pool: &PgPool, node_uuid: &str) -> Result<
         UPDATE nodes
         SET
             lease_expires_at = now(),
-            desired_run_id = NULL,
-            desired_role = NULL,
+            desired_run_id = CASE WHEN resume_requested THEN desired_run_id ELSE NULL END,
+            desired_role = CASE WHEN resume_requested THEN desired_role ELSE NULL END,
             active_run_id = NULL,
             active_role = NULL,
             shutdown_requested_at = NULL,

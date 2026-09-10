@@ -1,3 +1,6 @@
+use crate::api::node_launch::AutoRunNodesRequest;
+#[cfg(test)]
+use crate::api::node_launch::{derive_capabilities_from_config, resolve_node_launch_groups};
 mod auth;
 mod config_panels;
 mod panels;
@@ -8,12 +11,10 @@ mod settings;
 mod task_panels;
 mod worker_panels;
 
-use crate::api::{
-    ApiError, nodes as node_api, runs as run_api, templates as template_api, toml_template,
-};
+use crate::api::{ApiError, nodes as node_api, runs as run_api, templates as template_api};
 use crate::core::{
-    AggregationStore, ControlPlaneStore, EngineError, RunReadStore, RunSpec, RunSpecStore, RunTask,
-    RunTaskSpec, RunTaskState, RunTaskStore, SamplerQueueTuning,
+    AggregationStore, EngineError, RunReadStore, RunSpec, RunSpecStore, RunTask, RunTaskSpec,
+    RunTaskState, RunTaskStore, SamplerQueueTuning,
 };
 use crate::evaluation::AccumulatorState;
 use crate::runners::stage_context::{StageConfigProvenance, resolve_stage_context};
@@ -45,11 +46,9 @@ use gammalooprs::observables::ObservableSnapshotBundle;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, HashSet};
 #[cfg(feature = "gammaloop")]
 use std::fs;
 use std::{
-    fs::File,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
@@ -579,50 +578,6 @@ struct AssignNodeRequest {
 #[derive(Deserialize)]
 struct AutoAssignRequest {
     max_evaluators: Option<usize>,
-}
-
-#[derive(Deserialize)]
-struct AutoRunNodesRequest {
-    toml: Option<String>,
-    count: Option<usize>,
-    max_start_failures: Option<u32>,
-    #[serde(default = "empty_json_object")]
-    args: JsonValue,
-    name_prefix: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NodeLaunchToml {
-    groups: Vec<NodeLaunchTomlGroup>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NodeLaunchTomlGroup {
-    count: usize,
-    name_prefix: Option<String>,
-    #[serde(default = "default_node_launch_max_start_failures")]
-    max_start_failures: u32,
-    #[serde(default = "empty_json_object")]
-    config: JsonValue,
-}
-
-fn default_node_launch_max_start_failures() -> u32 {
-    3
-}
-
-fn empty_json_object() -> JsonValue {
-    JsonValue::Object(Default::default())
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedNodeLaunchGroup {
-    count: usize,
-    name_prefix: String,
-    max_start_failures: u32,
-    config: JsonValue,
-    capabilities: BTreeMap<String, u64>,
 }
 
 #[derive(Deserialize)]
@@ -1609,305 +1564,19 @@ async fn update_node_launch_request_progress(
     json_response(serde_json::json!({ "request": request }))
 }
 
-#[derive(Debug, Clone)]
-struct PlannedNodeStart {
-    node_name: String,
-    max_start_failures: u32,
-    capabilities: BTreeMap<String, u64>,
-}
-
-fn derive_capabilities_from_config(config: &JsonValue) -> BTreeMap<String, u64> {
-    let mut caps = BTreeMap::new();
-    let Some(map) = config.as_object() else {
-        return caps;
-    };
-    for (key, value) in map {
-        if key == "gpu" {
-            if let Some(count) = gpu_count_from_config_value(value) {
-                caps.insert("gpu".to_string(), count);
-            }
-            continue;
-        }
-        if matches!(
-            key.as_str(),
-            "cores" | "nr_cores" | "cpus" | "cpus_per_task" | "cpus-per-task"
-        ) {
-            if let Some(number) = value.as_u64() {
-                caps.insert("cpus".to_string(), number);
-            }
-            continue;
-        }
-        if let Some(number) = value.as_u64() {
-            caps.insert(key.clone(), number);
-        }
-    }
-    if let Some(gres) = map.get("gres").and_then(JsonValue::as_str)
-        && let Some(count) = parse_gpu_count_from_gres(gres)
-    {
-        caps.insert("gpu".to_string(), count);
-    }
-    caps
-}
-
-fn gpu_count_from_config_value(value: &JsonValue) -> Option<u64> {
-    if let Some(count) = value.as_u64() {
-        return (count > 0).then_some(count);
-    }
-    let raw = value.as_str()?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    if let Ok(count) = raw.parse::<u64>() {
-        return (count > 0).then_some(count);
-    }
-    parse_gpu_count_from_gres(if raw.starts_with("gpu:") {
-        raw
-    } else {
-        return parse_gpu_count_from_gres(&format!("gpu:{raw}"));
-    })
-}
-
-fn parse_gpu_count_from_gres(gres: &str) -> Option<u64> {
-    for segment in gres.split(',') {
-        let trimmed = segment.trim();
-        if !trimmed.starts_with("gpu:") {
-            continue;
-        }
-        let parts = trimmed.split(':').collect::<Vec<_>>();
-        let last = parts.last().copied().unwrap_or_default();
-        if let Ok(count) = last.parse::<u64>() {
-            return Some(count);
-        }
-        return Some(1);
-    }
-    None
-}
-
-fn resolve_node_launch_groups(
-    payload: &AutoRunNodesRequest,
-) -> Result<Vec<ResolvedNodeLaunchGroup>, ApiError> {
-    if let Some(toml_text) = payload.toml.as_ref() {
-        let parsed: NodeLaunchToml =
-            toml_template::parse_templated_toml(toml_text, "node launch TOML")?;
-        if parsed.groups.is_empty() {
-            return Err(ApiError::BadRequest(
-                "node launch TOML requires at least one [[groups]] entry".to_string(),
-            ));
-        }
-        let groups = parsed
-            .groups
-            .into_iter()
-            .enumerate()
-            .map(|(index, group)| {
-                if group.count == 0 {
-                    return Err(ApiError::BadRequest(format!(
-                        "groups[{index}].count must be greater than zero"
-                    )));
-                }
-                let name_prefix = group
-                    .name_prefix
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("w")
-                    .to_string();
-                let capabilities = derive_capabilities_from_config(&group.config);
-                Ok(ResolvedNodeLaunchGroup {
-                    count: group.count,
-                    name_prefix,
-                    max_start_failures: group.max_start_failures,
-                    config: group.config,
-                    capabilities,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        return Ok(groups);
-    }
-
-    let count = payload.count.ok_or_else(|| {
-        ApiError::BadRequest("count is required when no launch TOML is provided".to_string())
-    })?;
-    if count == 0 {
-        return Err(ApiError::BadRequest(
-            "requested node count must be greater than zero".to_string(),
-        ));
-    }
-    Ok(vec![ResolvedNodeLaunchGroup {
-        count,
-        name_prefix: payload
-            .name_prefix
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("w")
-            .to_string(),
-        max_start_failures: payload.max_start_failures.unwrap_or(3),
-        config: JsonValue::Object(Default::default()),
-        capabilities: BTreeMap::new(),
-    }])
-}
-
-async fn plan_group_node_names(
-    store: &PgStore,
-    groups: &[ResolvedNodeLaunchGroup],
-) -> Result<Vec<PlannedNodeStart>, ApiError> {
-    let existing = store
-        .list_nodes(None)
-        .await?
-        .into_iter()
-        .map(|node| node.name)
-        .collect::<HashSet<_>>();
-    let mut taken = existing;
-    let mut planned = Vec::new();
-    for group in groups {
-        let mut index = 1usize;
-        let mut generated = 0usize;
-        while generated < group.count {
-            let candidate = format!("{}-{}", group.name_prefix, index);
-            index = index.saturating_add(1);
-            if taken.contains(&candidate) {
-                continue;
-            }
-            taken.insert(candidate.clone());
-            planned.push(PlannedNodeStart {
-                node_name: candidate,
-                max_start_failures: group.max_start_failures,
-                capabilities: group.capabilities.clone(),
-            });
-            generated += 1;
-        }
-    }
-    Ok(planned)
-}
-
 async fn create_and_maybe_resolve_node_launch_request(
     state: AppState,
     payload: AutoRunNodesRequest,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let groups = resolve_node_launch_groups(&payload)?;
-    let requested_count = groups.iter().map(|group| group.count).sum::<usize>();
-    let backend = if state.allow_local_node_spawn {
-        "local"
-    } else {
-        "external"
-    };
-    let mut args = serde_json::Map::new();
-    if let JsonValue::Object(map) = payload.args.clone() {
-        args.extend(map);
-    }
-    let groups_json = groups
-        .iter()
-        .map(|group| {
-            serde_json::json!({
-                "count": group.count,
-                "name_prefix": group.name_prefix,
-                "max_start_failures": group.max_start_failures,
-                "config": group.config,
-            })
-        })
-        .collect::<Vec<_>>();
-    args.insert("groups".to_string(), JsonValue::Array(groups_json));
-    if let Some(toml) = payload.toml.as_ref() {
-        args.insert("toml".to_string(), JsonValue::String(toml.clone()));
-    }
-    let launch = node_api::create_node_launch_request(
-        &state.store,
-        requested_count,
-        backend,
-        None,
-        &JsonValue::Object(args),
-        state.allow_local_node_spawn,
-    )
-    .await
-    .inspect_err(|err| log_control_api_error("node_launch_request_create", err))?;
-
-    if !launch.should_resolve_locally {
-        tracing::info!(
-            source = "control",
-            control_surface = "dashboard",
-            action = "node_launch_request_create",
-            request_id = launch.request.id,
-            requested = launch.request.requested_count,
-            backend = %launch.request.backend,
-            "dashboard action completed"
-        );
-        return json_response(serde_json::json!({
-            "request": launch.request,
-            "requested": requested_count,
-            "started": 0,
-            "node_names": [],
-        }));
-    }
-
-    let planned_nodes = plan_group_node_names(&state.store, &groups)
-        .await
-        .inspect_err(|err| log_control_api_error("node_auto_run", err))?;
-
-    let binary = std::env::current_exe().map_err(|err| {
-        ApiError::Internal(format!("failed to resolve current executable: {err}"))
-    })?;
-
-    let runtime_cli_args = state.runtime.runtime_cli_args();
-    let mut started_node_names = Vec::new();
-    for planned in &planned_nodes {
-        if let Err(err) = spawn_node_process(
-            &binary,
-            &runtime_cli_args,
+    json_response(
+        crate::api::node_launch::launch(
+            &state.store,
             &state.runtime,
-            &planned.node_name,
-            planned.max_start_failures,
-            &planned.capabilities,
-        ) {
-            let workers = started_node_names
-                .iter()
-                .map(|node_name| serde_json::json!({ "node_name": node_name }))
-                .collect::<Vec<_>>();
-            let result = serde_json::json!({ "workers": workers });
-            let _ = node_api::mark_node_launch_request_failed(
-                &state.store,
-                launch.request.id,
-                started_node_names.len(),
-                &result,
-                &err.to_string(),
-            )
-            .await;
-            log_control_api_error("node_auto_run", &err);
-            return Err(err);
-        }
-        started_node_names.push(planned.node_name.clone());
-    }
-
-    let workers = started_node_names
-        .iter()
-        .map(|node_name| serde_json::json!({ "node_name": node_name }))
-        .collect::<Vec<_>>();
-    let result = serde_json::json!({ "workers": workers });
-    let request = node_api::mark_node_launch_request_starting(
-        &state.store,
-        launch.request.id,
-        started_node_names.len(),
-        &result,
+            state.allow_local_node_spawn,
+            payload,
+        )
+        .await?,
     )
-    .await
-    .inspect_err(|err| log_control_api_error("node_launch_request_starting", err))?;
-
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "node_auto_run",
-        request_id = launch.request.id,
-        requested = requested_count,
-        started = started_node_names.len(),
-        node_names = ?started_node_names,
-        "dashboard action completed"
-    );
-
-    json_response(serde_json::json!({
-        "request": request,
-        "requested": requested_count,
-        "started": started_node_names.len(),
-        "node_names": started_node_names,
-    }))
 }
 
 async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1935,6 +1604,17 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
     }))
 }
 
+async fn suspend_workers(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let saved = state
+        .store
+        .suspend_workers()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    json_response(serde_json::json!({"workers_saved": saved}))
+}
+
 async fn shutdown_control_process(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1946,7 +1626,7 @@ async fn shutdown_control_process(
     );
     let store = state.store.clone();
     tokio::spawn(async move {
-        let result = node_api::stop_all_nodes_gracefully(
+        let result = node_api::suspend_nodes_gracefully(
             &store,
             node_api::GracefulNodeShutdownParams {
                 sampler_drain_timeout: Duration::from_secs(60),
@@ -1980,82 +1660,6 @@ async fn shutdown_control_process(
     });
 
     json_response(serde_json::json!({ "shutdown_requested": true }))
-}
-
-fn spawn_node_process(
-    binary: &Path,
-    runtime_cli_args: &[String],
-    runtime: &RuntimeContext,
-    node_name: &str,
-    max_start_failures: u32,
-    capabilities: &BTreeMap<String, u64>,
-) -> Result<(), ApiError> {
-    use std::process::Stdio;
-    use tokio::process::Command;
-
-    let (stdout_log_path, stderr_log_path) = node_process_log_paths(runtime, node_name)?;
-    let stdout_log = File::create(&stdout_log_path).map_err(|err| {
-        ApiError::Internal(format!(
-            "failed to open stdout log for node {node_name} at {}: {err}",
-            stdout_log_path.display()
-        ))
-    })?;
-    let stderr_log = File::create(&stderr_log_path).map_err(|err| {
-        ApiError::Internal(format!(
-            "failed to open stderr log for node {node_name} at {}: {err}",
-            stderr_log_path.display()
-        ))
-    })?;
-
-    let mut command = Command::new(binary);
-    command
-        .args(runtime_cli_args)
-        .args(node_api::node_run_cli_args(
-            node_name,
-            max_start_failures,
-            capabilities,
-        ))
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(stderr_log));
-
-    let mut child = command
-        .spawn()
-        .map_err(|err| ApiError::Internal(format!("failed to spawn node {node_name}: {err}")))?;
-    let name = node_name.to_string();
-    tokio::spawn(async move {
-        match child.wait().await {
-            Ok(status) if !status.success() => {
-                tracing::warn!(
-                    node_name = %name,
-                    exit_status = %status,
-                    stdout_log = %stdout_log_path.display(),
-                    stderr_log = %stderr_log_path.display(),
-                    "spawned node process exited unsuccessfully"
-                );
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::warn!(
-                    node_name = %name,
-                    error = %err,
-                    stdout_log = %stdout_log_path.display(),
-                    stderr_log = %stderr_log_path.display(),
-                    "spawned node process wait failed"
-                );
-            }
-        }
-    });
-    Ok(())
-}
-
-fn node_process_log_paths(
-    runtime: &RuntimeContext,
-    node_name: &str,
-) -> Result<(PathBuf, PathBuf), ApiError> {
-    runtime
-        .node_log_paths(node_name)
-        .map_err(|err| ApiError::Internal(format!("failed resolving node log paths: {err}")))
 }
 
 async fn get_run_performance(
@@ -2291,7 +1895,7 @@ config = { cores = "$(cores:1)" }
             ),
             count: None,
             max_start_failures: None,
-            args: empty_json_object(),
+            args: serde_json::json!({}),
             name_prefix: None,
         };
 
@@ -2337,7 +1941,7 @@ config = { cores = "$(cores:1)" }
                 toml: Some(toml),
                 count: None,
                 max_start_failures: None,
-                args: empty_json_object(),
+                args: serde_json::json!({}),
                 name_prefix: None,
             };
             resolve_node_launch_groups(&payload)

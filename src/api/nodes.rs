@@ -227,6 +227,26 @@ pub async fn stop_all_nodes_gracefully(
     })
 }
 
+/// Deployment shutdown preserves launch intent and assignments for explicit resume.
+pub async fn suspend_nodes_gracefully(
+    store: &crate::stores::PgStore,
+    params: GracefulNodeShutdownParams,
+) -> Result<GracefulNodeShutdownResult, ApiError> {
+    let rows_updated = store
+        .suspend_workers()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let wait = wait_for_graceful_node_shutdown(store, params).await?;
+    Ok(GracefulNodeShutdownResult {
+        assignments_cleared: 0,
+        rows_updated,
+        sampler_drain_timed_out: wait.sampler_drain_timed_out,
+        node_stop_timed_out: wait.node_stop_timed_out,
+        active_samplers_remaining: wait.active_samplers_remaining,
+        live_nodes_remaining: wait.live_nodes_remaining,
+    })
+}
+
 struct GracefulNodeShutdownWaitResult {
     sampler_drain_timed_out: bool,
     node_stop_timed_out: bool,

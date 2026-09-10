@@ -239,3 +239,20 @@ Builds without the default `gammaloop` feature do not link GammaLoop, but
 GammaBoard still depends directly on Symbolica for built-in Symbolica
 evaluators. Developers who explicitly compile with
 `NO_SYMBOLICA_OEM_LICENSE=1` must provide `SYMBOLICA_LICENSE` at runtime.
+
+Graceful `deploy` shutdown automatically marks live workers for later recreation and
+preserves their intended assignments. Use `gammaboard deploy --resume-workers` to
+consume those markers through the normal launch-request queue. Plain `deploy`
+leaves them dormant. Explicit `node stop` clears a worker's marker. Pausing or
+unassigning a run still clears its assignments. Crashes and forced kills cannot
+save a new shutdown roster or guarantee a checkpoint.
+
+Launch workers through `node start-local`, the dashboard launch form, or the
+UBELIX launcher so their complete launch configuration is recorded. Workers
+started manually with `node run` have no reproducible launch request and are
+reported as unavailable for automatic recreation. Pending external jobs are not
+part of the saved roster; manage them through their existing launch requests.
+UBELIX `down` saves the roster before stopping jobs; `up --resume-workers --watch`
+re-enqueues saved workers with their original scheduler settings.
+
+Tests can use an isolated PostgreSQL server with `GAMMABOARD_TEST_DATABASE_URL`.

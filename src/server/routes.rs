@@ -57,6 +57,7 @@ pub(super) fn build_app(state: AppState) -> Router {
         .route("/logs", get(get_logs))
         .route("/histogram-bundle/export", post(export_histogram_bundle))
         .route("/admin/db/restart", post(restart_db))
+        .route("/admin/workers/suspend", post(suspend_workers))
         .route("/admin/control/shutdown", post(shutdown_control_process))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

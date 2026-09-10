@@ -47,3 +47,12 @@ def test_group_launches_have_stable_unique_names():
     )
     assert [group["node_name"] for group in groups] == ["cpu-12-1", "cpu-12-2", "cpu-12-3"]
     assert [group["capabilities"]["cpus"] for group in groups] == [4, 4, 8]
+
+
+def test_resumed_request_preserves_reserved_name_and_scheduler_config():
+    request = {"id": 99, "args": {"groups": [{"count": 1, "node_names": ["gpu-4"], "max_start_failures": 7, "config": {"partition": "gpu", "gres": "gpu:a100:1", "cpus": 8}}]}}
+    worker = ubelix.launch_groups_for_request(request)[0]
+    assert worker["node_name"] == "gpu-4"
+    assert worker["config"]["gres"] == "gpu:a100:1"
+    assert worker["max_start_failures"] == 7
+    assert ubelix.parser().parse_args(["up", "--resume-workers"]).resume_workers

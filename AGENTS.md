@@ -137,3 +137,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - After a coherent stage, provide a commit message as a bare fenced `text` block.
 - `run validate` shares run-creation preflight and requires no database; `--probe`
   initializes runtimes without producing samples or creating a run.
+- Worker launch normalization lives in `api::node_launch`, shared by CLI and HTTP.
+  `nodes.resume_requested` is captured at graceful deploy shutdown and consumed
+  atomically with a normal launch request by `deploy --resume-workers`. The
+  persisted launch group retains external scheduler options; never infer these
+  from runtime capabilities or substitute local processes for external workers.
