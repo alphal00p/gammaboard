@@ -157,6 +157,12 @@ The hot path is:
 sampler aggregator -> latent batch queue -> materializer -> batch transforms -> evaluator -> accumulator snapshot/training feedback
 ```
 
+Queue defaults target 2 seconds of evaluation per batch and one pending database
+batch per active evaluator. Task-level `queue_tuning` overrides apply live through
+the dashboard. The maximum batch size and queue/I/O limits remain independent
+safety bounds; increasing the pending buffer cannot make an adaptive sampler
+produce past its training boundary.
+
 The run domain is authoritative throughout this path. Samplers produce points in
 that domain, materializers and transforms must preserve a valid concrete batch,
 and evaluator workers validate materialized/transformed batches before calling
