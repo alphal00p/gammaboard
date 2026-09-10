@@ -302,3 +302,23 @@ version. Enable it with `GAMMABOARD_RUN_MADNIS_E2E=1`; set
 `GAMMABOARD_MADNIS_PYTHON` to its Python environment.
 Resumed workers use the new deployment/launcher environment, so make runtime
 credentials and shared resource paths available as for an ordinary launch.
+
+### Synthetic workloads and queue benchmarks
+
+The built-in `unit` evaluator and `naive_monte_carlo` sampler support optional,
+seeded Gaussian timing models for evaluation, generation, result ingestion and
+repeating training updates. Defaults introduce no delay. Set
+`training_window_samples` to enable a strict repeating training barrier; zero
+selects inference. Synthetic worker panels show requested/actual delay and update
+counts. These engines are available in ordinary builds.
+
+The [queue benchmark suite](benchmarks/queue/README.md) covers 1, 4, 16 and 64
+evaluators with nominal deployment compute ceilings from 1,000 to 2,000,000
+samples/s. It supports generated run cards, isolated local runs, and paired A/B
+measurements using prebuilt binaries:
+
+```sh
+just benchmark-queue run --binary target/release/gammaboard --smoke --output /tmp/queue-smoke
+```
+
+Use the timing tables instead of the former synthetic millisecond-delay fields.

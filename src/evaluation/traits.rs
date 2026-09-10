@@ -15,6 +15,10 @@ pub trait Evaluator: Send {
         json!({})
     }
 
+    fn diagnostics(&self) -> JsonValue {
+        json!({})
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,

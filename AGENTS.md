@@ -158,3 +158,14 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Finite training windows cap batch sizes for four chunks per evaluator; retain
   that cap as the window drains. Timing EWMA weights are normalized per 1,000
   samples rather than treating every sample as a complete EWMA update.
+- Synthetic engines share `utils::synthetic_timing::TimingModel`: one Gaussian
+  per-sample error and one overhead error per operation, with seeded work keys,
+  clipped negative durations and requested/actual delay counters. No feature flag.
+- Naive Monte Carlo uses a checkpointed sample RNG and optional repeating training
+  windows; all window feedback must return before its update and next production.
+  A zero window is inference and requests no training values.
+- Evaluator diagnostics use the default-empty `Evaluator::diagnostics` hook and
+  existing JSON performance metrics; synthetic worker panels display timing data.
+- `scripts/benchmark_queue.py` generates the 80-case synthetic suite and runs
+  isolated local or paired A/B deployments. Keep workload generation shared with
+  its fast tests; do not put tight throughput assertions in ordinary CI.

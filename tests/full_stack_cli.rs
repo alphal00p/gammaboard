@@ -3359,7 +3359,7 @@ name = "queue-tuning-live-update-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 5
+timing = { per_sample_seconds = 0.005 }
 
 [[task_queue]]
 name = "sample-a"
@@ -3562,7 +3562,7 @@ name = "delete-assigned-run-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 20
+timing = { per_sample_seconds = 0.02 }
 
 [[task_queue]]
 kind = "sample"
@@ -3651,7 +3651,7 @@ name = "delete-child-run-$(scale:1)"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 20
+timing = { per_sample_seconds = 0.02 }
 
 [[task_queue]]
 name = "sample"
@@ -4197,7 +4197,7 @@ name = "worker-death-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 100
+timing = { per_sample_seconds = 0.1 }
 
 [[task_queue]]
 kind = "sample"
@@ -6139,5 +6139,71 @@ sampler_aggregator = { config={kind="naive_monte_carlo"} }
     assert_eq!(store.enqueue_resumed_workers().await?, 0);
     pool.close().await;
     db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_synthetic_training_windows_and_inference() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    for node in ["synthetic-s", "synthetic-e1", "synthetic-e2"] {
+        harness.start_node(node).await?;
+    }
+    for training in [true, false] {
+        let name = format!(
+            "synthetic-{}",
+            if training { "training" } else { "inference" }
+        );
+        let config = temp_run_add_config(&format!(
+            r#"
+name = "{name}"
+[evaluator]
+kind = "unit"
+timing = {{ per_sample_seconds = 0.00001, overhead_seconds = 0.001, sigma_overhead_seconds = 0.0001, seed = 42 }}
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = {{ max_samples = 1024 }}
+accumulator = {{ config = "scalar" }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 42, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
+[evaluator_runner_params]
+performance_snapshot_interval_ms = 20
+[sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 20
+frontend_sync_interval_ms = 20
+min_tick_time_ms = 1
+[sampler_aggregator_runner_params.queue]
+max_batch_size = 64
+target_batch_eval_ms = 1.0
+"#,
+            window = if training { 128 } else { 0 }
+        ));
+        harness.add_run(&config);
+        let run_id = harness.run_id(&name).await?;
+        harness.assign_node("synthetic-s", "sampler_aggregator", &name);
+        harness.assign_node("synthetic-e1", "evaluator", &name);
+        harness.assign_node("synthetic-e2", "evaluator", &name);
+        harness.wait_for("synthetic task completes",Duration::from_secs(30),|| async {
+            let completed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_tasks WHERE run_id=$1 AND state='completed')")
+                .bind(run_id).fetch_one(&harness.pool).await?;
+            Ok(completed)
+        }).await?;
+        let progress = harness.run_sample_progress(run_id).await?;
+        assert_eq!(progress, (1024, 1024));
+        let diagnostics: JsonValue = sqlx::query_scalar("SELECT engine_diagnostics FROM sampler_aggregator_performance_latest WHERE run_id=$1 ORDER BY created_at DESC LIMIT 1")
+            .bind(run_id).fetch_one(&harness.pool).await?;
+        assert_eq!(diagnostics["synthetic"], true);
+        assert_eq!(
+            diagnostics["training_updates"],
+            if training { 8 } else { 0 }
+        );
+        assert_eq!(diagnostics["pending_training_samples"], 0);
+        harness.wait_for("synthetic evaluator diagnostics flush", Duration::from_secs(10), || async {
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM evaluator_performance_latest WHERE run_id=$1 AND metrics->'engine_diagnostics'->>'synthetic'='true'")
+                .bind(run_id).fetch_one(&harness.pool).await?;
+            Ok(count>0)
+        }).await?;
+    }
+    harness.cleanup().await?;
     Ok(())
 }

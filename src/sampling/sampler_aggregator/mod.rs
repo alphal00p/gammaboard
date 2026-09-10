@@ -150,6 +150,7 @@ impl SamplerAggregatorConfig {
             Self::HavanaTraining { .. }
             | Self::PdfAdaptationRasterPlane { .. }
             | Self::PdfAdaptationRasterLine { .. } => true,
+            Self::NaiveMonteCarlo { params, .. } => params.training_window_samples > 0,
             Self::ProcessSampler { params, .. } => params.requires_training_values,
             _ => false,
         }

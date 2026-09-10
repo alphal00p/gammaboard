@@ -6,53 +6,39 @@ use crate::sampling::{
     SamplerAggregatorSnapshot,
 };
 use crate::utils::domain::Domain;
+use crate::utils::synthetic_timing::{TimingModel, TimingStats};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::{thread, time::Duration};
 
-/// Test-only sampler-aggregator engine with simple random batch generation.
+/// Synthetic uniform sampler with optional repeating training barriers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NaiveMonteCarloSamplerAggregator {
     domain: Domain,
-    training_target_samples: usize,
-    training_delay_per_sample_ms: u64,
-    trained_samples: usize,
+    params: NaiveMonteCarloSamplerParams,
+    rng: crate::utils::rng::SerializableMonteCarloRng,
+    produced_samples: u64,
+    returned_samples: u64,
     pending_training_samples: usize,
-    fail_on_produce_batch_nr: Option<usize>,
-    #[serde(default)]
+    window_returned: usize,
+    updates: u64,
     produced_batches_total: usize,
-    nr_batches: i64,
-    nr_samples: i64,
-    sum: f64,
+    generation_stats: TimingStats,
+    ingest_stats: TimingStats,
+    update_stats: TimingStats,
+    training_barrier_seconds: f64,
+    #[serde(skip)]
+    barrier_since: Option<std::time::Instant>,
 }
 
-impl NaiveMonteCarloSamplerAggregator {
-    pub fn new(
-        domain: Domain,
-        training_target_samples: usize,
-        training_delay_per_sample_ms: u64,
-        fail_on_produce_batch_nr: Option<usize>,
-    ) -> Self {
-        Self {
-            domain,
-            training_target_samples,
-            training_delay_per_sample_ms,
-            trained_samples: 0,
-            pending_training_samples: 0,
-            fail_on_produce_batch_nr,
-            produced_batches_total: 0,
-            nr_batches: 0,
-            nr_samples: 0,
-            sum: 0.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct NaiveMonteCarloSamplerParams {
-    pub training_target_samples: usize,
-    pub training_delay_per_sample_ms: u64,
+    pub seed: u64,
+    /// Zero means inference; otherwise updates repeat after each complete window.
+    pub training_window_samples: usize,
+    pub generation_timing: TimingModel,
+    pub ingest_timing: TimingModel,
+    pub update_timing: TimingModel,
     pub fail_on_produce_batch_nr: Option<usize>,
     pub fail_on_materialize_batch_nr: Option<usize>,
 }
@@ -62,18 +48,51 @@ impl NaiveMonteCarloSamplerAggregator {
         params: NaiveMonteCarloSamplerParams,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
-        Ok(Self::new(
-            domain.clone(),
-            params.training_target_samples,
-            params.training_delay_per_sample_ms,
-            params.fail_on_produce_batch_nr,
-        ))
+        params.generation_timing.validate()?;
+        params.ingest_timing.validate()?;
+        params.update_timing.validate()?;
+        Ok(Self {
+            domain: domain.clone(),
+            rng: crate::utils::rng::SerializableMonteCarloRng::new(params.seed, 0),
+            params,
+            produced_samples: 0,
+            returned_samples: 0,
+            pending_training_samples: 0,
+            window_returned: 0,
+            updates: 0,
+            produced_batches_total: 0,
+            generation_stats: TimingStats::default(),
+            ingest_stats: TimingStats::default(),
+            update_stats: TimingStats::default(),
+            training_barrier_seconds: 0.0,
+            barrier_since: None,
+        })
     }
 
-    pub(crate) fn from_snapshot(snapshot: Self, domain: &Domain) -> Result<Self, BuildError> {
-        let runtime = snapshot;
-        runtime.validate_domain(domain)?;
-        Ok(runtime)
+    pub(crate) fn from_snapshot(mut snapshot: Self, domain: &Domain) -> Result<Self, BuildError> {
+        snapshot.validate_domain(domain)?;
+        snapshot.params.generation_timing.validate()?;
+        snapshot.params.ingest_timing.validate()?;
+        snapshot.params.update_timing.validate()?;
+        let window = snapshot.params.training_window_samples;
+        if window > 0
+            && (snapshot.window_returned >= window
+                || snapshot.pending_training_samples > window - snapshot.window_returned)
+        {
+            return Err(BuildError::build(
+                "invalid synthetic training window snapshot",
+            ));
+        }
+        if snapshot.training_samples_remaining() == Some(0) {
+            snapshot.barrier_since = Some(std::time::Instant::now());
+        }
+        Ok(snapshot)
+    }
+
+    fn flush_barrier_time(&mut self) {
+        if let Some(start) = self.barrier_since.take() {
+            self.training_barrier_seconds += start.elapsed().as_secs_f64();
+        }
     }
 }
 
@@ -89,33 +108,43 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
     }
 
     fn training_samples_remaining(&self) -> Option<usize> {
-        if self.training_target_samples == 0 {
-            None
-        } else {
-            Some(
-                self.training_target_samples.saturating_sub(
-                    self.trained_samples
-                        .saturating_add(self.pending_training_samples),
-                ),
-            )
-        }
+        let window = self.params.training_window_samples;
+        (window > 0).then(|| window - self.window_returned - self.pending_training_samples)
     }
 
     fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        Ok(SamplePlan::Produce {
-            nr_samples: usize::MAX,
+        Ok(match self.training_samples_remaining() {
+            Some(0) => SamplePlan::Pause,
+            Some(nr_samples) => SamplePlan::Produce { nr_samples },
+            None => SamplePlan::Produce {
+                nr_samples: usize::MAX,
+            },
         })
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
+        if self.barrier_since.is_some() {
+            self.flush_barrier_time();
+            self.barrier_since = Some(std::time::Instant::now());
+        }
         Ok(SamplerAggregatorSnapshot::NaiveMonteCarlo {
-            raw: serde_json::to_value(self.clone()).map_err(EngineError::from)?,
+            raw: serde_json::to_value(&*self)?,
         })
     }
 
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        self.produced_batches_total = self.produced_batches_total.saturating_add(1);
+        if nr_samples == 0
+            || self
+                .training_samples_remaining()
+                .is_some_and(|remaining| nr_samples > remaining)
+        {
+            return Err(EngineError::engine(
+                "synthetic sample request is empty or exceeds the training window",
+            ));
+        }
+        self.produced_batches_total += 1;
         if self
+            .params
             .fail_on_produce_batch_nr
             .is_some_and(|n| n > 0 && self.produced_batches_total == n)
         {
@@ -124,56 +153,61 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
                 self.produced_batches_total
             )));
         }
-        if nr_samples == 0 {
-            return Err(EngineError::engine(
-                "naive_monte_carlo sampler requires nr_samples > 0",
-            ));
-        }
-        let mut rng = rand::rng();
+        self.params.generation_timing.wait(
+            nr_samples,
+            self.produced_samples ^ 0x67656e,
+            &mut self.generation_stats,
+        )?;
         let mut points = Vec::with_capacity(nr_samples);
         for _ in 0..nr_samples {
-            let (discrete, continuous) = sample_domain_point(&self.domain, &mut rng)?;
+            let (discrete, continuous) = sample_domain_point(&self.domain, &mut self.rng)?;
             points.push(Point::new(continuous, discrete, 1.0));
         }
-
         let batch = Batch::new(points).engine_err()?;
-        if self.training_target_samples > 0 {
-            let reserved = self
-                .training_target_samples
-                .saturating_sub(
-                    self.trained_samples
-                        .saturating_add(self.pending_training_samples),
-                )
-                .min(nr_samples);
-            self.pending_training_samples = self.pending_training_samples.saturating_add(reserved);
+        self.produced_samples += nr_samples as u64;
+        if self.params.training_window_samples > 0 {
+            self.pending_training_samples += nr_samples;
+            if self.training_samples_remaining() == Some(0) {
+                self.barrier_since = Some(std::time::Instant::now());
+            }
         }
         Ok(LatentBatchSpec::from_batch(&batch))
     }
 
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let accepted = if self.training_target_samples == 0 {
-            training_values.len()
-        } else {
-            self.training_target_samples
-                .saturating_sub(self.trained_samples)
-                .min(training_values.len())
-        };
-
-        self.nr_batches += 1;
-        self.nr_samples += accepted as i64;
-        self.sum += training_values.iter().take(accepted).sum::<f64>();
-
-        if accepted > 0 && self.training_delay_per_sample_ms > 0 && self.training_target_samples > 0
-        {
-            thread::sleep(Duration::from_millis(
-                accepted as u64 * self.training_delay_per_sample_ms,
-            ));
+    fn ingest_training_values(&mut self, values: &[f64]) -> Result<(), EngineError> {
+        if values.is_empty() {
+            return Ok(());
         }
-        self.trained_samples = self.trained_samples.saturating_add(accepted);
-        self.pending_training_samples = self
-            .pending_training_samples
-            .saturating_sub(training_values.len());
+        if self.params.training_window_samples == 0 || values.len() > self.pending_training_samples
+        {
+            return Err(EngineError::engine("unexpected synthetic training values"));
+        }
+        self.params.ingest_timing.wait(
+            values.len(),
+            self.returned_samples ^ 0x696e67,
+            &mut self.ingest_stats,
+        )?;
+        self.pending_training_samples -= values.len();
+        self.window_returned += values.len();
+        self.returned_samples += values.len() as u64;
+        if self.window_returned == self.params.training_window_samples {
+            self.params.update_timing.wait(
+                self.window_returned,
+                self.updates ^ 0x757064,
+                &mut self.update_stats,
+            )?;
+            self.flush_barrier_time();
+            self.updates += 1;
+            self.window_returned = 0;
+        }
         Ok(())
+    }
+
+    fn get_diagnostics(&mut self) -> serde_json::Value {
+        serde_json::json!({"synthetic":true,"produced_samples":self.produced_samples,"returned_samples":self.returned_samples,
+            "training_updates":self.updates,"training_barrier_seconds":self.training_barrier_seconds + self.barrier_since.map_or(0.0, |start| start.elapsed().as_secs_f64()),"training_window_samples":self.params.training_window_samples,
+            "pending_training_samples":self.pending_training_samples,"window_returned":self.window_returned,
+            "generation_timing":self.generation_stats,"ingest_timing":self.ingest_stats,"update_timing":self.update_stats})
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
@@ -319,33 +353,82 @@ fn sample_domain_point(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn sampler(window: usize) -> NaiveMonteCarloSamplerAggregator {
+        NaiveMonteCarloSamplerAggregator::from_params_and_domain(
+            NaiveMonteCarloSamplerParams {
+                training_window_samples: window,
+                seed: 42,
+                ..Default::default()
+            },
+            &Domain::continuous(2),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn repeating_barrier_waits_for_all_returns_and_survives_restore() {
+        let mut s = sampler(10);
+        s.produce_latent_batch(6).unwrap();
+        s.produce_latent_batch(4).unwrap();
+        assert!(matches!(s.sample_plan().unwrap(), SamplePlan::Pause));
+        assert!(s.produce_latent_batch(1).is_err());
+        s.ingest_training_values(&[1.0; 4]).unwrap();
+        assert_eq!(s.updates, 0);
+        let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = s.snapshot().unwrap() else {
+            unreachable!()
+        };
+        let mut restored = NaiveMonteCarloSamplerAggregator::from_snapshot(
+            serde_json::from_value(raw).unwrap(),
+            &s.domain,
+        )
+        .unwrap();
+        for runtime in [&mut s, &mut restored] {
+            runtime.ingest_training_values(&[1.0; 6]).unwrap();
+            assert_eq!(runtime.training_samples_remaining(), Some(10));
+            assert_eq!(runtime.updates, 1);
+        }
+        assert_eq!(
+            s.produce_latent_batch(10).unwrap(),
+            restored.produce_latent_batch(10).unwrap()
+        );
+        restored.ingest_training_values(&[1.0; 10]).unwrap();
+        assert_eq!(restored.updates, 2);
+        assert_eq!(restored.update_stats.calls, 2);
+        assert!(restored.ingest_training_values(&[1.0]).is_err());
+    }
+    #[test]
+    fn barrier_checkpoint_preserves_elapsed_time_without_serializing_clock() {
+        let mut s = sampler(10);
+        s.produce_latent_batch(10).unwrap();
+        s.training_barrier_seconds = 3.0;
+        let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = s.snapshot().unwrap() else {
+            unreachable!()
+        };
+        assert!(raw.get("barrier_since").is_none());
+        let saved = raw["training_barrier_seconds"].as_f64().unwrap();
+        assert!(saved >= 3.0);
+        let mut restored = NaiveMonteCarloSamplerAggregator::from_snapshot(
+            serde_json::from_value(raw).unwrap(),
+            &s.domain,
+        )
+        .unwrap();
+        assert_eq!(restored.training_barrier_seconds, saved);
+        assert!(restored.barrier_since.is_some());
+        restored.ingest_training_values(&[1.0; 10]).unwrap();
+        assert!(restored.barrier_since.is_none());
+        assert!(restored.training_barrier_seconds >= saved);
+    }
 
     #[test]
-    fn snapshot_roundtrip_restores_naive_runtime_state() {
-        let domain = Domain::rectangular(2, 1);
-        let mut sampler = NaiveMonteCarloSamplerAggregator::new(domain.clone(), 100, 7, None);
-        sampler.trained_samples = 13;
-        sampler.nr_batches = 5;
-        sampler.nr_samples = 29;
-        sampler.sum = 4.5;
-
-        let snapshot = sampler.snapshot().expect("snapshot");
-        let mut restored = snapshot
-            .into_runtime(&domain, serde_json::json!({}))
-            .expect("restore");
-        let restored_snapshot = restored.snapshot().expect("snapshot after restore");
-
-        let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = restored_snapshot else {
-            panic!("expected naive snapshot");
-        };
-        let state: NaiveMonteCarloSamplerAggregator =
-            serde_json::from_value(raw).expect("decode snapshot");
-        assert_eq!(state.domain, domain);
-        assert_eq!(state.training_target_samples, 100);
-        assert_eq!(state.training_delay_per_sample_ms, 7);
-        assert_eq!(state.trained_samples, 13);
-        assert_eq!(state.nr_batches, 5);
-        assert_eq!(state.nr_samples, 29);
-        assert_eq!(state.sum, 4.5);
+    fn inference_has_no_barrier_and_points_ignore_batch_partitioning() {
+        let mut whole = sampler(0);
+        let mut split = sampler(0);
+        assert_eq!(whole.training_samples_remaining(), None);
+        let a = whole.produce_latent_batch(10).unwrap();
+        let b = split.produce_latent_batch(4).unwrap();
+        let c = split.produce_latent_batch(6).unwrap();
+        // RNG state after the same number of samples is independent of grouping.
+        assert_eq!(whole.rng, split.rng);
+        assert_eq!(a.nr_samples, b.nr_samples + c.nr_samples);
+        assert_eq!(whole.update_stats.calls, 0);
     }
 }

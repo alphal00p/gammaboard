@@ -1,0 +1,9 @@
+# Compute-only deployment ceilings. Batch overhead and sampler barriers are extra.
+evaluators = [1, 4, 16, 64]
+rates = [1000, 10000, 100000, 2000000]
+regimes = ["inference", "batch_overhead", "sampler_limited", "training_large", "training_small"]
+continuous_dims = 6
+noise_fraction = 0.1
+warmup_seconds = 30
+measurement_seconds = 120
+repetitions = 3

@@ -198,6 +198,7 @@ pub struct EvaluatorIdleProfileMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct EvaluatorPerformanceMetrics {
+    pub engine_diagnostics: serde_json::Value,
     pub batches_completed: i64,
     pub samples_evaluated: i64,
     pub avg_time_per_sample_ms: f64,

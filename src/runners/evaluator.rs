@@ -891,6 +891,7 @@ where
             run_id: self.run_id,
             node_name: self.node_name.clone(),
             metrics: EvaluatorPerformanceMetrics {
+                engine_diagnostics: self.evaluator.diagnostics(),
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,
                 avg_time_per_sample_ms: self.rolling.total_ms_per_sample.value().unwrap_or(0.0),

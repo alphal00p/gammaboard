@@ -56,6 +56,15 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
         }
     }
 
+    if synthetic_diagnostics(worker).is_some() {
+        panels.push(sized_panel_spec(
+            "synthetic_timing",
+            "Synthetic workload timing",
+            PanelKind::KeyValue,
+            PanelHistoryMode::None,
+            PanelWidth::Full,
+        ));
+    }
     panels
 }
 
@@ -119,6 +128,43 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
         }
     }
 
+    if let Some(diagnostics) = synthetic_diagnostics(worker) {
+        let mut entries = vec![key_value("synthetic", "Synthetic workload", true)];
+        for (field, label) in [
+            ("timing", "Evaluation"),
+            ("generation_timing", "Generation"),
+            ("ingest_timing", "Result ingestion"),
+            ("update_timing", "Training update"),
+        ] {
+            if let Some(stats) = diagnostics.get(field).and_then(JsonValue::as_object) {
+                for (key, suffix) in [
+                    ("calls", "calls"),
+                    ("requested_seconds", "requested seconds"),
+                    ("actual_seconds", "actual seconds"),
+                    ("clipped_calls", "clipped delays"),
+                ] {
+                    if let Some(value) = stats.get(key) {
+                        entries.push(key_value(
+                            &format!("{field}_{key}"),
+                            &format!("{label}: {suffix}"),
+                            value.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        for key in [
+            "training_updates",
+            "training_barrier_seconds",
+            "training_window_samples",
+            "pending_training_samples",
+        ] {
+            if let Some(value) = diagnostics.get(key) {
+                entries.push(key_value(key, &key.replace('_', " "), value.clone()));
+            }
+        }
+        panels.push(key_value_panel("synthetic_timing", entries));
+    }
     panels
 }
 
@@ -199,4 +245,13 @@ pub fn append_activity_panel(response: &mut PanelResponse, activity: &JsonValue)
             ),
         ],
     )));
+}
+
+fn synthetic_diagnostics(worker: &RegisteredWorkerEntry) -> Option<&JsonValue> {
+    let diagnostics = match worker.current_role {
+        Some(WorkerRole::Evaluator) => &worker.evaluator_metrics.as_ref()?.engine_diagnostics,
+        Some(WorkerRole::SamplerAggregator) => worker.sampler_engine_diagnostics.as_ref()?,
+        _ => return None,
+    };
+    (diagnostics.get("synthetic").and_then(JsonValue::as_bool) == Some(true)).then_some(diagnostics)
 }
