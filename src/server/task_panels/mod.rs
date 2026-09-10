@@ -78,7 +78,7 @@ pub struct TaskPanelContext<'a> {
     pub panel_state: &'a JsonValue,
     pub run_target: Option<&'a JsonValue>,
     pub completed_samples_per_second: Option<f64>,
-    pub smoothed_eta_seconds: Option<f64>,
+    pub eta_seconds: Option<f64>,
     pub sampler_engine_diagnostics: Option<&'a JsonValue>,
 }
 
@@ -171,7 +171,7 @@ fn project_current_panels(
     panel_state: &JsonValue,
     run_target: Option<&JsonValue>,
     completed_samples_per_second: Option<f64>,
-    smoothed_eta_seconds: Option<f64>,
+    eta_seconds: Option<f64>,
     sampler_engine_diagnostics: Option<&JsonValue>,
     current_accumulator: Option<&AccumulatorState>,
     latest_stage_snapshot: Option<&TaskStageSnapshot>,
@@ -194,7 +194,7 @@ fn project_current_panels(
                     panel_state,
                     run_target,
                     completed_samples_per_second,
-                    smoothed_eta_seconds,
+                    eta_seconds,
                     sampler_engine_diagnostics,
                 })
                 .transpose()
@@ -338,7 +338,7 @@ fn build_task_summary_entries(
             if let Some(rate) = ctx.completed_samples_per_second {
                 entries.push(key_value("rate", "Rate", format!("{rate:.2} samples/s")));
             }
-            if let Some(eta_seconds) = ctx.smoothed_eta_seconds {
+            if let Some(eta_seconds) = ctx.eta_seconds {
                 entries.push(key_value(
                     "eta",
                     "ETA",
@@ -695,7 +695,7 @@ impl TaskPanelSource {
         panel_state: &JsonValue,
         run_target: Option<&JsonValue>,
         completed_samples_per_second: Option<f64>,
-        smoothed_eta_seconds: Option<f64>,
+        eta_seconds: Option<f64>,
         sampler_engine_diagnostics: Option<&JsonValue>,
         current_accumulator: Option<&AccumulatorState>,
         latest_stage_snapshot: Option<&TaskStageSnapshot>,
@@ -709,7 +709,7 @@ impl TaskPanelSource {
             panel_state,
             run_target,
             completed_samples_per_second,
-            smoothed_eta_seconds,
+            eta_seconds,
             sampler_engine_diagnostics,
             current_accumulator,
             latest_stage_snapshot,

@@ -904,8 +904,8 @@ fn sample_eta_seconds(
     let Some(stop_condition) = ctx.task.task.sample_stop_condition() else {
         return Ok(None);
     };
-    if let Some(smoothed_eta_seconds) = ctx.smoothed_eta_seconds {
-        return Ok(Some(smoothed_eta_seconds));
+    if let Some(eta_seconds) = ctx.eta_seconds {
+        return Ok(Some(eta_seconds));
     }
     let accumulator = sample_accumulator(ctx, accumulator_config)?;
     let projected = if let Some(selector) = &stop_condition.metric {

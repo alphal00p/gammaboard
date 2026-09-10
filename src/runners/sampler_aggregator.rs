@@ -88,7 +88,7 @@ struct SamplerRuntimeState {
     ingested_batches_total: i64,
     ingested_samples_total: i64,
     completed_samples_per_second: f64,
-    eta_seconds_smoothed: Option<f64>,
+    eta_seconds: Option<f64>,
     #[serde(default)]
     sampler_uptime_ms_accumulated: f64,
     #[serde(default)]
@@ -107,7 +107,7 @@ impl Default for SamplerRuntimeState {
             ingested_batches_total: 0,
             ingested_samples_total: 0,
             completed_samples_per_second: 0.0,
-            eta_seconds_smoothed: None,
+            eta_seconds: None,
             sampler_uptime_ms_accumulated: 0.0,
             initial_round_trip_snapshot_pending: false,
             pending_persisted_completed_batches: 0,
@@ -154,8 +154,7 @@ impl SamplerRuntimeState {
             completed_samples_total,
             sampler_uptime_ms,
             completed_samples_per_second: self.completed_samples_per_second,
-            eta_completed_samples_per_second: self.completed_samples_per_second,
-            eta_seconds_smoothed: self.eta_seconds_smoothed,
+            eta_seconds: self.eta_seconds,
             batch_size_current: self.batch_size_current,
             sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
             avg_evaluator_utilization: evaluator_fleet.avg_utilization,
@@ -425,7 +424,7 @@ where
 
         // Resume with a fresh active-time window: the worker fleet may have changed.
         runtime_state.completed_samples_per_second = 0.0;
-        runtime_state.eta_seconds_smoothed = None;
+        runtime_state.eta_seconds = None;
 
         let nr_produced_samples = task.nr_produced_samples;
         let nr_completed_samples = task.nr_completed_samples;
@@ -1666,7 +1665,7 @@ where
         self.runtime_state.completed_samples_per_second = rate;
         // The rate already averages a full wall-time window. Further smoothing
         // ETA independently would make it inconsistent with the displayed rate.
-        self.runtime_state.eta_seconds_smoothed = self.estimate_eta_seconds_for_current_state(rate);
+        self.runtime_state.eta_seconds = self.estimate_eta_seconds_for_current_state(rate);
     }
 }
 

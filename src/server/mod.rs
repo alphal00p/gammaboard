@@ -1091,7 +1091,7 @@ async fn get_run_task_output(
     let sampler_engine_diagnostics = latest_sampler_performance
         .as_ref()
         .map(|entry| entry.engine_diagnostics.clone());
-    let (completed_samples_per_second, smoothed_eta_seconds) =
+    let (completed_samples_per_second, eta_seconds) =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
             && matches!(task.state, crate::core::RunTaskState::Active)
         {
@@ -1103,21 +1103,13 @@ async fn get_run_task_output(
             });
             let completed_samples_per_second = metrics
                 .as_ref()
-                .map(|metrics| {
-                    if metrics.eta_completed_samples_per_second.is_finite()
-                        && metrics.eta_completed_samples_per_second > 0.0
-                    {
-                        metrics.eta_completed_samples_per_second
-                    } else {
-                        metrics.completed_samples_per_second
-                    }
-                })
+                .map(|metrics| metrics.completed_samples_per_second)
                 .filter(|value| value.is_finite() && *value > 0.0);
-            let smoothed_eta_seconds = metrics
+            let eta_seconds = metrics
                 .as_ref()
-                .and_then(|metrics| metrics.eta_seconds_smoothed)
+                .and_then(|metrics| metrics.eta_seconds)
                 .filter(|value| value.is_finite() && *value >= 0.0);
-            (completed_samples_per_second, smoothed_eta_seconds)
+            (completed_samples_per_second, eta_seconds)
         } else {
             (None, None)
         };
@@ -1130,7 +1122,7 @@ async fn get_run_task_output(
             &request.request.panel_state,
             run.target.as_ref(),
             completed_samples_per_second,
-            smoothed_eta_seconds,
+            eta_seconds,
             sampler_engine_diagnostics.as_ref(),
             current_accumulator.as_ref(),
             latest_stage_snapshot.as_ref(),
