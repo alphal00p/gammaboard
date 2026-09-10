@@ -256,3 +256,9 @@ UBELIX `down` saves the roster before stopping jobs; `up --resume-workers --watc
 re-enqueues saved workers with their original scheduler settings.
 
 Tests can use an isolated PostgreSQL server with `GAMMABOARD_TEST_DATABASE_URL`.
+
+The run's **Checkpoint recovery** panel and `run inspect` show saving/saved/failed
+status, the saved task and sample count, and the last restore time and worker.
+A successful save is reported only after the checkpoint transaction commits.
+Checkpoint decode errors fail activation; completed work without a resume
+checkpoint is not silently restarted from fresh sampler state.

@@ -142,3 +142,5 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   atomically with a normal launch request by `deploy --resume-workers`. The
   persisted launch group retains external scheduler options; never infer these
   from runtime capabilities or substitute local processes for external workers.
+- Checkpoint status is lightweight persisted run metadata. Update successful-save
+  metadata in the checkpoint transaction; report restore only after runtime initialization.

@@ -345,6 +345,7 @@ pub(crate) async fn upsert_run_sampler_checkpoint(
     let payload = serde_json::to_value(checkpoint).map_err(|err| {
         sqlx::Error::Protocol(format!("failed to encode sampler_checkpoint: {err}"))
     })?;
+    let mut tx = pool.begin().await?;
     sqlx::query(
         r#"
         INSERT INTO run_sampler_checkpoints (run_id, task_id, sampler_checkpoint)
@@ -359,8 +360,13 @@ pub(crate) async fn upsert_run_sampler_checkpoint(
     .bind(run_id)
     .bind(checkpoint.task_id)
     .bind(payload)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE runs SET checkpoint_status=checkpoint_status || $2 WHERE id=$1")
+        .bind(run_id).bind(serde_json::json!({"state":"saved","saved_task_id":checkpoint.task_id,
+            "saved_at":chrono::Utc::now(),"saved_samples":checkpoint.completed_samples,"error":null}))
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 

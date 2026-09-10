@@ -142,6 +142,8 @@ impl Default for SamplerRuntimeState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerAggregatorCheckpoint {
+    #[serde(default)]
+    pub completed_samples: i64,
     pub task_id: i64,
     pub sampler_snapshot: SamplerAggregatorSnapshot,
     pub observable_state: AccumulatorState,
@@ -1051,18 +1053,31 @@ where
     }
 
     async fn persist_sampler_checkpoint(&mut self) -> Result<(), RunnerError> {
-        self.checkpoint_sampler_uptime_now();
-        let checkpoint = SamplerAggregatorCheckpoint {
-            task_id: self.task.id,
-            sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
-            observable_state: self.observable_state.clone(),
-            runtime_state: self.runtime_state.clone(),
-            queue: self.queue.checkpoint(),
-        };
-        self.store
-            .save_sampler_checkpoint(self.run_id, &checkpoint)
-            .await?;
-        Ok(())
+        self.store.record_checkpoint_status(self.run_id, &serde_json::json!({
+            "state":"saving", "task_id":self.task.id, "save_started_at":chrono::Utc::now(), "error":null
+        })).await?;
+        let result: Result<(), RunnerError> = async {
+            self.checkpoint_sampler_uptime_now();
+            let checkpoint = SamplerAggregatorCheckpoint {
+                completed_samples: self.task.nr_completed_samples,
+                task_id: self.task.id,
+                sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
+                observable_state: self.observable_state.clone(),
+                runtime_state: self.runtime_state.clone(),
+                queue: self.queue.checkpoint(),
+            };
+            self.store
+                .save_sampler_checkpoint(self.run_id, &checkpoint)
+                .await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = &result {
+            let _ = self.store.record_checkpoint_status(self.run_id, &serde_json::json!({
+                "state":"failed", "task_id":self.task.id, "failed_at":chrono::Utc::now(), "error":error.to_string()
+            })).await;
+        }
+        result
     }
 
     async fn drain_local_work_on_stop(&mut self) -> Result<(), RunnerError> {
@@ -1078,7 +1093,15 @@ where
     }
 
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
-        self.finalize_for_pause().await?;
+        self.store.record_checkpoint_status(self.run_id, &serde_json::json!({
+            "state":"saving", "task_id":self.task.id, "save_started_at":chrono::Utc::now(), "error":null
+        })).await?;
+        if let Err(error) = self.finalize_for_pause().await {
+            let _ = self.store.record_checkpoint_status(self.run_id, &serde_json::json!({
+                "state":"failed", "task_id":self.task.id, "failed_at":chrono::Utc::now(), "error":error.to_string()
+            })).await;
+            return Err(error);
+        }
         self.persist_sampler_checkpoint().await
     }
 
@@ -1790,6 +1813,7 @@ mod tests {
     #[test]
     fn carryover_batch_size_is_reduced_and_clamped() {
         let snapshot = SamplerAggregatorCheckpoint {
+            completed_samples: 0,
             task_id: 1,
             sampler_snapshot: SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) },
             observable_state: crate::evaluation::AccumulatorState::empty_scalar(),

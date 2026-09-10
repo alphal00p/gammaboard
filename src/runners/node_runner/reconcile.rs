@@ -505,6 +505,25 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 .apply_tuning(queue_tuning);
         }
 
+        if task.nr_completed_samples > 0 && restored_snapshot.is_none() && latest_snapshot.is_none()
+        {
+            return Err(StoreError::store(format!(
+                "task {} has {} completed samples but no resume checkpoint; refusing to restart from fresh state",
+                task.id, task.nr_completed_samples
+            )));
+        }
+        if let Some(checkpoint) = &restored_snapshot {
+            role_store
+                .record_checkpoint_status(
+                    worker.run_id,
+                    &serde_json::json!({
+                        "state":"restored", "restored_at":chrono::Utc::now(),
+                        "restored_task_id":task.id, "restored_samples":checkpoint.completed_samples,
+                        "restored_by":self.node_name, "error":null
+                    }),
+                )
+                .await?;
+        }
         let restored_snapshot_for_runner = restored_snapshot.clone();
         let task_for_runner = task.clone();
 

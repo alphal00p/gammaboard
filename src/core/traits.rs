@@ -187,6 +187,15 @@ pub trait WorkQueueStore: Send + Sync {
 /// Persists active-stage accumulator state and task-local persisted snapshots.
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
+    /// Lightweight lifecycle metadata; checkpoint payloads remain in their existing store.
+    async fn record_checkpoint_status(
+        &self,
+        _run_id: i32,
+        _status: &JsonValue,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     async fn load_current_accumulator(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
     async fn persist_task_result_snapshot(
         &self,

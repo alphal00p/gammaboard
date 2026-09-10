@@ -150,7 +150,9 @@ async fn inspect_run(store: &PgStore, run_ref: &str, log_limit: i64) -> Result<(
             None,
         )
         .await?;
-    let output = serde_json::json!({"run": run, "tasks": tasks, "logs": logs});
+    let checkpoint = store.checkpoint_status(run.run_id).await?;
+    let output =
+        serde_json::json!({"run": run, "tasks": tasks, "logs": logs, "checkpoint":checkpoint});
     if json_output_enabled() {
         print_json(&output);
     } else {

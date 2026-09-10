@@ -821,6 +821,9 @@ async fn get_run_panels(
     let mut response = build_run_panel_response(&run, &run_spec, &tasks, &workers)
         .map_err(|err| ApiError::Internal(err.to_string()))?;
 
+    let checkpoint = state.store.checkpoint_status(run_id).await?;
+    crate::server::run_panels::append_checkpoint_panel(&mut response, &checkpoint);
+
     let active_task = tasks.iter().find(|task| task.state.as_str() == "active");
     let configs = match active_task {
         Some(task) if task.task.runs_on_sampler_worker() => {

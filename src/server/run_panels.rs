@@ -320,3 +320,39 @@ fn target_summary(target: Option<&JsonValue>) -> String {
         Some(value) => serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
     }
 }
+
+/// Checkpoint lifecycle is persisted independently of live workers.
+pub fn append_checkpoint_panel(response: &mut PanelResponse, status: &JsonValue) {
+    response.panels.push(sized_panel_spec(
+        "run_checkpoint",
+        "Checkpoint recovery",
+        PanelKind::KeyValue,
+        PanelHistoryMode::None,
+        PanelWidth::Half,
+    ));
+    let fields = [
+        ("state", "Status"),
+        ("saved_task_id", "Saved task"),
+        ("saved_at", "Saved at"),
+        ("saved_samples", "Saved samples"),
+        ("restored_task_id", "Restored task"),
+        ("restored_at", "Restored at"),
+        ("restored_samples", "Restored samples"),
+        ("restored_by", "Restored by"),
+        ("error", "Error"),
+    ];
+    let mut entries = Vec::new();
+    for (key, label) in fields {
+        let value = status.get(key).cloned().unwrap_or_else(|| {
+            serde_json::json!(if key == "state" {
+                "No checkpoint recorded"
+            } else {
+                "—"
+            })
+        });
+        entries.push(key_value(key, label, value));
+    }
+    response
+        .updates
+        .push(replace_panel(key_value_panel("run_checkpoint", entries)));
+}

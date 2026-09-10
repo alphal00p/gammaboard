@@ -30,6 +30,16 @@ impl PgStore {
         Self { pool }
     }
 
+    pub async fn checkpoint_status(&self, run_id: i32) -> Result<JsonValue, StoreError> {
+        let status: Option<JsonValue> =
+            sqlx::query_scalar("SELECT checkpoint_status FROM runs WHERE id=$1")
+                .bind(run_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        Ok(status.unwrap_or_else(|| serde_json::json!({})))
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
@@ -771,6 +781,20 @@ impl AggregationStore for PgStore {
         queries::insert_task_output_snapshot(&self.pool, run_id, task_id, result)
             .await
             .map_err(map_sqlx)
+    }
+
+    async fn record_checkpoint_status(
+        &self,
+        run_id: i32,
+        status: &JsonValue,
+    ) -> Result<(), StoreError> {
+        sqlx::query("UPDATE runs SET checkpoint_status=checkpoint_status || $2 WHERE id=$1")
+            .bind(run_id)
+            .bind(status)
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(())
     }
 
     async fn load_sampler_checkpoint(
