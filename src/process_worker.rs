@@ -69,7 +69,8 @@ impl ProcessWorker {
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
         let log_path = crate::resources::primary_resource_root().ok().map(|root| {
-            let dir = root.join("logs/processes");
+            let dir = std::path::absolute(root.join("logs/processes"))
+                .unwrap_or_else(|_| root.join("logs/processes"));
             let _ = std::fs::create_dir_all(&dir);
             dir.join(format!(
                 "{}-{}.stderr.log",
@@ -642,6 +643,7 @@ fn pipe_process_stderr_to_file(
             .as_ref()
             .and_then(|p| std::fs::File::create(p).ok());
         let mut reader = BufReader::new(stderr);
+        let mut continuing_oversized_line = false;
         loop {
             // A worker can print an unlimited line; never allocate it in memory.
             let mut bytes = Vec::new();
@@ -651,7 +653,14 @@ fn pipe_process_stderr_to_file(
             if count == 0 {
                 break;
             }
-            let line = redact_diagnostic(&String::from_utf8_lossy(&bytes));
+            let oversized = !bytes.ends_with(b"\n") && bytes.len() == 4096;
+            let suppress = oversized || continuing_oversized_line;
+            continuing_oversized_line = oversized;
+            let line = if suppress {
+                "[oversized stderr line omitted]\n".into()
+            } else {
+                redact_diagnostic(&String::from_utf8_lossy(&bytes))
+            };
             if let Some(file) = &mut file {
                 let _ = file.write_all(line.as_bytes());
             }
@@ -683,8 +692,9 @@ fn current_worker_context() -> String {
 }
 
 fn bounded_diagnostic(value: &str, max: usize) -> String {
-    let mut result = value.chars().take(max).collect::<String>();
-    if value.chars().count() > max {
+    let redacted = redact_diagnostic(value);
+    let mut result = redacted.chars().take(max).collect::<String>();
+    if redacted.chars().count() > max {
         result.push_str("… [truncated]");
     }
     redact_diagnostic(&result)
@@ -728,6 +738,20 @@ fn redact_diagnostic(value: &str) -> String {
                     .find(|c: char| c.is_whitespace() || matches!(c, '\"' | '\'' | ',' | '}'))
                     .map(|i| begin + i)
                     .unwrap_or(result.len());
+                let finish = if key == "authorization"
+                    && matches!(
+                        &result[begin..finish].to_ascii_lowercase()[..],
+                        "bearer" | "basic"
+                    ) {
+                    let tail = &result[finish..];
+                    let next = finish + tail.len() - tail.trim_start().len();
+                    result[next..]
+                        .find(|c: char| c.is_whitespace() || matches!(c, '\"' | '\'' | ',' | '}'))
+                        .map(|i| next + i)
+                        .unwrap_or(result.len())
+                } else {
+                    finish
+                };
                 if finish > begin {
                     result.replace_range(begin..finish, "[REDACTED]");
                     start = begin + 10;
@@ -918,9 +942,9 @@ mod tests {
     #[test]
     fn credential_values_are_redacted_from_diagnostics() {
         let text = super::redact_diagnostic(
-            "password=abc123 token: xyz987 https://user:pass@example.org/path",
+            "password=abc123 token: xyz987 Authorization: Bearer hidden-bearer https://user:pass@example.org/path",
         );
-        for secret in ["abc123", "xyz987", "user:pass"] {
+        for secret in ["abc123", "xyz987", "user:pass", "hidden-bearer"] {
             assert!(!text.contains(secret));
         }
         assert!(text.contains("example.org/path"));

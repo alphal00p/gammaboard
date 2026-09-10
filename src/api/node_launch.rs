@@ -191,9 +191,16 @@ pub async fn launch(
     payload: AutoRunNodesRequest,
 ) -> Result<JsonValue, ApiError> {
     let groups = resolve_node_launch_groups(&payload)?;
-    let groups = groups.iter().map(|g| json!({"count":g.count,"name_prefix":g.name_prefix,"max_start_failures":g.max_start_failures,"config":g.config})).collect::<Vec<_>>();
+    let groups = groups.iter().map(|g| json!({"count":g.count,"name_prefix":g.name_prefix,"max_start_failures":g.max_start_failures,"config":g.config,"capabilities":g.capabilities})).collect::<Vec<_>>();
+    let mut args = payload.args;
+    if !args.is_object() {
+        args = json!({});
+    }
+    if let Some(toml) = payload.toml {
+        args["toml"] = json!(toml);
+    }
     let id = store
-        .reserve_worker_launch(if local { "local" } else { "external" }, groups)
+        .reserve_worker_launch_with_args(if local { "local" } else { "external" }, groups, args)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     if local {

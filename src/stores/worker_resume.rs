@@ -8,6 +8,16 @@ impl PgStore {
         backend: &str,
         groups: Vec<Value>,
     ) -> Result<i64, sqlx::Error> {
+        self.reserve_worker_launch_with_args(backend, groups, json!({}))
+            .await
+    }
+
+    pub async fn reserve_worker_launch_with_args(
+        &self,
+        backend: &str,
+        groups: Vec<Value>,
+        mut args: Value,
+    ) -> Result<i64, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(71809241)")
             .execute(&mut *tx)
@@ -39,7 +49,10 @@ impl PgStore {
             .iter()
             .map(|g| g["count"].as_i64().unwrap_or(0) as i32)
             .sum();
-        let args = json!({"groups":normalized});
+        if !args.is_object() {
+            args = json!({});
+        }
+        args["groups"] = json!(normalized);
         let id: i64 = sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count,args) VALUES ('pending',$1,$2,$3) RETURNING id")
             .bind(backend).bind(count).bind(&args).fetch_one(&mut *tx).await?;
         for group in &normalized {
@@ -65,11 +78,13 @@ impl PgStore {
     /// Clear the marker in the same transaction that durably enqueues its replacement.
     pub async fn enqueue_resumed_workers(&self) -> Result<usize, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
-        let rows: Vec<(String, Value, String)> = sqlx::query_as("SELECT n.name,n.launch_group,r.backend FROM nodes n JOIN node_launch_requests r ON r.id=n.launch_request_id WHERE n.resume_requested AND n.lease_expires_at <= now() AND n.launch_group IS NOT NULL ORDER BY n.name FOR UPDATE OF n")
+        let rows: Vec<(String, Value, String, Value)> = sqlx::query_as("SELECT n.name,n.launch_group,r.backend,r.args FROM nodes n JOIN node_launch_requests r ON r.id=n.launch_request_id WHERE n.resume_requested AND n.lease_expires_at <= now() AND n.launch_group IS NOT NULL ORDER BY n.name FOR UPDATE OF n")
             .fetch_all(&mut *tx).await?;
-        for (name, group, backend) in &rows {
+        for (name, group, backend, original_args) in &rows {
+            let mut args = original_args.clone();
+            args["groups"] = json!([group]);
             let id: i64 = sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count,args) VALUES ('pending',$1,1,$2) RETURNING id")
-                .bind(backend).bind(json!({"groups":[group]})).fetch_one(&mut *tx).await?;
+                .bind(backend).bind(args).fetch_one(&mut *tx).await?;
             sqlx::query("UPDATE nodes SET resume_requested=false,launch_request_id=$2,shutdown_requested_at=NULL,updated_at=now() WHERE name=$1")
                 .bind(name).bind(id).execute(&mut *tx).await?;
         }

@@ -235,7 +235,7 @@ impl FullStackHarness {
             r#"
             SELECT last_seen
             FROM nodes
-            WHERE name = $1
+            WHERE name = $1 AND last_seen IS NOT NULL
             "#,
         )
         .bind(node_name)
@@ -1519,7 +1519,11 @@ async fn full_stack_cli_gammaloop_madnis_metadata_and_batch_fuzz_e2e() -> anyhow
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let process_api_python = manifest_dir.join("process_api/python/src");
     let madnis_src = manifest_dir.join("integrations/madnis/src");
-    let gammaloop_state = manifest_dir.join("resources/states/epem_a_ttxh/LO/state");
+    let gammaloop_state = std::env::var_os("GAMMABOARD_MADNIS_STATE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("resources/states/epem_a_ttxh/LO/state"));
+    let integrand_name =
+        std::env::var("GAMMABOARD_MADNIS_INTEGRAND").unwrap_or_else(|_| "LO".into());
     let madnis_pythonpath = format!("{}:{}", process_api_python.display(), madnis_src.display());
     let default_madnis_python = manifest_dir.join("integrations/madnis/.venv/bin/python");
     let madnis_python = std::env::var("GAMMABOARD_MADNIS_PYTHON").unwrap_or_else(|_| {
@@ -1574,7 +1578,7 @@ name = "{run_name}"
 [evaluator]
 kind = "gammaloop"
 state_folder = "{}"
-integrand_name = "LO"
+integrand_name = "{integrand_name}"
 training_projection = "abs"
 
 [evaluator.preprocessing]
@@ -1656,6 +1660,8 @@ training_projection = {{ kind = "component", name = "real" }}
             Duration::from_secs(30),
             || {
                 let pool = harness.pool.clone();
+                let gammaloop_state = gammaloop_state.clone();
+                let integrand_name = integrand_name.clone();
                 async move {
                     let diagnostics: Option<JsonValue> = sqlx::query_scalar(
                         r#"
@@ -1672,9 +1678,9 @@ training_projection = {{ kind = "component", name = "real" }}
                     };
                     let metadata = &diagnostics["gammaloop_metadata"];
                     Ok(metadata["state_folder"].as_str().is_some_and(|path| {
-                        path.ends_with("resources/states/epem_a_ttxh/LO/state")
+                        std::path::Path::new(path) == gammaloop_state.as_path()
                     }) && metadata["process_id"].as_u64().is_some()
-                        && metadata["integrand_name"].as_str() == Some("LO")
+                        && metadata["integrand_name"].as_str() == Some(integrand_name.as_str())
                         && metadata["coordinate_space"].as_str() == Some("x_space")
                         && diagnostics["produced_batches"].as_u64().unwrap_or(0) > 0)
                 }
@@ -4046,10 +4052,11 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     );
     assert_eq!(body["request"]["args"]["partition"].as_str(), Some("epyc2"));
 
-    let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes")
-        .fetch_one(&harness.pool)
-        .await
-        .map_err(|err| anyhow::anyhow!("node count query failed: {err}"))?;
+    let node_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE lease_expires_at > now()")
+            .fetch_one(&harness.pool)
+            .await
+            .map_err(|err| anyhow::anyhow!("node count query failed: {err}"))?;
     assert_eq!(node_count, 0);
 
     let request_id = body["request"]["id"]
@@ -6057,12 +6064,38 @@ async fn worker_resume_is_durable_backend_neutral_and_consumed_once() -> anyhow:
         .await?;
     let store = gammaboard::PgStore::new(pool.clone());
     let group = serde_json::json!({"count":2,"name_prefix":"resume","max_start_failures":7,"config":{"partition":"gpu","cpus":4,"gres":"gpu:a100:1"}});
-    let id = store.reserve_worker_launch("external", vec![group]).await?;
+    let id = store
+        .reserve_worker_launch_with_args("external", vec![group], json!({"partition":"epyc2"}))
+        .await?;
+    let config = temp_run_add_config(
+        r#"
+name = "resume-assignment"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples=100 }
+accumulator = { config="scalar" }
+sampler_aggregator = { config={kind="naive_monte_carlo"} }
+"#,
+    );
+    let config = gammaboard::api::runs::load_run_add_config_file(config.path())?;
+    let run = gammaboard::api::runs::create_run(&store, config).await?;
+
     let names: Vec<String> = sqlx::query_scalar("SELECT name FROM nodes ORDER BY name")
         .fetch_all(&pool)
         .await?;
     store
         .announce_node(&names[0], "first", &Default::default())
+        .await?;
+    store
+        .upsert_desired_assignment(
+            &names[0],
+            gammaboard::core::WorkerRole::SamplerAggregator,
+            run.run_id,
+        )
         .await?;
     assert_eq!(store.suspend_workers().await?, 1); // Pending scheduler jobs are not saved.
     store.expire_node_lease("first").await?;
@@ -6076,6 +6109,7 @@ async fn worker_resume_is_durable_backend_neutral_and_consumed_once() -> anyhow:
     let requests = store.list_node_launch_requests().await?;
     let resumed = requests.iter().find(|r| r.id != id).unwrap();
     assert_eq!(resumed.backend, "external");
+    assert_eq!(resumed.args["partition"], "epyc2");
     assert_eq!(resumed.args["groups"][0]["config"]["partition"], "gpu");
     assert_eq!(resumed.args["groups"][0]["max_start_failures"], 7);
     assert_eq!(resumed.args["groups"][0]["node_names"][0], names[0]);
@@ -6083,8 +6117,19 @@ async fn worker_resume_is_durable_backend_neutral_and_consumed_once() -> anyhow:
     store
         .announce_node(&names[0], "second", &Default::default())
         .await?;
+    assert_eq!(
+        store
+            .get_desired_assignment(&names[0])
+            .await?
+            .unwrap()
+            .run_id,
+        run.run_id
+    );
     store.suspend_workers().await?;
     store.expire_node_lease("second").await?;
+    // An operator pause while the fleet is down still clears the saved assignment.
+    store.clear_desired_assignments_for_run(run.run_id).await?;
+    assert!(store.get_desired_assignment(&names[0]).await?.is_none());
     store.request_node_shutdown(&names[0]).await?;
     assert_eq!(store.enqueue_resumed_workers().await?, 0);
     pool.close().await;
