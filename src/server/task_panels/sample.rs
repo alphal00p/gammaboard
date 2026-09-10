@@ -11,7 +11,7 @@ use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
     extract_accumulator_metric_with_runtime,
 };
-use crate::runners::sampler_aggregator::MIN_BATCH_SIZE;
+use crate::runners::queue::MIN_BATCH_SIZE;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TableStateOptions,
     TickBreakdownSegment, key_value, key_value_panel, progress_panel,

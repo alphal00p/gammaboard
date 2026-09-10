@@ -159,7 +159,11 @@ sampler aggregator -> latent batch queue -> materializer -> batch transforms -> 
 
 Queue defaults target 2 seconds of evaluation per batch and one pending database
 batch per active evaluator. Task-level `queue_tuning` overrides apply live through
-the dashboard. The maximum batch size and queue/I/O limits remain independent
+the dashboard. The refill low/high ratios provide hysteresis around this target;
+`local_pending_buffer_multiplier` bounds the unpersisted producer buffer. Batch
+sizing uses a 15% deadband and waits for three completed evaluation batches
+between changes (`batch_size_cooldown_ticks` counts these observations, not
+worker polling ticks). The maximum batch size and queue/I/O limits remain independent
 safety bounds; increasing the pending buffer cannot make an adaptive sampler
 produce past its training boundary.
 
@@ -170,6 +174,12 @@ if a peer is unresponsive. Evaluation-time smoothing uses an EWMA weight of 0.2
 per 1,000 samples, retaining history across normal-sized batches. These defaults
 are starting points: adapters with substantial per-batch setup can benefit from
 longer batches, while finite training windows need enough chunks for parallelism.
+
+Sampler timing panels report observations from each performance snapshot
+interval. They do not maintain a second checkpointed smoothing history. Queue
+control uses its own sample-weighted evaluation-time estimate, independently of
+those diagnostic intervals. Queue insert/fetch/cleanup durations end when their
+I/O finishes, excluding the wait until the sampler collects the result.
 
 The run domain is authoritative throughout this path. Samplers produce points in
 that domain, materializers and transforms must preserve a valid concrete batch,

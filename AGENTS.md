@@ -169,3 +169,6 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - `scripts/benchmark_queue.py` generates the 80-case synthetic suite and runs
   isolated local or paired A/B deployments. Keep workload generation shared with
   its fast tests; do not put tight throughput assertions in ordinary CI.
+- Sampler timing diagnostics accumulate once per snapshot window; do not maintain
+  unused checkpointed EWMA copies. Only scheduling and evaluator averages use
+  smoothing. Throughput and ETA share one active-wall-time rate.

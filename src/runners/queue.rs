@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 const RECLAIM_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
-const MIN_BATCH_SIZE: usize = 16;
+pub(crate) const MIN_BATCH_SIZE: usize = 16;
 // One EWMA observation per 1,000 samples, rather than per individual point.
 const EVAL_TIMING_REFERENCE_SAMPLES: f64 = 1000.0;
 const DEFAULT_BATCH_SIZE_DEADBAND_RATIO: f64 = 0.15;
@@ -109,7 +109,6 @@ pub struct SamplerQueue<S> {
     pending_insert: VecDeque<LatentBatch>,
     ready_processed: VecDeque<CompletedBatch>,
     pending_insert_tasks: Vec<PendingInsertTask>,
-    insert_pump_running: bool,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
     pending_completed_cleanup: Option<PendingCompletedCleanupTask>,
     cached_db_queue_counts: Option<BatchQueueCounts>,
@@ -183,19 +182,12 @@ struct PendingInsertTask {
     batch_count: usize,
     local_pending_at_start: usize,
     db_pending_at_start: Option<i64>,
-    started_at: Instant,
     handle: JoinHandle<Result<InsertBatchesMetrics, StoreError>>,
 }
 
-struct PendingProcessedFetchTask {
-    started_at: Instant,
-    handle: JoinHandle<Result<Vec<CompletedBatch>, StoreError>>,
-}
+type PendingProcessedFetchTask = JoinHandle<Result<(Vec<CompletedBatch>, Duration), StoreError>>;
 
-struct PendingCompletedCleanupTask {
-    started_at: Instant,
-    handle: JoinHandle<Result<u64, StoreError>>,
-}
+type PendingCompletedCleanupTask = JoinHandle<Result<Duration, StoreError>>;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QueueUtilizationSnapshot {
@@ -283,7 +275,6 @@ where
             pending_insert: VecDeque::new(),
             ready_processed: VecDeque::new(),
             pending_insert_tasks: Vec::new(),
-            insert_pump_running: false,
             pending_processed_fetch: None,
             pending_completed_cleanup: None,
             cached_db_queue_counts: None,
@@ -310,7 +301,6 @@ where
             .batch_size_current
             .clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
         self.batch_size_tune_cooldown_remaining = 0;
-        self.refresh_insert_pump_state();
     }
 
     pub fn checkpoint(&self) -> SamplerQueueCheckpoint {
@@ -681,10 +671,10 @@ where
 
     pub(crate) fn cancel_nonessential_background_work(&mut self) {
         if let Some(task) = self.pending_processed_fetch.take() {
-            task.handle.abort();
+            task.abort();
         }
         if let Some(task) = self.pending_completed_cleanup.take() {
-            task.handle.abort();
+            task.abort();
         }
     }
 
@@ -815,25 +805,24 @@ where
         }
         let store = self.store.clone();
         let run_id = self.run_id;
-        self.pending_completed_cleanup = Some(PendingCompletedCleanupTask {
-            started_at: Instant::now(),
-            handle: tokio::spawn(async move {
-                store
-                    .cleanup_consumed_completed_batches(
-                        run_id,
-                        up_to_batch_id,
-                        COMPLETED_CLEANUP_BATCH_LIMIT,
-                    )
-                    .await
-            }),
-        });
+        self.pending_completed_cleanup = Some(tokio::spawn(async move {
+            let started = Instant::now();
+            store
+                .cleanup_consumed_completed_batches(
+                    run_id,
+                    up_to_batch_id,
+                    COMPLETED_CLEANUP_BATCH_LIMIT,
+                )
+                .await?;
+            Ok(started.elapsed())
+        }));
     }
 
     async fn drain_finished_completed_cleanup(&mut self) -> Result<Option<Duration>, StoreError> {
         let Some(task) = self.pending_completed_cleanup.as_ref() else {
             return Ok(None);
         };
-        if !task.handle.is_finished() {
+        if !task.is_finished() {
             return Ok(None);
         }
         let task = self
@@ -847,9 +836,8 @@ where
         &mut self,
         task: PendingCompletedCleanupTask,
     ) -> Result<Duration, StoreError> {
-        let duration = task.started_at.elapsed();
-        match task.handle.await {
-            Ok(Ok(_deleted_rows)) => {
+        match task.await {
+            Ok(Ok(duration)) => {
                 self.last_completed_cleanup_at = Instant::now();
                 Ok(duration)
             }
@@ -870,22 +858,20 @@ where
         let run_id = self.run_id;
         let fetch_limit = self.config.completed_batch_fetch_limit.max(1);
         let after_batch_id = self.checkpoint.last_completed_batch_id;
-        self.pending_processed_fetch = Some(PendingProcessedFetchTask {
-            started_at: Instant::now(),
-            handle: tokio::spawn(async move {
-                store
-                    .fetch_completed_batches(run_id, fetch_limit, true, after_batch_id)
-                    .await
-            }),
-        });
+        self.pending_processed_fetch = Some(tokio::spawn(async move {
+            let started = Instant::now();
+            let batches = store
+                .fetch_completed_batches(run_id, fetch_limit, true, after_batch_id)
+                .await?;
+            Ok((batches, started.elapsed()))
+        }));
     }
 
     fn start_insert_pump_if_idle(&mut self) {
-        if self.insert_pump_running || self.pending_insert.is_empty() {
+        if !self.pending_insert_tasks.is_empty() || self.pending_insert.is_empty() {
             return;
         }
 
-        self.insert_pump_running = true;
         self.ensure_insert_pump();
     }
 
@@ -910,7 +896,6 @@ where
                 batch_count,
                 local_pending_at_start,
                 db_pending_at_start,
-                started_at: Instant::now(),
                 handle: tokio::spawn(async move {
                     let outcome = store
                         .insert_batches(
@@ -925,8 +910,6 @@ where
                 }),
             });
         }
-
-        self.refresh_insert_pump_state();
     }
 
     async fn drain_finished_insert(&mut self) -> Result<(), StoreError> {
@@ -942,47 +925,32 @@ where
             self.consume_insert_task(task).await?;
         }
 
-        self.refresh_insert_pump_state();
         Ok(())
     }
 
     async fn consume_insert_task(&mut self, task: PendingInsertTask) -> Result<(), StoreError> {
-        let duration = task.started_at.elapsed();
-        let result = match task.handle.await {
-            Ok(Ok(metrics)) => Ok(metrics),
-            Ok(Err(err)) => Err(err),
-            Err(err) => Err(StoreError::store(format!(
-                "sampler queue insert task failed: {err}"
-            ))),
-        };
-        match result {
-            Ok(metrics) => {
-                self.observe_insert_bundle_start_state(
-                    task.local_pending_at_start,
-                    task.db_pending_at_start,
-                );
-                observe_duration_ms(&mut self.metrics.insert_bundle_ms, duration);
-                self.metrics
-                    .insert_bundle_batches
-                    .observe(task.batch_count as f64);
-                if task.batch_count > 0 {
-                    observe_duration_ms(
-                        &mut self.metrics.insert_bundle_ms_per_batch,
-                        duration / task.batch_count as u32,
-                    );
-                    self.metrics
-                        .insert_bundle_payload_bytes_per_batch
-                        .observe(metrics.payload_bytes as f64 / task.batch_count as f64);
-                }
-                self.observe_insert_bundle_store_metrics(&metrics);
-                self.ensure_insert_pump();
-                Ok(())
-            }
-            Err(err) => {
-                self.insert_pump_running = false;
-                Err(err)
-            }
+        let metrics = task.handle.await.map_err(|err| {
+            StoreError::store(format!("sampler queue insert task failed: {err}"))
+        })??;
+        self.observe_insert_bundle_start_state(
+            task.local_pending_at_start,
+            task.db_pending_at_start,
+        );
+        self.metrics.insert_bundle_ms.observe(metrics.end_to_end_ms);
+        self.metrics
+            .insert_bundle_batches
+            .observe(task.batch_count as f64);
+        if task.batch_count > 0 {
+            self.metrics
+                .insert_bundle_ms_per_batch
+                .observe(metrics.end_to_end_ms / task.batch_count as f64);
+            self.metrics
+                .insert_bundle_payload_bytes_per_batch
+                .observe(metrics.payload_bytes as f64 / task.batch_count as f64);
         }
+        self.observe_insert_bundle_store_metrics(&metrics);
+        self.ensure_insert_pump();
+        Ok(())
     }
 
     fn observe_insert_bundle_store_metrics(&mut self, metrics: &InsertBatchesMetrics) {
@@ -1007,7 +975,7 @@ where
         let Some(task) = self.pending_processed_fetch.as_ref() else {
             return Ok(());
         };
-        if !task.handle.is_finished() {
+        if !task.is_finished() {
             return Ok(());
         }
 
@@ -1023,8 +991,7 @@ where
         &mut self,
         task: PendingProcessedFetchTask,
     ) -> Result<(), StoreError> {
-        let duration = task.started_at.elapsed();
-        let completed = match task.handle.await {
+        let (completed, duration) = match task.await {
             Ok(Ok(completed)) => completed,
             Ok(Err(err)) => return Err(err),
             Err(err) => {
@@ -1033,7 +1000,7 @@ where
                 )));
             }
         };
-        observe_duration_ms(&mut self.metrics.fetch_completed_ms, duration);
+        self.metrics.fetch_completed_ms.observe_duration(duration);
         self.metrics
             .fetch_completed_batches
             .observe(completed.len() as f64);
@@ -1094,14 +1061,6 @@ where
         self.batch_size_tune_cooldown_remaining = self.config.batch_size_cooldown_ticks;
     }
 
-    fn local_insert_work_drained(&self) -> bool {
-        self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty()
-    }
-
-    fn refresh_insert_pump_state(&mut self) {
-        self.insert_pump_running = !self.local_insert_work_drained();
-    }
-
     fn take_ready_processed(&mut self) -> Vec<CompletedBatch> {
         self.ready_processed.drain(..).collect::<Vec<_>>()
     }
@@ -1135,13 +1094,6 @@ where
         } else {
             value
         }
-    }
-}
-
-fn observe_duration_ms(metric: &mut WindowMetric, duration: Duration) {
-    let ms = duration.as_secs_f64() * 1000.0;
-    if ms.is_finite() && ms >= 0.0 {
-        metric.observe(ms);
     }
 }
 
@@ -1754,6 +1706,41 @@ mod tests {
             SamplerQueueCheckpoint::default(),
             128,
         )
+    }
+
+    #[tokio::test]
+    async fn io_metrics_use_operation_durations_not_collection_time() {
+        let mut queue = recording_queue(RecordingStore::default());
+        queue
+            .consume_insert_task(PendingInsertTask {
+                batch_count: 2,
+                local_pending_at_start: 2,
+                db_pending_at_start: Some(0),
+                handle: tokio::spawn(async {
+                    Ok(InsertBatchesMetrics {
+                        end_to_end_ms: 24.0,
+                        ..Default::default()
+                    })
+                }),
+            })
+            .await
+            .expect("insert completed");
+        queue
+            .consume_processed_fetch_task(tokio::spawn(async {
+                Ok((vec![], Duration::from_millis(7)))
+            }))
+            .await
+            .expect("fetch completed");
+        let cleanup = queue
+            .consume_completed_cleanup_task(tokio::spawn(async { Ok(Duration::from_millis(11)) }))
+            .await
+            .expect("cleanup completed");
+        assert_eq!(cleanup, Duration::from_millis(11));
+        let metrics = queue.take_metrics_snapshot();
+        assert_eq!(metrics.insert_bundle_ms.mean, Some(24.0));
+        assert_eq!(metrics.insert_bundle_ms_per_batch.mean, Some(12.0));
+        assert_eq!(metrics.fetch_completed_ms.mean, Some(7.0));
+        assert_eq!(queue.take_metrics_snapshot().insert_bundle_ms.count, 0);
     }
 
     #[tokio::test]

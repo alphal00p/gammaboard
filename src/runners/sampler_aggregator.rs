@@ -18,8 +18,7 @@ use crate::evaluation::{
     AccumulatorState, extract_accumulator_metric_with_runtime, relative_error,
 };
 use crate::runners::process_memory::current_rss_bytes;
-use crate::runners::queue::QueueUtilizationSnapshot;
-use crate::runners::rolling_metric::RollingMetric;
+use crate::runners::queue::{MIN_BATCH_SIZE, QueueUtilizationSnapshot};
 use crate::runners::wall_time_rate::WallTimeRate;
 use crate::runners::window_metric::WindowMetric;
 use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
@@ -31,7 +30,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-pub const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const TASK_CONFIG_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,24 +44,6 @@ pub struct SamplerAggregatorRunnerParams {
 
 fn default_sampler_db_pool_size() -> u32 {
     4
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-struct SamplerRollingState {
-    eval_ms_per_sample: RollingMetric,
-    eval_ms_per_batch: RollingMetric,
-    training_ingest_ms_per_sample: RollingMetric,
-    completed_training_ingest_ms: RollingMetric,
-    produce_ms_per_sample: RollingMetric,
-    reclaim_ms: RollingMetric,
-    queue_counts_ms: RollingMetric,
-    completed_merge_ingest_ms: RollingMetric,
-    persist_accumulator_ms: RollingMetric,
-    completed_delete_ms: RollingMetric,
-    produce_ms: RollingMetric,
-    progress_sync_ms: RollingMetric,
-    performance_sync_ms: RollingMetric,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -108,8 +88,6 @@ struct SamplerRuntimeState {
     ingested_batches_total: i64,
     ingested_samples_total: i64,
     completed_samples_per_second: f64,
-    #[serde(default)]
-    eta_completed_samples_per_second: f64,
     eta_seconds_smoothed: Option<f64>,
     #[serde(default)]
     sampler_uptime_ms_accumulated: f64,
@@ -119,7 +97,6 @@ struct SamplerRuntimeState {
     batch_size_current: usize,
     sampler_tick_busy_ratio: Option<f64>,
     accumulator_checkpoint_state: AccumulatorCheckpointState,
-    rolling: SamplerRollingState,
 }
 
 impl Default for SamplerRuntimeState {
@@ -130,7 +107,6 @@ impl Default for SamplerRuntimeState {
             ingested_batches_total: 0,
             ingested_samples_total: 0,
             completed_samples_per_second: 0.0,
-            eta_completed_samples_per_second: 0.0,
             eta_seconds_smoothed: None,
             sampler_uptime_ms_accumulated: 0.0,
             initial_round_trip_snapshot_pending: false,
@@ -138,7 +114,6 @@ impl Default for SamplerRuntimeState {
             batch_size_current: 0,
             sampler_tick_busy_ratio: None,
             accumulator_checkpoint_state: AccumulatorCheckpointState::NeedsInitialRoundTrip,
-            rolling: SamplerRollingState::default(),
         }
     }
 }
@@ -179,7 +154,7 @@ impl SamplerRuntimeState {
             completed_samples_total,
             sampler_uptime_ms,
             completed_samples_per_second: self.completed_samples_per_second,
-            eta_completed_samples_per_second: self.eta_completed_samples_per_second,
+            eta_completed_samples_per_second: self.completed_samples_per_second,
             eta_seconds_smoothed: self.eta_seconds_smoothed,
             batch_size_current: self.batch_size_current,
             sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
@@ -450,7 +425,6 @@ where
 
         // Resume with a fresh active-time window: the worker fleet may have changed.
         runtime_state.completed_samples_per_second = 0.0;
-        runtime_state.eta_completed_samples_per_second = 0.0;
         runtime_state.eta_seconds_smoothed = None;
 
         let nr_produced_samples = task.nr_produced_samples;
@@ -918,24 +892,16 @@ where
             completed_cleanup_duration,
         } = self.queue.tick().await?;
         if let Some(duration) = reclaim_duration {
-            observe_duration_pair(
-                &mut self.runtime_state.rolling.reclaim_ms,
-                &mut self.window_state.reclaim_ms,
-                duration,
-            );
+            self.window_state.reclaim_ms.observe_duration(duration);
         }
         if let Some(duration) = completed_cleanup_duration {
-            observe_duration_pair(
-                &mut self.runtime_state.rolling.completed_delete_ms,
-                &mut self.window_state.completed_delete_ms,
-                duration,
-            );
+            self.window_state
+                .completed_delete_ms
+                .observe_duration(duration);
         }
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.queue_counts_ms,
-            &mut self.window_state.queue_counts_ms,
-            queue_snapshot_duration,
-        );
+        self.window_state
+            .queue_counts_ms
+            .observe_duration(queue_snapshot_duration);
         crate::runners::activity::set("updating sampler");
         let ingest_stats = self.process_completed_batches(completed).await?;
         if ingest_stats.completed_batches > 0 {
@@ -954,29 +920,23 @@ where
         let produce_started = Instant::now();
         let (produced_batches, sampler_wants_to_produce) =
             self.produce(queue_before_produce).await?;
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.produce_ms,
-            &mut self.window_state.produce_ms,
-            produce_started.elapsed(),
-        );
+        self.window_state
+            .produce_ms
+            .observe_duration(produce_started.elapsed());
 
         self.flush_aggregation(false).await?;
 
         let progress_sync_started = Instant::now();
         self.flush_progress_sync(false).await?;
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.progress_sync_ms,
-            &mut self.window_state.progress_sync_ms,
-            progress_sync_started.elapsed(),
-        );
+        self.window_state
+            .progress_sync_ms
+            .observe_duration(progress_sync_started.elapsed());
 
         let performance_sync_started = Instant::now();
         self.flush_performance_snapshot(false).await?;
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.performance_sync_ms,
-            &mut self.window_state.performance_sync_ms,
-            performance_sync_started.elapsed(),
-        );
+        self.window_state
+            .performance_sync_ms
+            .observe_duration(performance_sync_started.elapsed());
         self.sync_tick_busy_time += tick_started.elapsed();
         crate::runners::activity::set("waiting");
         self.check_tick_terminal_state(
@@ -1200,11 +1160,9 @@ where
     ) -> Result<(), RunnerError> {
         match task.handle.await {
             Ok(Ok(())) => {
-                observe_duration_pair(
-                    &mut self.runtime_state.rolling.persist_accumulator_ms,
-                    &mut self.window_state.persist_accumulator_ms,
-                    task.started_at.elapsed(),
-                );
+                self.window_state
+                    .persist_accumulator_ms
+                    .observe_duration(task.started_at.elapsed());
                 if task.cleared_initial_round_trip {
                     self.runtime_state.initial_round_trip_snapshot_pending = false;
                 }
@@ -1227,11 +1185,9 @@ where
             .force_cleanup_consumed_completed_batches()
             .await?
         {
-            observe_duration_pair(
-                &mut self.runtime_state.rolling.completed_delete_ms,
-                &mut self.window_state.completed_delete_ms,
-                duration,
-            );
+            self.window_state
+                .completed_delete_ms
+                .observe_duration(duration);
         }
         Ok(())
     }
@@ -1309,17 +1265,12 @@ where
             if let Some(total_eval_time_ms) = batch.total_eval_time_ms
                 && batch_samples > 0
             {
-                observe_value_pair(
-                    &mut self.runtime_state.rolling.eval_ms_per_batch,
-                    &mut self.window_state.eval_ms_per_batch,
-                    total_eval_time_ms,
-                );
-                observe_value_pair_weighted(
-                    &mut self.runtime_state.rolling.eval_ms_per_sample,
-                    &mut self.window_state.eval_ms_per_sample,
-                    total_eval_time_ms / batch_samples as f64,
-                    batch_samples as f64,
-                );
+                self.window_state
+                    .eval_ms_per_batch
+                    .observe(total_eval_time_ms);
+                self.window_state
+                    .eval_ms_per_sample
+                    .observe(total_eval_time_ms / batch_samples as f64);
                 self.queue
                     .observe_completed_eval_batch(batch_samples, total_eval_time_ms);
                 self.runtime_state.batch_size_current = self.queue.current_batch_size();
@@ -1350,12 +1301,9 @@ where
                 self.runtime_state.ingested_batches_total += 1;
                 self.runtime_state.ingested_samples_total += batch_samples as i64;
                 if batch_samples > 0 {
-                    observe_value_pair_weighted(
-                        &mut self.runtime_state.rolling.training_ingest_ms_per_sample,
-                        &mut self.window_state.training_ingest_ms_per_sample,
-                        ingest_time_ms / batch_samples as f64,
-                        batch_samples as f64,
-                    );
+                    self.window_state
+                        .training_ingest_ms_per_sample
+                        .observe(ingest_time_ms / batch_samples as f64);
                 }
             }
 
@@ -1380,17 +1328,13 @@ where
             }
         }
         if completed_training_ingest_batches > 0 {
-            observe_value_pair(
-                &mut self.runtime_state.rolling.completed_training_ingest_ms,
-                &mut self.window_state.completed_training_ingest_ms,
-                completed_training_ingest_ms,
-            );
+            self.window_state
+                .completed_training_ingest_ms
+                .observe(completed_training_ingest_ms);
         }
-        observe_value_pair(
-            &mut self.runtime_state.rolling.completed_merge_ingest_ms,
-            &mut self.window_state.completed_merge_ingest_ms,
-            completed_merge_ms,
-        );
+        self.window_state
+            .completed_merge_ingest_ms
+            .observe(completed_merge_ms);
         self.queue.mark_processed(&completed);
         Ok(CompletedIngestStats {
             completed_batches: completed.len(),
@@ -1421,12 +1365,9 @@ where
             let produced_samples = batch.nr_samples;
             produced_samples_total += produced_samples as i64;
             if produced_samples > 0 {
-                observe_value_pair_weighted(
-                    &mut self.runtime_state.rolling.produce_ms_per_sample,
-                    &mut self.window_state.produce_ms_per_sample,
-                    produce_time_ms / produced_samples as f64,
-                    produced_samples as f64,
-                );
+                self.window_state
+                    .produce_ms_per_sample
+                    .observe(produce_time_ms / produced_samples as f64);
             }
             produced.push(
                 batch
@@ -1723,41 +1664,10 @@ where
             .completed_rate
             .observe(Instant::now(), completed_samples_delta.max(0) as f64);
         self.runtime_state.completed_samples_per_second = rate;
-        self.runtime_state.eta_completed_samples_per_second = rate;
         // The rate already averages a full wall-time window. Further smoothing
         // ETA independently would make it inconsistent with the displayed rate.
         self.runtime_state.eta_seconds_smoothed = self.estimate_eta_seconds_for_current_state(rate);
     }
-}
-
-fn observe_value_pair(rolling: &mut RollingMetric, window: &mut WindowMetric, value: f64) {
-    if !value.is_finite() || value < 0.0 {
-        return;
-    }
-    rolling.observe(value);
-    window.observe(value);
-}
-
-fn observe_value_pair_weighted(
-    rolling: &mut RollingMetric,
-    window: &mut WindowMetric,
-    value: f64,
-    weight: f64,
-) {
-    if !value.is_finite() || value < 0.0 || !weight.is_finite() || weight <= 0.0 {
-        return;
-    }
-    rolling.observe_weighted(value, weight);
-    window.observe(value);
-}
-
-fn observe_duration_pair(
-    rolling: &mut RollingMetric,
-    window: &mut WindowMetric,
-    duration: Duration,
-) {
-    let ms = duration.as_secs_f64() * 1000.0;
-    observe_value_pair(rolling, window, ms);
 }
 
 #[cfg(test)]
