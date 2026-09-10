@@ -1,199 +1,151 @@
 # Synthetic queue benchmark
 
-This suite exercises the real GammaBoard sampler, evaluator runners, PostgreSQL
-queues, serialization, accumulators and training barriers. Only engine work is
-synthetic: a unit evaluator returns one and waits for a configured duration;
-a seeded uniform sampler simulates generation, feedback ingestion and updates.
-No GammaLoop state, Python sampler, GPU or Symbolica license is needed for these
-workloads. Use `--no-default-features` to build without GammaLoop support.
-
-## Run
-
-Use Python 3.11+ and `psql` inside `nix develop`. Build before measuring:
+This suite exercises normal workers, PostgreSQL queues, point serialization,
+accumulators and training feedback. Only integrand/sampler work is synthetic.
+No GammaLoop state or Symbolica license is needed. Build before benchmarking:
 
 ```sh
 cargo build --release --no-default-features
 python3 scripts/benchmark_queue.py run --binary target/release/gammaboard \
-  --smoke --output /tmp/queue-smoke
+  --output /tmp/queue-baseline
 ```
 
-The smoke suite covers all four evaluator counts (1, 4, 16, 64), using short
-windows for functional verification, not performance conclusions. A normal
-worker is additionally allocated to the sampler. The full suite has 80 cases:
+Use Python 3.11+ and `psql` inside `nix develop`. `just benchmark-queue ...`
+forwards the same arguments. Compilation is separate from benchmark time.
+
+## Five-minute default
+
+The default has **16 cases**: 1/4/16/64 evaluators × nominal compute capacity
+1,000/2,000,000 samples/s × steady/bursty sampling. Each uses 0.5 seconds warm-up
+and 4 seconds measurement, with one repetition and deterministic timing.
+A normal sampler worker is additional to the evaluator count.
+
+Both a baseline run and a paired A/B invocation have a **300-second wall-time
+budget**, including deployment and cleanup. The runner reuses workers across
+cases with the same fleet size, assigning them through the normal `run resume`
+CLI. It pauses and removes each case before reassigning the workers. No special
+worker capabilities are involved. Workloads that cannot fit are rejected; a
+runtime deadline stops an unexpectedly slow run and retains partial results.
+`completion.json` records the actual total duration and whether it met the budget.
+An interrupted or incomplete run is not a complete baseline.
+
+The benchmark targets 100 ms evaluation batches and records progress/performance
+at 100 ms intervals, so short cases contain multiple observations. Per-point
+costs remain `evaluators / nominal_rate`; the expensive 64-worker, 1,000/s case
+still costs **64 ms per point**. The normal minimum batch size can consequently
+make its batches longer than 100 ms. These explicit benchmark settings are shared
+between A and B; this suite does not measure changes to the production batch-time
+default. Short runs detect coarse regressions; repeat paired runs before claiming
+small gains. One repetition provides no estimate of run-to-run variance.
+
+## Fast generation, then a 0.5-second stall
+
+`inference` generates points without artificial generation delay and never
+updates. `training_burst` also generates without artificial delay, but repeatedly:
+
+1. Produces a finite training window as quickly as the queue allows.
+2. Waits for all feedback from that window.
+3. Spends **0.5 seconds** updating, producing no points during the update.
+4. Starts producing the next window immediately afterward.
+
+The window is `max(64, min(100000, ceil(nominal_rate * 0.25)))` points. The cap
+keeps update cycles frequent enough for the short test. Ingestion has no artificial
+delay. Feedback waiting is additional to the 0.5-second update. Small windows may
+not fill all 64 workers because of minimum batch sizes; the recorded utilization
+and queue trace expose that limitation. Every burst case must observe at least
+two completed updates during measurement or the benchmark fails explicitly.
+
+Timing noise defaults to zero for short comparisons. `--noise 0.1` enables the
+shared Gaussian model with sigma equal to 10% of each configured mean component.
+
+## A/B and focused cases
 
 ```sh
+python3 scripts/benchmark_queue.py ab --baseline /path/to/A/gammaboard \
+  --candidate /path/to/B/gammaboard --output /tmp/queue-ab
+
 python3 scripts/benchmark_queue.py run --binary target/release/gammaboard \
-  --output /tmp/queue-full
+  --evaluators 4 --rates 1000 --regimes training_burst \
+  --duration 20 --repetitions 3 --output /tmp/burst-repeat
 ```
 
-Filter without changing the suite file:
+Corresponding A/B cases use identical seeds and workloads. Repetitions reverse
+A/B order. Binary copies are frozen in the output directory before measurement.
+Filters and durations must fit the same five-minute budget. `--smoke` selects four
+cases spanning all fleet sizes. Additional supported regimes are `batch_overhead`
+(250 ms per batch), `sampler_limited` (generation capacity half compute capacity),
+`training_large` (8 seconds nominal work, 10 ms update), and `training_small`
+(0.25 seconds nominal work, 500 ms update, without the burst window cap).
 
-```sh
-python3 scripts/benchmark_queue.py run --binary target/release/gammaboard \
-  --evaluators 1 4 --rates 1000 --regimes inference training_small \
-  --warmup 10 --duration 30 --repetitions 3 --output /tmp/queue-subset
-```
-
-`just benchmark-queue ...` forwards the same arguments. Output directories must
-be new; logs and results are never silently overwritten.
-
-The runner starts its own deployment at port offset 30, refuses occupied ports,
-uses a separate resource directory and stops its workers/deployment afterward.
-It removes only runs it created. PostgreSQL data and logs remain in the output
-folder for inspection. Use `--port-offset` for another isolated port range.
-The runtime retains normal worker connection pools and allows 512 PostgreSQL
-connections to support 65 ordinary workers. Record these settings when comparing
-with another deployment. Ensure no other substantial workload competes with the
-benchmark if you want meaningful performance comparisons.
-
-For cluster deployment or manual inspection, generate ordinary run cards:
+Generate ordinary TOML cards for manual or external-worker deployments:
 
 ```sh
 python3 scripts/benchmark_queue.py generate --output /tmp/queue-cards
 ```
 
-Create a card through `gammaboard run create`, launch its specified evaluator
-count plus a sampler using your normal local or external worker launch workflow,
-and assign them normally. The automatic runner currently manages local workers;
-TOML generation works for external deployments as well.
+The automatic runner manages only its own isolated local deployment. It refuses
+occupied ports (default offset 30), uses a separate resource root with 512 allowed
+PostgreSQL connections, and retains database files and logs after shutdown.
+Use `--port-offset` to choose another isolated range. Avoid competing workloads
+when comparing results.
 
-## A/B
+## Results and recovery
 
-Both binaries must support the synthetic timing configuration. Build and save
-immutable executables before starting. The runner copies the executables into the output directory before starting,
-so subsequent builds cannot replace a binary midway through a measurement.
-It performs no compilation:
+- `manifest.json`: workloads, settings, host, source tree state, suite/runner hashes
+  and executable hashes. The working-tree commit does not prove provenance of an
+  arbitrary prebuilt executable.
+- `results.jsonl`: completed-case journal with throughput, queue occupancy,
+  utilization, update counts, actual mean update duration and engine diagnostics.
+- Per-case TOML, raw JSONL and CSV: 100 ms observations of produced/completed
+  sample rates, update counts and pending/claimed batches. These show the burst,
+  stall and recovery instead of averaging them into a single sampler delay.
+- `summary.md`/`summary.json`: rates and stall measurements; `comparison.json`
+  contains paired B/A ratios. `completion.json` includes deployment/cleanup time.
 
-```sh
-python3 scripts/benchmark_queue.py ab --baseline /path/to/A/gammaboard \
-  --candidate /path/to/B/gammaboard --output /tmp/queue-ab
-```
+Utilization uses the dashboard's active-time rolling window and includes startup
+history. Throughput uses persisted completed-sample deltas. Training barrier
+counters follow sampler snapshot timestamps, so `barrier_observation_seconds`
+records their actual observation span separately. Compute capacities exclude
+batch overhead, queue costs and training barriers; they are not promised rates.
 
-Each repetition runs the matrix with A then B, reversing that order on alternate
-repetitions. Corresponding cases use the same seeds, dimensions, noise parameters
-and sample budgets. Defaults are three repetitions, 30 seconds warm-up and
-120 seconds measurement per case. `--noise 0` provides deterministic timing
-references. Use more repetitions to resolve small changes.
+Output directories must be new. To continue an interrupted run, repeat the exact
+command with `--resume`; completed cases are skipped after verifying settings,
+host and saved binaries. Incomplete attempts keep their raw observations and
+restart in a fresh deployment directory. Finish shutting down any interrupted
+deployment before resuming. Each invocation retains its five-minute budget.
 
-`manifest.json` records suite parameters, host, working-tree commit/dirty state,
-and hashes of the actual binaries (the working-tree commit does not establish
-the provenance of an arbitrary prebuilt binary). Every case preserves its TOML,
-raw observations and deployment log. `results.jsonl` includes throughput, fraction
-of the compute ceiling, samples per evaluator-second, actual mean batch size,
-rolling utilization, peak queue occupancy, recorded training-barrier time and
-final engine timing diagnostics. Barrier time measures production blocking from
-window exhaustion through feedback collection and update completion; shutdown
-downtime is excluded on resume. Its measurement boundaries follow periodic
-performance snapshots; `barrier_observation_seconds` records their actual time
-span, which can differ from the independent progress-measurement window.
-`summary.md` provides a readable report. `summary.json` reports repetition means and standard deviations; `comparison.json`
-contains paired B/A ratios and their variation. One repetition has no estimated
-variation. Do not interpret small differences as wins without repeatability.
+## Shared synthetic engines
 
-Task progress is sampled independently of dashboard rate estimates. Utilization
-is the dashboard's rolling measurement, so a short warm-up retains some earlier
-history. Warm-up and measurement use the same running task; the common sample
-budget is deliberately above expected progress so no stop boundary determines
-the reported rate. The runner fails if the task stops, loses workers, or makes no
-measured progress. Samples and training windows completed during warm-up are not
-reset.
-
-## Workloads
-
-`queue/suite.toml` specifies 1/4/16/64 evaluators, nominal aggregate compute
-ceilings 1k/10k/100k/2M samples/s, and five regimes. Per-sample evaluator time is
-`evaluators / rate`: the 64-worker 1k/s case costs 64 ms per sample; its 2M/s
-counterpart costs 32 microseconds. The matrix normalizes aggregate compute
-capacity while changing per-worker work. It is not a fixed-integrand strong
-scaling experiment.
-
-| Regime | Parameters beyond per-sample evaluator time |
-| --- | --- |
-| inference | 1 ms batch overhead; generation capacity 8 times compute ceiling |
-| batch_overhead | 250 ms batch overhead; generation capacity 8 times compute ceiling |
-| sampler_limited | generation capacity half compute ceiling; 1 ms evaluator batch overhead |
-| training_large | 8 seconds of nominal aggregate work per window; 10 ms updates |
-| training_small | 0.25 seconds of nominal aggregate work per window (minimum 64 points); 500 ms updates |
-
-Training cases also simulate ingestion at 100 times the compute ceiling plus
-0.1 ms per returned batch. Noise sigma defaults to 10% of each configured mean
-component. Queue controls retain the deployed defaults, deliberately making
-changes to those defaults part of A/B comparisons. Run cards record workloads;
-the binary and source revision determine queue defaults.
-
-Compute ceilings exclude batch overhead, sampler work, training barriers and
-GammaBoard's own work. Two million samples/s is a target to stress overhead, not
-a promised achievable rate. Real concrete point payloads and accumulator updates
-are retained; there is no shortcut that bypasses data movement at high rates.
-
-Waiting simulates service time without burning 64 cores. It does not simulate
-CPU cache effects, memory bandwidth contention, NUMA or remote network latency.
-Validate promising scheduler changes on real workloads/hardware afterward.
-
-## Shared synthetic timing
-
-The user-facing `unit` evaluator accepts `timing`; `naive_monte_carlo` accepts
+The user-facing `unit` evaluator accepts `timing`. `naive_monte_carlo` accepts
 `generation_timing`, `ingest_timing`, `update_timing`, `seed` and
-`training_window_samples`. Zero window means inference. Defaults have no delays.
-
-Each timing table contains floating-point `per_sample_seconds`,
-`overhead_seconds`, `sigma_per_sample_seconds`, `sigma_overhead_seconds` and an
-integer `seed`. The duration is:
+`training_window_samples` (zero means inference). Timing tables specify
+`per_sample_seconds`, `overhead_seconds`, `sigma_per_sample_seconds`,
+`sigma_overhead_seconds` and `seed`:
 
 ```
 max(0, N * (per_sample_seconds + Normal(0, sigma_per_sample_seconds))
        + overhead_seconds + Normal(0, sigma_overhead_seconds))
 ```
 
-One Gaussian pair is drawn per operation. The per-sample noise is correlated
-across that whole batch; its standard deviation grows as N, not sqrt(N).
-Durations are additional simulated work, not a target including real point
-processing. Negative draws are clipped, counted and therefore bias the mean
-upward near zero. Invalid/nonfinite parameters and duration overflow fail clearly.
-Requested and actual waits are reported separately in worker panels and metrics.
+One Gaussian pair is drawn per operation. Per-sample noise is correlated across
+that batch; negative durations are clipped and counted. Requested and actual
+waits are recorded separately. These waits are additional to actual point work.
+Evaluator draws depend on batch size and endpoint coordinates, independently of
+worker assignment/retries. Sampler timing draws use sample/update counters;
+point RNG state is checkpointed independently. Changing batch boundaries changes
+noise realizations even with paired seeds.
 
-Evaluator noise is keyed by batch size and endpoint coordinates, independent of
-worker assignment and retries. Identical-content batches have identical noise;
-use a nonzero continuous dimension for representative noisy benchmarks. Sampler
-points use a checkpointed RNG, independent of timing draws and batch boundaries.
-Generation/ingestion keys use their sample counters and update keys use the update
-index. Repartitioning batches changes batch-correlated noise realizations even
-with paired seeds; use repetitions and zero-noise references rather than claiming
-identical random work across different batch layouts.
-
-Training windows forbid generating beyond the window until all feedback returns
-and the update delay finishes. Snapshot restoration preserves counters, pending
-feedback and sample RNG state. A task stopping partway through its final window
-does not perform an incomplete update. A fresh inference task uses a sampler
-configuration with window zero; inheriting a training sampler retains its window.
-
-The previous `min_eval_time_per_sample_ms`, `training_delay_per_sample_ms` and
-one-shot `training_target_samples` synthetic settings are replaced by these
-fields. Migrate old synthetic cards/checkpoints; production sampler formats are
-unchanged.
-
-## Tests
+Training snapshots preserve pending feedback, update counts and RNG state.
+A task ending partway through a window does not perform an incomplete update.
+Synthetic waits model service time, not CPU/cache/NUMA or remote network effects.
 
 ```sh
 python3 -m unittest discover -s benchmarks/queue -p 'test_*.py'
 cargo test synthetic
-# Uses the normal full-stack harness and an isolated test database:
+# With an isolated test database:
 cargo test --test full_stack_cli full_stack_synthetic_training_windows_and_inference -- --ignored
 ```
 
-Timing unit tests inject a waiter instead of sleeping. Full-stack tests use small
-real delays and assert progress, exact training update counts and diagnostics;
-ordinary CI does not assert tight performance thresholds.
-
-## Continuing an interrupted benchmark
-
-The full default run takes at least ten hours (80 cases × 3 repetitions ×
-150 seconds), plus worker startup and shutdown. Completed cases are appended to
-`results.jsonl`; summary files are derived from that journal. Repeat the original
-command with `--resume` and the same options to skip completed cases. The runner
-checks workload settings, host, thread limits, runner/suite hashes and binary
-hashes, and uses the saved executable copies. An incomplete case starts again in
-a fresh deployment directory; its earlier raw observations remain available.
-An occupied port still fails explicitly: finish shutting down an interrupted
-benchmark deployment before resuming. Do not combine records from different
-binaries or measurement settings to make a baseline.
+The old millisecond-only evaluator delay and one-shot sampler training settings
+are replaced by the timing tables and repeating windows. Ordinary CI tests
+correctness and timing-model behavior, not tight throughput thresholds.

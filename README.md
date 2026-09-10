@@ -326,7 +326,9 @@ counts. These engines are available in ordinary builds.
 The [queue benchmark suite](benchmarks/queue/README.md) covers 1, 4, 16 and 64
 evaluators with nominal deployment compute ceilings from 1,000 to 2,000,000
 samples/s. It supports generated run cards, isolated local runs, and paired A/B
-measurements using prebuilt binaries:
+measurements using prebuilt binaries. The default 16-case suite has a five-minute
+wall-time budget, including paired A/B runs. Its burst cases alternate fast
+generation with 0.5-second training updates:
 
 ```sh
 just benchmark-queue run --binary target/release/gammaboard --smoke --output /tmp/queue-smoke

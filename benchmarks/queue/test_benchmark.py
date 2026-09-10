@@ -4,6 +4,8 @@ from pathlib import Path
 import tomllib
 import unittest
 import tempfile
+import subprocess
+import sys
 
 ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('benchmark_queue',ROOT/'scripts/benchmark_queue.py')
@@ -18,8 +20,8 @@ class BenchmarkTests(unittest.TestCase):
     def test_matrix_and_generated_tomls(self):
         suite=tomllib.loads((ROOT/'benchmarks/queue/suite.toml').read_text())
         cases=bench.cases(suite)
-        self.assertEqual(len(cases),80)
-        self.assertEqual(len({bench.case_id(c) for c in cases}),80)
+        self.assertEqual(len(cases),16)
+        self.assertEqual(len({bench.case_id(c) for c in cases}),16)
         for case in cases:
             card=tomllib.loads(bench.run_card(case,12,'test',10000))
             timing=card['evaluator']['timing']
@@ -27,6 +29,31 @@ class BenchmarkTests(unittest.TestCase):
             params=card['task_queue'][0]['sampler_aggregator']['config']
             self.assertEqual('training_window_samples' in params,case['regime'].startswith('training_'))
             self.assertEqual(card['task_queue'][0]['stop_condition']['max_samples'],10000)
+    def test_default_budget_and_burst_stalls(self):
+        suite=tomllib.loads((ROOT/'benchmarks/queue/suite.toml').read_text())
+        self.assertEqual(suite['evaluators'],[1,4,16,64])
+        self.assertEqual(suite['rates'],[1000,2000000])
+        # Paired measurements leave substantial time for launch/drain/cleanup.
+        self.assertLess(len(bench.cases(suite))*2*(suite['warmup_seconds']+suite['measurement_seconds']),180)
+        for case in bench.cases(suite):
+            card=tomllib.loads(bench.run_card(case,42,'test',10000000))
+            params=card['task_queue'][0]['sampler_aggregator']['config']
+            self.assertEqual(params['generation_timing']['per_sample_seconds'],0)
+            if case['regime']=='training_burst':
+                self.assertLessEqual(params['training_window_samples'],100000)
+                self.assertEqual(params['update_timing']['overhead_seconds'],.5)
+                self.assertEqual(params['ingest_timing']['per_sample_seconds'],0)
+
+    def test_oversized_run_is_rejected_before_deployment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output=Path(temp)/'never-created'
+            result=subprocess.run([sys.executable,str(ROOT/'scripts/benchmark_queue.py'),
+                                   'run','--binary',sys.executable,'--duration','300',
+                                   '--output',str(output)],capture_output=True,text=True,timeout=5)
+            self.assertEqual(result.returncode,2)
+            self.assertIn('exceed the wall-time budget',result.stderr)
+            self.assertFalse(output.exists())
+
     def test_expensive_64_worker_case_and_seed_pairing(self):
         case=dict(evaluators=64,rate=1000,regime='training_small',continuous_dims=6,noise_fraction=.1)
         a=tomllib.loads(bench.run_card(case,42,'A',10000))

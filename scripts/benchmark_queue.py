@@ -5,6 +5,7 @@ Python >=3.11 and psql are required; run inside the project's Nix environment.
 No build is performed. See benchmarks/queue/README.md for methodology.
 """
 import argparse
+import csv
 from datetime import datetime
 import hashlib
 import itertools
@@ -25,6 +26,7 @@ import uuid
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+MAX_SECONDS = 300
 
 
 def timing(per_sample=0.0, overhead=0.0, noise=0.0, seed=0):
@@ -53,16 +55,26 @@ def run_card(case, seed, name, budget):
     e, rate, regime = case['evaluators'], case['rate'], case['regime']
     noise = case['noise_fraction']
     sampler = dict(kind='naive_monte_carlo', seed=seed,
-                   generation_timing=timing(2 / rate if regime == 'sampler_limited' else 1 / (8 * rate), noise=noise, seed=seed + 1))
+                   generation_timing=timing(0 if regime in ('inference','training_burst') else (2 / rate if regime == 'sampler_limited' else 1 / (8 * rate)), noise=noise, seed=seed + 1))
     if regime.startswith('training_'):
-        sampler.update(training_window_samples=max(64, math.ceil(rate * (8 if regime == 'training_large' else .25))),
-                       ingest_timing=timing(.01 / rate, .0001, noise, seed + 2),
+        window = max(64, math.ceil(rate * (8 if regime == 'training_large' else .25)))
+        if regime == 'training_burst': window = min(window,100000)
+        sampler.update(training_window_samples=window,
+                       ingest_timing=timing(0, 0, 0, seed + 2) if regime == 'training_burst' else timing(.01 / rate, .0001, noise, seed + 2),
                        update_timing=timing(0, .01 if regime == 'training_large' else .5, noise, seed + 3))
     return f'''name = {inline(name)}
 [evaluator]
 kind = "unit"
 continuous_dims = {case['continuous_dims']}
 timing = {inline(timing(e / rate, .25 if regime == 'batch_overhead' else .001, noise, seed))}
+
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 100
+performance_snapshot_interval_ms = 100
+[sampler_aggregator_runner_params.queue]
+target_batch_eval_ms = 100.0
+[evaluator_runner_params]
+performance_snapshot_interval_ms = 100
 
 [[task_queue]]
 name = "benchmark"
@@ -160,26 +172,42 @@ max_connections = 512
             self.__exit__(*sys.exc_info())
             raise
 
-    def clear_case(self):
+    def wait_workers(self, predicate):
+        names = ','.join(sql_literal(n) for n in self.workers)
+        return self.sql(f"select count(*) from nodes where name in ({names}) and {predicate};")
+
+    def stop_workers(self):
         if self.workers:
-            names = ','.join(sql_literal(n) for n in self.workers)
             self.cli('node', 'stop', *self.workers)
-            wait_for(lambda: self.sql(f"select count(*) from nodes where name in ({names}) and lease_expires_at>now();") == '0')
+            wait_for(lambda: self.wait_workers('lease_expires_at>now()') == '0')
             self.workers = []
+
+    def ensure_workers(self, evaluators):
+        if len(self.workers) != evaluators + 1:
+            self.stop_workers()
+            self.workers = self.cli('node', 'start-local', str(evaluators + 1))['node_names']
+        wait_for(lambda: self.wait_workers('lease_expires_at>now()') == str(evaluators + 1))
+
+    def clear_case(self):
         if self.run_name:
+            self.cli('run', 'pause', self.run_name)
+            if self.workers:
+                wait_for(lambda: self.wait_workers('active_run_id is not null and lease_expires_at>now()') == '0')
             self.cli('run', 'remove', '--yes', self.run_name)
             self.run_name = None
 
     def __exit__(self, *exc):
         try:
-            self.clear_case()
+            try:
+                self.clear_case()
+            finally:
+                self.stop_workers()
         finally:
             if self.process and self.process.poll() is None:
                 self.process.terminate()
                 try:
-                    self.process.wait(timeout=90)
+                    self.process.wait(timeout=30)
                 except subprocess.TimeoutExpired:
-                    # Do not pretend cleanup succeeded or kill unrelated processes.
                     raise RuntimeError(f'graceful shutdown timed out; inspect PID {self.process.pid}')
             if self.log:
                 self.log.close()
@@ -207,11 +235,8 @@ max_connections = 512
         self.run_name = name
         run_id = created['run_id']
         try:
-            launched = self.cli('node', 'start-local', str(case['evaluators'] + 1))
-            self.workers = launched['node_names']
-            self.cli('node', 'assign', self.workers[0], 'sampler_aggregator', str(run_id))
-            for name in self.workers[1:]:
-                self.cli('node', 'assign', name, 'evaluator', str(run_id))
+            self.ensure_workers(case['evaluators'])
+            self.cli('run', 'resume', str(run_id), '--max-evaluators', str(case['evaluators']))
             wait_for(lambda: self.sql(f"select count(*) from nodes where active_run_id={run_id} and lease_expires_at>now();") == str(case['evaluators'] + 1))
             rows = []
             start = time.monotonic()
@@ -228,7 +253,18 @@ max_connections = 512
                     rows.append(row)
                     if row['elapsed'] >= warmup + duration:
                         break
-                    time.sleep(min(1, max(.1, duration / 10)))
+                    time.sleep(.1)
+            with output.with_suffix('.csv').open('w',newline='') as trace:
+                writer=csv.writer(trace)
+                writer.writerow(['elapsed_seconds','completed_samples_per_second','produced_samples_per_second','training_updates','pending_batches','claimed_batches'])
+                for previous,current in zip(rows,rows[1:]):
+                    dt=current['monotonic']-previous['monotonic']
+                    before=((previous['sampler'] or {}).get('engine_diagnostics') or {})
+                    after=((current['sampler'] or {}).get('engine_diagnostics') or {})
+                    queue=current['queue'] or {}
+                    writer.writerow([current['elapsed'],(current['progress']-previous['progress'])/dt,
+                                     (after.get('produced_samples',0)-before.get('produced_samples',0))/dt,
+                                     after.get('training_updates',0),queue.get('pending',0),queue.get('claimed',0)])
             measured = [r for r in rows if r['elapsed'] >= warmup]
             seconds = measured[-1]['monotonic'] - measured[0]['monotonic']
             rate = (measured[-1]['progress'] - measured[0]['progress']) / seconds
@@ -246,7 +282,14 @@ max_connections = 512
             first_sampler, last_sampler = measured[0]['sampler'], measured[-1]['sampler']
             barrier_span = ((datetime.fromisoformat(last_sampler['created_at']) - datetime.fromisoformat(first_sampler['created_at'])).total_seconds()
                             if first_sampler and last_sampler else None)
+            diagnostics = lambda r: ((r['sampler'] or {}).get('engine_diagnostics') or {})
+            first_diag, last_diag = diagnostics(measured[0]), diagnostics(measured[-1])
+            updates = last_diag.get('training_updates',0) - first_diag.get('training_updates',0)
+            update_seconds = (last_diag.get('update_timing') or {}).get('actual_seconds',0) - (first_diag.get('update_timing') or {}).get('actual_seconds',0)
+            if case['regime'] == 'training_burst' and updates < 2:
+                raise RuntimeError('burst benchmark did not observe two complete update stalls; increase its measurement duration')
             return dict(case=case, seed=seed, seconds=seconds, samples_per_second=rate,
+                        training_updates=updates, mean_update_seconds=update_seconds/updates if updates else None,
                         recorded_training_barrier_seconds=max(0,barrier(measured[-1])-barrier(measured[0])) if barrier_span is not None else None,
                         barrier_observation_seconds=barrier_span,
                         compute_ceiling_fraction=rate / case['rate'],
@@ -307,11 +350,14 @@ def summary(records):
 def write_summary(output, records):
     rows = summary(records)
     (output/'summary.json').write_text(json.dumps(rows,indent=2))
-    lines = ['# Synthetic queue benchmark', '', '| Variant | Case | Repetitions | Mean samples/s | Standard deviation |', '| --- | --- | ---: | ---: | ---: |']
+    lines = ['# Synthetic queue benchmark', '', '| Variant | Case | Repetitions | Mean samples/s | Standard deviation | Updates | Mean update stall (s) |', '| --- | --- | ---: | ---: | ---: | ---: | ---: |']
     for row in rows:
         spread = f"{row['stdev']:.1f}" if row['stdev'] is not None else '—'
-        lines.append(f"| {row['variant']} | {row['case']} | {row['repetitions']} | {row['mean']:.1f} | {spread} |")
-    lines += ['', 'Short smoke measurements verify operation; they do not establish performance gains.', 'Compute ceilings exclude sampler costs, batch overhead and training barriers. Raw observations and binary hashes are retained alongside this report.', '']
+        matching = [r for r in records if r['variant']==row['variant'] and case_id(r['case'])==row['case']]
+        updates = sum(r.get('training_updates',0) for r in matching)
+        stall = sum(r['mean_update_seconds']*r['training_updates'] for r in matching if r.get('mean_update_seconds') is not None)/updates if updates else 0
+        lines.append(f"| {row['variant']} | {row['case']} | {row['repetitions']} | {row['mean']:.1f} | {spread} | {updates} | {stall:.3f} |")
+    lines += ['', 'Short runs are coarse regression measurements, not precision estimates. Repeat paired runs before interpreting small changes.', 'Compute ceilings exclude sampler costs, batch overhead and training barriers. Raw observations and binary hashes are retained alongside this report.', '']
     (output/'summary.md').write_text('\n'.join(lines))
 
 
@@ -334,25 +380,28 @@ def main():
     parser.add_argument('--repetitions', type=int)
     parser.add_argument('--port-offset', type=int, default=30)
     args = parser.parse_args()
+    started = time.monotonic()
     suite = tomllib.loads(args.suite.read_text())
     for key in ('evaluators','rates','regimes'):
         if getattr(args,key) is not None: suite[key] = getattr(args,key)
     if args.noise is not None: suite['noise_fraction'] = args.noise
     matrix = cases(suite)
     if args.smoke:
-        wanted = {('inference',1,1000),('training_large',4,100000),('batch_overhead',16,2000000),('training_small',64,1000)}
+        wanted = {('inference',1,1000),('training_burst',4,2000000),('inference',16,2000000),('training_burst',64,1000)}
         matrix = [c for c in matrix if (c['regime'],c['evaluators'],c['rate']) in wanted]
     if not matrix: parser.error('no matching benchmark cases')
     if len({case_id(c) for c in matrix}) != len(matrix): parser.error('duplicate benchmark cases')
     if suite['continuous_dims'] < 1: parser.error('benchmark requires at least one continuous dimension')
-    if any(c['evaluators']<1 or c['rate']<1 or c['regime'] not in ['inference','batch_overhead','sampler_limited','training_large','training_small'] for c in matrix): parser.error('invalid workload parameters')
+    if any(c['evaluators']<1 or c['rate']<1 or c['regime'] not in ['inference','batch_overhead','sampler_limited','training_large','training_small','training_burst'] for c in matrix): parser.error('invalid workload parameters')
     if not math.isfinite(suite['noise_fraction']) or suite['noise_fraction']<0: parser.error('noise must be finite and nonnegative')
-    warmup = args.warmup if args.warmup is not None else (3 if args.smoke else suite['warmup_seconds'])
-    duration = args.duration if args.duration is not None else (5 if args.smoke else suite['measurement_seconds'])
+    warmup = args.warmup if args.warmup is not None else suite['warmup_seconds']
+    duration = args.duration if args.duration is not None else suite['measurement_seconds']
     repeats = args.repetitions if args.repetitions is not None else (1 if args.smoke else suite['repetitions'])
     if not all(math.isfinite(x) for x in [warmup,duration]) or warmup<0 or duration<1 or repeats<1 or not 1<=args.port_offset<=57000: parser.error('invalid duration, repetitions or port offset')
     requested_variants = [] if args.action == 'generate' else ([('run',args.binary)] if args.action == 'run' else [('A',args.baseline),('B',args.candidate)])
     if any(p is None or not p.is_file() or not os.access(p,os.X_OK) for _,p in requested_variants): parser.error('supply executable --binary, or --baseline and --candidate files')
+    measurement_budget = len(matrix)*repeats*len(requested_variants)*(warmup+duration)
+    if measurement_budget+30 > MAX_SECONDS: parser.error('requested measurements exceed the wall-time budget; reduce cases, duration or repetitions')
     args.output = args.output.resolve()
     if args.resume and args.action == 'generate': parser.error('generate cannot be resumed')
     args.output.mkdir(parents=True, exist_ok=args.resume)
@@ -362,7 +411,7 @@ def main():
                     thread_limits={k:os.environ.get(k) for k in ['OMP_NUM_THREADS','RAYON_NUM_THREADS']},
                     source_commit=command(['git','rev-parse','HEAD'],cwd=ROOT).strip(),
                     source_dirty=bool(command(['git','status','--porcelain'],cwd=ROOT).strip()),
-                    started_unix=time.time(),
+                    started_unix=time.time(), max_seconds=MAX_SECONDS,
                     runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     suite_sha256=hashlib.sha256(args.suite.read_bytes()).hexdigest(), description='Synthetic compute ceilings exclude batch overhead, sampler costs and barriers.')
     if args.action == 'generate':
@@ -386,6 +435,10 @@ def main():
     else:
         variants, manifest['binaries'] = snapshot_binaries(requested_variants,args.output)
         (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2))
+    def deadline(*_):
+        raise TimeoutError('benchmark wall-time budget exhausted; partial results retained, cleaning up')
+    signal.signal(signal.SIGALRM,deadline)
+    signal.setitimer(signal.ITIMER_REAL,max(.1,MAX_SECONDS-(time.monotonic()-started)-30))
     records = load_records(args.output)
     completed = {(r['variant'],r['repetition'],case_id(r['case'])) for r in records}
     for repeat in range(repeats):
@@ -397,6 +450,8 @@ def main():
             directory = args.output/f'{label}-{repeat}-{uuid.uuid4().hex[:8]}'
             with Deployment(binary,args.port_offset,directory) as deployment:
                 for case in remaining:
+                    if time.monotonic()-started+warmup+duration+30 > MAX_SECONDS:
+                        raise TimeoutError('insufficient time for another case and cleanup')
                     cid=case_id(case)
                     seed=1234+repeat
                     print(f'{label} repetition {repeat+1}: {cid}',flush=True)
@@ -421,6 +476,12 @@ def main():
                 spread = f"{pair['stdev_ratio']:.4f}" if pair['stdev_ratio'] is not None else '—'
                 report.write(f"| {pair['case']} | {pair['mean_ratio']:.4f} | {spread} |\n")
             report.write('\nRatios above 1 favor B; assess variation and repeatability before concluding an improvement.\n')
+
+    signal.setitimer(signal.ITIMER_REAL,0)
+    elapsed=time.monotonic()-started
+    (args.output/'completion.json').write_text(json.dumps(dict(elapsed_seconds=elapsed,measurements=len(records),expected_measurements=len(matrix)*repeats*len(variants),within_budget=elapsed<=MAX_SECONDS),indent=2))
+    if elapsed>MAX_SECONDS: raise RuntimeError('benchmark exceeded its wall-time budget')
+    print(f'Completed {len(records)} measurements in {elapsed:.1f}s (including deployment and cleanup).',flush=True)
 
 
 def interrupted(*_):

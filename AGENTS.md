@@ -166,9 +166,11 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   A zero window is inference and requests no training values.
 - Evaluator diagnostics use the default-empty `Evaluator::diagnostics` hook and
   existing JSON performance metrics; synthetic worker panels display timing data.
-- `scripts/benchmark_queue.py` generates the 80-case synthetic suite and runs
+- `scripts/benchmark_queue.py` generates a compact 16-case synthetic suite and runs
   isolated local or paired A/B deployments. Keep workload generation shared with
-  its fast tests; do not put tight throughput assertions in ordinary CI.
+  its fast tests; do not put tight throughput assertions in ordinary CI. The default
+  run and A/B suite have a 300-second wall-time budget. Reuse workers between
+  cases of equal fleet size; burst cases require repeated 0.5-second updates.
 - Sampler timing diagnostics accumulate once per snapshot window; do not maintain
   unused checkpointed EWMA copies. Only scheduling and evaluator averages use
   smoothing. Throughput and ETA share one active-wall-time rate.
