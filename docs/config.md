@@ -405,7 +405,7 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 - `frontend_sync_interval_ms` sets how often the sampler runner refreshes frontend-facing and persisted accumulator snapshots during sampling.
 - Sampler queue settings live under `[sampler_aggregator_runner_params.queue]`.
 - `target_batch_eval_ms`, `batch_size_deadband_ratio`, `batch_size_cooldown_ticks`, and `max_batch_size` are queue-level controls.
-- `queue_buffer` targets about `queue_buffer * active_evaluator_count` pending batches. `0.0` is most aggressive; larger values keep more pending work buffered.
-- Refill hysteresis is controlled with `pending_refill_low_ratio` and `pending_refill_high_ratio`.
+- `queue_buffer` targets `ceil(queue_buffer * active_evaluator_count)` pending batches, including local and in-flight inserts. `0.0` stops new production; larger values keep more work buffered. There are no separate refill-ratio or local-buffer controls.
+- Both runner roles default to `min_tick_time_ms = 10`. Raising this interval reduces polling load when low latency is unnecessary.
 - Total open batches (`pending + claimed + completed`) are capped by `max_queue_size`.
 - Pause/unassign drains the local queue fully before the sampler checkpoint is persisted.

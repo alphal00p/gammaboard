@@ -679,21 +679,6 @@ fn temp_config(contents: &str) -> NamedTempFile {
     file
 }
 
-fn temp_run_add_config(contents: &str) -> NamedTempFile {
-    let mut merged = contents.trim_end().to_string();
-    if !contents.contains("evaluator_runner_params.min_tick_time_ms")
-        && !contents.contains("[evaluator_runner_params]")
-    {
-        merged.push_str("\n\nevaluator_runner_params.min_tick_time_ms = 50\n");
-    }
-    if !contents.contains("sampler_aggregator_runner_params.min_tick_time_ms")
-        && !contents.contains("[sampler_aggregator_runner_params]")
-    {
-        merged.push_str("\nsampler_aggregator_runner_params.min_tick_time_ms = 10\n");
-    }
-    temp_config(&merged)
-}
-
 async fn run_havana_training_then_inference(
     harness: &mut FullStackHarness,
     run_name: &str,
@@ -701,7 +686,7 @@ async fn run_havana_training_then_inference(
 ) -> anyhow::Result<(JsonValue, JsonValue)> {
     let training_samples = 256usize;
     let inference_samples = 64usize;
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "{run_name}"
 
@@ -709,6 +694,11 @@ name = "{run_name}"
 kind = "unit"
 continuous_dims = 2
 discrete_dims = 0
+# Leave time to request a pause independently of runner polling defaults.
+timing = {{ per_sample_seconds = 0.01 }}
+
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 50
 
 [[task_queue]]
 name = "train-a"
@@ -914,7 +904,7 @@ async fn full_stack_cli_alternating_havana_e2e() -> anyhow::Result<()> {
     // 2: havana_inference
     // 3: naive_monte_carlo
     // 4: image
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "havana-alt-e2e"
 
@@ -1058,7 +1048,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
 async fn full_stack_cli_symbolica_havana_pdf_two_bumps_e2e() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "symbolica-havana-pdf-1d2d-e2e"
 
@@ -1083,10 +1073,7 @@ queue_buffer = 1.0
 target_batch_eval_ms = 500.0
 batch_size_deadband_ratio = 0.15
 batch_size_cooldown_ticks = 3
-pending_refill_low_ratio = 0.85
-pending_refill_high_ratio = 1.15
 max_batch_size = 100000
-local_pending_buffer_multiplier = 0.5
 max_queue_size = 200
 max_batches_per_tick = 100
 max_insert_bundle_size = 5
@@ -1421,7 +1408,7 @@ async fn full_stack_cli_python_scalar_venv_e2e() -> anyhow::Result<()> {
             .join("process_api/examples/python_sampler_symbolica_havana")
             .display()
     );
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "python-scalar-venv-e2e"
 
@@ -1575,7 +1562,7 @@ target_batch_eval_ms = 1.0
         ));
     }
 
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "{run_name}"
 
@@ -1756,7 +1743,7 @@ async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow:
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let run_name = format!("python-gammaloop-observable-e2e-{}", unique_suffix());
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "{run_name}"
 
@@ -1867,7 +1854,7 @@ async fn full_stack_cli_task_level_evaluator_switch_e2e() -> anyhow::Result<()> 
     let mut harness = FullStackHarness::new().await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "task-level-evaluator-switch-e2e"
 
@@ -2007,7 +1994,7 @@ async fn full_stack_cli_rust_apptainer_process_evaluator_e2e() -> anyhow::Result
     let mut harness = FullStackHarness::new().await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "rust-apptainer-process-evaluator-e2e"
 
@@ -2695,7 +2682,7 @@ impl<'a> SamplerCheckpointProgram<'a> {
 async fn full_stack_cli_flow_exercises_run_and_node_lifecycle() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let invalid_config = temp_run_add_config(
+    let invalid_config = temp_config(
         r#"
 name = "invalid-run"
 
@@ -2716,7 +2703,7 @@ discrete_dims = 0
             "top-level [point_spec] or [domain] is no longer supported",
         ));
 
-    let valid_config = temp_run_add_config(
+    let valid_config = temp_config(
         r#"
 name = "full-stack-e2e"
 "#,
@@ -2915,7 +2902,7 @@ name = "full-stack-e2e"
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_installation_smoke_produces_unit_estimate() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config(include_str!(
+    let config = temp_config(include_str!(
         "../resources/templates/runs/installation-smoke.toml"
     ));
     harness.add_run(&config);
@@ -2984,7 +2971,7 @@ async fn full_stack_cli_installation_smoke_produces_unit_estimate() -> anyhow::R
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_set_accumulator_enables_following_sample() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "set-accumulator-e2e"
 
@@ -3163,7 +3150,7 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
 async fn full_stack_cli_pause_resume_restores_sampler_checkpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "sampler-checkpoint-e2e"
 
@@ -3278,7 +3265,7 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "sigterm-node-e2e"
 
@@ -3351,7 +3338,7 @@ async fn full_stack_server_queue_tuning_update_applies_to_active_sample_task() -
 {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "queue-tuning-live-update-e2e"
 
@@ -3377,7 +3364,6 @@ frontend_sync_interval_ms = 100
 queue_buffer = 1.0
 target_batch_eval_ms = 50.0
 max_batch_size = 32
-local_pending_buffer_multiplier = 1.0
 max_queue_size = 64
 max_batches_per_tick = 8
 max_insert_bundle_size = 8
@@ -3554,7 +3540,7 @@ completed_batch_fetch_limit = 64
 async fn full_stack_cli_removes_assigned_run_immediately() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "delete-assigned-run-e2e"
 
@@ -3628,7 +3614,7 @@ async fn full_stack_cli_removes_child_runs_with_parent() -> anyhow::Result<()> {
         .start_nodes(&["delete-family-s", "delete-family-e"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "delete-parent-run-e2e"
 
@@ -3755,7 +3741,7 @@ source_task = "sample"
 async fn full_stack_graceful_node_shutdown_waits_for_sampler_unassign() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "graceful-node-shutdown-e2e"
 
@@ -3826,7 +3812,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config("name = \"auth-e2e\"\n");
+    let config = temp_config("name = \"auth-e2e\"\n");
     harness.add_run(&config);
     let run_id = harness.run_id("auth-e2e").await?;
 
@@ -4143,8 +4129,8 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
 async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config_a = temp_run_add_config("name = \"duplicate-run\"\n");
-    let config_b = temp_run_add_config("name = \"duplicate-run\"\n");
+    let config_a = temp_config("name = \"duplicate-run\"\n");
+    let config_b = temp_config("name = \"duplicate-run\"\n");
 
     harness.add_run(&config_a);
     harness.add_run(&config_b);
@@ -4189,7 +4175,7 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
 async fn full_stack_cli_reclaims_claimed_batches_after_worker_death() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "worker-death-e2e"
 
@@ -4313,7 +4299,7 @@ strict_batch_ordering = true
 async fn full_stack_cli_fails_task_gracefully_on_sampler_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "sampler-error-e2e"
 
@@ -4349,7 +4335,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
 async fn full_stack_cli_retries_batch_after_materializer_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "materializer-error-e2e"
 
@@ -4386,7 +4372,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 async fn full_stack_cli_retries_batch_after_evaluator_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-error-e2e"
 
@@ -4424,7 +4410,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 async fn full_stack_cli_evaluator_batch_fails_twice_then_task_recovers() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-retry-twice-then-recover-e2e"
 
@@ -4481,7 +4467,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 async fn full_stack_cli_evaluator_batch_fails_three_times_and_task_fails() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-retry-three-then-fail-e2e"
 
@@ -4552,7 +4538,7 @@ async fn full_stack_cli_evaluator_build_failure_fails_task_and_unassigns_run() -
 {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-build-fail-e2e"
 
@@ -4609,7 +4595,7 @@ async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> 
         .start_nodes(&["campaign-parent", "campaign-s1", "campaign-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "integration-campaign-result-e2e"
 
@@ -4724,7 +4710,7 @@ async fn full_stack_cli_parameter_scan_creates_child_runs_and_collects_measureme
         .start_nodes(&["scan-parent", "scan-s1", "scan-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-e2e"
 
@@ -4881,7 +4867,7 @@ async fn full_stack_cli_parameter_scan_cartesian_product_parameters() -> anyhow:
         .start_nodes(&["scan-grid-parent", "scan-grid-s1", "scan-grid-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-grid-e2e"
 
@@ -4991,7 +4977,7 @@ async fn full_stack_cli_parameter_scan_hands_over_to_next_scan_task() -> anyhow:
         .start_nodes(&["scan-chain-parent", "scan-chain-s1", "scan-chain-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-chain-e2e"
 
@@ -5127,7 +5113,7 @@ async fn full_stack_cli_parameter_scan_redistributes_parent_assignments_and_upda
         .start_nodes(&["scan-owned-s", "scan-owned-e1", "scan-owned-e2"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-redistribute-e2e"
 
@@ -5263,7 +5249,7 @@ async fn full_stack_cli_hyperparameter_tuning_random_search_creates_trials_and_c
         .start_nodes(&["tune-parent", "tune-s1", "tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-random-e2e"
 
@@ -5391,7 +5377,7 @@ async fn full_stack_cli_hyperparameter_tuning_egobox_creates_adaptive_trials() -
         .start_nodes(&["egobox-tune-parent", "egobox-tune-s1", "egobox-tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-egobox-e2e"
 
@@ -5533,7 +5519,7 @@ async fn full_stack_cli_hyperparameter_tuning_grid_search_enumerates_finite_doma
         .start_nodes(&["grid-tune-parent", "grid-tune-s1", "grid-tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-grid-e2e"
 
@@ -5632,7 +5618,7 @@ async fn full_stack_cli_hyperparameter_tuning_fails_on_bad_trial_template() -> a
         .start_nodes(&["bad-tune-parent", "bad-tune-s1", "bad-tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-bad-template-e2e"
 
@@ -5707,7 +5693,7 @@ async fn full_stack_cli_hyperparameter_tuning_fails_when_child_measurement_fails
         ])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-failed-measurement-e2e"
 
@@ -5812,7 +5798,7 @@ async fn full_stack_cli_hyperparameter_tuning_redistributes_parent_assignments()
         .start_nodes(&["tune-owned-s", "tune-owned-e1", "tune-owned-e2"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-redistribute-e2e"
 
@@ -5959,7 +5945,7 @@ max = 4
 async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "clone-source-e2e"
 
@@ -6072,7 +6058,7 @@ async fn worker_resume_is_durable_backend_neutral_and_consumed_once() -> anyhow:
     let id = store
         .reserve_worker_launch_with_args("external", vec![group], json!({"partition":"epyc2"}))
         .await?;
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "resume-assignment"
 [evaluator]
@@ -6154,7 +6140,7 @@ async fn full_stack_synthetic_training_windows_and_inference() -> anyhow::Result
             "synthetic-{}",
             if training { "training" } else { "inference" }
         );
-        let config = temp_run_add_config(&format!(
+        let config = temp_config(&format!(
             r#"
 name = "{name}"
 [evaluator]

@@ -157,10 +157,12 @@ The hot path is:
 sampler aggregator -> latent batch queue -> materializer -> batch transforms -> evaluator -> accumulator snapshot/training feedback
 ```
 
-Queue defaults target 2 seconds of evaluation per batch and one pending database
-batch per active evaluator. Task-level `queue_tuning` overrides apply live through
-the dashboard. The refill low/high ratios provide hysteresis around this target;
-`local_pending_buffer_multiplier` bounds the unpersisted producer buffer. Batch
+Queue defaults target 2 seconds of evaluation per batch and one pending
+batch per active evaluator, counting queued and unpersisted work together.
+Workers use a 10 ms minimum polling interval; longer evaluation calls need no
+additional sleep. Task-level `queue_tuning` overrides apply live through the
+dashboard. A single `queue_buffer` sets the pending target; the separate refill
+low/high ratios and local buffer multiplier have been removed. Batch
 sizing uses a 15% deadband and waits for three completed evaluation batches
 between changes (`batch_size_cooldown_ticks` counts these observations, not
 worker polling ticks). The maximum batch size and queue/I/O limits remain independent
@@ -280,7 +282,10 @@ part of the saved roster; manage them through their existing launch requests.
 UBELIX `down` saves the roster before stopping jobs; `up --resume-workers --watch`
 re-enqueues saved workers with their original scheduler settings.
 
-Tests can use an isolated PostgreSQL server with `GAMMABOARD_TEST_DATABASE_URL`.
+PostgreSQL store tests require `GAMMABOARD_TEST_DATABASE_URL` pointing to an
+isolated, migrated test database. They fail if it is missing or unavailable;
+they never fall back to a running deployment. Full-stack tests also accept this
+variable and create their own temporary databases.
 
 The run's **Checkpoint recovery** panel and `run inspect` show saving/saved/failed
 status, the saved task and sample count, and the last restore time and worker.

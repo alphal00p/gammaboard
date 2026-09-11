@@ -547,18 +547,10 @@ where
             diagnostics_snapshot.and_then(|snapshot| snapshot.active_evaluator_count);
         let target_pending_batches =
             active_evaluator_count.and_then(|count| self.queue.target_pending_batches(count));
-        let target_pending_low_batches =
-            active_evaluator_count.and_then(|count| self.queue.target_pending_low_batches(count));
-        let target_pending_high_batches =
-            active_evaluator_count.and_then(|count| self.queue.target_pending_high_batches(count));
-        let target_local_pending_batches =
-            active_evaluator_count.and_then(|count| self.queue.target_local_pending_batches(count));
-        let target_local_pending_high_batches = active_evaluator_count
-            .and_then(|count| self.queue.target_local_pending_high_batches(count));
         let queue_runtime = self.queue.runtime_metrics();
-        let pending_shortfall = target_pending_high_batches
-            .zip(queue_runtime.db_pending_batches)
-            .map(|(target, pending)| (target as i64).saturating_sub(pending.max(0)));
+        let pending_shortfall = target_pending_batches
+            .zip(queue_counts)
+            .map(|(target, counts)| target.saturating_sub(counts.pending.max(0) as usize));
         json!({
             "active_evaluator_count": active_evaluator_count,
             "target_batch_eval_ms": self.params.queue.target_batch_eval_ms,
@@ -569,14 +561,7 @@ where
             "completed_batches": queue_counts.map(|counts| counts.completed),
             "open_batches": queue_counts.map(|counts| counts.open()),
             "queue_buffer": self.params.queue.queue_buffer,
-            "pending_refill_low_ratio": self.params.queue.pending_refill_low_ratio,
-            "pending_refill_high_ratio": self.params.queue.pending_refill_high_ratio,
-            "local_pending_buffer_multiplier": self.params.queue.local_pending_buffer_multiplier,
             "target_pending_batches": target_pending_batches,
-            "target_pending_low_batches": target_pending_low_batches,
-            "target_pending_high_batches": target_pending_high_batches,
-            "target_local_pending_batches": target_local_pending_batches,
-            "target_local_pending_high_batches": target_local_pending_high_batches,
             "pending_shortfall": pending_shortfall,
             "last_completed_batch_id": self.queue.last_completed_batch_id(),
             "db_pending_batches": queue_runtime.db_pending_batches,

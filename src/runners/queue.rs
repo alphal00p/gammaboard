@@ -16,8 +16,6 @@ const COMPLETED_CLEANUP_BATCH_LIMIT: usize = 2048;
 pub(crate) const MIN_BATCH_SIZE: usize = 16;
 const DEFAULT_BATCH_SIZE_DEADBAND_RATIO: f64 = 0.15;
 const DEFAULT_BATCH_SIZE_COOLDOWN_TICKS: u32 = 3;
-const DEFAULT_PENDING_REFILL_LOW_RATIO: f64 = 0.85;
-const DEFAULT_PENDING_REFILL_HIGH_RATIO: f64 = 1.15;
 const DEFAULT_MAX_BATCH_RETRIES: i32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,12 +26,7 @@ pub struct SamplerQueueConfig {
     pub batch_size_deadband_ratio: f64,
     #[serde(default = "default_batch_size_cooldown_ticks")]
     pub batch_size_cooldown_ticks: u32,
-    #[serde(default = "default_pending_refill_low_ratio")]
-    pub pending_refill_low_ratio: f64,
-    #[serde(default = "default_pending_refill_high_ratio")]
-    pub pending_refill_high_ratio: f64,
     pub max_batch_size: usize,
-    pub local_pending_buffer_multiplier: f64,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub max_insert_bundle_size: usize,
@@ -55,19 +48,7 @@ impl SamplerQueueConfig {
             &mut self.batch_size_cooldown_ticks,
             tuning.batch_size_cooldown_ticks,
         );
-        apply_option(
-            &mut self.pending_refill_low_ratio,
-            tuning.pending_refill_low_ratio,
-        );
-        apply_option(
-            &mut self.pending_refill_high_ratio,
-            tuning.pending_refill_high_ratio,
-        );
         apply_option(&mut self.max_batch_size, tuning.max_batch_size);
-        apply_option(
-            &mut self.local_pending_buffer_multiplier,
-            tuning.local_pending_buffer_multiplier,
-        );
         apply_option(&mut self.max_queue_size, tuning.max_queue_size);
         apply_option(&mut self.max_batches_per_tick, tuning.max_batches_per_tick);
         apply_option(
@@ -164,19 +145,12 @@ const fn default_batch_size_cooldown_ticks() -> u32 {
     DEFAULT_BATCH_SIZE_COOLDOWN_TICKS
 }
 
-const fn default_pending_refill_low_ratio() -> f64 {
-    DEFAULT_PENDING_REFILL_LOW_RATIO
-}
-
-const fn default_pending_refill_high_ratio() -> f64 {
-    DEFAULT_PENDING_REFILL_HIGH_RATIO
-}
-
 const fn default_max_batch_retries() -> i32 {
     DEFAULT_MAX_BATCH_RETRIES
 }
 
 struct PendingInsertTask {
+    first_batch_id: i64,
     batch_count: usize,
     local_pending_at_start: usize,
     db_pending_at_start: Option<i64>,
@@ -543,71 +517,10 @@ where
     }
 
     pub fn target_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
-        self.target_pending_batches_with_ratio(active_evaluator_count, 1.0)
-    }
-
-    pub fn target_pending_low_batches(&self, active_evaluator_count: usize) -> Option<usize> {
-        self.target_pending_batches_with_ratio(
-            active_evaluator_count,
-            self.sanitized_pending_refill_low_ratio(),
-        )
-    }
-
-    pub fn target_pending_high_batches(&self, active_evaluator_count: usize) -> Option<usize> {
-        self.target_pending_batches_with_ratio(
-            active_evaluator_count,
-            self.sanitized_pending_refill_high_ratio(),
-        )
-    }
-
-    fn target_pending_batches_with_ratio(
-        &self,
-        active_evaluator_count: usize,
-        ratio: f64,
-    ) -> Option<usize> {
         if !self.config.queue_buffer.is_finite() || self.config.queue_buffer < 0.0 {
             return None;
         }
-        if !ratio.is_finite() || ratio < 0.0 {
-            return None;
-        }
-        Some(
-            ((active_evaluator_count as f64) * self.config.queue_buffer * ratio)
-                .ceil()
-                .max(0.0) as usize,
-        )
-    }
-
-    pub fn target_local_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
-        self.target_local_pending_batches_from_target(
-            self.target_pending_batches(active_evaluator_count),
-        )
-    }
-
-    pub fn target_local_pending_high_batches(
-        &self,
-        active_evaluator_count: usize,
-    ) -> Option<usize> {
-        self.target_local_pending_batches_from_target(
-            self.target_pending_high_batches(active_evaluator_count),
-        )
-    }
-
-    fn target_local_pending_batches_from_target(
-        &self,
-        target_pending_batches: Option<usize>,
-    ) -> Option<usize> {
-        if !self.config.local_pending_buffer_multiplier.is_finite()
-            || self.config.local_pending_buffer_multiplier < 0.0
-        {
-            return None;
-        }
-        let target_pending_batches = target_pending_batches?;
-        Some(
-            ((target_pending_batches as f64) * self.config.local_pending_buffer_multiplier)
-                .ceil()
-                .max(0.0) as usize,
-        )
+        Some(((active_evaluator_count as f64) * self.config.queue_buffer).ceil() as usize)
     }
 
     pub fn ingest(&mut self, batches: Vec<LatentBatch>) {
@@ -689,29 +602,12 @@ where
             return Vec::new();
         }
 
-        let Some(target_pending_after_enqueue) =
-            self.target_pending_high_batches(active_evaluator_count)
-        else {
+        let Some(target_pending) = self.target_pending_batches(active_evaluator_count) else {
             return Vec::new();
         };
-        let mut target_pending_low = self
-            .target_pending_low_batches(active_evaluator_count)
-            .unwrap_or(target_pending_after_enqueue);
-        if target_pending_low > target_pending_after_enqueue {
-            target_pending_low = target_pending_after_enqueue;
-        }
-        if pending_before > target_pending_low {
-            return Vec::new();
-        }
-        let local_target_pending_after_enqueue = self
-            .target_local_pending_high_batches(active_evaluator_count)
-            .unwrap_or(target_pending_after_enqueue);
-
-        let batch_limit = hard_limit
-            .min(target_pending_after_enqueue.saturating_sub(pending_before))
-            .min(
-                local_target_pending_after_enqueue.saturating_sub(self.local_unpersisted_batches()),
-            );
+        // queue_counts includes local and in-flight inserts. One pending target
+        // therefore bounds both the database queue and unpersisted production.
+        let batch_limit = hard_limit.min(target_pending.saturating_sub(pending_before));
         if batch_limit == 0 {
             return Vec::new();
         }
@@ -854,11 +750,24 @@ where
         let run_id = self.run_id;
         let fetch_limit = self.config.completed_batch_fetch_limit.max(1);
         let after_batch_id = self.checkpoint.last_completed_batch_id;
+        // PostgreSQL cannot see an earlier bundle whose insert has not committed.
+        // Keep the completion cursor below every outstanding insert. Reserving a
+        // boundary also excludes inserts started after this async fetch is spawned.
+        let before_batch_id = self
+            .pending_insert_tasks
+            .iter()
+            .map(|task| task.first_batch_id)
+            .min()
+            .unwrap_or_else(|| next_batch_ids(1)[0]);
         self.pending_processed_fetch = Some(tokio::spawn(async move {
             let started = Instant::now();
             let batches = store
                 .fetch_completed_batches(run_id, fetch_limit, true, after_batch_id)
                 .await?;
+            let batches = batches
+                .into_iter()
+                .take_while(|batch| batch.batch_id < before_batch_id)
+                .collect();
             Ok((batches, started.elapsed()))
         }));
     }
@@ -889,6 +798,7 @@ where
             let task_id = self.task_id;
             let requires_training_values = self.requires_training_values;
             self.pending_insert_tasks.push(PendingInsertTask {
+                first_batch_id: batch_ids[0],
                 batch_count,
                 local_pending_at_start,
                 db_pending_at_start,
@@ -1073,24 +983,6 @@ where
             value.min(0.95)
         }
     }
-
-    fn sanitized_pending_refill_low_ratio(&self) -> f64 {
-        let value = self.config.pending_refill_low_ratio;
-        if !value.is_finite() || value < 0.0 {
-            DEFAULT_PENDING_REFILL_LOW_RATIO
-        } else {
-            value
-        }
-    }
-
-    fn sanitized_pending_refill_high_ratio(&self) -> f64 {
-        let value = self.config.pending_refill_high_ratio;
-        if !value.is_finite() || value < 0.0 {
-            DEFAULT_PENDING_REFILL_HIGH_RATIO
-        } else {
-            value
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1119,6 +1011,7 @@ mod tests {
     struct RecordingStore {
         inserts: RecordedInserts,
         fetch_completed_calls: Arc<Mutex<usize>>,
+        completed_ids: Arc<Mutex<Vec<i64>>>,
     }
 
     impl RecordingStore {
@@ -1231,7 +1124,26 @@ mod tests {
             _after_batch_id: Option<i64>,
         ) -> Result<Vec<crate::core::CompletedBatch>, StoreError> {
             *self.fetch_completed_calls.lock().expect("recording lock") += 1;
-            Ok(Vec::new())
+            Ok(self
+                .completed_ids
+                .lock()
+                .unwrap()
+                .iter()
+                .copied()
+                .filter(|id| *id > _after_batch_id.unwrap_or(0))
+                .map(|batch_id| CompletedBatch {
+                    batch_id,
+                    task_id: 1,
+                    requires_training_values: true,
+                    batch_size: 1,
+                    result: crate::evaluation::BatchResult::new(
+                        None,
+                        crate::evaluation::AccumulatorState::Empty(Default::default()),
+                    ),
+                    completed_at: None,
+                    total_eval_time_ms: None,
+                })
+                .collect())
         }
 
         async fn cleanup_consumed_completed_batches(
@@ -1688,10 +1600,7 @@ mod tests {
                 target_batch_eval_ms: 500.0,
                 batch_size_deadband_ratio: 0.15,
                 batch_size_cooldown_ticks: 3,
-                pending_refill_low_ratio: 0.85,
-                pending_refill_high_ratio: 1.15,
                 max_batch_size: 4096,
-                local_pending_buffer_multiplier: 1.0,
                 max_queue_size: 16,
                 max_batches_per_tick: 16,
                 max_insert_bundle_size: 1,
@@ -1709,6 +1618,7 @@ mod tests {
         let mut queue = recording_queue(RecordingStore::default());
         queue
             .consume_insert_task(PendingInsertTask {
+                first_batch_id: 1,
                 batch_count: 2,
                 local_pending_at_start: 2,
                 db_pending_at_start: Some(0),
@@ -1777,6 +1687,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_cursor_cannot_skip_uncommitted_or_future_inserts() {
+        let store = RecordingStore::default();
+        let mut queue = recording_queue(store.clone());
+        let ids = next_batch_ids(3);
+        *store.completed_ids.lock().unwrap() = vec![ids[0], ids[2]];
+        let (commit, committed) = tokio::sync::oneshot::channel();
+        queue.pending_insert_tasks.push(PendingInsertTask {
+            first_batch_id: ids[1],
+            batch_count: 1,
+            local_pending_at_start: 1,
+            db_pending_at_start: None,
+            handle: tokio::spawn(async move {
+                committed.await.unwrap();
+                Ok(InsertBatchesMetrics::default())
+            }),
+        });
+        queue.ensure_processed_prefetch();
+        let fetch = queue.pending_processed_fetch.take().unwrap();
+        queue.consume_processed_fetch_task(fetch).await.unwrap();
+        let completed = queue.take_ready_processed();
+        assert_eq!(
+            completed.iter().map(|b| b.batch_id).collect::<Vec<_>>(),
+            vec![ids[0]]
+        );
+        queue.mark_processed(&completed);
+
+        // The delayed bundle commits; it and the previously deferred result are
+        // now both visible. A newer insert racing the fetch must still wait.
+        commit.send(()).unwrap();
+        let insert = queue.pending_insert_tasks.pop().unwrap();
+        queue.consume_insert_task(insert).await.unwrap();
+        queue.ensure_processed_prefetch();
+        let future_id = next_batch_ids(1)[0];
+        *store.completed_ids.lock().unwrap() = vec![ids[0], ids[1], ids[2], future_id];
+        let fetch = queue.pending_processed_fetch.take().unwrap();
+        queue.consume_processed_fetch_task(fetch).await.unwrap();
+        let completed = queue.take_ready_processed();
+        assert_eq!(
+            completed.iter().map(|b| b.batch_id).collect::<Vec<_>>(),
+            vec![ids[1], ids[2]]
+        );
+        queue.mark_processed(&completed);
+        queue.ensure_processed_prefetch();
+        let fetch = queue.pending_processed_fetch.take().unwrap();
+        queue.consume_processed_fetch_task(fetch).await.unwrap();
+        assert_eq!(queue.take_ready_processed()[0].batch_id, future_id);
+    }
+
+    #[tokio::test]
     async fn get_processed_ready_does_not_start_completed_fetch() {
         let store = RecordingStore::default();
         let mut queue = recording_queue(store.clone());
@@ -1789,6 +1748,32 @@ mod tests {
         assert!(processed.is_empty());
         assert_eq!(store.fetch_completed_calls(), 0);
     }
+    #[test]
+    fn pending_target_counts_unpersisted_work_and_respects_capacity() {
+        let mut queue = recording_queue(RecordingStore::default());
+        queue
+            .pending_insert
+            .push_back(latent_batch_with_weight(1.0));
+        let counts = queue.queue_counts_with_local_buffer(BatchQueueCounts {
+            pending: 1,
+            claimed: 2,
+            ..Default::default()
+        });
+        assert_eq!(counts.pending, 2);
+        assert_eq!(queue.get_sample(None, counts, 4, 128), vec![128; 2]);
+        queue.config.max_queue_size = 5;
+        assert_eq!(queue.get_sample(None, counts, 4, 128), vec![128]);
+        queue.config.max_queue_size = 16;
+        queue.config.max_batches_per_tick = 1;
+        assert_eq!(queue.get_sample(None, counts, 4, 128), vec![128]);
+        queue.config.max_batches_per_tick = 16;
+        assert_eq!(queue.get_sample(Some(150), counts, 4, 128), vec![75; 2]);
+        assert!(queue.get_sample(Some(0), counts, 4, 128).is_empty());
+        assert!(queue.get_sample(None, counts, 0, 128).is_empty());
+        queue.config.queue_buffer = 0.0;
+        assert!(queue.get_sample(None, counts, 4, 128).is_empty());
+    }
+
     #[test]
     fn training_chunks_cover_workers_without_shrinking_the_tail() {
         let mut sizing = TrainingBatchSizing::default();

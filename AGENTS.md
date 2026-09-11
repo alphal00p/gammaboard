@@ -174,3 +174,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Sampler timing diagnostics accumulate once per snapshot window; do not maintain
   unused checkpointed EWMA copies. Only scheduling and evaluator averages use
   smoothing. Throughput and ETA share one active-wall-time rate.
+
+- One pending queue target includes database work and local/in-flight inserts; do
+  not reintroduce independent refill ratios or a local-buffer multiplier.
+- CPU accounting runs on lease, actual-assignment and capability updates. Activity
+  and desired-assignment writes must not acquire the shared task CPU row lock.
+- Completed fetches must stop before outstanding or subsequently started inserts;
+  production-order IDs alone cannot prevent skipping an uncommitted bundle.
