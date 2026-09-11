@@ -112,6 +112,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   compute tasks.
 - Persist/API payloads must be JSON-safe
 - Backend owns panel/read-model semantics; frontend should render generic panel payloads.
+- Task throughput/ETA and evaluator utilization use 60-second active runner
+  wall-time windows, including waits between ticks; reset windows on activation.
+- Dashboard startup validates its browser Origin through `POST /api/auth/session`
+  before mounting workspaces. Origin rejection is 403, distinct from missing login.
 - Run performance is exposed as one panel response containing sampler,
   run-evaluator, and optional selected-evaluator panels.
 
@@ -130,4 +134,76 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Update this file for significant architecture/runtime/CLI/config shape changes.
 - Update `README.md` for setup/operator workflow changes.
 - If Rust code changes: run `cargo fmt`, `cargo check -q`, `cargo test -q`. Run `just test-e2e` only for larger changes touching relevant code.
+- Before pushing, run the workflow's strict Clippy check with its Rust toolchain:
+  `cargo clippy --locked --all-targets --all-features -- -D warnings`. Database
+  checks must explicitly set `GAMMABOARD_TEST_DATABASE_URL` in both CI and local runs.
 - After a coherent stage, provide a commit message as a bare fenced `text` block.
+- `run validate` shares run-creation preflight and requires no database; `--probe`
+  initializes runtimes without producing samples or creating a run.
+- Worker launch normalization lives in `api::node_launch`, shared by CLI and HTTP.
+  `nodes.resume_requested` is captured at graceful deploy shutdown and consumed
+  atomically with a normal launch request by `deploy --resume-workers`. The
+  persisted launch group retains external scheduler options; never infer these
+  from runtime capabilities or substitute local processes for external workers.
+- Checkpoint status is lightweight persisted run metadata. Update successful-save
+  metadata in the checkpoint transaction; report restore only after runtime initialization.
+- Worker activity changes stay in memory within the node's task-local context;
+  the independent lease heartbeat persists snapshots, at most once per heartbeat.
+  Optional framed process `progress` notifications share the original request deadline.
+- All process roles use `ProcessWorker::spawn` for consistent launch diagnostics.
+  Bound malformed frame excerpts and stderr tails; redact credentials before
+  emitting tracing events or writing the per-process stderr log.
+- Deploy initializes its store and tracing once, then reuses that store for both
+  worker resumption and graceful shutdown. Shutdown tests must check exit status.
+
+- Fresh batch claims yield speculative prefetch to live evaluators with no claimed
+  work, bounded by a 250 ms batch-age grace period in the shared PostgreSQL claim.
+- Finite training windows cap batch sizes for four chunks per evaluator; retain
+  that cap as the window drains. Timing EWMA weights are normalized per 1,000
+  samples rather than treating every sample as a complete EWMA update.
+- Synthetic engines share `utils::synthetic_timing::TimingModel`: one Gaussian
+  per-sample error and one overhead error per operation, with seeded work keys,
+  clipped negative durations and requested/actual delay counters. No feature flag.
+- Naive Monte Carlo uses a checkpointed sample RNG and optional repeating training
+  windows; all window feedback must return before its update and next production.
+  A zero window is inference and requests no training values.
+- Evaluator diagnostics use the default-empty `Evaluator::diagnostics` hook and
+  existing JSON performance metrics; synthetic worker panels display timing data.
+- `scripts/benchmark_queue.py` runs the 16-case synthetic suite in one isolated
+  temporary deployment and prints results to the console. Keep its total budget
+  at 300 seconds, reuse workers within each fleet size, and require repeated
+  0.5-second updates in burst cases. Workload and measurement tests live in
+  `scripts/test_benchmark_queue.py`; no stored baselines or comparison framework.
+- Sampler timing diagnostics accumulate once per snapshot window; do not maintain
+  unused checkpointed EWMA copies. Only scheduling and evaluator averages use
+  smoothing. Throughput and ETA share one active-wall-time rate.
+
+- One pending queue target includes database work and local/in-flight inserts; do
+  not reintroduce independent refill ratios or a local-buffer multiplier.
+- CPU accounting runs on lease, actual-assignment and capability updates. Activity
+  and desired-assignment writes must not acquire the shared task CPU row lock.
+- Completed fetches must stop before outstanding or subsequently started inserts;
+  production-order IDs alone cannot prevent skipping an uncommitted bundle.
+
+- Launch request success is `fulfilled`, separate from current node health. Resume
+  reuses node names and changes `launch_request_id`; reconciliation must match
+  both the name and request. List all outstanding requests plus bounded terminal
+  history, so recent launches cannot hide older pending work or failures.
+
+- Recovery checkpoints include both consumed and produced batch boundaries. Cleanup
+  preserves outstanding work within that interval; consumed work beyond the upper
+  boundary is safe to delete because recovery discards/regenerates it. Publish the
+  checkpoint durably before cleanup. Save an initial checkpoint before production.
+- Sampler activation atomically restores task/run sample counters, accumulator and
+  output-history boundary, and deletes post-checkpoint batches. Missing retained
+  work fails activation. Late evaluator results are fenced by batch ownership.
+- Large process-sampler snapshots may remain external; references must identify
+  immutable files published durably before returning the snapshot. Reuse the same
+  sampler snapshot for the recovery checkpoint and its corresponding stage snapshot.
+
+- Recovery models live in `core::checkpoint`; the queue owns adaptive batch size.
+  Checkpoint only durable progress, not live timing windows or pending writes.
+  Finish pending aggregation writes before final persistence; commit checkpoint,
+  matching stage snapshot and saved status in one transaction. Cleanup on stop is
+  bounded and follows durable publication. Deploy and dashboard share the same
+  `api::nodes::GracefulNodeShutdownParams` configuration and wait result model.

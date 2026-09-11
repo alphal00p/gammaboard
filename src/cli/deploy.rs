@@ -16,14 +16,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 
 use super::db;
-use super::shared::with_control_store;
+use super::shared::init_cli_store;
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
+    /// Recreate workers saved at graceful shutdown through their original launch backend.
+    #[arg(long)]
+    resume_workers: bool,
     #[arg(long = "server-config", default_value = DEFAULT_SERVER_CONFIG_PATH, value_name = "PATH")]
     server_config: PathBuf,
     #[arg(long)]
     api_port: Option<u16>,
+    /// Additional browser origin, including the external port when using port forwarding.
     #[arg(long = "allowed-origin", value_name = "ORIGIN")]
     allowed_origins: Vec<String>,
 }
@@ -32,7 +36,20 @@ pub async fn run_deploy_command(args: DeployArgs, runtime: &RuntimeContext) -> R
     deploy_run(args, runtime).await
 }
 
+#[cfg(unix)]
+struct DeploySignals {
+    terminate: tokio::signal::unix::Signal,
+    interrupt: tokio::signal::unix::Signal,
+}
+
 async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
+    // Register before exposing a healthy frontend: shutdown may arrive while
+    // startup is still enqueuing saved workers.
+    #[cfg(unix)]
+    let mut signals = DeploySignals {
+        terminate: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+        interrupt: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
+    };
     let mut server_config = ServerConfig::load(&args.server_config)?;
     let runtime_config = runtime.runtime_config();
     apply_port_offset(&mut server_config, runtime.port_offset())?;
@@ -54,6 +71,7 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
         db::start_db(&runtime_config.local_postgres, &runtime_config.database.url)?;
     }
 
+    let store = init_cli_store(runtime_config, 10, true).await?;
     let deploy_paths = DeployRuntimePaths::new(frontend_port, runtime);
     prepare_runtime_dirs(&deploy_paths)?;
     write_nginx_config(&server_config, frontend_port, &deploy_paths)?;
@@ -96,6 +114,26 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
         return Err(err);
     }
 
+    if args.resume_workers {
+        let resumed: Result<usize> = async {
+            let count = store.enqueue_resumed_workers().await?;
+            gammaboard::api::node_launch::resolve_local_requests(&store, runtime).await?;
+            Ok(count)
+        }
+        .await;
+        if let Err(error) = resumed {
+            cleanup_deploy(
+                &server_config,
+                runtime_config,
+                &store,
+                &mut backend,
+                &mut nginx,
+            )
+            .await?;
+            return Err(error);
+        }
+        println!("enqueued saved workers: {}", resumed.unwrap());
+    }
     println!("deploy running");
     println!("server_config: {}", args.server_config.display());
     println!("frontend_build_dir: {}", server_config.frontend.build_dir);
@@ -107,10 +145,22 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
         println!("open: {url}");
     }
 
-    let result = supervise_children(&mut backend, &mut nginx).await;
-    let cleanup_result = cleanup_deploy(&server_config, runtime_config, &mut backend, &mut nginx)
-        .await
-        .context("deploy cleanup failed");
+    let result = supervise_children(
+        &mut backend,
+        &mut nginx,
+        #[cfg(unix)]
+        &mut signals,
+    )
+    .await;
+    let cleanup_result = cleanup_deploy(
+        &server_config,
+        runtime_config,
+        &store,
+        &mut backend,
+        &mut nginx,
+    )
+    .await
+    .context("deploy cleanup failed");
 
     match (result, cleanup_result) {
         (Err(err), _) => Err(err),
@@ -361,26 +411,14 @@ fn apply_port_offset(server_config: &mut ServerConfig, port_offset: u16) -> Resu
 async fn cleanup_deploy(
     server_config: &ServerConfig,
     runtime_config: &RuntimeConfig,
+    store: &gammaboard::PgStore,
     backend: &mut Child,
     nginx: &mut Child,
 ) -> Result<()> {
-    let sampler_drain_error = with_control_store(
-        runtime_config,
-        10,
-        true,
-        "deploy_stop_all_nodes_gracefully",
-        |store| async move {
-            let stopped = node_api::stop_all_nodes_gracefully(
-                &store,
-                node_api::GracefulNodeShutdownParams {
-                    sampler_drain_timeout: Duration::from_secs(
-                        server_config.cleanup.sampler_drain_timeout_seconds,
-                    ),
-                    node_stop_timeout: Duration::from_secs(
-                        server_config.cleanup.node_stop_timeout_seconds,
-                    ),
-                    poll_interval: Duration::from_millis(server_config.cleanup.poll_interval_ms),
-                },
+    let sampler_drain_result: Result<()> = async {
+            let stopped = node_api::suspend_nodes_gracefully(
+                store,
+                server_config.cleanup.clone(),
             )
             .await?;
             tracing::info!(
@@ -399,10 +437,8 @@ async fn cleanup_deploy(
                 );
             }
             Ok(())
-        },
-    )
-    .await
-    .err();
+    }.await;
+    let sampler_drain_error = sampler_drain_result.err();
 
     terminate_child(nginx, "nginx")?;
     terminate_child(backend, "backend")?;
@@ -417,20 +453,20 @@ async fn cleanup_deploy(
     Ok(())
 }
 
-async fn supervise_children(backend: &mut Child, nginx: &mut Child) -> Result<()> {
-    #[cfg(unix)]
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .context("failed to install SIGTERM handler")?;
-
+async fn supervise_children(
+    backend: &mut Child,
+    nginx: &mut Child,
+    #[cfg(unix)] signals: &mut DeploySignals,
+) -> Result<()> {
     loop {
         #[cfg(unix)]
         {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
+                _ = signals.interrupt.recv() => {
                     println!("received Ctrl-C; shutting down deploy");
                     return Ok(());
                 }
-                _ = sigterm.recv() => {
+                _ = signals.terminate.recv() => {
                     println!("received SIGTERM; shutting down deploy");
                     return Ok(());
                 }

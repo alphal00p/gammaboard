@@ -109,7 +109,9 @@ export const fetchRuns = async ({ includeChildren = false, limit = 100, offset =
 
 export const fetchServerStatus = async (signal) => apiGet("/health", "Failed to fetch server status", signal);
 
-export const fetchSession = async (signal) => apiGet("/auth/session", "Failed to fetch session", signal);
+// POST makes browsers include Origin even through the same-origin dashboard
+// proxy, so a forwarded port mismatch is detected before mounting workspaces.
+export const fetchSession = async (signal) => apiPost("/auth/session", {}, "Failed to check browser access", signal);
 
 export const fetchSettingsOverview = async (signal) => apiGet("/settings", "Failed to fetch settings", signal);
 

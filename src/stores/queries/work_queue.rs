@@ -160,23 +160,6 @@ pub(crate) async fn insert_batches(
     })
 }
 
-pub(crate) async fn get_pending_batch_count(
-    pool: &PgPool,
-    run_id: i32,
-) -> Result<i64, sqlx::Error> {
-    let count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COALESCE(pending_batches, 0)
-        FROM run_batch_queue_counters
-        WHERE run_id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(count.unwrap_or(0))
-}
-
 pub(crate) async fn get_batch_queue_counts(
     pool: &PgPool,
     run_id: i32,
@@ -212,20 +195,6 @@ pub(crate) async fn get_batch_queue_counts(
     })
 }
 
-pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i64, sqlx::Error> {
-    let count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COALESCE(pending_batches + claimed_batches + completed_batches, 0)
-        FROM run_batch_queue_counters
-        WHERE run_id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(count.unwrap_or(0))
-}
-
 pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
@@ -245,6 +214,30 @@ pub(crate) async fn claim_batch(
                     AND n.active_run_id = $2
                     AND n.active_role = 'evaluator'
                     AND n.lease_expires_at > now()
+              )
+              -- Give an evaluator without work the first chance at a fresh
+              -- batch before another worker reserves a second one. The grace
+              -- period bounds the delay if an assigned peer is unresponsive.
+              AND (
+                  b.created_at <= now() - INTERVAL '250 milliseconds'
+                  OR NOT EXISTS (
+                      SELECT 1 FROM batches own
+                      WHERE own.run_id = $2 AND own.status = 'claimed'
+                        AND own.claimed_by_node_uuid = $1
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1 FROM nodes peer
+                      WHERE peer.uuid <> $1
+                        AND peer.active_run_id = $2
+                        AND peer.active_role = 'evaluator'
+                        AND peer.lease_expires_at > now()
+                        AND NOT EXISTS (
+                            SELECT 1 FROM batches assigned
+                            WHERE assigned.run_id = $2
+                              AND assigned.status = 'claimed'
+                              AND assigned.claimed_by_node_uuid = peer.uuid
+                        )
+                  )
               )
             ORDER BY b.created_at, b.id
             LIMIT 1
@@ -717,6 +710,8 @@ pub(crate) async fn cleanup_consumed_completed_batches(
         return Ok(0);
     }
 
+    // Protect outstanding work at the checkpoint. Work produced after its upper
+    // boundary is discarded on recovery, so consumed results there need no retention.
     let result = sqlx::query(
         r#"
         WITH cleanup_candidates AS (
@@ -726,6 +721,16 @@ pub(crate) async fn cleanup_consumed_completed_batches(
               AND status = 'completed'
               AND COALESCE(retry_count, 0) = 0
               AND id <= $2
+              AND EXISTS (
+                  SELECT 1 FROM run_sampler_checkpoints c WHERE c.run_id = $1
+                  AND (
+                      batches.id <= (c.sampler_checkpoint->'queue'->>'last_completed_batch_id')::bigint
+                      OR (
+                          c.sampler_checkpoint->'queue' ? 'last_produced_batch_id'
+                          AND batches.id > COALESCE((c.sampler_checkpoint->'queue'->>'last_produced_batch_id')::bigint, 0)
+                      )
+                  )
+              )
             ORDER BY id ASC
             LIMIT $3
         )

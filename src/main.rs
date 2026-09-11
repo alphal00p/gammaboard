@@ -36,9 +36,12 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             if json_output {
-                eprintln!("{}", cli::format_error_json("command_failed", error));
+                eprintln!(
+                    "{}",
+                    cli::format_error_json("command_failed", format!("{error:#}"))
+                );
             } else {
-                eprintln!("Error: {error}");
+                eprintln!("Error: {error:#}");
             }
             ExitCode::FAILURE
         }

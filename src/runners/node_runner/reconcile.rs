@@ -60,7 +60,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     fn resolve_observable_state_for_sampler_task(
         run_id: i32,
         task_id: i64,
-        restored_snapshot: Option<&crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint>,
+        restored_snapshot: Option<&crate::core::SamplerAggregatorCheckpoint>,
         accumulator_source_snapshot: Option<&RunStageSnapshot>,
         base_stage_snapshot: Option<&RunStageSnapshot>,
         new_accumulator_config: Option<crate::core::AccumulatorConfig>,
@@ -377,6 +377,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
 
+        crate::runners::activity::context(worker.run_id, task.id);
+        crate::runners::activity::set("initializing runtime");
         let latest_snapshot = role_store.load_sampler_checkpoint(worker.run_id).await?;
         let initial_batch_size_hint = latest_snapshot
             .as_ref()
@@ -485,6 +487,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 .queue
                 .max_batch_size,
         );
+        if let Some(checkpoint) = &restored_snapshot {
+            role_store
+                .restore_sampler_checkpoint(worker.run_id, checkpoint)
+                .await?;
+        }
         let run_progress = role_store
             .load_run_sample_progress(worker.run_id)
             .await?
@@ -505,14 +512,32 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 .apply_tuning(queue_tuning);
         }
 
-        let restored_snapshot_for_runner = restored_snapshot.clone();
-        let task_for_runner = task.clone();
+        if task.nr_completed_samples > 0 && restored_snapshot.is_none() && latest_snapshot.is_none()
+        {
+            return Err(StoreError::store(format!(
+                "task {} has {} completed samples but no resume checkpoint; refusing to restart from fresh state",
+                task.id, task.nr_completed_samples
+            )));
+        }
+        if let Some(checkpoint) = &restored_snapshot {
+            role_store
+                .record_checkpoint_status(
+                    worker.run_id,
+                    &serde_json::json!({
+                        "state":"restored", "restored_at":chrono::Utc::now(),
+                        "restored_task_id":task.id, "restored_samples":checkpoint.completed_samples,
+                        "restored_by":self.node_name, "error":null
+                    }),
+                )
+                .await?;
+        }
+        let needs_initial_checkpoint = restored_snapshot.is_none();
 
-        let runner = SamplerAggregatorRunner::new(
+        let mut runner = SamplerAggregatorRunner::new(
             role_store,
             worker.run_id,
             self.node_name.clone(),
-            task_for_runner,
+            task,
             sampler,
             observable_state,
             evaluator_config,
@@ -522,9 +547,15 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             base_queue_config,
             initial_batch_size,
             run_progress,
-            restored_snapshot_for_runner,
+            restored_snapshot,
         );
 
+        if needs_initial_checkpoint {
+            runner
+                .save_initial_checkpoint()
+                .await
+                .map_err(|err| StoreError::store(err.to_string()))?;
+        }
         info!("sampler-aggregator worker started");
         Ok(Some(Box::new(runner)))
     }

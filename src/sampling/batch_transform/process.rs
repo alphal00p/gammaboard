@@ -1,5 +1,4 @@
 use crate::core::EngineResultExt;
-use std::process::Stdio;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -11,7 +10,7 @@ use crate::process_runtime::{
     build_process_worker_command, default_process_args, parse_process_offsets,
 };
 use crate::process_worker::{
-    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, pipe_process_stderr,
+    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds,
 };
 use crate::utils::domain::Domain;
 
@@ -93,39 +92,12 @@ impl ProcessBatchTransformWorker {
             params.cwd.as_deref(),
             "batch_transform",
         )?;
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command.spawn().map_err(|error| {
-            BuildError::build(format!(
-                "failed to start process batch transform worker: {error}"
-            ))
-        })?;
-
-        let stdin = child.stdin.take().ok_or_else(|| {
-            BuildError::build("process batch transform worker stdin not available")
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            BuildError::build("process batch transform worker stdout not available")
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            BuildError::build("process batch transform worker stderr not available")
-        })?;
-        let stderr_tail = pipe_process_stderr("process batch transform", stderr);
-
-        let mut worker = Self {
-            process: ProcessWorker::new(
-                "process batch transform",
-                child,
-                stdin,
-                stdout,
-                stderr_tail,
-                params.shutdown_grace_seconds,
-            ),
-            domain,
-        };
+        let process = ProcessWorker::spawn(
+            &mut command,
+            "process batch transform",
+            params.shutdown_grace_seconds,
+        )?;
+        let mut worker = Self { process, domain };
         worker.send_init(params.args.clone())?;
         Ok(worker)
     }

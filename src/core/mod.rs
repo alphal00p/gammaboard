@@ -1,3 +1,5 @@
+pub mod checkpoint;
+pub use checkpoint::{SamplerAggregatorCheckpoint, SamplerQueueCheckpoint};
 pub mod batch_ids;
 pub mod errors;
 pub mod models;

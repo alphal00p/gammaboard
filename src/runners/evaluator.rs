@@ -10,6 +10,7 @@ use crate::evaluation::{BatchResult, EvalBatchOptions, Evaluator, Materializer};
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::stage_context::resolve_stage_context;
+use crate::runners::wall_time_rate::WallTimeRate;
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -60,6 +61,7 @@ pub struct EvaluatorRunner<S> {
     batches_completed_total: i64,
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
+    compute_rate: WallTimeRate,
     counters: EvaluatorPipelineCounters,
     store: S,
     current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
@@ -72,7 +74,7 @@ struct TaskRuntimeContext {
     batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Default)]
 struct EvaluatorRollingAverages {
     total_ms_per_sample: RollingMetric,
     fetch_ms_per_sample: RollingMetric,
@@ -81,7 +83,6 @@ struct EvaluatorRollingAverages {
     materialization_ms_per_sample: RollingMetric,
     submit_ms_per_sample: RollingMetric,
     submit_stall_ms_per_sample: RollingMetric,
-    idle_ratio: RollingMetric,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -394,6 +395,7 @@ where
             batches_completed_total: 0,
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
+            compute_rate: WallTimeRate::new(Instant::now()),
             counters: EvaluatorPipelineCounters::default(),
             store,
             current_batch_transforms: Vec::new(),
@@ -526,7 +528,6 @@ where
 
     async fn fail_tick(
         &mut self,
-        loop_started: Instant,
         batch_id: i64,
         compute_time_ms: f64,
         err: impl Into<EvaluatorRunnerError>,
@@ -576,13 +577,13 @@ where
                 "batch retry limit reached; task marked failed and run assignments cleared"
             );
         }
-        self.observe_idle_ratio(loop_started, compute_time_ms);
+        self.observe_idle_ratio(compute_time_ms);
         self.flush_performance_snapshot_if_due(false).await?;
         Ok(())
     }
 
     pub async fn tick(&mut self) -> Result<(), EvaluatorRunnerError> {
-        let loop_started = Instant::now();
+        crate::runners::activity::set("waiting");
         self.consume_finished_submit().await?;
 
         self.counters.fetch_attempts += 1;
@@ -590,7 +591,7 @@ where
         let pop = self.prefetch_buffer.pop(&self.store, self.draining).await?;
         let Some(claimed) = pop.claimed else {
             self.counters.queue_starved_attempts += 1;
-            self.observe_idle_ratio(loop_started, 0.0);
+            self.observe_idle_ratio(0.0);
             self.flush_performance_snapshot_if_due(false).await?;
             return Ok(());
         };
@@ -601,8 +602,11 @@ where
         if pop.stalled {
             self.counters.fetch_stalls += 1;
         }
+        crate::runners::activity::context(self.run_id, claimed.task_id);
+        crate::runners::activity::set("initializing runtime");
         self.ensure_task_context(claimed.task_id).await?;
 
+        crate::runners::activity::set("materializing");
         let materialization_started = Instant::now();
         let materializer = self.materializer.as_mut().ok_or_else(|| {
             EvaluatorRunnerError::Store(StoreError::store(format!(
@@ -620,7 +624,7 @@ where
             Ok(batch) => batch,
             Err(err) => {
                 return self
-                    .fail_tick(loop_started, claimed.batch_id, materialization_time_ms, err)
+                    .fail_tick(claimed.batch_id, materialization_time_ms, err)
                     .await;
             }
         };
@@ -634,7 +638,7 @@ where
                 Ok(batch) => batch,
                 Err(err) => {
                     return self
-                        .fail_tick(loop_started, claimed.batch_id, materialization_time_ms, err)
+                        .fail_tick(claimed.batch_id, materialization_time_ms, err)
                         .await;
                 }
             };
@@ -642,7 +646,6 @@ where
         if let Err(err) = self.domain.validate_batch(&transformed_batch) {
             return self
                 .fail_tick(
-                    loop_started,
                     claimed.batch_id,
                     materialization_time_ms,
                     EngineError::engine(format!(
@@ -652,6 +655,7 @@ where
                 .await;
         }
         let started = Instant::now();
+        crate::runners::activity::set("evaluating");
         let eval_result = Self::call_with_panic_guard("evaluator.eval_batch", || {
             self.evaluator
                 .eval_batch(
@@ -680,14 +684,13 @@ where
                     transformed_batch.size(),
                 )
                 .await?;
-                self.observe_idle_ratio(loop_started, total_time_ms);
+                self.observe_idle_ratio(total_time_ms);
                 Ok(())
             }
             Err(err) => {
                 let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let total_time_ms = materialization_time_ms + eval_time_ms;
-                self.fail_tick(loop_started, claimed.batch_id, total_time_ms, err)
-                    .await
+                self.fail_tick(claimed.batch_id, total_time_ms, err).await
             }
         }
     }
@@ -810,58 +813,36 @@ where
         submit_stall_time_ms: f64,
     ) {
         self.batches_completed_total += 1;
+        crate::runners::activity::completed_batch();
+        crate::runners::activity::set("waiting");
         self.samples_evaluated_total += samples as i64;
-        if samples > 0 {
-            let samples = samples as f64;
-            if total_time_ms.is_finite() && total_time_ms >= 0.0 {
-                self.rolling
-                    .total_ms_per_sample
-                    .observe_weighted(total_time_ms / samples, samples);
-            }
-            if fetch_time_ms.is_finite() && fetch_time_ms >= 0.0 {
-                self.rolling
-                    .fetch_ms_per_sample
-                    .observe_weighted(fetch_time_ms / samples, samples);
-            }
-            if fetch_stall_time_ms.is_finite() && fetch_stall_time_ms >= 0.0 {
-                self.rolling
-                    .fetch_stall_ms_per_sample
-                    .observe_weighted(fetch_stall_time_ms / samples, samples);
-            }
-            if materialization_time_ms.is_finite() && materialization_time_ms >= 0.0 {
-                self.rolling
-                    .materialization_ms_per_sample
-                    .observe_weighted(materialization_time_ms / samples, samples);
-            }
-            if eval_time_ms.is_finite() && eval_time_ms >= 0.0 {
-                self.rolling
-                    .evaluate_ms_per_sample
-                    .observe_weighted(eval_time_ms / samples, samples);
-            }
-            if submit_time_ms.is_finite() && submit_time_ms >= 0.0 {
-                self.rolling
-                    .submit_ms_per_sample
-                    .observe_weighted(submit_time_ms / samples, samples);
-            }
-            if submit_stall_time_ms.is_finite() && submit_stall_time_ms >= 0.0 {
-                self.rolling
-                    .submit_stall_ms_per_sample
-                    .observe_weighted(submit_stall_time_ms / samples, samples);
-            }
-        }
+        self.rolling
+            .total_ms_per_sample
+            .observe_batch(total_time_ms, samples);
+        self.rolling
+            .fetch_ms_per_sample
+            .observe_batch(fetch_time_ms, samples);
+        self.rolling
+            .fetch_stall_ms_per_sample
+            .observe_batch(fetch_stall_time_ms, samples);
+        self.rolling
+            .materialization_ms_per_sample
+            .observe_batch(materialization_time_ms, samples);
+        self.rolling
+            .evaluate_ms_per_sample
+            .observe_batch(eval_time_ms, samples);
+        self.rolling
+            .submit_ms_per_sample
+            .observe_batch(submit_time_ms, samples);
+        self.rolling
+            .submit_stall_ms_per_sample
+            .observe_batch(submit_stall_time_ms, samples);
     }
 
-    fn observe_idle_ratio(&mut self, loop_started: Instant, compute_time_ms: f64) {
-        let elapsed_ms = loop_started.elapsed().as_secs_f64() * 1000.0;
-        if !elapsed_ms.is_finite() || elapsed_ms <= 0.0 {
-            return;
-        }
-        let compute = compute_time_ms.max(0.0);
-        let idle_ratio = ((elapsed_ms - compute).max(0.0) / elapsed_ms).clamp(0.0, 1.0);
-        let baseline_ms = self.params.min_tick_time_ms.max(1) as f64;
-        self.rolling
-            .idle_ratio
-            .observe_weighted(idle_ratio, elapsed_ms / baseline_ms);
+    fn observe_idle_ratio(&mut self, compute_time_ms: f64) {
+        // Consecutive observations include the worker's sleep outside tick().
+        self.compute_rate
+            .observe(Instant::now(), compute_time_ms.max(0.0) / 1000.0);
     }
 
     async fn flush_performance_snapshot_if_due(
@@ -893,6 +874,7 @@ where
             run_id: self.run_id,
             node_name: self.node_name.clone(),
             metrics: EvaluatorPerformanceMetrics {
+                engine_diagnostics: self.evaluator.diagnostics(),
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,
                 avg_time_per_sample_ms: self.rolling.total_ms_per_sample.value().unwrap_or(0.0),
@@ -958,7 +940,7 @@ where
                 ),
                 completed_samples_total,
                 idle_profile: Some(EvaluatorIdleProfileMetrics {
-                    idle_ratio: self.rolling.idle_ratio.value().unwrap_or(0.0),
+                    idle_ratio: 1.0 - self.compute_rate.rate().clamp(0.0, 1.0),
                 }),
             },
             rss_bytes: current_rss_bytes(),

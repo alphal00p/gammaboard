@@ -11,7 +11,7 @@ use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
     extract_accumulator_metric_with_runtime,
 };
-use crate::runners::sampler_aggregator::MIN_BATCH_SIZE;
+use crate::runners::queue::MIN_BATCH_SIZE;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TableStateOptions,
     TickBreakdownSegment, key_value, key_value_panel, progress_panel,
@@ -904,8 +904,8 @@ fn sample_eta_seconds(
     let Some(stop_condition) = ctx.task.task.sample_stop_condition() else {
         return Ok(None);
     };
-    if let Some(smoothed_eta_seconds) = ctx.smoothed_eta_seconds {
-        return Ok(Some(smoothed_eta_seconds));
+    if let Some(eta_seconds) = ctx.eta_seconds {
+        return Ok(Some(eta_seconds));
     }
     let accumulator = sample_accumulator(ctx, accumulator_config)?;
     let projected = if let Some(selector) = &stop_condition.metric {

@@ -66,6 +66,19 @@ GAMMABOARD_PROFILE=release ./gammaboard \
 For UBELIX Slurm/Apptainer operation, use
 [ops/ubelix/README.md](ops/ubelix/README.md).
 
+Validate an example before allocating workers:
+
+```bash
+./gammaboard run validate example.toml
+./gammaboard run validate example.toml --probe
+```
+
+Validation shares creation's task/domain checks and checks process executables,
+working directories and generated state artifacts on the current host. `--probe`
+also initializes configured runtimes (including requested GPU initialization)
+without creating a run or producing samples. Run it in the worker environment
+when its executables or resource mounts differ from the control host.
+
 ## Core Commands
 
 - `gammaboard deploy`: supervise local Postgres, backend API, and nginx/frontend in one foreground process.
@@ -83,6 +96,20 @@ The frontend build is skipped when its output is newer than its sources and
 configuration. Pass `./gammaboard deploy --rebuild-frontend` to force a rebuild.
 Set `GAMMABOARD_FRONTEND_BASE=/board/` when building the dashboard for a
 reverse-proxy mount below a URL path instead of at `/`.
+
+When opening the dashboard through a forwarded port or a different hostname,
+allow the origin visible in your browser (scheme, host, and port, without a path):
+
+```bash
+./gammaboard deploy --allowed-origin http://localhost:39491
+```
+
+The option is repeatable and also available on `gammaboard server`. For a
+persistent deployment, add the origin to `server.allowed_origins` in
+`server.toml`. A changed external port needs an updated origin. CLI origins are
+added after `--port-offset` is applied; configured local origins with explicit
+ports are shifted by that offset. The dashboard checks browser access before
+loading workspaces and shows a configuration remedy if the origin is rejected.
 
 ## Core Ideas
 
@@ -115,6 +142,12 @@ workers that can come and go.
 - Evaluators consume concrete batches, validate them against the run domain,
   evaluate the integrand, and return accumulator updates plus optional scalar
   training values for adaptive samplers.
+- Task rate and ETA use completed samples over the last 60 seconds of active
+  sampler wall time, including training and queue waits. Evaluator Busy measures
+  materialization/evaluation time over a 60-second worker wall-time window,
+  including polling sleeps; it is not operating-system CPU utilization. Windows
+  start fresh on runner activation. Throughput history still reports completed
+  batches per snapshot interval, so its chart can show spikes while workers are busy.
 - Accumulators own observable semantics: scalar/vector/full-vector/GammaLoop
   state, error estimates, moments, projections, and panel-ready metrics.
 
@@ -123,6 +156,33 @@ The hot path is:
 ```text
 sampler aggregator -> latent batch queue -> materializer -> batch transforms -> evaluator -> accumulator snapshot/training feedback
 ```
+
+Queue defaults target 2 seconds of evaluation per batch and one pending
+batch per active evaluator, counting queued and unpersisted work together.
+Workers use a 10 ms minimum polling interval; longer evaluation calls need no
+additional sleep. Task-level `queue_tuning` overrides apply live through the
+dashboard. A single `queue_buffer` sets the pending target; the separate refill
+low/high ratios and local buffer multiplier have been removed. Batch
+sizing uses a 15% deadband and waits for three completed evaluation batches
+between changes (`batch_size_cooldown_ticks` counts these observations, not
+worker polling ticks). The maximum batch size and queue/I/O limits remain independent
+safety bounds; increasing the pending buffer cannot make an adaptive sampler
+produce past its training boundary.
+
+Finite training windows aim for at least four chunks per evaluator, subject to
+minimum batch size and queue limits. Fresh batches give evaluators without work
+priority over speculative prefetch for up to 250 ms; older work remains claimable
+if a peer is unresponsive. Evaluation-time smoothing uses an EWMA weight of 0.2
+per 1,000 samples for both queue sizing and evaluator timing statistics, retaining
+history across normal-sized batches. These defaults
+are starting points: adapters with substantial per-batch setup can benefit from
+longer batches, while finite training windows need enough chunks for parallelism.
+
+Sampler timing panels report observations from each performance snapshot
+interval. They do not maintain a second checkpointed smoothing history. Queue
+control uses its own sample-weighted evaluation-time estimate, independently of
+those diagnostic intervals. Queue insert/fetch/cleanup durations end when their
+I/O finishes, excluding the wait until the sampler collects the result.
 
 The run domain is authoritative throughout this path. Samplers produce points in
 that domain, materializers and transforms must preserve a valid concrete batch,
@@ -206,3 +266,112 @@ Builds without the default `gammaloop` feature do not link GammaLoop, but
 GammaBoard still depends directly on Symbolica for built-in Symbolica
 evaluators. Developers who explicitly compile with
 `NO_SYMBOLICA_OEM_LICENSE=1` must provide `SYMBOLICA_LICENSE` at runtime.
+
+Graceful `deploy` shutdown automatically marks live workers for later recreation and
+preserves their intended assignments. Use `gammaboard deploy --resume-workers` to
+consume those markers through the normal launch-request queue. Plain `deploy`
+leaves them dormant. Explicit `node stop` clears a worker's marker. Pausing or
+unassigning a run still clears its assignments. Crashes and forced kills cannot
+save a new shutdown roster or guarantee a checkpoint.
+
+Launch workers through `node start-local`, the dashboard launch form, or the
+UBELIX launcher so their complete launch configuration is recorded. Workers
+started manually with `node run` have no reproducible launch request and are
+reported as unavailable for automatic recreation. Pending external jobs are not
+part of the saved roster; manage them through their existing launch requests.
+UBELIX `down` saves the roster before stopping jobs; `up --resume-workers --watch`
+re-enqueues saved workers with their original scheduler settings.
+
+The dashboard startup queue shows pending/starting requests and failures. Fulfilled
+and canceled requests appear in collapsed launch history (latest 100). A fulfilled
+request means its workers connected, not that they are still online; current health
+is shown in the node list. Resuming a worker reuses its name and creates a new
+launch request, preserving the earlier attempts. Outstanding requests survive
+redeployment and are never hidden by the history limit.
+
+PostgreSQL store tests require `GAMMABOARD_TEST_DATABASE_URL` pointing to an
+isolated, migrated test database. They fail if it is missing or unavailable;
+they never fall back to a running deployment. Full-stack tests also accept this
+variable and create their own temporary databases.
+
+The run's **Checkpoint recovery** panel and `run inspect` show saving/saved/failed
+status, the saved task and sample count, and the last restore time and worker.
+A successful save is reported only after the checkpoint transaction commits.
+Checkpoint decode errors fail activation; completed work without a resume
+checkpoint is not silently restarted from fresh sampler state.
+
+A sampler checkpoint is saved before first production and on graceful stop/task
+completion. Recovery restores the sampler, accumulator, sample counters and result
+snapshot boundary together. Work produced after the checkpoint is discarded and
+regenerated; sample progress can therefore roll back after a crash. CPU usage is
+retained. Missing checkpoint work causes an explicit activation failure.
+
+Only outstanding work included in the committed checkpoint must remain available
+for replay. Consumed work produced later can be cleaned up, keeping retention
+bounded without forcing frequent writes of large checkpoint files. Checkpoint
+publication waits for durable database commit before authorizing cleanup. A stop flushes local
+work and pending accumulator writes, then commits the recovery checkpoint and
+matching stage snapshot together. Cleanup does one bounded pass on stop and
+continues during normal operation; it need not empty the persistent queue.
+Only durable sampler progress is checkpointed; live rate/timing windows reset
+on activation. Dashboard shutdown and deploy use the same `[cleanup]` settings.
+
+Process samplers may store large checkpoints in external files. Each returned
+snapshot must reference immutable, durably published files accessible to resumed
+workers; never overwrite a file referenced by an earlier snapshot. GammaBoard
+stores the reference, not the file contents. Retain files referenced by recovery or
+stage snapshots; file retention belongs to the sampler/storage owner.
+
+
+Worker details include the current activity, its start time, and the age of the
+last completed batch. The lease heartbeat publishes activity independently of
+blocked sampler/evaluator calls. Updates are capped at the heartbeat frequency.
+Throughput is a 60-second active runner wall-time window, including waits.
+
+Process workers may send framed JSON-RPC notifications before their response:
+`{"jsonrpc":"2.0","method":"progress","params":{"activity":"updating sampler"}}`.
+Supported activities are `waiting`, `materializing`, `evaluating`, `updating sampler`,
+`saving checkpoint`, and `shutdown`. Notifications do not extend the request
+timeout. Without notifications, a process sampler reports “waiting for sampler
+response”; GammaBoard does not infer Python training activity from timing.
+
+Process failures include the executable, working directory, operation, worker,
+run/task, exit status, and a bounded stderr excerpt. `stderr_log` points to the
+process's stderr log (oversized lines are omitted) under `resources/logs/processes/`. Credentials are
+redacted from diagnostics and logs; command arguments and request payloads are
+not included. Python traceback output on stderr remains separate from the framed
+JSON-RPC protocol on stdout.
+
+The optional MadNIS end-to-end test accepts `GAMMABOARD_MADNIS_STATE_PATH` and
+`GAMMABOARD_MADNIS_INTEGRAND` for a state generated by the installed GammaLoop
+version. Enable it with `GAMMABOARD_RUN_MADNIS_E2E=1`; set
+`GAMMABOARD_MADNIS_PYTHON` to its Python environment.
+Resumed workers use the new deployment/launcher environment, so make runtime
+credentials and shared resource paths available as for an ordinary launch.
+
+### Synthetic workloads and queue benchmarks
+
+The built-in `unit` evaluator and `naive_monte_carlo` sampler support optional,
+seeded Gaussian timing models for evaluation, generation, result ingestion and
+repeating training updates. Defaults introduce no delay. Set
+`training_window_samples` to enable a strict repeating training barrier; zero
+selects inference. Synthetic worker panels show requested/actual delay and update
+counts. These engines are available in ordinary builds.
+
+Run the 16-case queue benchmark with a prebuilt binary:
+
+```sh
+cargo build --release --no-default-features
+just benchmark-queue --binary target/release/gammaboard
+```
+
+The script requires Python 3.11+ and `psql` (`nix develop` supplies both). It prints
+throughput, evaluator utilization and training stall measurements to the console,
+using an isolated temporary deployment. Defaults cover 1/4/16/64 evaluators,
+nominal capacities of 1,000/2,000,000 samples/s, and fast sampling with repeated
+0.5-second training stalls versus inference. The whole suite is limited to five
+minutes; compilation is separate. Use `--evaluators`, `--rates`, `--regimes` or
+`--duration` to focus a run, and `--port-offset` if its default ports are occupied.
+Successful runs remove their temporary database; failures retain diagnostics.
+Short runs measure coarse differences, and nominal capacity excludes overhead
+and training stalls.

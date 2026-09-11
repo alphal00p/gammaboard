@@ -2,11 +2,11 @@ use serde_json::Value as JsonValue;
 use sqlx::{Executor, PgPool, Postgres};
 use std::collections::HashMap;
 
+use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{
     BatchTransformConfig, EvaluatorConfig, RunStageSnapshot, SamplerAggregatorConfig,
 };
 use crate::evaluation::AccumulatorState;
-use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::SamplerAggregatorSnapshot;
 
 #[derive(sqlx::FromRow)]
@@ -129,11 +129,13 @@ pub(crate) async fn get_run_sampler_checkpoint(
             .map_err(|err| {
                 sqlx::Error::Protocol(format!("failed to decode sampler_checkpoint: {err}"))
             })
-            .map(|mut checkpoint| {
+            .and_then(|checkpoint| {
                 if checkpoint.task_id != task_id {
-                    checkpoint.task_id = task_id;
+                    return Err(sqlx::Error::Protocol(
+                        "checkpoint task does not match its database row".into(),
+                    ));
                 }
-                checkpoint
+                Ok(checkpoint)
             })
     })
     .transpose()
@@ -295,12 +297,15 @@ pub(crate) async fn get_run_sample_progress(
     .await
 }
 
-pub(crate) async fn insert_task_output_snapshot(
-    pool: &PgPool,
+pub(crate) async fn insert_task_output_snapshot<'a, E>(
+    executor: E,
     run_id: i32,
     task_id: i64,
     persisted_observable: &JsonValue,
-) -> Result<i64, sqlx::Error> {
+) -> Result<i64, sqlx::Error>
+where
+    E: Executor<'a, Database = Postgres>,
+{
     sqlx::query_scalar(
         r#"
         INSERT INTO persisted_observable_snapshots (run_id, task_id, persisted_observable)
@@ -311,16 +316,19 @@ pub(crate) async fn insert_task_output_snapshot(
     .bind(run_id)
     .bind(task_id)
     .bind(persisted_observable)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
 }
 
-pub(crate) async fn update_run_current_accumulator(
-    pool: &PgPool,
+pub(crate) async fn update_run_current_accumulator<'a, E>(
+    executor: E,
     run_id: i32,
     current_accumulator: &JsonValue,
     delta_batches_completed: i32,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), sqlx::Error>
+where
+    E: Executor<'a, Database = Postgres>,
+{
     sqlx::query(
         r#"
         UPDATE runs
@@ -332,7 +340,7 @@ pub(crate) async fn update_run_current_accumulator(
     .bind(current_accumulator)
     .bind(delta_batches_completed)
     .bind(run_id)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -341,8 +349,28 @@ pub(crate) async fn upsert_run_sampler_checkpoint(
     pool: &PgPool,
     run_id: i32,
     checkpoint: &SamplerAggregatorCheckpoint,
+    stage: Option<&RunStageSnapshot>,
 ) -> Result<(), sqlx::Error> {
-    let payload = serde_json::to_value(checkpoint).map_err(|err| {
+    let mut tx = pool.begin().await?;
+    // Cleanup may follow immediately, so checkpoint acknowledgement must wait for WAL.
+    sqlx::query("SET LOCAL synchronous_commit = on")
+        .execute(&mut *tx)
+        .await?;
+    let mut checkpoint = checkpoint.clone();
+    let (output_id, batches_completed): (Option<i64>, i32) = sqlx::query_as(
+        "SELECT (SELECT max(id) FROM persisted_observable_snapshots WHERE run_id=$1 AND task_id=$2),COALESCE(batches_completed,0) FROM runs WHERE id=$1"
+    ).bind(run_id).bind(checkpoint.task_id).fetch_one(&mut *tx).await?;
+    checkpoint.output_snapshot_id = output_id;
+    checkpoint.batches_completed = batches_completed;
+    if let Some(stage) = stage {
+        if stage.run_id != run_id || stage.task_id != Some(checkpoint.task_id) {
+            return Err(sqlx::Error::Protocol(
+                "checkpoint and stage must identify the same run and task".into(),
+            ));
+        }
+        insert_run_stage_snapshot(&mut *tx, stage).await?;
+    }
+    let payload = serde_json::to_value(&checkpoint).map_err(|err| {
         sqlx::Error::Protocol(format!("failed to encode sampler_checkpoint: {err}"))
     })?;
     sqlx::query(
@@ -359,8 +387,13 @@ pub(crate) async fn upsert_run_sampler_checkpoint(
     .bind(run_id)
     .bind(checkpoint.task_id)
     .bind(payload)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE runs SET checkpoint_status=checkpoint_status || $2 WHERE id=$1")
+        .bind(run_id).bind(serde_json::json!({"state":"saved","saved_task_id":checkpoint.task_id,
+            "saved_at":chrono::Utc::now(),"saved_samples":checkpoint.completed_samples,"error":null}))
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
 }
 

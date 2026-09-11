@@ -1,5 +1,6 @@
 use crate::core::RollingMetricSnapshot;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Snapshot-window metric accumulator for non-negative timing/capacity metrics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -12,6 +13,10 @@ pub(crate) struct WindowMetric {
 }
 
 impl WindowMetric {
+    pub(crate) fn observe_duration(&mut self, duration: Duration) {
+        self.observe(duration.as_secs_f64() * 1000.0);
+    }
+
     pub(crate) fn observe(&mut self, observation: f64) {
         if !observation.is_finite() || observation < 0.0 {
             return;

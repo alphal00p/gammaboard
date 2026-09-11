@@ -198,6 +198,7 @@ pub struct EvaluatorIdleProfileMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct EvaluatorPerformanceMetrics {
+    pub engine_diagnostics: serde_json::Value,
     pub batches_completed: i64,
     pub samples_evaluated: i64,
     pub avg_time_per_sample_ms: f64,
@@ -336,9 +337,7 @@ pub struct SamplerRuntimeMetrics {
     #[serde(default)]
     pub sampler_uptime_ms: f64,
     pub completed_samples_per_second: f64,
-    #[serde(default)]
-    pub eta_completed_samples_per_second: f64,
-    pub eta_seconds_smoothed: Option<f64>,
+    pub eta_seconds: Option<f64>,
     pub batch_size_current: usize,
     pub sampler_tick_busy_ratio: Option<f64>,
     pub avg_evaluator_utilization: Option<f64>,

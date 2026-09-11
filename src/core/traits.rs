@@ -8,9 +8,9 @@ use super::models::{
     RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot,
 };
+use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
-use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
@@ -29,6 +29,14 @@ pub trait RunSpecStore: Send + Sync {
 /// Desired-state control-plane operations for node assignments and run steering.
 #[async_trait]
 pub trait ControlPlaneStore: Send + Sync {
+    async fn record_worker_activity(
+        &self,
+        _node_uuid: &str,
+        _activity: &JsonValue,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     async fn upsert_desired_assignment(
         &self,
         node_name: &str,
@@ -135,8 +143,6 @@ pub trait WorkQueueStore: Send + Sync {
         run_id: i32,
         completed_after_batch_id: Option<i64>,
     ) -> Result<BatchQueueCounts, StoreError>;
-    async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
-    async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn claim_batch(
         &self,
         run_id: i32,
@@ -187,6 +193,15 @@ pub trait WorkQueueStore: Send + Sync {
 /// Persists active-stage accumulator state and task-local persisted snapshots.
 #[async_trait]
 pub trait AggregationStore: Send + Sync {
+    /// Lightweight lifecycle metadata; checkpoint payloads remain in their existing store.
+    async fn record_checkpoint_status(
+        &self,
+        _run_id: i32,
+        _status: &JsonValue,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
     async fn load_current_accumulator(&self, run_id: i32) -> Result<Option<JsonValue>, StoreError>;
     async fn persist_task_result_snapshot(
         &self,
@@ -228,6 +243,7 @@ pub trait AggregationStore: Send + Sync {
         &self,
         run_id: i32,
         checkpoint: &SamplerAggregatorCheckpoint,
+        stage: Option<&RunStageSnapshot>,
     ) -> Result<(), StoreError>;
     async fn save_run_sample_progress(
         &self,

@@ -68,8 +68,8 @@ pub async fn require_admin_session(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if !origin_allowed(request.headers(), &state.allowed_origins) {
-        return ApiError::Unauthorized("invalid origin".to_string()).into_response();
+    if let Err(err) = validate_origin(request.headers(), &state.allowed_origins) {
+        return err.into_response();
     }
     let Some(auth) = &state.auth else {
         return next.run(request).await;
@@ -90,9 +90,7 @@ pub async fn login(
     headers: HeaderMap,
     axum::extract::Json(payload): axum::extract::Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    if !origin_allowed(&headers, &state.allowed_origins) {
-        return Err(ApiError::Unauthorized("invalid origin".to_string()));
-    }
+    validate_origin(&headers, &state.allowed_origins)?;
     let Some(auth) = &state.auth else {
         return Ok(Json(SessionStatus {
             authenticated: true,
@@ -118,9 +116,7 @@ pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if !origin_allowed(&headers, &state.allowed_origins) {
-        return Err(ApiError::Unauthorized("invalid origin".to_string()));
-    }
+    validate_origin(&headers, &state.allowed_origins)?;
     let authenticated = state.auth.is_none();
     Ok(response_with_cookie(
         session_cookie("", 0, state.secure_cookie),
@@ -214,13 +210,27 @@ fn cookie_value(headers: &HeaderMap, key: &str) -> Option<String> {
     })
 }
 
-fn origin_allowed(headers: &HeaderMap, allowed_origins: &[HeaderValue]) -> bool {
+pub(super) fn validate_origin(
+    headers: &HeaderMap,
+    allowed_origins: &[HeaderValue],
+) -> Result<(), ApiError> {
     let Some(origin) = headers.get(ORIGIN) else {
-        return true;
+        // Non-browser CLI and worker requests need not carry an Origin header.
+        return Ok(());
     };
-    allowed_origins
-        .iter()
-        .any(|allowed_origin| allowed_origin == origin)
+    if allowed_origins.iter().any(|allowed| allowed == origin) {
+        return Ok(());
+    }
+    let origin = origin.to_str().unwrap_or("<invalid Origin header>");
+    let quoted_origin = format!("'{}'", origin.replace('\'', "'\\''"));
+    let message = format!(
+        "Browser origin {origin:?} is not allowed. Restart gammaboard deploy with --allowed-origin {quoted_origin}, or add this origin to server.allowed_origins in your server configuration."
+    );
+    tracing::warn!(
+        origin,
+        "browser origin rejected; configure --allowed-origin or server.allowed_origins"
+    );
+    Err(ApiError::Forbidden(message))
 }
 
 fn now_unix_secs() -> u64 {
@@ -233,6 +243,30 @@ fn now_unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_origins_require_an_exact_allowlist_match() {
+        let allowed = vec![HeaderValue::from_static("http://localhost:39491")];
+        let mut headers = HeaderMap::new();
+        assert!(validate_origin(&headers, &allowed).is_ok());
+        headers.insert(ORIGIN, allowed[0].clone());
+        assert!(validate_origin(&headers, &allowed).is_ok());
+        for origin in [
+            "http://localhost:8081",
+            "http://127.0.0.1:39491",
+            "https://example.org",
+            "null",
+        ] {
+            headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
+            let err = validate_origin(&headers, &allowed).unwrap_err();
+            assert!(err.to_string().contains(origin));
+            assert!(err.to_string().contains("--allowed-origin"));
+            assert_eq!(
+                err.into_response().status(),
+                axum::http::StatusCode::FORBIDDEN
+            );
+        }
+    }
 
     fn auth_config(session_version: &str) -> AuthConfig {
         AuthConfig::from_server_config(

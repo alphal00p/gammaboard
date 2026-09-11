@@ -5,8 +5,8 @@ pub mod materializer;
 pub mod sampler;
 pub mod sampler_aggregator;
 
+use crate::core::{RunStageSnapshot, SamplerAggregatorCheckpoint};
 use crate::evaluation::AccumulatorState;
-use crate::{core::RunStageSnapshot, runners::sampler_aggregator::SamplerAggregatorCheckpoint};
 
 pub use batch_transform::{
     ProcessBatchTransformParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,

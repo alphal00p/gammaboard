@@ -8,32 +8,31 @@
 //! - merge completed batch observables into the current accumulator state
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
+use crate::core::checkpoint::{AccumulatorCheckpointState, SamplerProgress};
 use crate::core::{
     AccumulatorMetricSelector, BatchTransformConfig, EngineError, EvaluatorConfig,
     RunSampleProgress, RunStageSnapshot, RunTask, SampleErrorProjection, SamplerAggregatorConfig,
     SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
     SamplerWorkRollingAverages, SamplerWorkerStore, StoreError, WorkerRole,
 };
+use crate::core::{SamplerAggregatorCheckpoint, SamplerQueueCheckpoint};
 use crate::evaluation::{
     AccumulatorState, extract_accumulator_metric_with_runtime, relative_error,
 };
 use crate::runners::process_memory::current_rss_bytes;
-use crate::runners::queue::QueueUtilizationSnapshot;
-use crate::runners::rolling_metric::RollingMetric;
+use crate::runners::queue::{MIN_BATCH_SIZE, QueueUtilizationSnapshot};
+use crate::runners::wall_time_rate::WallTimeRate;
 use crate::runners::window_metric::WindowMetric;
-use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
+use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
 use crate::sampling::DiscreteSubspace;
-use crate::sampling::{SamplePlan, SamplerAggregator, SamplerAggregatorSnapshot};
+use crate::sampling::{SamplePlan, SamplerAggregator};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-pub const MIN_BATCH_SIZE: usize = 16;
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
-const COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.2;
-const ETA_COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA: f64 = 0.02;
 const TASK_CONFIG_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
@@ -49,26 +48,7 @@ fn default_sampler_db_pool_size() -> u32 {
     4
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-struct SamplerRollingState {
-    eval_ms_per_sample: RollingMetric,
-    eval_ms_per_batch: RollingMetric,
-    training_ingest_ms_per_sample: RollingMetric,
-    completed_training_ingest_ms: RollingMetric,
-    produce_ms_per_sample: RollingMetric,
-    reclaim_ms: RollingMetric,
-    queue_counts_ms: RollingMetric,
-    completed_merge_ingest_ms: RollingMetric,
-    persist_accumulator_ms: RollingMetric,
-    completed_delete_ms: RollingMetric,
-    produce_ms: RollingMetric,
-    progress_sync_ms: RollingMetric,
-    performance_sync_ms: RollingMetric,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[derive(Debug, Clone, Default)]
 struct SamplerWindowState {
     eval_ms_per_sample: WindowMetric,
     eval_ms_per_batch: WindowMetric,
@@ -85,107 +65,26 @@ struct SamplerWindowState {
     performance_sync_ms: WindowMetric,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-enum AccumulatorCheckpointState {
-    #[default]
-    NeedsInitialRoundTrip,
-    WaitingForInitialRoundTrip,
-    Ready,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckpointKind {
+    Initial,
+    Stage,
 }
 
 enum ProduceDecision {
     None,
     InitialRoundTrip(usize),
-    PlannedByQueue(Option<usize>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SamplerRuntimeState {
-    produced_batches_total: i64,
-    produced_samples_total: i64,
-    ingested_batches_total: i64,
-    ingested_samples_total: i64,
-    completed_samples_per_second: f64,
-    #[serde(default)]
-    eta_completed_samples_per_second: f64,
-    eta_seconds_smoothed: Option<f64>,
-    #[serde(default)]
-    sampler_uptime_ms_accumulated: f64,
-    #[serde(default)]
-    initial_round_trip_snapshot_pending: bool,
-    pending_persisted_completed_batches: i32,
-    batch_size_current: usize,
-    sampler_tick_busy_ratio: Option<f64>,
-    accumulator_checkpoint_state: AccumulatorCheckpointState,
-    rolling: SamplerRollingState,
-}
-
-impl Default for SamplerRuntimeState {
-    fn default() -> Self {
-        Self {
-            produced_batches_total: 0,
-            produced_samples_total: 0,
-            ingested_batches_total: 0,
-            ingested_samples_total: 0,
-            completed_samples_per_second: 0.0,
-            eta_completed_samples_per_second: 0.0,
-            eta_seconds_smoothed: None,
-            sampler_uptime_ms_accumulated: 0.0,
-            initial_round_trip_snapshot_pending: false,
-            pending_persisted_completed_batches: 0,
-            batch_size_current: 0,
-            sampler_tick_busy_ratio: None,
-            accumulator_checkpoint_state: AccumulatorCheckpointState::NeedsInitialRoundTrip,
-            rolling: SamplerRollingState::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SamplerAggregatorCheckpoint {
-    pub task_id: i64,
-    pub sampler_snapshot: SamplerAggregatorSnapshot,
-    pub observable_state: AccumulatorState,
-    runtime_state: SamplerRuntimeState,
-    queue: SamplerQueueCheckpoint,
+    PlannedByQueue {
+        max_samples: Option<usize>,
+        training_remaining: Option<usize>,
+    },
 }
 
 impl SamplerAggregatorCheckpoint {
     pub fn reduced_carryover_batch_size(&self, max_batch_size: usize) -> usize {
-        let reduced = ((self.runtime_state.batch_size_current as f64) * MAX_BATCH_SIZE_DOWN_FACTOR)
-            .round() as usize;
+        let reduced =
+            ((self.queue.batch_size_current as f64) * MAX_BATCH_SIZE_DOWN_FACTOR).round() as usize;
         reduced.clamp(MIN_BATCH_SIZE, max_batch_size)
-    }
-}
-
-impl SamplerRuntimeState {
-    fn to_runtime_metrics(
-        &self,
-        sampler: SamplerWorkRollingAverages,
-        queue: crate::core::SamplerQueueRuntimeMetrics,
-        completed_samples_total: i64,
-        sampler_uptime_ms: f64,
-        evaluator_fleet: EvaluatorFleetSnapshot,
-    ) -> SamplerRuntimeMetrics {
-        SamplerRuntimeMetrics {
-            produced_batches_total: self.produced_batches_total,
-            produced_samples_total: self.produced_samples_total,
-            ingested_batches_total: self.ingested_batches_total,
-            ingested_samples_total: self.ingested_samples_total,
-            completed_samples_total,
-            sampler_uptime_ms,
-            completed_samples_per_second: self.completed_samples_per_second,
-            eta_completed_samples_per_second: self.eta_completed_samples_per_second,
-            eta_seconds_smoothed: self.eta_seconds_smoothed,
-            batch_size_current: self.batch_size_current,
-            sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
-            avg_evaluator_utilization: evaluator_fleet.avg_utilization,
-            active_evaluator_count: Some(evaluator_fleet.active_count),
-            avg_evaluator_rss_bytes: evaluator_fleet.avg_rss_bytes,
-            total_evaluator_rss_bytes: evaluator_fleet.total_rss_bytes,
-            sampler,
-            queue,
-        }
     }
 }
 
@@ -216,7 +115,12 @@ pub struct SamplerAggregatorRunner<S> {
     last_frontend_sync_at: Instant,
     last_progress_sync_at: Instant,
     pending_aggregation_flush: Option<PendingAggregationFlushTask>,
-    runtime_state: SamplerRuntimeState,
+    runtime_state: SamplerProgress,
+    completed_samples_per_second: f64,
+    eta_seconds: Option<f64>,
+    sampler_tick_busy_ratio: Option<f64>,
+    initial_round_trip_snapshot_pending: bool,
+    pending_persisted_completed_batches: i32,
     window_state: SamplerWindowState,
     queue: SamplerQueue<S>,
     base_queue_config: SamplerQueueConfig,
@@ -224,6 +128,7 @@ pub struct SamplerAggregatorRunner<S> {
     utilization_window_started_at: Instant,
     sync_tick_busy_time: Duration,
     sampler_uptime_started_at: Instant,
+    completed_rate: WallTimeRate,
 }
 
 struct CompletedIngestStats {
@@ -406,11 +311,39 @@ impl<S> SamplerAggregatorRunner<S>
 where
     S: SamplerWorkerStore + Clone + Send + Sync + 'static,
 {
+    fn to_runtime_metrics(
+        &self,
+        sampler: SamplerWorkRollingAverages,
+        queue: crate::core::SamplerQueueRuntimeMetrics,
+        completed_samples_total: i64,
+        sampler_uptime_ms: f64,
+        evaluator_fleet: EvaluatorFleetSnapshot,
+    ) -> SamplerRuntimeMetrics {
+        SamplerRuntimeMetrics {
+            produced_batches_total: self.runtime_state.produced_batches_total,
+            produced_samples_total: self.runtime_state.produced_samples_total,
+            ingested_batches_total: self.runtime_state.ingested_batches_total,
+            ingested_samples_total: self.runtime_state.ingested_samples_total,
+            completed_samples_total,
+            sampler_uptime_ms,
+            completed_samples_per_second: self.completed_samples_per_second,
+            eta_seconds: self.eta_seconds,
+            batch_size_current: self.queue.current_batch_size(),
+            sampler_tick_busy_ratio: self.sampler_tick_busy_ratio,
+            avg_evaluator_utilization: evaluator_fleet.avg_utilization,
+            active_evaluator_count: Some(evaluator_fleet.active_count),
+            avg_evaluator_rss_bytes: evaluator_fleet.avg_rss_bytes,
+            total_evaluator_rss_bytes: evaluator_fleet.total_rss_bytes,
+            sampler,
+            queue,
+        }
+    }
+
     pub fn new(
         store: S,
         run_id: i32,
         node_name: impl Into<String>,
-        task: RunTask,
+        mut task: RunTask,
         sampler: Box<dyn SamplerAggregator>,
         observable_state: AccumulatorState,
         evaluator_config: EvaluatorConfig,
@@ -427,18 +360,17 @@ where
         let max_batch_size = params.queue.max_batch_size.max(MIN_BATCH_SIZE);
         let has_resume_snapshot = resume_snapshot.is_some();
         if let Some(snapshot) = resume_snapshot {
-            runtime_state = snapshot.runtime_state.clone();
-            queue_checkpoint = snapshot.queue.clone();
+            task.nr_produced_samples = snapshot.produced_samples();
+            task.nr_completed_samples = snapshot.completed_samples;
+            runtime_state = snapshot.runtime_state;
+            queue_checkpoint = snapshot.queue;
         } else {
-            runtime_state = SamplerRuntimeState {
+            runtime_state = SamplerProgress::default();
+            queue_checkpoint = SamplerQueueCheckpoint {
                 batch_size_current: initial_batch_size.clamp(MIN_BATCH_SIZE, max_batch_size),
-                ..SamplerRuntimeState::default()
+                ..SamplerQueueCheckpoint::default()
             };
-            queue_checkpoint = SamplerQueueCheckpoint::default();
         }
-        runtime_state.batch_size_current = runtime_state
-            .batch_size_current
-            .clamp(MIN_BATCH_SIZE, max_batch_size);
         runtime_state.sampler_uptime_ms_accumulated = runtime_state
             .sampler_uptime_ms_accumulated
             .max(run_progress.sampler_runner_uptime_ms);
@@ -462,9 +394,7 @@ where
             requires_training_values,
             params.queue.clone(),
             queue_checkpoint,
-            runtime_state.batch_size_current,
         );
-        runtime_state.batch_size_current = queue.current_batch_size();
 
         Self {
             run_id,
@@ -486,6 +416,11 @@ where
             last_progress_sync_at: now,
             pending_aggregation_flush: None,
             runtime_state,
+            completed_samples_per_second: 0.0,
+            eta_seconds: None,
+            sampler_tick_busy_ratio: None,
+            initial_round_trip_snapshot_pending: false,
+            pending_persisted_completed_batches: 0,
             window_state: SamplerWindowState::default(),
             queue,
             base_queue_config,
@@ -495,6 +430,7 @@ where
             utilization_window_started_at: now,
             sync_tick_busy_time: Duration::ZERO,
             sampler_uptime_started_at: now,
+            completed_rate: WallTimeRate::new(now),
         }
     }
 
@@ -552,7 +488,6 @@ where
         let next_queue_config = self.effective_queue_config_for_tuning(next_tuning.as_ref());
         self.params.queue = next_queue_config.clone();
         self.queue.apply_config(next_queue_config);
-        self.runtime_state.batch_size_current = self.queue.current_batch_size();
         Ok(())
     }
 
@@ -563,18 +498,10 @@ where
             diagnostics_snapshot.and_then(|snapshot| snapshot.active_evaluator_count);
         let target_pending_batches =
             active_evaluator_count.and_then(|count| self.queue.target_pending_batches(count));
-        let target_pending_low_batches =
-            active_evaluator_count.and_then(|count| self.queue.target_pending_low_batches(count));
-        let target_pending_high_batches =
-            active_evaluator_count.and_then(|count| self.queue.target_pending_high_batches(count));
-        let target_local_pending_batches =
-            active_evaluator_count.and_then(|count| self.queue.target_local_pending_batches(count));
-        let target_local_pending_high_batches = active_evaluator_count
-            .and_then(|count| self.queue.target_local_pending_high_batches(count));
         let queue_runtime = self.queue.runtime_metrics();
-        let pending_shortfall = target_pending_high_batches
-            .zip(queue_runtime.db_pending_batches)
-            .map(|(target, pending)| (target as i64).saturating_sub(pending.max(0)));
+        let pending_shortfall = target_pending_batches
+            .zip(queue_counts)
+            .map(|(target, counts)| target.saturating_sub(counts.pending.max(0) as usize));
         json!({
             "active_evaluator_count": active_evaluator_count,
             "target_batch_eval_ms": self.params.queue.target_batch_eval_ms,
@@ -585,14 +512,7 @@ where
             "completed_batches": queue_counts.map(|counts| counts.completed),
             "open_batches": queue_counts.map(|counts| counts.open()),
             "queue_buffer": self.params.queue.queue_buffer,
-            "pending_refill_low_ratio": self.params.queue.pending_refill_low_ratio,
-            "pending_refill_high_ratio": self.params.queue.pending_refill_high_ratio,
-            "local_pending_buffer_multiplier": self.params.queue.local_pending_buffer_multiplier,
             "target_pending_batches": target_pending_batches,
-            "target_pending_low_batches": target_pending_low_batches,
-            "target_pending_high_batches": target_pending_high_batches,
-            "target_local_pending_batches": target_local_pending_batches,
-            "target_local_pending_high_batches": target_local_pending_high_batches,
             "pending_shortfall": pending_shortfall,
             "last_completed_batch_id": self.queue.last_completed_batch_id(),
             "db_pending_batches": queue_runtime.db_pending_batches,
@@ -727,14 +647,13 @@ where
         &self,
         selector: &AccumulatorMetricSelector,
     ) -> Result<Option<ProjectedEstimate>, RunnerError> {
-        let completed_samples_per_second =
-            if self.runtime_state.completed_samples_per_second.is_finite()
-                && self.runtime_state.completed_samples_per_second > 0.0
-            {
-                Some(self.runtime_state.completed_samples_per_second)
-            } else {
-                None
-            };
+        let completed_samples_per_second = if self.completed_samples_per_second.is_finite()
+            && self.completed_samples_per_second > 0.0
+        {
+            Some(self.completed_samples_per_second)
+        } else {
+            None
+        };
         let Some(metric) = extract_accumulator_metric_with_runtime(
             &self.observable_state,
             selector,
@@ -886,42 +805,6 @@ where
         etas.into_iter().reduce(f64::min)
     }
 
-    fn eta_smoothing_alpha(elapsed_secs: f64, eta_seconds: f64) -> f64 {
-        // Continuous EMA:
-        // alpha = 1 - exp(-dt / tau(eta))
-        // Larger ETA -> substantially larger tau -> much stronger smoothing.
-        // Smaller ETA -> smaller tau -> faster response.
-        let eta_seconds = eta_seconds.max(0.0);
-        let tau_seconds = (8.0 + 4.0 * eta_seconds.powf(0.6)).clamp(8.0, 86_400.0);
-        let elapsed_secs = elapsed_secs.max(0.0);
-        if elapsed_secs <= 0.0 {
-            return 0.0;
-        }
-        (1.0 - (-elapsed_secs / tau_seconds).exp()).clamp(0.0, 1.0)
-    }
-
-    fn update_smoothed_eta_seconds(&mut self, elapsed: Duration) {
-        let raw_eta = self.estimate_eta_seconds_for_current_state(
-            self.runtime_state.eta_completed_samples_per_second,
-        );
-        let Some(raw_eta) = raw_eta.filter(|value| value.is_finite() && *value >= 0.0) else {
-            return;
-        };
-        let alpha = Self::eta_smoothing_alpha(elapsed.as_secs_f64(), raw_eta);
-        self.runtime_state.eta_seconds_smoothed = match self.runtime_state.eta_seconds_smoothed {
-            Some(previous) if previous.is_finite() && previous > 0.0 && raw_eta > 0.0 => {
-                // Log-domain smoothing damps multiplicative swings (common on ETA).
-                let prev_log = previous.ln();
-                let raw_log = raw_eta.ln();
-                Some((prev_log + alpha * (raw_log - prev_log)).exp())
-            }
-            Some(previous) if previous.is_finite() && previous >= 0.0 => {
-                Some(previous * (1.0 - alpha) + raw_eta * alpha)
-            }
-            _ => Some(raw_eta),
-        };
-    }
-
     pub fn task_id(&self) -> i64 {
         self.task.id
     }
@@ -930,7 +813,15 @@ where
         &self.task
     }
 
+    pub(crate) async fn save_initial_checkpoint(&mut self) -> Result<(), RunnerError> {
+        self.persist_sampler_checkpoint(CheckpointKind::Initial)
+            .await?;
+        Ok(())
+    }
+
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
+        crate::runners::activity::context(self.run_id, self.task.id);
+        crate::runners::activity::set("waiting");
         self.refresh_live_queue_tuning().await?;
         let tick_started = Instant::now();
         let QueueTickResult {
@@ -941,25 +832,22 @@ where
             completed_cleanup_duration,
         } = self.queue.tick().await?;
         if let Some(duration) = reclaim_duration {
-            observe_duration_pair(
-                &mut self.runtime_state.rolling.reclaim_ms,
-                &mut self.window_state.reclaim_ms,
-                duration,
-            );
+            self.window_state.reclaim_ms.observe_duration(duration);
         }
         if let Some(duration) = completed_cleanup_duration {
-            observe_duration_pair(
-                &mut self.runtime_state.rolling.completed_delete_ms,
-                &mut self.window_state.completed_delete_ms,
-                duration,
-            );
+            self.window_state
+                .completed_delete_ms
+                .observe_duration(duration);
         }
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.queue_counts_ms,
-            &mut self.window_state.queue_counts_ms,
-            queue_snapshot_duration,
-        );
+        self.window_state
+            .queue_counts_ms
+            .observe_duration(queue_snapshot_duration);
+        crate::runners::activity::set("updating sampler");
         let ingest_stats = self.process_completed_batches(completed).await?;
+        if ingest_stats.completed_batches > 0 {
+            crate::runners::activity::completed_batch();
+        }
+        crate::runners::activity::set("producing samples");
         let queue_before_produce = crate::core::BatchQueueCounts {
             pending: queue_before_tick.pending,
             claimed: queue_before_tick.claimed,
@@ -968,37 +856,29 @@ where
                 .saturating_sub(ingest_stats.completed_batches as i64),
             failed: queue_before_tick.failed,
         };
-        self.update_completed_samples_per_second(
-            tick_started.elapsed(),
-            ingest_stats.completed_samples_delta,
-        );
+        self.update_completed_samples_per_second(ingest_stats.completed_samples_delta);
         let produce_started = Instant::now();
         let (produced_batches, sampler_wants_to_produce) =
             self.produce(queue_before_produce).await?;
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.produce_ms,
-            &mut self.window_state.produce_ms,
-            produce_started.elapsed(),
-        );
+        self.window_state
+            .produce_ms
+            .observe_duration(produce_started.elapsed());
 
         self.flush_aggregation(false).await?;
 
         let progress_sync_started = Instant::now();
         self.flush_progress_sync(false).await?;
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.progress_sync_ms,
-            &mut self.window_state.progress_sync_ms,
-            progress_sync_started.elapsed(),
-        );
+        self.window_state
+            .progress_sync_ms
+            .observe_duration(progress_sync_started.elapsed());
 
         let performance_sync_started = Instant::now();
         self.flush_performance_snapshot(false).await?;
-        observe_duration_pair(
-            &mut self.runtime_state.rolling.performance_sync_ms,
-            &mut self.window_state.performance_sync_ms,
-            performance_sync_started.elapsed(),
-        );
+        self.window_state
+            .performance_sync_ms
+            .observe_duration(performance_sync_started.elapsed());
         self.sync_tick_busy_time += tick_started.elapsed();
+        crate::runners::activity::set("waiting");
         self.check_tick_terminal_state(
             queue_before_produce,
             ingest_stats.completed_batches,
@@ -1061,41 +941,65 @@ where
         Ok(stop_status.reached && open_batch_count == 0)
     }
 
-    async fn persist_stage_state_with_queue_empty(
+    /// One save lifecycle for activation, pause and task completion. The initial
+    /// checkpoint precedes production; subsequent saves also publish a branchable stage.
+    async fn persist_sampler_checkpoint(
         &mut self,
-        queue_empty: bool,
+        kind: CheckpointKind,
     ) -> Result<(), RunnerError> {
-        self.store
-            .save_run_stage_snapshot(&RunStageSnapshot {
-                id: None,
-                run_id: self.run_id,
-                task_id: Some(self.task.id),
-                name: self.task.name.clone(),
-                sequence_nr: Some(self.task.sequence_nr),
-                queue_empty,
-                sampler_snapshot: Some(self.sampler.snapshot().map_err(RunnerError::Engine)?),
-                observable_state: Some(self.observable_state.clone()),
-                evaluator: Some(self.evaluator_config.clone()),
-                sampler_aggregator: Some(self.sampler_config.clone()),
-                batch_transforms: self.batch_transforms.clone(),
-            })
-            .await?;
-        Ok(())
-    }
-
-    async fn persist_sampler_checkpoint(&mut self) -> Result<(), RunnerError> {
-        self.checkpoint_sampler_uptime_now();
-        let checkpoint = SamplerAggregatorCheckpoint {
-            task_id: self.task.id,
-            sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
-            observable_state: self.observable_state.clone(),
-            runtime_state: self.runtime_state.clone(),
-            queue: self.queue.checkpoint(),
-        };
-        self.store
-            .save_sampler_checkpoint(self.run_id, &checkpoint)
-            .await?;
-        Ok(())
+        crate::runners::activity::set("saving checkpoint");
+        self.store.record_checkpoint_status(self.run_id, &json!({
+            "state":"saving", "task_id":self.task.id, "save_started_at":chrono::Utc::now(), "error":null
+        })).await?;
+        let result: Result<(), RunnerError> = async {
+            self.queue.flush().await?;
+            if kind == CheckpointKind::Stage {
+                self.drain_local_work_on_stop().await?;
+                self.flush_aggregation(true).await?;
+                self.flush_performance_snapshot(true).await?;
+                self.flush_progress_sync(true).await?;
+            }
+            self.checkpoint_sampler_uptime_now();
+            let checkpoint = SamplerAggregatorCheckpoint {
+                completed_samples: self.task.nr_completed_samples,
+                task_id: self.task.id,
+                output_snapshot_id: None,
+                batches_completed: 0,
+                sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
+                observable_state: self.observable_state.clone(),
+                runtime_state: self.runtime_state.clone(),
+                queue: self.queue.checkpoint(),
+            };
+            let stage = if kind == CheckpointKind::Stage {
+                Some(RunStageSnapshot {
+                    id: None,
+                    run_id: self.run_id,
+                    task_id: Some(self.task.id),
+                    name: self.task.name.clone(),
+                    sequence_nr: Some(self.task.sequence_nr),
+                    // Retained consumed results are recovery history, not open work.
+                    queue_empty: self.queue.queue_counts().await?.open() == 0,
+                    sampler_snapshot: Some(checkpoint.sampler_snapshot.clone()),
+                    observable_state: Some(checkpoint.observable_state.clone()),
+                    evaluator: Some(self.evaluator_config.clone()),
+                    sampler_aggregator: Some(self.sampler_config.clone()),
+                    batch_transforms: self.batch_transforms.clone(),
+                })
+            } else {
+                None
+            };
+            self.store
+                .save_sampler_checkpoint(self.run_id, &checkpoint, stage.as_ref())
+                .await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = &result {
+            let _ = self.store.record_checkpoint_status(self.run_id, &json!({
+                "state":"failed", "task_id":self.task.id, "failed_at":chrono::Utc::now(), "error":error.to_string()
+            })).await;
+        }
+        result
     }
 
     async fn drain_local_work_on_stop(&mut self) -> Result<(), RunnerError> {
@@ -1111,12 +1015,32 @@ where
     }
 
     pub async fn persist_state(&mut self) -> Result<(), RunnerError> {
-        self.finalize_for_pause().await?;
-        self.persist_sampler_checkpoint().await
+        // Task completion already published its final checkpoint. The supervisor
+        // still calls stop to release the role; do not snapshot it a second time.
+        if self.task.state == crate::core::RunTaskState::Completed {
+            return Ok(());
+        }
+        self.persist_sampler_checkpoint(CheckpointKind::Stage)
+            .await?;
+        // Cleanup is bounded maintenance after durable publication, not part of saving.
+        if let Some(duration) = self.queue.cleanup_completed_batches().await? {
+            self.window_state
+                .completed_delete_ms
+                .observe_duration(duration);
+        }
+        Ok(())
     }
 
     async fn flush_aggregation(&mut self, force: bool) -> Result<(), RunnerError> {
-        self.drain_finished_aggregation_flush().await?;
+        if force {
+            // A final write must follow the pending write, otherwise the older
+            // accumulator can land after the checkpoint and batches get counted twice.
+            if let Some(task) = self.pending_aggregation_flush.take() {
+                self.consume_aggregation_flush_task(task).await?;
+            }
+        } else {
+            self.drain_finished_aggregation_flush().await?;
+        }
         if !self.aggregation_flush_due(force) {
             return Ok(());
         }
@@ -1125,8 +1049,8 @@ where
         }
 
         let persist_snapshot = force
-            || self.runtime_state.initial_round_trip_snapshot_pending
-            || self.runtime_state.pending_persisted_completed_batches > 0;
+            || self.initial_round_trip_snapshot_pending
+            || self.pending_persisted_completed_batches > 0;
         let cleared_initial_round_trip = persist_snapshot;
         let current_accumulator = self
             .observable_state
@@ -1146,19 +1070,18 @@ where
         } else {
             None
         };
-        let flushed_completed_batches = self.runtime_state.pending_persisted_completed_batches;
+        let flushed_completed_batches = self.pending_persisted_completed_batches;
         let started_at = Instant::now();
         let store = self.store.clone();
         let run_id = self.run_id;
         let task_id = self.task.id;
-        let snapshot_ref = snapshot.clone();
         let handle = tokio::spawn(async move {
             store
                 .save_aggregation(
                     run_id,
                     task_id,
                     &current_accumulator,
-                    snapshot_ref.as_ref(),
+                    snapshot.as_ref(),
                     flushed_completed_batches,
                 )
                 .await
@@ -1198,16 +1121,13 @@ where
     ) -> Result<(), RunnerError> {
         match task.handle.await {
             Ok(Ok(())) => {
-                observe_duration_pair(
-                    &mut self.runtime_state.rolling.persist_accumulator_ms,
-                    &mut self.window_state.persist_accumulator_ms,
-                    task.started_at.elapsed(),
-                );
+                self.window_state
+                    .persist_accumulator_ms
+                    .observe_duration(task.started_at.elapsed());
                 if task.cleared_initial_round_trip {
-                    self.runtime_state.initial_round_trip_snapshot_pending = false;
+                    self.initial_round_trip_snapshot_pending = false;
                 }
-                self.runtime_state.pending_persisted_completed_batches = self
-                    .runtime_state
+                self.pending_persisted_completed_batches = self
                     .pending_persisted_completed_batches
                     .saturating_sub(task.flushed_completed_batches);
                 Ok(())
@@ -1219,23 +1139,8 @@ where
         }
     }
 
-    async fn force_cleanup_consumed_completed_batches(&mut self) -> Result<(), RunnerError> {
-        if let Some(duration) = self
-            .queue
-            .force_cleanup_consumed_completed_batches()
-            .await?
-        {
-            observe_duration_pair(
-                &mut self.runtime_state.rolling.completed_delete_ms,
-                &mut self.window_state.completed_delete_ms,
-                duration,
-            );
-        }
-        Ok(())
-    }
-
     pub async fn complete_task(&mut self) -> Result<(), RunnerError> {
-        self.finalize_completed_task().await?;
+        self.persist_state().await?;
         let measurement_output = match crate::services::measurement::extract_task_measurement(
             &self.store,
             self.run_id,
@@ -1254,32 +1159,13 @@ where
             .persist_task_measurement_output(self.task.id, &measurement_output)
             .await?;
         self.store.complete_run_task(self.task.id).await?;
+        self.task.state = crate::core::RunTaskState::Completed;
         Ok(())
     }
 
     pub async fn fail_task(&mut self, reason: &str) -> Result<(), RunnerError> {
         self.store.fail_run_task(self.task.id, reason).await?;
         Ok(())
-    }
-
-    async fn finalize_for_pause(&mut self) -> Result<(), RunnerError> {
-        self.queue.flush().await?;
-        self.drain_local_work_on_stop().await?;
-        let queue_empty = self.queue.open_batch_count().await? <= 0;
-        self.persist_sampler_state(queue_empty).await
-    }
-
-    async fn finalize_completed_task(&mut self) -> Result<(), RunnerError> {
-        self.queue.flush().await?;
-        self.persist_sampler_state(true).await
-    }
-
-    async fn persist_sampler_state(&mut self, queue_empty: bool) -> Result<(), RunnerError> {
-        self.force_cleanup_consumed_completed_batches().await?;
-        self.flush_aggregation(true).await?;
-        self.flush_performance_snapshot(true).await?;
-        self.flush_progress_sync(true).await?;
-        self.persist_stage_state_with_queue_empty(queue_empty).await
     }
 
     async fn process_completed_batches(
@@ -1307,20 +1193,14 @@ where
             if let Some(total_eval_time_ms) = batch.total_eval_time_ms
                 && batch_samples > 0
             {
-                observe_value_pair(
-                    &mut self.runtime_state.rolling.eval_ms_per_batch,
-                    &mut self.window_state.eval_ms_per_batch,
-                    total_eval_time_ms,
-                );
-                observe_value_pair_weighted(
-                    &mut self.runtime_state.rolling.eval_ms_per_sample,
-                    &mut self.window_state.eval_ms_per_sample,
-                    total_eval_time_ms / batch_samples as f64,
-                    batch_samples as f64,
-                );
+                self.window_state
+                    .eval_ms_per_batch
+                    .observe(total_eval_time_ms);
+                self.window_state
+                    .eval_ms_per_sample
+                    .observe(total_eval_time_ms / batch_samples as f64);
                 self.queue
                     .observe_completed_eval_batch(batch_samples, total_eval_time_ms);
-                self.runtime_state.batch_size_current = self.queue.current_batch_size();
             }
 
             if batch.requires_training_values {
@@ -1348,12 +1228,9 @@ where
                 self.runtime_state.ingested_batches_total += 1;
                 self.runtime_state.ingested_samples_total += batch_samples as i64;
                 if batch_samples > 0 {
-                    observe_value_pair_weighted(
-                        &mut self.runtime_state.rolling.training_ingest_ms_per_sample,
-                        &mut self.window_state.training_ingest_ms_per_sample,
-                        ingest_time_ms / batch_samples as f64,
-                        batch_samples as f64,
-                    );
+                    self.window_state
+                        .training_ingest_ms_per_sample
+                        .observe(ingest_time_ms / batch_samples as f64);
                 }
             }
 
@@ -1367,28 +1244,23 @@ where
         self.nr_completed_samples += completed_samples_delta;
         self.task.nr_completed_samples += completed_samples_delta;
 
-        self.runtime_state.pending_persisted_completed_batches = self
-            .runtime_state
+        self.pending_persisted_completed_batches = self
             .pending_persisted_completed_batches
             .saturating_add(completed.len() as i32);
         if completed_samples_delta > 0 {
             self.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
             if was_waiting_initial_round_trip {
-                self.runtime_state.initial_round_trip_snapshot_pending = true;
+                self.initial_round_trip_snapshot_pending = true;
             }
         }
         if completed_training_ingest_batches > 0 {
-            observe_value_pair(
-                &mut self.runtime_state.rolling.completed_training_ingest_ms,
-                &mut self.window_state.completed_training_ingest_ms,
-                completed_training_ingest_ms,
-            );
+            self.window_state
+                .completed_training_ingest_ms
+                .observe(completed_training_ingest_ms);
         }
-        observe_value_pair(
-            &mut self.runtime_state.rolling.completed_merge_ingest_ms,
-            &mut self.window_state.completed_merge_ingest_ms,
-            completed_merge_ms,
-        );
+        self.window_state
+            .completed_merge_ingest_ms
+            .observe(completed_merge_ms);
         self.queue.mark_processed(&completed);
         Ok(CompletedIngestStats {
             completed_batches: completed.len(),
@@ -1419,12 +1291,9 @@ where
             let produced_samples = batch.nr_samples;
             produced_samples_total += produced_samples as i64;
             if produced_samples > 0 {
-                observe_value_pair_weighted(
-                    &mut self.runtime_state.rolling.produce_ms_per_sample,
-                    &mut self.window_state.produce_ms_per_sample,
-                    produce_time_ms / produced_samples as f64,
-                    produced_samples as f64,
-                );
+                self.window_state
+                    .produce_ms_per_sample
+                    .observe(produce_time_ms / produced_samples as f64);
             }
             produced.push(
                 batch
@@ -1458,9 +1327,12 @@ where
         let batch_plan = match decision {
             ProduceDecision::None => Vec::new(),
             ProduceDecision::InitialRoundTrip(nr_samples) => vec![nr_samples],
-            ProduceDecision::PlannedByQueue(max_samples) => self
+            ProduceDecision::PlannedByQueue {
+                max_samples,
+                training_remaining,
+            } => self
                 .queue
-                .plan_production(max_samples, queue_before_produce)
+                .plan_production(max_samples, training_remaining, queue_before_produce)
                 .await
                 .map_err(RunnerError::from)?,
         };
@@ -1511,7 +1383,10 @@ where
                 }
                 ProduceDecision::None
             }
-            AccumulatorCheckpointState::Ready => ProduceDecision::PlannedByQueue(max_samples),
+            AccumulatorCheckpointState::Ready => ProduceDecision::PlannedByQueue {
+                max_samples,
+                training_remaining: training_samples_remaining,
+            },
         })
     }
 
@@ -1523,7 +1398,7 @@ where
 
     fn aggregation_flush_due(&self, force: bool) -> bool {
         force
-            || self.runtime_state.initial_round_trip_snapshot_pending
+            || self.initial_round_trip_snapshot_pending
             || self.frontend_sync_interval.is_zero()
             || self.last_frontend_sync_at.elapsed() >= self.frontend_sync_interval
     }
@@ -1563,7 +1438,7 @@ where
         }
 
         let sampler_tick_busy_ratio = self.take_sampler_tick_busy_ratio_snapshot();
-        self.runtime_state.sampler_tick_busy_ratio = sampler_tick_busy_ratio;
+        self.sampler_tick_busy_ratio = sampler_tick_busy_ratio;
         let QueueUtilizationSnapshot {
             insert_task_utilization,
             completed_fetch_utilization,
@@ -1604,7 +1479,7 @@ where
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             node_name: self.node_name.clone(),
-            runtime_metrics: self.runtime_state.to_runtime_metrics(
+            runtime_metrics: self.to_runtime_metrics(
                 sampler_runtime,
                 queue_runtime,
                 self.nr_completed_samples,
@@ -1708,74 +1583,24 @@ where
         })
     }
 
-    fn update_completed_samples_per_second(
-        &mut self,
-        elapsed: Duration,
-        completed_samples_delta: i64,
-    ) {
-        let elapsed_secs = elapsed.as_secs_f64();
-        if elapsed_secs > 0.0 {
-            let completed_samples_delta_non_negative = completed_samples_delta.max(0);
-            let instantaneous_rate =
-                (completed_samples_delta_non_negative as f64 / elapsed_secs).max(0.0);
-            let previous = self.runtime_state.completed_samples_per_second;
-            if !previous.is_finite() || previous <= 0.0 {
-                self.runtime_state.completed_samples_per_second = instantaneous_rate;
-            } else {
-                self.runtime_state.completed_samples_per_second = previous
-                    * (1.0 - COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA)
-                    + instantaneous_rate * COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA;
-            }
-            if completed_samples_delta_non_negative > 0 {
-                let previous_eta_rate = self.runtime_state.eta_completed_samples_per_second;
-                if !previous_eta_rate.is_finite() || previous_eta_rate <= 0.0 {
-                    self.runtime_state.eta_completed_samples_per_second = instantaneous_rate;
-                } else {
-                    self.runtime_state.eta_completed_samples_per_second = previous_eta_rate
-                        * (1.0 - ETA_COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA)
-                        + instantaneous_rate * ETA_COMPLETED_SAMPLES_PER_SECOND_EWMA_ALPHA;
-                }
-            }
-        }
-        self.update_smoothed_eta_seconds(elapsed);
+    fn update_completed_samples_per_second(&mut self, completed_samples_delta: i64) {
+        // Observe at the same point each tick so production, training, syncing
+        // and the outer worker sleep all contribute to elapsed wall time.
+        let rate = self
+            .completed_rate
+            .observe(Instant::now(), completed_samples_delta.max(0) as f64);
+        self.completed_samples_per_second = rate;
+        // The rate already averages a full wall-time window. Further smoothing
+        // ETA independently would make it inconsistent with the displayed rate.
+        self.eta_seconds = self.estimate_eta_seconds_for_current_state(rate);
     }
-}
-
-fn observe_value_pair(rolling: &mut RollingMetric, window: &mut WindowMetric, value: f64) {
-    if !value.is_finite() || value < 0.0 {
-        return;
-    }
-    rolling.observe(value);
-    window.observe(value);
-}
-
-fn observe_value_pair_weighted(
-    rolling: &mut RollingMetric,
-    window: &mut WindowMetric,
-    value: f64,
-    weight: f64,
-) {
-    if !value.is_finite() || value < 0.0 || !weight.is_finite() || weight <= 0.0 {
-        return;
-    }
-    rolling.observe_weighted(value, weight);
-    window.observe(value);
-}
-
-fn observe_duration_pair(
-    rolling: &mut RollingMetric,
-    window: &mut WindowMetric,
-    duration: Duration,
-) {
-    let ms = duration.as_secs_f64() * 1000.0;
-    observe_value_pair(rolling, window, ms);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SamplerAggregatorCheckpoint, SamplerRuntimeState, no_progress_is_terminal};
+    use super::{SamplerAggregatorCheckpoint, SamplerProgress, no_progress_is_terminal};
+    use crate::core::SamplerQueueCheckpoint;
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
-    use crate::runners::SamplerQueueCheckpoint;
     use crate::sampling::{
         NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
         SamplerAggregatorSnapshot,
@@ -1842,14 +1667,17 @@ mod tests {
     #[test]
     fn carryover_batch_size_is_reduced_and_clamped() {
         let snapshot = SamplerAggregatorCheckpoint {
+            completed_samples: 0,
             task_id: 1,
+            output_snapshot_id: None,
+            batches_completed: 0,
             sampler_snapshot: SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) },
             observable_state: crate::evaluation::AccumulatorState::empty_scalar(),
-            runtime_state: SamplerRuntimeState {
+            runtime_state: SamplerProgress::default(),
+            queue: SamplerQueueCheckpoint {
                 batch_size_current: 128,
-                ..SamplerRuntimeState::default()
+                ..SamplerQueueCheckpoint::default()
             },
-            queue: SamplerQueueCheckpoint::default(),
         };
 
         assert_eq!(snapshot.reduced_carryover_batch_size(512), 32);
@@ -1858,7 +1686,7 @@ mod tests {
 
     #[test]
     fn fresh_task_does_not_skip_initial_round_trip_due_to_run_level_progress() {
-        let mut runtime_state = SamplerRuntimeState::default();
+        let mut runtime_state = SamplerProgress::default();
         let task_completed_samples = 0_i64;
         let has_resume_snapshot = false;
 

@@ -868,10 +868,7 @@ pub struct SamplerQueueTuning {
     pub target_batch_eval_ms: Option<f64>,
     pub batch_size_deadband_ratio: Option<f64>,
     pub batch_size_cooldown_ticks: Option<u32>,
-    pub pending_refill_low_ratio: Option<f64>,
-    pub pending_refill_high_ratio: Option<f64>,
     pub max_batch_size: Option<usize>,
-    pub local_pending_buffer_multiplier: Option<f64>,
     pub max_queue_size: Option<usize>,
     pub max_batches_per_tick: Option<usize>,
     pub max_insert_bundle_size: Option<usize>,
@@ -906,18 +903,6 @@ impl SamplerQueueTuning {
         validate_non_negative_finite(
             self.batch_size_deadband_ratio,
             "queue_tuning.batch_size_deadband_ratio",
-        )?;
-        validate_non_negative_finite(
-            self.pending_refill_low_ratio,
-            "queue_tuning.pending_refill_low_ratio",
-        )?;
-        validate_non_negative_finite(
-            self.pending_refill_high_ratio,
-            "queue_tuning.pending_refill_high_ratio",
-        )?;
-        validate_non_negative_finite(
-            self.local_pending_buffer_multiplier,
-            "queue_tuning.local_pending_buffer_multiplier",
         )?;
         validate_positive(self.max_batch_size, "queue_tuning.max_batch_size")?;
         validate_positive(self.max_queue_size, "queue_tuning.max_queue_size")?;

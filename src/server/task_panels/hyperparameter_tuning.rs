@@ -392,7 +392,7 @@ mod tests {
             panel_state: &JsonValue::Null,
             run_target: None,
             completed_samples_per_second: None,
-            smoothed_eta_seconds: None,
+            eta_seconds: None,
             sampler_engine_diagnostics: None,
         }
     }

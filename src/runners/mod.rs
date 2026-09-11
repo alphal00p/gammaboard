@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod controller_child;
 pub mod evaluator;
 pub mod hyperparameter_tuning;
@@ -11,10 +12,11 @@ pub(crate) mod rolling_metric;
 pub mod sampler_aggregator;
 pub(crate) mod stage_context;
 pub mod task_control;
+pub(crate) mod wall_time_rate;
 pub(crate) mod window_metric;
 
 pub use evaluator::{EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams};
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
-pub use queue::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
+pub use queue::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
 pub use sampler_aggregator::{RunnerError, SamplerAggregatorRunner, SamplerAggregatorRunnerParams};
 pub use task_control::{TaskControlLoop, TaskControlLoopConfig};

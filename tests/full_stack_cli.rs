@@ -112,9 +112,11 @@ struct TestDatabase {
 
 impl TestDatabase {
     async fn create() -> anyhow::Result<Self> {
-        let base_url = RuntimeConfig::load("ops/local/config/runtime.toml")?
-            .database
-            .url;
+        let base_url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap_or(
+            RuntimeConfig::load("ops/local/config/runtime.toml")?
+                .database
+                .url,
+        );
 
         let mut admin_url = Url::parse(&base_url)?;
         admin_url.set_path("/postgres");
@@ -233,7 +235,7 @@ impl FullStackHarness {
             r#"
             SELECT last_seen
             FROM nodes
-            WHERE name = $1
+            WHERE name = $1 AND last_seen IS NOT NULL
             "#,
         )
         .bind(node_name)
@@ -624,7 +626,11 @@ impl FullStackHarness {
             anyhow::bail!("failed to send SIGTERM to child process {label}");
         }
 
-        let _ = tokio::time::timeout(Duration::from_secs(10), managed.child.wait()).await;
+        let status = tokio::time::timeout(Duration::from_secs(10), managed.child.wait()).await??;
+        anyhow::ensure!(
+            status.success(),
+            "child {label} failed graceful shutdown: {status}"
+        );
         Ok(())
     }
 
@@ -673,21 +679,6 @@ fn temp_config(contents: &str) -> NamedTempFile {
     file
 }
 
-fn temp_run_add_config(contents: &str) -> NamedTempFile {
-    let mut merged = contents.trim_end().to_string();
-    if !contents.contains("evaluator_runner_params.min_tick_time_ms")
-        && !contents.contains("[evaluator_runner_params]")
-    {
-        merged.push_str("\n\nevaluator_runner_params.min_tick_time_ms = 50\n");
-    }
-    if !contents.contains("sampler_aggregator_runner_params.min_tick_time_ms")
-        && !contents.contains("[sampler_aggregator_runner_params]")
-    {
-        merged.push_str("\nsampler_aggregator_runner_params.min_tick_time_ms = 10\n");
-    }
-    temp_config(&merged)
-}
-
 async fn run_havana_training_then_inference(
     harness: &mut FullStackHarness,
     run_name: &str,
@@ -695,7 +686,7 @@ async fn run_havana_training_then_inference(
 ) -> anyhow::Result<(JsonValue, JsonValue)> {
     let training_samples = 256usize;
     let inference_samples = 64usize;
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "{run_name}"
 
@@ -703,6 +694,11 @@ name = "{run_name}"
 kind = "unit"
 continuous_dims = 2
 discrete_dims = 0
+# Leave time to request a pause independently of runner polling defaults.
+timing = {{ per_sample_seconds = 0.01 }}
+
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 50
 
 [[task_queue]]
 name = "train-a"
@@ -908,7 +904,7 @@ async fn full_stack_cli_alternating_havana_e2e() -> anyhow::Result<()> {
     // 2: havana_inference
     // 3: naive_monte_carlo
     // 4: image
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "havana-alt-e2e"
 
@@ -1052,7 +1048,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
 async fn full_stack_cli_symbolica_havana_pdf_two_bumps_e2e() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "symbolica-havana-pdf-1d2d-e2e"
 
@@ -1077,10 +1073,7 @@ queue_buffer = 1.0
 target_batch_eval_ms = 500.0
 batch_size_deadband_ratio = 0.15
 batch_size_cooldown_ticks = 3
-pending_refill_low_ratio = 0.85
-pending_refill_high_ratio = 1.15
 max_batch_size = 100000
-local_pending_buffer_multiplier = 0.5
 max_queue_size = 200
 max_batches_per_tick = 100
 max_insert_bundle_size = 5
@@ -1415,7 +1408,7 @@ async fn full_stack_cli_python_scalar_venv_e2e() -> anyhow::Result<()> {
             .join("process_api/examples/python_sampler_symbolica_havana")
             .display()
     );
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "python-scalar-venv-e2e"
 
@@ -1517,7 +1510,11 @@ async fn full_stack_cli_gammaloop_madnis_metadata_and_batch_fuzz_e2e() -> anyhow
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let process_api_python = manifest_dir.join("process_api/python/src");
     let madnis_src = manifest_dir.join("integrations/madnis/src");
-    let gammaloop_state = manifest_dir.join("resources/states/epem_a_ttxh/LO/state");
+    let gammaloop_state = std::env::var_os("GAMMABOARD_MADNIS_STATE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("resources/states/epem_a_ttxh/LO/state"));
+    let integrand_name =
+        std::env::var("GAMMABOARD_MADNIS_INTEGRAND").unwrap_or_else(|_| "LO".into());
     let madnis_pythonpath = format!("{}:{}", process_api_python.display(), madnis_src.display());
     let default_madnis_python = manifest_dir.join("integrations/madnis/.venv/bin/python");
     let madnis_python = std::env::var("GAMMABOARD_MADNIS_PYTHON").unwrap_or_else(|_| {
@@ -1565,14 +1562,14 @@ target_batch_eval_ms = 1.0
         ));
     }
 
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "{run_name}"
 
 [evaluator]
 kind = "gammaloop"
 state_folder = "{}"
-integrand_name = "LO"
+integrand_name = "{integrand_name}"
 training_projection = "abs"
 
 [evaluator.preprocessing]
@@ -1654,6 +1651,8 @@ training_projection = {{ kind = "component", name = "real" }}
             Duration::from_secs(30),
             || {
                 let pool = harness.pool.clone();
+                let gammaloop_state = gammaloop_state.clone();
+                let integrand_name = integrand_name.clone();
                 async move {
                     let diagnostics: Option<JsonValue> = sqlx::query_scalar(
                         r#"
@@ -1670,9 +1669,9 @@ training_projection = {{ kind = "component", name = "real" }}
                     };
                     let metadata = &diagnostics["gammaloop_metadata"];
                     Ok(metadata["state_folder"].as_str().is_some_and(|path| {
-                        path.ends_with("resources/states/epem_a_ttxh/LO/state")
+                        std::path::Path::new(path) == gammaloop_state.as_path()
                     }) && metadata["process_id"].as_u64().is_some()
-                        && metadata["integrand_name"].as_str() == Some("LO")
+                        && metadata["integrand_name"].as_str() == Some(integrand_name.as_str())
                         && metadata["coordinate_space"].as_str() == Some("x_space")
                         && diagnostics["produced_batches"].as_u64().unwrap_or(0) > 0)
                 }
@@ -1744,7 +1743,7 @@ async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow:
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let run_name = format!("python-gammaloop-observable-e2e-{}", unique_suffix());
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "{run_name}"
 
@@ -1855,7 +1854,7 @@ async fn full_stack_cli_task_level_evaluator_switch_e2e() -> anyhow::Result<()> 
     let mut harness = FullStackHarness::new().await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "task-level-evaluator-switch-e2e"
 
@@ -1995,7 +1994,7 @@ async fn full_stack_cli_rust_apptainer_process_evaluator_e2e() -> anyhow::Result
     let mut harness = FullStackHarness::new().await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    let config = temp_run_add_config(&format!(
+    let config = temp_config(&format!(
         r#"
 name = "rust-apptainer-process-evaluator-e2e"
 
@@ -2683,7 +2682,7 @@ impl<'a> SamplerCheckpointProgram<'a> {
 async fn full_stack_cli_flow_exercises_run_and_node_lifecycle() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let invalid_config = temp_run_add_config(
+    let invalid_config = temp_config(
         r#"
 name = "invalid-run"
 
@@ -2704,7 +2703,7 @@ discrete_dims = 0
             "top-level [point_spec] or [domain] is no longer supported",
         ));
 
-    let valid_config = temp_run_add_config(
+    let valid_config = temp_config(
         r#"
 name = "full-stack-e2e"
 "#,
@@ -2903,7 +2902,7 @@ name = "full-stack-e2e"
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_installation_smoke_produces_unit_estimate() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config(include_str!(
+    let config = temp_config(include_str!(
         "../resources/templates/runs/installation-smoke.toml"
     ));
     harness.add_run(&config);
@@ -2972,7 +2971,7 @@ async fn full_stack_cli_installation_smoke_produces_unit_estimate() -> anyhow::R
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_set_accumulator_enables_following_sample() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "set-accumulator-e2e"
 
@@ -3097,6 +3096,7 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
             .arg("--database-url")
             .arg(database_url)
             .arg("deploy")
+            .arg("--resume-workers")
             .arg("--server-config")
             .arg(deploy_config_path)
             .arg("--api-port")
@@ -3150,7 +3150,7 @@ async fn full_stack_deploy_can_run_two_port_isolated_instances() -> anyhow::Resu
 async fn full_stack_cli_pause_resume_restores_sampler_checkpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "sampler-checkpoint-e2e"
 
@@ -3265,7 +3265,7 @@ async fn full_stack_cli_server_can_restart_while_nodes_keep_running() -> anyhow:
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_run_node_exits_on_sigterm_and_releases_name() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "sigterm-node-e2e"
 
@@ -3338,7 +3338,7 @@ async fn full_stack_server_queue_tuning_update_applies_to_active_sample_task() -
 {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "queue-tuning-live-update-e2e"
 
@@ -3346,7 +3346,7 @@ name = "queue-tuning-live-update-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 5
+timing = { per_sample_seconds = 0.005 }
 
 [[task_queue]]
 name = "sample-a"
@@ -3364,7 +3364,6 @@ frontend_sync_interval_ms = 100
 queue_buffer = 1.0
 target_batch_eval_ms = 50.0
 max_batch_size = 32
-local_pending_buffer_multiplier = 1.0
 max_queue_size = 64
 max_batches_per_tick = 8
 max_insert_bundle_size = 8
@@ -3541,7 +3540,7 @@ completed_batch_fetch_limit = 64
 async fn full_stack_cli_removes_assigned_run_immediately() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "delete-assigned-run-e2e"
 
@@ -3549,7 +3548,7 @@ name = "delete-assigned-run-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 20
+timing = { per_sample_seconds = 0.02 }
 
 [[task_queue]]
 kind = "sample"
@@ -3615,7 +3614,7 @@ async fn full_stack_cli_removes_child_runs_with_parent() -> anyhow::Result<()> {
         .start_nodes(&["delete-family-s", "delete-family-e"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "delete-parent-run-e2e"
 
@@ -3638,7 +3637,7 @@ name = "delete-child-run-$(scale:1)"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 20
+timing = { per_sample_seconds = 0.02 }
 
 [[task_queue]]
 name = "sample"
@@ -3742,7 +3741,7 @@ source_task = "sample"
 async fn full_stack_graceful_node_shutdown_waits_for_sampler_unassign() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "graceful-node-shutdown-e2e"
 
@@ -3780,9 +3779,9 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         let result = node_api::stop_all_nodes_gracefully(
             &store,
             node_api::GracefulNodeShutdownParams {
-                sampler_drain_timeout: Duration::from_secs(10),
-                node_stop_timeout: Duration::from_secs(10),
-                poll_interval: Duration::from_millis(50),
+                sampler_drain_timeout_seconds: 10,
+                node_stop_timeout_seconds: 10,
+                poll_interval_ms: 50,
             },
         )
         .await?;
@@ -3813,7 +3812,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config("name = \"auth-e2e\"\n");
+    let config = temp_config("name = \"auth-e2e\"\n");
     harness.add_run(&config);
     let run_id = harness.run_id("auth-e2e").await?;
 
@@ -4044,10 +4043,11 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     );
     assert_eq!(body["request"]["args"]["partition"].as_str(), Some("epyc2"));
 
-    let node_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM nodes")
-        .fetch_one(&harness.pool)
-        .await
-        .map_err(|err| anyhow::anyhow!("node count query failed: {err}"))?;
+    let node_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE lease_expires_at > now()")
+            .fetch_one(&harness.pool)
+            .await
+            .map_err(|err| anyhow::anyhow!("node count query failed: {err}"))?;
     assert_eq!(node_count, 0);
 
     let request_id = body["request"]["id"]
@@ -4101,7 +4101,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     harness.start_nodes(&["queued-w-1", "queued-w-2"]).await?;
     harness
         .wait_for(
-            "launch request reconciles to running from live node leases",
+            "launch request is fulfilled after workers connect",
             Duration::from_secs(10),
             || async {
                 let body =
@@ -4115,7 +4115,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
                             .find(|item| item["id"].as_str() == Some(request_id.as_str()))
                     })
                     .and_then(|item| item["state"].as_str());
-                Ok(state == Some("running"))
+                Ok(state == Some("fulfilled"))
             },
         )
         .await?;
@@ -4129,8 +4129,8 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
 async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config_a = temp_run_add_config("name = \"duplicate-run\"\n");
-    let config_b = temp_run_add_config("name = \"duplicate-run\"\n");
+    let config_a = temp_config("name = \"duplicate-run\"\n");
+    let config_b = temp_config("name = \"duplicate-run\"\n");
 
     harness.add_run(&config_a);
     harness.add_run(&config_b);
@@ -4175,7 +4175,7 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
 async fn full_stack_cli_reclaims_claimed_batches_after_worker_death() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "worker-death-e2e"
 
@@ -4183,7 +4183,7 @@ name = "worker-death-e2e"
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-min_eval_time_per_sample_ms = 100
+timing = { per_sample_seconds = 0.1 }
 
 [[task_queue]]
 kind = "sample"
@@ -4299,7 +4299,7 @@ strict_batch_ordering = true
 async fn full_stack_cli_fails_task_gracefully_on_sampler_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "sampler-error-e2e"
 
@@ -4335,7 +4335,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_produce_ba
 async fn full_stack_cli_retries_batch_after_materializer_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "materializer-error-e2e"
 
@@ -4372,7 +4372,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 async fn full_stack_cli_retries_batch_after_evaluator_error() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-error-e2e"
 
@@ -4410,7 +4410,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 async fn full_stack_cli_evaluator_batch_fails_twice_then_task_recovers() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-retry-twice-then-recover-e2e"
 
@@ -4467,7 +4467,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 async fn full_stack_cli_evaluator_batch_fails_three_times_and_task_fails() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-retry-three-then-fail-e2e"
 
@@ -4538,7 +4538,7 @@ async fn full_stack_cli_evaluator_build_failure_fails_task_and_unassigns_run() -
 {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "evaluator-build-fail-e2e"
 
@@ -4595,7 +4595,7 @@ async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> 
         .start_nodes(&["campaign-parent", "campaign-s1", "campaign-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "integration-campaign-result-e2e"
 
@@ -4710,7 +4710,7 @@ async fn full_stack_cli_parameter_scan_creates_child_runs_and_collects_measureme
         .start_nodes(&["scan-parent", "scan-s1", "scan-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-e2e"
 
@@ -4867,7 +4867,7 @@ async fn full_stack_cli_parameter_scan_cartesian_product_parameters() -> anyhow:
         .start_nodes(&["scan-grid-parent", "scan-grid-s1", "scan-grid-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-grid-e2e"
 
@@ -4977,7 +4977,7 @@ async fn full_stack_cli_parameter_scan_hands_over_to_next_scan_task() -> anyhow:
         .start_nodes(&["scan-chain-parent", "scan-chain-s1", "scan-chain-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-chain-e2e"
 
@@ -5113,7 +5113,7 @@ async fn full_stack_cli_parameter_scan_redistributes_parent_assignments_and_upda
         .start_nodes(&["scan-owned-s", "scan-owned-e1", "scan-owned-e2"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "parameter-scan-redistribute-e2e"
 
@@ -5249,7 +5249,7 @@ async fn full_stack_cli_hyperparameter_tuning_random_search_creates_trials_and_c
         .start_nodes(&["tune-parent", "tune-s1", "tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-random-e2e"
 
@@ -5377,7 +5377,7 @@ async fn full_stack_cli_hyperparameter_tuning_egobox_creates_adaptive_trials() -
         .start_nodes(&["egobox-tune-parent", "egobox-tune-s1", "egobox-tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-egobox-e2e"
 
@@ -5519,7 +5519,7 @@ async fn full_stack_cli_hyperparameter_tuning_grid_search_enumerates_finite_doma
         .start_nodes(&["grid-tune-parent", "grid-tune-s1", "grid-tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-grid-e2e"
 
@@ -5618,7 +5618,7 @@ async fn full_stack_cli_hyperparameter_tuning_fails_on_bad_trial_template() -> a
         .start_nodes(&["bad-tune-parent", "bad-tune-s1", "bad-tune-e1"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-bad-template-e2e"
 
@@ -5693,7 +5693,7 @@ async fn full_stack_cli_hyperparameter_tuning_fails_when_child_measurement_fails
         ])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-failed-measurement-e2e"
 
@@ -5798,7 +5798,7 @@ async fn full_stack_cli_hyperparameter_tuning_redistributes_parent_assignments()
         .start_nodes(&["tune-owned-s", "tune-owned-e1", "tune-owned-e2"])
         .await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "hyperparameter-tuning-redistribute-e2e"
 
@@ -5945,7 +5945,7 @@ max = 4
 async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
-    let config = temp_run_add_config(
+    let config = temp_config(
         r#"
 name = "clone-source-e2e"
 
@@ -6040,6 +6040,286 @@ stop_condition = { max_samples = 16 }
         "unexpected cloned root snapshot name: {cloned_root_snapshot_name}"
     );
 
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn worker_resume_is_durable_backend_neutral_and_consumed_once() -> anyhow::Result<()> {
+    use gammaboard::core::ControlPlaneStore;
+    let db = TestDatabase::create().await?;
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&db.database_url)
+        .await?;
+    let store = gammaboard::PgStore::new(pool.clone());
+    let group = serde_json::json!({"count":2,"name_prefix":"resume","max_start_failures":7,"config":{"partition":"gpu","cpus":4,"gres":"gpu:a100:1"}});
+    let id = store
+        .reserve_worker_launch_with_args("external", vec![group], json!({"partition":"epyc2"}))
+        .await?;
+    let config = temp_config(
+        r#"
+name = "resume-assignment"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples=100 }
+accumulator = { config="scalar" }
+sampler_aggregator = { config={kind="naive_monte_carlo"} }
+"#,
+    );
+    let config = gammaboard::api::runs::load_run_add_config_file(config.path())?;
+    let run = gammaboard::api::runs::create_run(&store, config).await?;
+
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM nodes ORDER BY name")
+        .fetch_all(&pool)
+        .await?;
+    store
+        .announce_node(&names[0], "first", &Default::default())
+        .await?;
+    store
+        .upsert_desired_assignment(
+            &names[0],
+            gammaboard::core::WorkerRole::SamplerAggregator,
+            run.run_id,
+        )
+        .await?;
+    assert_eq!(store.suspend_workers().await?, 1); // Pending scheduler jobs are not saved.
+    store.expire_node_lease("first").await?;
+    let saved: bool = sqlx::query_scalar("SELECT resume_requested FROM nodes WHERE name=$1")
+        .bind(&names[0])
+        .fetch_one(&pool)
+        .await?;
+    assert!(saved);
+    assert_eq!(store.enqueue_resumed_workers().await?, 1);
+    assert_eq!(store.enqueue_resumed_workers().await?, 0);
+    let requests = store.list_node_launch_requests().await?;
+    let resumed = requests.iter().find(|r| r.id != id).unwrap();
+    assert_eq!(resumed.backend, "external");
+    assert_eq!(resumed.args["partition"], "epyc2");
+    assert_eq!(resumed.args["groups"][0]["config"]["partition"], "gpu");
+    assert_eq!(resumed.args["groups"][0]["max_start_failures"], 7);
+    assert_eq!(resumed.args["groups"][0]["node_names"][0], names[0]);
+    assert!(store.claim_local_worker_launch().await?.is_none());
+    store
+        .announce_node(&names[0], "second", &Default::default())
+        .await?;
+    assert_eq!(
+        store
+            .get_desired_assignment(&names[0])
+            .await?
+            .unwrap()
+            .run_id,
+        run.run_id
+    );
+    store.suspend_workers().await?;
+    store.expire_node_lease("second").await?;
+    // An operator pause while the fleet is down still clears the saved assignment.
+    store.clear_desired_assignments_for_run(run.run_id).await?;
+    assert!(store.get_desired_assignment(&names[0]).await?.is_none());
+    store.request_node_shutdown(&names[0]).await?;
+    assert_eq!(store.enqueue_resumed_workers().await?, 0);
+    pool.close().await;
+    db.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_synthetic_training_windows_and_inference() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    for node in ["synthetic-s", "synthetic-e1", "synthetic-e2"] {
+        harness.start_node(node).await?;
+    }
+    for training in [true, false] {
+        let name = format!(
+            "synthetic-{}",
+            if training { "training" } else { "inference" }
+        );
+        let config = temp_config(&format!(
+            r#"
+name = "{name}"
+[evaluator]
+kind = "unit"
+timing = {{ per_sample_seconds = 0.00001, overhead_seconds = 0.001, sigma_overhead_seconds = 0.0001, seed = 42 }}
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = {{ max_samples = 1024 }}
+accumulator = {{ config = "scalar" }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 42, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
+[evaluator_runner_params]
+performance_snapshot_interval_ms = 20
+[sampler_aggregator_runner_params]
+performance_snapshot_interval_ms = 20
+frontend_sync_interval_ms = 20
+min_tick_time_ms = 1
+[sampler_aggregator_runner_params.queue]
+max_batch_size = 64
+target_batch_eval_ms = 1.0
+"#,
+            window = if training { 128 } else { 0 }
+        ));
+        harness.add_run(&config);
+        let run_id = harness.run_id(&name).await?;
+        harness.assign_node("synthetic-s", "sampler_aggregator", &name);
+        harness.assign_node("synthetic-e1", "evaluator", &name);
+        harness.assign_node("synthetic-e2", "evaluator", &name);
+        harness.wait_for("synthetic task completes",Duration::from_secs(30),|| async {
+            let completed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_tasks WHERE run_id=$1 AND state='completed')")
+                .bind(run_id).fetch_one(&harness.pool).await?;
+            Ok(completed)
+        }).await?;
+        let progress = harness.run_sample_progress(run_id).await?;
+        assert_eq!(progress, (1024, 1024));
+        let diagnostics: JsonValue = sqlx::query_scalar("SELECT engine_diagnostics FROM sampler_aggregator_performance_latest WHERE run_id=$1 ORDER BY created_at DESC LIMIT 1")
+            .bind(run_id).fetch_one(&harness.pool).await?;
+        assert_eq!(diagnostics["synthetic"], true);
+        assert_eq!(
+            diagnostics["training_updates"],
+            if training { 8 } else { 0 }
+        );
+        assert_eq!(diagnostics["pending_training_samples"], 0);
+        harness.wait_for("synthetic evaluator diagnostics flush", Duration::from_secs(10), || async {
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM evaluator_performance_latest WHERE run_id=$1 AND metrics->'engine_diagnostics'->>'synthetic'='true'")
+                .bind(run_id).fetch_one(&harness.pool).await?;
+            Ok(count>0)
+        }).await?;
+    }
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_sampler_crash_recovers_an_older_training_checkpoint() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let name = "sampler-crash-recovery";
+    let config = temp_config(
+        r#"
+name = "sampler-crash-recovery"
+[evaluator]
+kind = "unit"
+timing = { per_sample_seconds = 0.002 }
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 8192 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 42, training_window_samples = 1024 } }
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 20
+performance_snapshot_interval_ms = 20
+[sampler_aggregator_runner_params.queue]
+queue_buffer = 64.0
+max_queue_size = 64
+max_batch_size = 16
+target_batch_eval_ms = 32.0
+"#,
+    );
+    harness.add_run(&config);
+    let run_id = harness.run_id(name).await?;
+    harness.start_nodes(&["crash-s", "crash-e"]).await?;
+    harness.assign_node("crash-s", "sampler_aggregator", name);
+    harness.assign_node("crash-e", "evaluator", name);
+    harness
+        .wait_for(
+            "first training window is generated",
+            Duration::from_secs(15),
+            || async { Ok(harness.run_sample_progress(run_id).await?.0 >= 1024) },
+        )
+        .await?;
+    let saved;
+    {
+        let mut program = SamplerCheckpointProgram::new(&mut harness, run_id, name);
+        program.pause_run().await?;
+        program
+            .wait_nodes_down(&["crash-s", "crash-e"], Duration::from_secs(15))
+            .await?;
+        program
+            .capture_paused_state(Duration::from_secs(15))
+            .await?;
+        saved = program.paused_checkpoint.clone().unwrap();
+    }
+    let saved_completed = saved["completed_samples"].as_i64().unwrap();
+    let retained_at_checkpoint: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(batch_size),0)::bigint FROM batches WHERE run_id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert!(
+        retained_at_checkpoint > 0,
+        "checkpoint must include outstanding training feedback"
+    );
+    harness.assign_node("crash-s", "sampler_aggregator", name);
+    harness.assign_node("crash-e", "evaluator", name);
+    harness
+        .wait_for(
+            "live progress advances beyond the recovery checkpoint",
+            Duration::from_secs(20),
+            || async { Ok(harness.run_sample_progress(run_id).await?.1 >= saved_completed + 2048) },
+        )
+        .await?;
+    // Leave enough time for the ordinary one-second completed-batch cleanup.
+    sleep(Duration::from_millis(1200)).await;
+    harness.kill_child("crash-s").await?; // SIGKILL: no graceful checkpoint.
+    assert_eq!(
+        harness.run_sampler_checkpoint(run_id).await?.unwrap(),
+        saved
+    );
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name='crash-s'")
+        .execute(&harness.pool)
+        .await?;
+    harness.start_node("crash-s").await?;
+    harness.assign_node("crash-s", "sampler_aggregator", name);
+    harness.wait_for("crash recovery completes every training window", Duration::from_secs(35), || async {
+        let (state, failure): (String, Option<String>) = sqlx::query_as("SELECT state,failure_reason FROM run_tasks WHERE run_id=$1")
+            .bind(run_id).fetch_one(&harness.pool).await?;
+        anyhow::ensure!(state != "failed", "restored training failed: {failure:?}");
+        let inconsistent: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runtime_logs WHERE fields::text LIKE '%run_tasks_progress_check%')")
+            .fetch_one(&harness.pool).await?;
+        anyhow::ensure!(!inconsistent, "restored sampler and persisted task counters disagree (run_tasks_progress_check)");
+        Ok(state == "completed")
+    }).await?;
+    assert_eq!(harness.run_sample_progress(run_id).await?, (8192, 8192));
+    let metrics: JsonValue = sqlx::query_scalar(
+        "SELECT runtime_metrics FROM sampler_aggregator_performance_latest WHERE run_id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(metrics["ingested_samples_total"], 8192);
+    assert_eq!(metrics["completed_samples_total"], 8192);
+    let diagnostics: JsonValue = sqlx::query_scalar(
+        "SELECT engine_diagnostics FROM sampler_aggregator_performance_latest WHERE run_id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(diagnostics["training_updates"], 8);
+    assert_eq!(diagnostics["pending_training_samples"], 0);
+    SamplerCheckpointProgram::new(&mut harness, run_id, name)
+        .wait_nodes_down(&["crash-s", "crash-e"], Duration::from_secs(10))
+        .await?;
+    let stages: i64 = sqlx::query_scalar("SELECT count(*) FROM run_stage_snapshots WHERE run_id=$1 AND task_id IS NOT NULL AND sampler_snapshot IS NOT NULL")
+        .bind(run_id).fetch_one(&harness.pool).await?;
+    assert_eq!(
+        stages, 2,
+        "one pause snapshot and one completion snapshot, with no duplicate on role stop"
+    );
+    let batches: i32 = sqlx::query_scalar("SELECT batches_completed FROM runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(
+        batches,
+        8192 / 16,
+        "final flush must not count pending batches twice"
+    );
     harness.cleanup().await?;
     Ok(())
 }

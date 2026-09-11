@@ -6,20 +6,24 @@ const AuthContext = createContext(null);
 export const AuthProvider = ({ children }) => {
   const [authenticated, setAuthenticated] = useState(false);
   const [allowLocalNodeSpawn, setAllowLocalNodeSpawn] = useState(true);
+  const [sessionError, setSessionError] = useState(null);
   const [ready, setReady] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
   const refreshSession = useCallback(async () => {
+    setReady(false);
     try {
       const response = await fetchSession();
       setAuthenticated(response?.authenticated === true);
       setAllowLocalNodeSpawn(response?.allow_local_node_spawn !== false);
+      setSessionError(null);
       setError(null);
     } catch (err) {
       setAuthenticated(false);
       setAllowLocalNodeSpawn(true);
+      setSessionError(err?.message || "Failed to check browser access");
       setError(err?.status === 401 ? null : err?.message || "Failed to load auth session");
     } finally {
       setReady(true);
@@ -68,6 +72,7 @@ export const AuthProvider = ({ children }) => {
       authenticated,
       allowLocalNodeSpawn,
       ready,
+      sessionError,
       busy,
       error,
       dialogOpen,
@@ -81,6 +86,7 @@ export const AuthProvider = ({ children }) => {
       authenticated,
       allowLocalNodeSpawn,
       ready,
+      sessionError,
       busy,
       error,
       dialogOpen,

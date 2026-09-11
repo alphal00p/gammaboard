@@ -16,6 +16,7 @@ import {
 } from "@mui/material";
 import ConnectionStatus from "./ConnectionStatus";
 import TomlActionDialog from "./runs/TomlActionDialog";
+import NodeLaunchQueue from "./NodeLaunchQueue";
 import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
 import { formatDateTime } from "../utils/formatters";
@@ -181,6 +182,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
                 <TableHead>
                   <TableRow>
                     <TableCell>Node</TableCell>
+                    <TableCell>Status</TableCell>
                     <TableCell>Run</TableCell>
                     <TableCell>Role</TableCell>
                     <TableCell>Capabilities</TableCell>
@@ -205,6 +207,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
                         }}
                       >
                         <TableCell>{nodeName || "unknown"}</TableCell>
+                        <TableCell>{worker.status || "unknown"}</TableCell>
                         <TableCell>{displayRun(worker)}</TableCell>
                         <TableCell>{displayRole(worker)}</TableCell>
                         <TableCell>{displayCapabilities(worker)}</TableCell>
@@ -228,37 +231,8 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
             <Alert severity="error" sx={{ mb: 2 }}>
               Failed to fetch node launch requests.
             </Alert>
-          ) : launchRequestsData.launchRequests.length === 0 ? (
-            <EmptyStateCard title="No launch requests" message="Node start requests will appear here." />
           ) : (
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small" aria-label="node launch requests table">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>ID</TableCell>
-                    <TableCell>State</TableCell>
-                    <TableCell>Backend</TableCell>
-                    <TableCell>Count</TableCell>
-                    <TableCell>Submitted</TableCell>
-                    <TableCell>Created</TableCell>
-                    <TableCell>Error</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {launchRequestsData.launchRequests.map((request) => (
-                    <TableRow key={request.id}>
-                      <TableCell>{request.id}</TableCell>
-                      <TableCell>{request.state}</TableCell>
-                      <TableCell>{request.backend}</TableCell>
-                      <TableCell>{request.requested_count}</TableCell>
-                      <TableCell>{request.started_count}</TableCell>
-                      <TableCell>{formatDateTime(request.created_at, "-")}</TableCell>
-                      <TableCell>{request.error || "-"}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
+            <NodeLaunchQueue requests={launchRequestsData.launchRequests} />
           )}
         </Box>
       </Paper>

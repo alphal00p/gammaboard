@@ -408,7 +408,7 @@ def parse_port_offset(value: str) -> int:
 
 
 def submit_singleton_job(
-    job_name: str, time_limit: str, *, port_offset: int, single_node: bool = False
+    job_name: str, time_limit: str, *, port_offset: int, single_node: bool = False, resume_workers: bool = False
 ) -> Job:
     jobs = active_jobs(name=job_name)
     if len(jobs) == 1:
@@ -423,6 +423,7 @@ def submit_singleton_job(
     env["GAMMABOARD_PORT_OFFSET"] = str(port_offset)
     env["GAMMABOARD_WORKSPACE_ROOT"] = WORKSPACE_ROOT
     env["GAMMABOARD_SINGLE_NODE"] = "1" if single_node else "0"
+    env["GAMMABOARD_RESUME_WORKERS"] = "1" if resume_workers else "0"
     result = run(
         [
             "sbatch",
@@ -440,15 +441,15 @@ def submit_singleton_job(
     return Job(id=job_id, name=job_name, state="SUBMITTED", node="")
 
 
-def submit_control(time_limit: str, *, port_offset: int) -> Job:
+def submit_control(time_limit: str, *, port_offset: int, resume_workers: bool = False) -> Job:
     return submit_singleton_job(
-        CONTROL_JOB_NAME, time_limit, port_offset=port_offset
+        CONTROL_JOB_NAME, time_limit, port_offset=port_offset, resume_workers=resume_workers
     )
 
 
-def submit_single_node(time_limit: str, *, port_offset: int) -> Job:
+def submit_single_node(time_limit: str, *, port_offset: int, resume_workers: bool = False) -> Job:
     return submit_singleton_job(
-        SINGLE_NODE_JOB_NAME, time_limit, port_offset=port_offset, single_node=True
+        SINGLE_NODE_JOB_NAME, time_limit, port_offset=port_offset, single_node=True, resume_workers=resume_workers
     )
 
 
@@ -601,6 +602,10 @@ def launch_groups_for_request(request: dict) -> list[dict]:
                 f"{prefix}-{request_id}-{index}"
                 for index in range(start_index, start_index + count)
             ]
+            if "node_names" in group:
+                node_names = group["node_names"]
+                if not isinstance(node_names, list) or len(node_names) != count or not all(isinstance(n, str) and n for n in node_names):
+                    raise RuntimeError("launch request group node_names must match count")
             next_index_by_prefix[prefix] = start_index + count
             for node_name in node_names:
                 normalized.append(
@@ -864,9 +869,9 @@ def watch_launch_requests(
 def command_up(args: argparse.Namespace) -> None:
     port_offset = args.port_offset
     job = (
-        submit_single_node(args.time, port_offset=port_offset)
+        submit_single_node(args.time, port_offset=port_offset, resume_workers=args.resume_workers)
         if args.single_node
-        else submit_control(args.time, port_offset=port_offset)
+        else submit_control(args.time, port_offset=port_offset, resume_workers=args.resume_workers)
     )
     print(f"{'single_node_job_id' if args.single_node else 'control_job_id'}={job.id}")
     node = wait_for_job_node(job.id, args.startup_timeout, verbose=True)
@@ -939,10 +944,10 @@ def command_down(args: argparse.Namespace) -> None:
 
     try:
         cookie = login(node, admin_password(args), port_offset=port_offset)
-        post(node, "/nodes/stop-all", cookie=cookie, port_offset=port_offset)
-        print("requested node stop through API")
+        post(node, "/admin/workers/suspend", cookie=cookie, port_offset=port_offset)
+        print("saved active workers and requested shutdown through API")
     except Exception as err:
-        print(f"warning: API node stop failed: {err}", file=sys.stderr)
+        raise SystemExit(f"could not save workers before shutdown: {err}") from err
 
     if job.name == CONTROL_JOB_NAME:
         deadline = time.monotonic() + args.worker_timeout
@@ -973,20 +978,14 @@ def command_status(_: argparse.Namespace) -> None:
 def command_submit_workers(args: argparse.Namespace) -> None:
     control = require_single_control()
     control_node = wait_for_job_node(control.id)
-    ensure_dirs()
-    capabilities = capabilities_from_args({"capabilities": dict(args.capabilities)})
-    for i in range(1, args.count + 1):
-        node_name = f"{args.prefix}-{i}"
-        job_id = submit_worker(
-            node_name,
-            control_node,
-            control_job_id=control.id,
-            port_offset=args.port_offset,
-            max_start_failures=args.max_start_failures,
-            capabilities=capabilities,
-            config={},
-        )
-        print(f"{node_name}\t{job_id}")
+    cookie = login(control_node, admin_password(args), port_offset=args.port_offset)
+    config = dict(args.capabilities)
+    toml = f"[[groups]]\ncount = {args.count}\nname_prefix = {json.dumps(args.prefix)}\nmax_start_failures = {args.max_start_failures}\n[groups.config]\n"
+    toml += "\n".join(f"{json.dumps(k)} = {json.dumps(v)}" for k, v in config.items())
+    response = api_request_json(control_node, "/node-launch-requests", method="POST", cookie=cookie,
+                                payload={"toml":toml}, port_offset=args.port_offset)
+    print(f"request_id={response['request']['id']}")
+    resolve_launch_requests(control, control_node, cookie, port_offset=args.port_offset)
 
 
 def command_watch_requests(args: argparse.Namespace) -> None:
@@ -1047,6 +1046,7 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run control and local workers in one Slurm allocation",
     )
+    up.add_argument("--resume-workers", action="store_true", help="recreate workers saved at graceful shutdown")
     up.add_argument("--local-port", type=int, default=8080)
     up.add_argument("--port-offset", type=parse_port_offset, default=0)
     up.add_argument("--startup-timeout", type=int, default=180)

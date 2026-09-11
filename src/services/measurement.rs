@@ -354,10 +354,8 @@ mod tests {
         async fn load_sampler_checkpoint(
             &self,
             _run_id: i32,
-        ) -> Result<
-            Option<crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint>,
-            crate::core::StoreError,
-        > {
+        ) -> Result<Option<crate::core::SamplerAggregatorCheckpoint>, crate::core::StoreError>
+        {
             unreachable!("unused")
         }
         async fn load_stage_snapshot(
@@ -399,7 +397,8 @@ mod tests {
         async fn save_sampler_checkpoint(
             &self,
             _run_id: i32,
-            _checkpoint: &crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint,
+            _checkpoint: &crate::core::SamplerAggregatorCheckpoint,
+            _stage: Option<&crate::core::RunStageSnapshot>,
         ) -> Result<(), crate::core::StoreError> {
             unreachable!("unused")
         }
@@ -998,8 +997,7 @@ mod tests {
             "completed_samples_total": 4,
             "sampler_uptime_ms": 1000.0,
             "completed_samples_per_second": 2.0,
-            "eta_completed_samples_per_second": 0.0,
-            "eta_seconds_smoothed": null,
+            "eta_seconds": null,
             "batch_size_current": 1,
             "sampler_tick_busy_ratio": null,
             "avg_evaluator_utilization": null,

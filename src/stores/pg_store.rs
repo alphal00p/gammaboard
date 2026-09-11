@@ -5,6 +5,7 @@ mod run_spec;
 mod runtime_log;
 
 use super::queries;
+use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{
     AggregationStore, BatchClaim, BatchQueueCounts, CompletedBatch, ControlPlaneStore,
     DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode, RunSampleProgress,
@@ -13,7 +14,6 @@ use crate::core::{
 };
 use crate::core::{IntegrationParams, RunSpec, SamplerQueueTuning, canonical_task_toml};
 use crate::evaluation::BatchResult;
-use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
@@ -30,6 +30,25 @@ impl PgStore {
         Self { pool }
     }
 
+    pub async fn checkpoint_status(&self, run_id: i32) -> Result<JsonValue, StoreError> {
+        let status: Option<JsonValue> =
+            sqlx::query_scalar("SELECT checkpoint_status FROM runs WHERE id=$1")
+                .bind(run_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        Ok(status.unwrap_or_else(|| serde_json::json!({})))
+    }
+
+    pub async fn worker_activity(&self, node_name: &str) -> Result<JsonValue, StoreError> {
+        let value: Option<JsonValue> =
+            sqlx::query_scalar("SELECT activity FROM nodes WHERE name=$1")
+                .bind(node_name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        Ok(value.unwrap_or_default())
+    }
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
@@ -215,6 +234,16 @@ fn decode_node_assignment(
 
 #[async_trait::async_trait]
 impl ControlPlaneStore for PgStore {
+    async fn record_worker_activity(
+        &self,
+        node_uuid: &str,
+        activity: &JsonValue,
+    ) -> Result<(), StoreError> {
+        sqlx::query("UPDATE nodes SET activity=$2 WHERE uuid=$1 AND lease_expires_at>now() AND activity IS DISTINCT FROM $2")
+            .bind(node_uuid).bind(activity).execute(&self.pool).await.map_err(map_sqlx)?;
+        Ok(())
+    }
+
     async fn upsert_desired_assignment(
         &self,
         node_name: &str,
@@ -381,7 +410,7 @@ impl ControlPlaneStore for PgStore {
     async fn list_node_launch_requests(
         &self,
     ) -> Result<Vec<crate::core::NodeLaunchRequest>, StoreError> {
-        queries::reconcile_running_node_launch_requests(&self.pool)
+        queries::reconcile_fulfilled_node_launch_requests(&self.pool)
             .await
             .map_err(map_sqlx)?;
         let rows = queries::list_node_launch_requests(&self.pool)
@@ -417,6 +446,10 @@ impl ControlPlaneStore for PgStore {
         )
         .await
         .map_err(map_sqlx)?;
+        // Local workers can announce before the launcher finishes reporting submission.
+        queries::reconcile_fulfilled_node_launch_requests(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
         Ok(node_launch_request_from_raw(row))
     }
 
@@ -616,18 +649,6 @@ impl WorkQueueStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
-        queries::get_pending_batch_count(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
-        queries::get_open_batch_count(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
     async fn claim_batch(
         &self,
         run_id: i32,
@@ -773,6 +794,20 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn record_checkpoint_status(
+        &self,
+        run_id: i32,
+        status: &JsonValue,
+    ) -> Result<(), StoreError> {
+        sqlx::query("UPDATE runs SET checkpoint_status=checkpoint_status || $2 WHERE id=$1")
+            .bind(run_id)
+            .bind(status)
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(())
+    }
+
     async fn load_sampler_checkpoint(
         &self,
         run_id: i32,
@@ -841,9 +876,10 @@ impl AggregationStore for PgStore {
             return Ok(());
         }
 
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
         if let Some(persisted_observable) = persisted_observable {
             let _ = queries::insert_task_output_snapshot(
-                &self.pool,
+                &mut *tx,
                 run_id,
                 task_id,
                 persisted_observable,
@@ -852,7 +888,7 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)?;
         }
         queries::update_run_current_accumulator(
-            &self.pool,
+            &mut *tx,
             run_id,
             current_accumulator,
             delta_batches_completed,
@@ -860,6 +896,7 @@ impl AggregationStore for PgStore {
         .await
         .map_err(map_sqlx)?;
 
+        tx.commit().await.map_err(map_sqlx)?;
         Ok(())
     }
 
@@ -867,8 +904,9 @@ impl AggregationStore for PgStore {
         &self,
         run_id: i32,
         checkpoint: &SamplerAggregatorCheckpoint,
+        stage: Option<&RunStageSnapshot>,
     ) -> Result<(), StoreError> {
-        queries::upsert_run_sampler_checkpoint(&self.pool, run_id, checkpoint)
+        queries::upsert_run_sampler_checkpoint(&self.pool, run_id, checkpoint, stage)
             .await
             .map_err(map_sqlx)
     }
@@ -1040,10 +1078,7 @@ mod tests {
                     "target_batch_eval_ms": 200.0,
                     "batch_size_deadband_ratio": 0.15,
                     "batch_size_cooldown_ticks": 3,
-                    "pending_refill_low_ratio": 0.85,
-                    "pending_refill_high_ratio": 1.15,
                     "max_batch_size": 64,
-                    "local_pending_buffer_multiplier": 1.0,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
@@ -1097,10 +1132,7 @@ mod tests {
                     "target_batch_eval_ms": 200.0,
                     "batch_size_deadband_ratio": 0.15,
                     "batch_size_cooldown_ticks": 3,
-                    "pending_refill_low_ratio": 0.85,
-                    "pending_refill_high_ratio": 1.15,
                     "max_batch_size": 64,
-                    "local_pending_buffer_multiplier": 1.0,
                     "max_queue_size": 128,
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
@@ -1149,10 +1181,7 @@ mod tests {
                         "target_batch_eval_ms": 200.0,
                         "batch_size_deadband_ratio": 0.15,
                         "batch_size_cooldown_ticks": 3,
-                        "pending_refill_low_ratio": 0.85,
-                        "pending_refill_high_ratio": 1.15,
                         "max_batch_size": 64,
-                        "local_pending_buffer_multiplier": 1.0,
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,
@@ -1191,10 +1220,7 @@ mod tests {
                         "target_batch_eval_ms": 200.0,
                         "batch_size_deadband_ratio": 0.15,
                         "batch_size_cooldown_ticks": 3,
-                        "pending_refill_low_ratio": 0.85,
-                        "pending_refill_high_ratio": 1.15,
                         "max_batch_size": 64,
-                        "local_pending_buffer_multiplier": 1.0,
                         "max_queue_size": 128,
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,

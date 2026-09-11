@@ -107,7 +107,6 @@ pub(crate) fn build_process_worker_command(
     tracing::info!(
         worker = label,
         program = %program,
-        args = ?resolved_args,
         workdir = %workdir.display(),
         "resolved process runtime command"
     );

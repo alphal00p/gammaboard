@@ -13,3 +13,6 @@ symbolica-variable-theta:
 
 benchmark-campaign *args:
     scripts/benchmark_campaign.sh {{args}}
+
+benchmark-queue *args:
+    python3 scripts/benchmark_queue.py {{args}}

@@ -1,5 +1,4 @@
 use crate::core::EngineResultExt;
-use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,7 +9,7 @@ use crate::process_runtime::{
     build_process_worker_command, default_process_args, parse_process_offsets,
 };
 use crate::process_worker::{
-    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, pipe_process_stderr,
+    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds,
 };
 use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
@@ -83,42 +82,12 @@ impl ProcessMaterializerWorker {
     fn spawn(params: &ProcessMaterializerParams, domain: Domain) -> Result<Self, BuildError> {
         let mut command =
             build_process_worker_command(&params.command, params.cwd.as_deref(), "materializer")?;
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command.spawn().map_err(|error| {
-            BuildError::build(format!(
-                "failed to start process materializer worker: {error}"
-            ))
-        })?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| BuildError::build("process materializer worker stdin not available"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| BuildError::build("process materializer worker stdout not available"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| BuildError::build("process materializer worker stderr not available"))?;
-        let stderr_tail = pipe_process_stderr("process materializer", stderr);
-
-        let mut worker = Self {
-            process: ProcessWorker::new(
-                "process materializer",
-                child,
-                stdin,
-                stdout,
-                stderr_tail,
-                params.shutdown_grace_seconds,
-            ),
-            domain,
-        };
+        let process = ProcessWorker::spawn(
+            &mut command,
+            "process materializer",
+            params.shutdown_grace_seconds,
+        )?;
+        let mut worker = Self { process, domain };
         worker.send_init(params.args.clone())?;
         Ok(worker)
     }

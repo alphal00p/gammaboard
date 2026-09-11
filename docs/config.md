@@ -94,7 +94,7 @@ gammaboard auth hash-password
 
 `auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
 
-When `allow_local_node_spawn = true`, the server resolves node launch requests by spawning local child processes. Otherwise launch requests remain queued for an external launcher. External launchers should use the node-launch-request API; `starting` means workers were submitted, and `running` is reconciled from live node leases.
+When `allow_local_node_spawn = true`, the server resolves node launch requests by spawning local child processes. Otherwise launch requests remain queued for an external launcher. External launchers should use the node-launch-request API; `starting` means workers were submitted, and `fulfilled` records that all workers connected. Current worker health is separate from this historical launch outcome; the dashboard collapses fulfilled/canceled requests into launch history.
 
 The create-run, add-task, and node-request dialogs can load `.toml` templates from `run_templates_dir`, `task_templates_dir`, and `node_templates_dir`; admin users can also save edited TOML back as templates and delete templates from the dashboard.
 
@@ -169,9 +169,10 @@ GammaBoard evaluates GammaLoop runs in x-space so GammaLoop's parameterized obse
 
 `[evaluator.preprocessing]` is optional and runs GammaLoop commands after loading
 the state and before integrand selection. `read_only = true` is the default and
-records the intended mode in logs; GammaLoop's current state-loading API does
-not yet accept that setting. Commands are executed in order and may be any
-GammaLoop command.
+enables GammaLoop's protection against preprocessing commands writing into the
+active state folder. In-memory changes and exports outside that folder remain
+allowed by GammaLoop. Set `read_only = false` explicitly when preprocessing
+must modify files in the loaded state. Commands are executed in order.
 
 ### Process Evaluator
 
@@ -404,7 +405,7 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 - `frontend_sync_interval_ms` sets how often the sampler runner refreshes frontend-facing and persisted accumulator snapshots during sampling.
 - Sampler queue settings live under `[sampler_aggregator_runner_params.queue]`.
 - `target_batch_eval_ms`, `batch_size_deadband_ratio`, `batch_size_cooldown_ticks`, and `max_batch_size` are queue-level controls.
-- `queue_buffer` targets about `queue_buffer * active_evaluator_count` pending batches. `0.0` is most aggressive; larger values keep more pending work buffered.
-- Refill hysteresis is controlled with `pending_refill_low_ratio` and `pending_refill_high_ratio`.
+- `queue_buffer` targets `ceil(queue_buffer * active_evaluator_count)` pending batches, including local and in-flight inserts. `0.0` stops new production; larger values keep more work buffered. There are no separate refill-ratio or local-buffer controls.
+- Both runner roles default to `min_tick_time_ms = 10`. Raising this interval reduces polling load when low latency is unnecessary.
 - Total open batches (`pending + claimed + completed`) are capped by `max_queue_size`.
 - Pause/unassign drains the local queue fully before the sampler checkpoint is persisted.

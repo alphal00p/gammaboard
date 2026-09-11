@@ -1,4 +1,3 @@
-use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{
     AccumulatorMetricName, BatchFailOutcome, ControlPlaneStore, RunReadStore, RunTaskInput,
     RunTaskSpec, RunTaskStore, SampleStopCondition, StoreError, TaskMeasurementOutput,
@@ -20,18 +19,16 @@ fn unique_id(prefix: &str) -> String {
     format!("{prefix}-{nanos}")
 }
 
-async fn locked_test_store() -> Option<(tokio::sync::MutexGuard<'static, ()>, PgStore)> {
+async fn locked_test_store() -> (tokio::sync::MutexGuard<'static, ()>, PgStore) {
     let guard = TEST_LOCK.lock().await;
-    let db_url = RuntimeConfig::load("ops/local/config/runtime.toml")
-        .ok()?
-        .database
-        .url;
+    let db_url = std::env::var("GAMMABOARD_TEST_DATABASE_URL")
+        .expect("set GAMMABOARD_TEST_DATABASE_URL to an isolated, migrated test database");
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&db_url)
         .await
-        .ok()?;
-    Some((guard, PgStore::new(pool)))
+        .expect("connect to explicitly configured test database");
+    (guard, PgStore::new(pool))
 }
 
 async fn insert_completed_pause_task(store: &PgStore, run_id: i32) -> i64 {
@@ -52,9 +49,7 @@ async fn insert_completed_pause_task(store: &PgStore, run_id: i32) -> i64 {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn active_task_accumulates_declared_cpu_time() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("cpu-node");
     let node_uuid = unique_id("cpu-uuid");
     let run_id: i32 = sqlx::query_scalar(
@@ -103,6 +98,24 @@ async fn active_task_accumulates_declared_cpu_time() {
         .set_current_assignment(&node_uuid, WorkerRole::Evaluator, run_id)
         .await
         .expect("assign node");
+    // A progress writer may hold the task row while pause/activity updates
+    // proceed. Those node updates must not acquire the CPU-accounting lock.
+    let mut task_writer = store.pool().begin().await.expect("task writer");
+    sqlx::query("SELECT id FROM run_tasks WHERE id = $1 FOR UPDATE")
+        .bind(task.id)
+        .fetch_one(&mut *task_writer)
+        .await
+        .expect("lock task");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        sqlx::query("UPDATE nodes SET activity = '{\"phase\":\"waiting\"}', desired_run_id = NULL, desired_role = NULL WHERE uuid = $1")
+            .bind(&node_uuid)
+            .execute(store.pool())
+            .await
+            .expect("activity and pause do not write task CPU time");
+    })
+    .await
+    .expect("node metadata must not wait for the task lock");
+    task_writer.rollback().await.expect("release task writer");
     sleep(Duration::from_millis(50)).await;
     store
         .announce_node(&node_name, &node_uuid, &capabilities)
@@ -149,9 +162,7 @@ async fn active_task_accumulates_declared_cpu_time() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn parent_task_and_run_include_child_cpu_time() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let parent_run_id: i32 = sqlx::query_scalar(
         r#"
         INSERT INTO runs (name, integration_params, point_spec)
@@ -235,9 +246,7 @@ async fn parent_task_and_run_include_child_cpu_time() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_requires_active_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -299,9 +308,7 @@ async fn claim_batch_requires_active_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn task_measurement_output_round_trips() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -378,9 +385,7 @@ async fn task_measurement_output_round_trips() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -456,9 +461,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_claims_exactly_one_pending_batch() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -553,9 +556,7 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_a = unique_id("node-a");
     let node_b = unique_id("node-b");
     let node_a_uuid = unique_id("uuid-a");
@@ -614,9 +615,7 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -684,9 +683,7 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let stale_node = unique_id("stale-sampler");
     let stale_uuid = unique_id("stale-sampler-uuid");
     let fresh_node = unique_id("fresh-sampler");
@@ -757,9 +754,7 @@ async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -859,9 +854,7 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn assigning_dead_node_returns_not_found() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("dead-node");
     let node_uuid = unique_id("dead-uuid");
 
@@ -913,9 +906,7 @@ async fn assigning_dead_node_returns_not_found() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expiring_node_lease_clears_desired_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("expiring-node");
     let node_uuid = unique_id("expiring-uuid");
 
@@ -966,9 +957,7 @@ async fn expiring_node_lease_clears_desired_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("shutdown-node");
     let node_uuid = unique_id("shutdown-uuid");
 
@@ -1043,9 +1032,7 @@ async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expired_shutdown_request_does_not_affect_replacement_node() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("shutdown-replacement-node");
     let old_uuid = unique_id("shutdown-replacement-old");
     let new_uuid = unique_id("shutdown-replacement-new");
@@ -1077,9 +1064,7 @@ async fn expired_shutdown_request_does_not_affect_replacement_node() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn shutdown_all_nodes_clears_desired_assignments() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_a = unique_id("shutdown-all-a");
     let node_b = unique_id("shutdown-all-b");
     let uuid_a = unique_id("shutdown-all-uuid-a");
@@ -1156,9 +1141,7 @@ async fn shutdown_all_nodes_clears_desired_assignments() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_current_assignment_is_unique_per_run() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_a = unique_id("node-a");
     let node_b = unique_id("node-b");
     let uuid_a = unique_id("uuid-a");
@@ -1212,4 +1195,390 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
     }
 
     store.remove_run(run_id).await.expect("cleanup run");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
+    let (_guard, store) = locked_test_store().await;
+    let run_id: i32 = sqlx::query_scalar(
+        "INSERT INTO runs (name,integration_params,point_spec) VALUES ('fair-prefetch','{}','{\"continuous\":{\"dims\":1}}') RETURNING id"
+    ).fetch_one(store.pool()).await.unwrap();
+    let a = unique_id("fair-a");
+    let b = unique_id("fair-b");
+    for node in [&a, &b] {
+        store
+            .announce_node(node, node, &Default::default())
+            .await
+            .unwrap();
+        store
+            .set_current_assignment(node, WorkerRole::Evaluator, run_id)
+            .await
+            .unwrap();
+    }
+    let task_id = insert_completed_pause_task(&store, run_id).await;
+    let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).unwrap();
+    let batches = vec![LatentBatchSpec::from_batch(&batch).build(); 5];
+    store
+        .insert_batches(run_id, task_id, false, &next_batch_ids(5), &batches)
+        .await
+        .unwrap();
+    // Freeze the fresh-batch condition rather than making a wall-clock-sensitive test.
+    sqlx::query("UPDATE batches SET created_at=now()+interval '1 hour' WHERE run_id=$1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_none());
+    assert!(store.claim_batch(run_id, &b).await.unwrap().is_some());
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    store
+        .release_claimed_batches_for_worker(run_id, &b)
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_none());
+    // A live but unresponsive peer cannot indefinitely prevent prefetch.
+    sqlx::query("UPDATE batches SET created_at=now()-interval '1 second' WHERE run_id=$1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    // Expired peers should not delay even newly inserted work.
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE uuid=$1")
+        .bind(&b)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE batches SET created_at=now()+interval '1 hour' WHERE run_id=$1")
+        .bind(run_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    store.remove_run(run_id).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
+    let (_test_guard, store) = locked_test_store().await;
+    let prefix = unique_id("launch-history");
+    let request_id = store
+        .reserve_worker_launch(
+            "external",
+            vec![serde_json::json!({
+                "count": 1, "name_prefix": prefix,
+            })],
+        )
+        .await
+        .unwrap();
+    let name = format!("{prefix}-1");
+    let result = serde_json::json!({"workers": [{"node_name": name}]});
+    sqlx::query(
+        "UPDATE node_launch_requests SET state='starting',started_count=1,result=$2 WHERE id=$1",
+    )
+    .bind(request_id)
+    .bind(&result)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    // Submission alone does not fulfill a request.
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "starting"
+    );
+    store
+        .announce_node(&name, &unique_id("launch-worker"), &Default::default())
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("SELECT state FROM node_launch_requests WHERE id=$1")
+        .bind(request_id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        state, "fulfilled",
+        "success is recorded without polling the request list"
+    );
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "fulfilled"
+    );
+    store.suspend_workers().await.unwrap();
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 minute' WHERE name=$1")
+        .bind(&name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(store.enqueue_resumed_workers().await.unwrap(), 1);
+    let replacement: i64 = sqlx::query_scalar("SELECT launch_request_id FROM nodes WHERE name=$1")
+        .bind(&name)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_ne!(replacement, request_id);
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "fulfilled",
+        "worker shutdown does not change the historical launch outcome"
+    );
+    let node_count: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes WHERE name=$1")
+        .bind(&name)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(node_count, 1);
+    // A replacement's live lease cannot fulfill an earlier, incomplete attempt.
+    sqlx::query("UPDATE node_launch_requests SET state='starting' WHERE id=$1")
+        .bind(request_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()+interval '1 minute' WHERE name=$1")
+        .bind(&name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let history_ids: Vec<i64> = sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count) SELECT 'fulfilled','external',1 FROM generate_series(1,101) RETURNING id")
+        .fetch_all(store.pool()).await.unwrap();
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "starting"
+    );
+    assert_eq!(
+        requests.iter().find(|r| r.id == replacement).unwrap().state,
+        "pending"
+    );
+    assert_eq!(
+        requests.iter().filter(|r| r.state == "fulfilled").count(),
+        100
+    );
+    sqlx::query("DELETE FROM nodes WHERE name=$1")
+        .bind(name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let mut ids = history_ids;
+    ids.extend([request_id, replacement]);
+    sqlx::query("DELETE FROM node_launch_requests WHERE id=ANY($1)")
+        .bind(ids)
+        .execute(store.pool())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn completed_cleanup_preserves_committed_checkpoint_work() {
+    let (_guard, store) = locked_test_store().await;
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('checkpoint-cleanup','{}','{\"continuous\":{\"dims\":1}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let task = insert_completed_pause_task(&store, run).await;
+    let batch = Batch::from_points([Point::new(vec![1.0], vec![], 1.0)]).unwrap();
+    let ids = next_batch_ids(5);
+    store
+        .insert_batches(
+            run,
+            task,
+            false,
+            &ids,
+            &vec![LatentBatchSpec::from_batch(&batch).build(); 5],
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE batches SET status='completed' WHERE run_id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        0,
+        "without a checkpoint every result must remain replayable"
+    );
+    sqlx::query(
+        "INSERT INTO run_sampler_checkpoints (run_id,task_id,sampler_checkpoint) VALUES ($1,$2,$3)",
+    )
+    .bind(run)
+    .bind(task)
+    .bind(serde_json::json!({"queue":{"last_completed_batch_id":ids[0],"last_produced_batch_id":ids[2]}}))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        3
+    );
+    let mut tx = store.pool().begin().await.unwrap();
+    sqlx::query("UPDATE run_sampler_checkpoints SET sampler_checkpoint=$2 WHERE run_id=$1")
+        .bind(run)
+        .bind(serde_json::json!({"queue":{"last_completed_batch_id":ids[1],"last_produced_batch_id":ids[2]}}))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        0,
+        "an in-flight checkpoint must not authorize cleanup"
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        0,
+        "a failed checkpoint must not authorize cleanup"
+    );
+    sqlx::query("UPDATE run_sampler_checkpoints SET sampler_checkpoint=$2 WHERE run_id=$1")
+        .bind(run)
+        .bind(serde_json::json!({"queue":{"last_completed_batch_id":ids[1],"last_produced_batch_id":ids[2]}}))
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        1
+    );
+    let remaining: Vec<i64> = sqlx::query_scalar("SELECT id FROM batches WHERE run_id=$1")
+        .bind(run)
+        .fetch_all(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(remaining, vec![ids[2]]);
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
+    use gammaboard::core::{AggregationStore, RunStageSnapshot, SamplerAggregatorCheckpoint};
+    use gammaboard::evaluation::AccumulatorState;
+    use gammaboard::sampling::SamplerAggregatorSnapshot;
+    use serde_json::json;
+
+    let (_guard, store) = locked_test_store().await;
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('checkpoint-atomic','{}','{\"continuous\":{\"dims\":1}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let task = insert_completed_pause_task(&store, run).await;
+    sqlx::query("UPDATE run_tasks SET state='active' WHERE id=$1")
+        .bind(task)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let sampler = SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) };
+    let observable = AccumulatorState::empty_scalar();
+    // A checkpoint written by the preceding version, including discarded live metrics.
+    let old = json!({
+        "completed_samples":0, "task_id":task, "output_snapshot_id":null, "batches_completed":null,
+        "sampler_snapshot":sampler, "observable_state":observable,
+        "runtime_state":{
+            "produced_batches_total":0, "produced_samples_total":0,
+            "ingested_batches_total":0, "ingested_samples_total":0,
+            "sampler_uptime_ms_accumulated":10.0, "accumulator_checkpoint_state":"NeedsInitialRoundTrip",
+            "completed_samples_per_second":99.0, "eta_seconds":1.0, "sampler_tick_busy_ratio":0.8,
+            "initial_round_trip_snapshot_pending":false, "pending_persisted_completed_batches":0,
+            "batch_size_current":128
+        },
+        "queue":{"last_completed_batch_id":null,"last_produced_batch_id":null,"batch_size_current":128}
+    });
+    sqlx::query(
+        "INSERT INTO run_sampler_checkpoints (run_id,task_id,sampler_checkpoint) VALUES ($1,$2,$3)",
+    )
+    .bind(run)
+    .bind(task)
+    .bind(old)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/202609110004_compact_checkpoints.sql"
+    ))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let mut checkpoint: SamplerAggregatorCheckpoint =
+        store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    store
+        .restore_sampler_checkpoint(run, &checkpoint)
+        .await
+        .expect("migrated checkpoint remains restorable");
+    let compact = serde_json::to_value(&checkpoint).unwrap();
+    assert_eq!(compact["runtime_state"].as_object().unwrap().len(), 6);
+    assert_eq!(compact["batches_completed"], 0);
+    let stage = RunStageSnapshot {
+        id: None,
+        run_id: run,
+        task_id: Some(task),
+        name: "saved".into(),
+        sequence_nr: Some(0),
+        queue_empty: true,
+        sampler_snapshot: Some(sampler),
+        observable_state: Some(observable),
+        evaluator: None,
+        sampler_aggregator: None,
+        batch_transforms: vec![],
+    };
+    store
+        .save_sampler_checkpoint(run, &checkpoint, Some(&stage))
+        .await
+        .unwrap();
+    let before = store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    // Fail after the stage INSERT, inside the checkpoint transaction.
+    let constraint = format!("reject_test_checkpoint_{run}");
+    sqlx::query(&format!("ALTER TABLE run_sampler_checkpoints ADD CONSTRAINT {constraint} CHECK (run_id <> {run} OR (sampler_checkpoint->>'completed_samples')::bigint < 1000)"))
+        .execute(store.pool()).await.unwrap();
+    checkpoint.completed_samples = 1000;
+    assert!(
+        store
+            .save_sampler_checkpoint(run, &checkpoint, Some(&stage))
+            .await
+            .is_err()
+    );
+    sqlx::query(&format!(
+        "ALTER TABLE run_sampler_checkpoints DROP CONSTRAINT {constraint}"
+    ))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let stages: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM run_stage_snapshots WHERE run_id=$1")
+            .bind(run)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        stages, 1,
+        "failed save cannot leave an orphan stage snapshot"
+    );
+    let after = store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    let status = store.checkpoint_status(run).await.unwrap();
+    assert_eq!(status["saved_samples"], 0);
+    // A mismatched embedded task must fail instead of silently changing recovery identity.
+    sqlx::query("UPDATE run_sampler_checkpoints SET sampler_checkpoint=jsonb_set(sampler_checkpoint,'{task_id}','-1') WHERE run_id=$1")
+        .bind(run).execute(store.pool()).await.unwrap();
+    assert!(store.load_sampler_checkpoint(run).await.is_err());
+    store.remove_run(run).await.unwrap();
 }

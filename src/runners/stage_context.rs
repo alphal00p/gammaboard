@@ -1,7 +1,7 @@
+use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{
     AggregationStore, BatchTransformConfig, EvaluatorConfig, RunTask, RunTaskStore, StoreError,
 };
-use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::StageHandoffOwned;
 use crate::services::stage::resolve_task_source_snapshot;
 
