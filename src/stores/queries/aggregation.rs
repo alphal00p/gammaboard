@@ -342,10 +342,20 @@ pub(crate) async fn upsert_run_sampler_checkpoint(
     run_id: i32,
     checkpoint: &SamplerAggregatorCheckpoint,
 ) -> Result<(), sqlx::Error> {
-    let payload = serde_json::to_value(checkpoint).map_err(|err| {
+    let mut tx = pool.begin().await?;
+    // Cleanup may follow immediately, so checkpoint acknowledgement must wait for WAL.
+    sqlx::query("SET LOCAL synchronous_commit = on")
+        .execute(&mut *tx)
+        .await?;
+    let mut checkpoint = checkpoint.clone();
+    let (output_id, batches_completed): (Option<i64>, Option<i32>) = sqlx::query_as(
+        "SELECT (SELECT max(id) FROM persisted_observable_snapshots WHERE run_id=$1 AND task_id=$2),batches_completed FROM runs WHERE id=$1"
+    ).bind(run_id).bind(checkpoint.task_id).fetch_one(&mut *tx).await?;
+    checkpoint.output_snapshot_id = output_id;
+    checkpoint.batches_completed = batches_completed;
+    let payload = serde_json::to_value(&checkpoint).map_err(|err| {
         sqlx::Error::Protocol(format!("failed to encode sampler_checkpoint: {err}"))
     })?;
-    let mut tx = pool.begin().await?;
     sqlx::query(
         r#"
         INSERT INTO run_sampler_checkpoints (run_id, task_id, sampler_checkpoint)

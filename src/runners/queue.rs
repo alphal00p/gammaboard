@@ -75,6 +75,8 @@ fn apply_option<T>(destination: &mut T, value: Option<T>) {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SamplerQueueCheckpoint {
     pub last_completed_batch_id: Option<i64>,
+    #[serde(default)]
+    pub last_produced_batch_id: Option<i64>,
     pub batch_size_current: Option<usize>,
 }
 
@@ -278,6 +280,7 @@ where
     pub fn checkpoint(&self) -> SamplerQueueCheckpoint {
         SamplerQueueCheckpoint {
             last_completed_batch_id: self.checkpoint.last_completed_batch_id,
+            last_produced_batch_id: self.checkpoint.last_produced_batch_id,
             batch_size_current: Some(self.batch_size_current),
         }
     }
@@ -793,6 +796,7 @@ where
             let batch_count = self.pending_insert.len().min(bundle_size);
             let batches = self.pending_insert.drain(..batch_count).collect::<Vec<_>>();
             let batch_ids = next_batch_ids(batch_count);
+            self.checkpoint.last_produced_batch_id = batch_ids.last().copied();
             let store = self.store.clone();
             let run_id = self.run_id;
             let task_id = self.task_id;

@@ -6193,3 +6193,115 @@ target_batch_eval_ms = 1.0
     harness.cleanup().await?;
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_sampler_crash_recovers_an_older_training_checkpoint() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let name = "sampler-crash-recovery";
+    let config = temp_config(
+        r#"
+name = "sampler-crash-recovery"
+[evaluator]
+kind = "unit"
+timing = { per_sample_seconds = 0.002 }
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 8192 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 42, training_window_samples = 1024 } }
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 20
+performance_snapshot_interval_ms = 20
+[sampler_aggregator_runner_params.queue]
+queue_buffer = 64.0
+max_queue_size = 64
+max_batch_size = 16
+target_batch_eval_ms = 32.0
+"#,
+    );
+    harness.add_run(&config);
+    let run_id = harness.run_id(name).await?;
+    harness.start_nodes(&["crash-s", "crash-e"]).await?;
+    harness.assign_node("crash-s", "sampler_aggregator", name);
+    harness.assign_node("crash-e", "evaluator", name);
+    harness
+        .wait_for(
+            "first training window is generated",
+            Duration::from_secs(15),
+            || async { Ok(harness.run_sample_progress(run_id).await?.0 >= 1024) },
+        )
+        .await?;
+    let saved;
+    {
+        let mut program = SamplerCheckpointProgram::new(&mut harness, run_id, name);
+        program.pause_run().await?;
+        program
+            .wait_nodes_down(&["crash-s", "crash-e"], Duration::from_secs(15))
+            .await?;
+        program
+            .capture_paused_state(Duration::from_secs(15))
+            .await?;
+        saved = program.paused_checkpoint.clone().unwrap();
+    }
+    let saved_completed = saved["completed_samples"].as_i64().unwrap();
+    let retained_at_checkpoint: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(batch_size),0)::bigint FROM batches WHERE run_id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert!(
+        retained_at_checkpoint > 0,
+        "checkpoint must include outstanding training feedback"
+    );
+    harness.assign_node("crash-s", "sampler_aggregator", name);
+    harness.assign_node("crash-e", "evaluator", name);
+    harness
+        .wait_for(
+            "live progress advances beyond the recovery checkpoint",
+            Duration::from_secs(20),
+            || async { Ok(harness.run_sample_progress(run_id).await?.1 >= saved_completed + 2048) },
+        )
+        .await?;
+    // Leave enough time for the ordinary one-second completed-batch cleanup.
+    sleep(Duration::from_millis(1200)).await;
+    harness.kill_child("crash-s").await?; // SIGKILL: no graceful checkpoint.
+    assert_eq!(
+        harness.run_sampler_checkpoint(run_id).await?.unwrap(),
+        saved
+    );
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name='crash-s'")
+        .execute(&harness.pool)
+        .await?;
+    harness.start_node("crash-s").await?;
+    harness.assign_node("crash-s", "sampler_aggregator", name);
+    harness.wait_for("crash recovery completes every training window", Duration::from_secs(35), || async {
+        let (state, failure): (String, Option<String>) = sqlx::query_as("SELECT state,failure_reason FROM run_tasks WHERE run_id=$1")
+            .bind(run_id).fetch_one(&harness.pool).await?;
+        anyhow::ensure!(state != "failed", "restored training failed: {failure:?}");
+        let inconsistent: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runtime_logs WHERE fields::text LIKE '%run_tasks_progress_check%')")
+            .fetch_one(&harness.pool).await?;
+        anyhow::ensure!(!inconsistent, "restored sampler and persisted task counters disagree (run_tasks_progress_check)");
+        Ok(state == "completed")
+    }).await?;
+    assert_eq!(harness.run_sample_progress(run_id).await?, (8192, 8192));
+    let metrics: JsonValue = sqlx::query_scalar(
+        "SELECT runtime_metrics FROM sampler_aggregator_performance_latest WHERE run_id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(metrics["ingested_samples_total"], 8192);
+    assert_eq!(metrics["completed_samples_total"], 8192);
+    let diagnostics: JsonValue = sqlx::query_scalar(
+        "SELECT engine_diagnostics FROM sampler_aggregator_performance_latest WHERE run_id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(diagnostics["training_updates"], 8);
+    assert_eq!(diagnostics["pending_training_samples"], 0);
+    harness.cleanup().await?;
+    Ok(())
+}

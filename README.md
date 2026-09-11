@@ -300,6 +300,24 @@ A successful save is reported only after the checkpoint transaction commits.
 Checkpoint decode errors fail activation; completed work without a resume
 checkpoint is not silently restarted from fresh sampler state.
 
+A sampler checkpoint is saved before first production and on graceful stop/task
+completion. Recovery restores the sampler, accumulator, sample counters and result
+snapshot boundary together. Work produced after the checkpoint is discarded and
+regenerated; sample progress can therefore roll back after a crash. CPU usage is
+retained. Missing checkpoint work causes an explicit activation failure.
+
+Only outstanding work included in the committed checkpoint must remain available
+for replay. Consumed work produced later can be cleaned up, keeping retention
+bounded without forcing frequent writes of large checkpoint files. Checkpoint
+publication waits for durable database commit before authorizing cleanup.
+
+Process samplers may store large checkpoints in external files. Each returned
+snapshot must reference immutable, durably published files accessible to resumed
+workers; never overwrite a file referenced by an earlier snapshot. GammaBoard
+stores the reference, not the file contents. Retain files referenced by recovery or
+stage snapshots; file retention belongs to the sampler/storage owner.
+
+
 Worker details include the current activity, its start time, and the age of the
 last completed batch. The lease heartbeat publishes activity independently of
 blocked sampler/evaluator calls. Updates are capped at the heartbeat frequency.

@@ -1372,3 +1372,97 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn completed_cleanup_preserves_committed_checkpoint_work() {
+    let (_guard, store) = locked_test_store().await;
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('checkpoint-cleanup','{}','{\"continuous\":{\"dims\":1}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let task = insert_completed_pause_task(&store, run).await;
+    let batch = Batch::from_points([Point::new(vec![1.0], vec![], 1.0)]).unwrap();
+    let ids = next_batch_ids(5);
+    store
+        .insert_batches(
+            run,
+            task,
+            false,
+            &ids,
+            &vec![LatentBatchSpec::from_batch(&batch).build(); 5],
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE batches SET status='completed' WHERE run_id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        0,
+        "without a checkpoint every result must remain replayable"
+    );
+    sqlx::query(
+        "INSERT INTO run_sampler_checkpoints (run_id,task_id,sampler_checkpoint) VALUES ($1,$2,$3)",
+    )
+    .bind(run)
+    .bind(task)
+    .bind(serde_json::json!({"queue":{"last_completed_batch_id":ids[0],"last_produced_batch_id":ids[2]}}))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        3
+    );
+    let mut tx = store.pool().begin().await.unwrap();
+    sqlx::query("UPDATE run_sampler_checkpoints SET sampler_checkpoint=$2 WHERE run_id=$1")
+        .bind(run)
+        .bind(serde_json::json!({"queue":{"last_completed_batch_id":ids[1],"last_produced_batch_id":ids[2]}}))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        0,
+        "an in-flight checkpoint must not authorize cleanup"
+    );
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        0,
+        "a failed checkpoint must not authorize cleanup"
+    );
+    sqlx::query("UPDATE run_sampler_checkpoints SET sampler_checkpoint=$2 WHERE run_id=$1")
+        .bind(run)
+        .bind(serde_json::json!({"queue":{"last_completed_batch_id":ids[1],"last_produced_batch_id":ids[2]}}))
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .cleanup_consumed_completed_batches(run, ids[4], 100)
+            .await
+            .unwrap(),
+        1
+    );
+    let remaining: Vec<i64> = sqlx::query_scalar("SELECT id FROM batches WHERE run_id=$1")
+        .bind(run)
+        .fetch_all(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(remaining, vec![ids[2]]);
+    store.remove_run(run).await.unwrap();
+}

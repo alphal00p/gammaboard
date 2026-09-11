@@ -10,4 +10,5 @@ pub use read_models::{
     RunLifecycleState, RunProgress, RuntimeLogEntry, RuntimeLogPage,
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot, WorkerStatus,
 };
+mod recovery;
 mod worker_resume;

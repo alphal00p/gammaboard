@@ -186,3 +186,14 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   reuses node names and changes `launch_request_id`; reconciliation must match
   both the name and request. List all outstanding requests plus bounded terminal
   history, so recent launches cannot hide older pending work or failures.
+
+- Recovery checkpoints include both consumed and produced batch boundaries. Cleanup
+  preserves outstanding work within that interval; consumed work beyond the upper
+  boundary is safe to delete because recovery discards/regenerates it. Publish the
+  checkpoint durably before cleanup. Save an initial checkpoint before production.
+- Sampler activation atomically restores task/run sample counters, accumulator and
+  output-history boundary, and deletes post-checkpoint batches. Missing retained
+  work fails activation. Late evaluator results are fenced by batch ownership.
+- Large process-sampler snapshots may remain external; references must identify
+  immutable files published durably before returning the snapshot. Reuse the same
+  sampler snapshot for the recovery checkpoint and its corresponding stage snapshot.

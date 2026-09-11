@@ -741,6 +741,8 @@ pub(crate) async fn cleanup_consumed_completed_batches(
         return Ok(0);
     }
 
+    // Protect outstanding work at the checkpoint. Work produced after its upper
+    // boundary is discarded on recovery, so consumed results there need no retention.
     let result = sqlx::query(
         r#"
         WITH cleanup_candidates AS (
@@ -750,6 +752,16 @@ pub(crate) async fn cleanup_consumed_completed_batches(
               AND status = 'completed'
               AND COALESCE(retry_count, 0) = 0
               AND id <= $2
+              AND EXISTS (
+                  SELECT 1 FROM run_sampler_checkpoints c WHERE c.run_id = $1
+                  AND (
+                      batches.id <= (c.sampler_checkpoint->'queue'->>'last_completed_batch_id')::bigint
+                      OR (
+                          c.sampler_checkpoint->'queue' ? 'last_produced_batch_id'
+                          AND batches.id > COALESCE((c.sampler_checkpoint->'queue'->>'last_produced_batch_id')::bigint, 0)
+                      )
+                  )
+              )
             ORDER BY id ASC
             LIMIT $3
         )

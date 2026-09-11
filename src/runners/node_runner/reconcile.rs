@@ -487,6 +487,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 .queue
                 .max_batch_size,
         );
+        if let Some(checkpoint) = &restored_snapshot {
+            role_store
+                .restore_sampler_checkpoint(worker.run_id, checkpoint)
+                .await?;
+        }
         let run_progress = role_store
             .load_run_sample_progress(worker.run_id)
             .await?
@@ -529,7 +534,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         let restored_snapshot_for_runner = restored_snapshot.clone();
         let task_for_runner = task.clone();
 
-        let runner = SamplerAggregatorRunner::new(
+        let mut runner = SamplerAggregatorRunner::new(
             role_store,
             worker.run_id,
             self.node_name.clone(),
@@ -546,6 +551,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             restored_snapshot_for_runner,
         );
 
+        if restored_snapshot.is_none() {
+            runner
+                .save_initial_checkpoint()
+                .await
+                .map_err(|err| StoreError::store(err.to_string()))?;
+        }
         info!("sampler-aggregator worker started");
         Ok(Some(Box::new(runner)))
     }

@@ -123,13 +123,21 @@ pub struct SamplerAggregatorCheckpoint {
     #[serde(default)]
     pub completed_samples: i64,
     pub task_id: i64,
+    #[serde(default)]
+    pub(crate) output_snapshot_id: Option<i64>,
+    #[serde(default)]
+    pub(crate) batches_completed: Option<i32>,
     pub sampler_snapshot: SamplerAggregatorSnapshot,
     pub observable_state: AccumulatorState,
     runtime_state: SamplerRuntimeState,
-    queue: SamplerQueueCheckpoint,
+    pub(crate) queue: SamplerQueueCheckpoint,
 }
 
 impl SamplerAggregatorCheckpoint {
+    pub(crate) fn produced_samples(&self) -> i64 {
+        self.runtime_state.produced_samples_total
+    }
+
     pub fn reduced_carryover_batch_size(&self, max_batch_size: usize) -> usize {
         let reduced = ((self.runtime_state.batch_size_current as f64) * MAX_BATCH_SIZE_DOWN_FACTOR)
             .round() as usize;
@@ -389,7 +397,7 @@ where
         store: S,
         run_id: i32,
         node_name: impl Into<String>,
-        task: RunTask,
+        mut task: RunTask,
         sampler: Box<dyn SamplerAggregator>,
         observable_state: AccumulatorState,
         evaluator_config: EvaluatorConfig,
@@ -406,6 +414,8 @@ where
         let max_batch_size = params.queue.max_batch_size.max(MIN_BATCH_SIZE);
         let has_resume_snapshot = resume_snapshot.is_some();
         if let Some(snapshot) = resume_snapshot {
+            task.nr_produced_samples = snapshot.produced_samples();
+            task.nr_completed_samples = snapshot.completed_samples;
             runtime_state = snapshot.runtime_state.clone();
             queue_checkpoint = snapshot.queue.clone();
         } else {
@@ -863,6 +873,11 @@ where
         &self.task
     }
 
+    pub(crate) async fn save_initial_checkpoint(&mut self) -> Result<(), RunnerError> {
+        self.persist_sampler_checkpoint().await?;
+        Ok(())
+    }
+
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
         crate::runners::activity::context(self.run_id, self.task.id);
         crate::runners::activity::set("waiting");
@@ -988,6 +1003,7 @@ where
     async fn persist_stage_state_with_queue_empty(
         &mut self,
         queue_empty: bool,
+        sampler_snapshot: SamplerAggregatorSnapshot,
     ) -> Result<(), RunnerError> {
         self.store
             .save_run_stage_snapshot(&RunStageSnapshot {
@@ -997,7 +1013,7 @@ where
                 name: self.task.name.clone(),
                 sequence_nr: Some(self.task.sequence_nr),
                 queue_empty,
-                sampler_snapshot: Some(self.sampler.snapshot().map_err(RunnerError::Engine)?),
+                sampler_snapshot: Some(sampler_snapshot),
                 observable_state: Some(self.observable_state.clone()),
                 evaluator: Some(self.evaluator_config.clone()),
                 sampler_aggregator: Some(self.sampler_config.clone()),
@@ -1007,15 +1023,20 @@ where
         Ok(())
     }
 
-    async fn persist_sampler_checkpoint(&mut self) -> Result<(), RunnerError> {
+    async fn persist_sampler_checkpoint(
+        &mut self,
+    ) -> Result<SamplerAggregatorSnapshot, RunnerError> {
         self.store.record_checkpoint_status(self.run_id, &serde_json::json!({
             "state":"saving", "task_id":self.task.id, "save_started_at":chrono::Utc::now(), "error":null
         })).await?;
-        let result: Result<(), RunnerError> = async {
+        let result: Result<SamplerAggregatorSnapshot, RunnerError> = async {
+            self.queue.flush().await?;
             self.checkpoint_sampler_uptime_now();
             let checkpoint = SamplerAggregatorCheckpoint {
                 completed_samples: self.task.nr_completed_samples,
                 task_id: self.task.id,
+                output_snapshot_id: None,
+                batches_completed: None,
                 sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
                 observable_state: self.observable_state.clone(),
                 runtime_state: self.runtime_state.clone(),
@@ -1024,7 +1045,7 @@ where
             self.store
                 .save_sampler_checkpoint(self.run_id, &checkpoint)
                 .await?;
-            Ok(())
+            Ok(checkpoint.sampler_snapshot)
         }
         .await;
         if let Err(error) = &result {
@@ -1058,7 +1079,7 @@ where
             })).await;
             return Err(error);
         }
-        self.persist_sampler_checkpoint().await
+        Ok(())
     }
 
     async fn flush_aggregation(&mut self, force: bool) -> Result<(), RunnerError> {
@@ -1217,11 +1238,13 @@ where
     }
 
     async fn persist_sampler_state(&mut self, queue_empty: bool) -> Result<(), RunnerError> {
-        self.force_cleanup_consumed_completed_batches().await?;
         self.flush_aggregation(true).await?;
         self.flush_performance_snapshot(true).await?;
         self.flush_progress_sync(true).await?;
-        self.persist_stage_state_with_queue_empty(queue_empty).await
+        let sampler_snapshot = self.persist_sampler_checkpoint().await?;
+        self.force_cleanup_consumed_completed_batches().await?;
+        self.persist_stage_state_with_queue_empty(queue_empty, sampler_snapshot)
+            .await
     }
 
     async fn process_completed_batches(
@@ -1727,6 +1750,8 @@ mod tests {
         let snapshot = SamplerAggregatorCheckpoint {
             completed_samples: 0,
             task_id: 1,
+            output_snapshot_id: None,
+            batches_completed: None,
             sampler_snapshot: SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) },
             observable_state: crate::evaluation::AccumulatorState::empty_scalar(),
             runtime_state: SamplerRuntimeState {
