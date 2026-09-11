@@ -110,13 +110,13 @@ pub async fn mark_node_launch_request_starting(
     update_node_launch_request_state(store, id, "starting", started_count, result, None).await
 }
 
-pub async fn mark_node_launch_request_running(
+pub async fn mark_node_launch_request_fulfilled(
     store: &impl ControlPlaneStore,
     id: i64,
     started_count: usize,
     result: &JsonValue,
 ) -> Result<NodeLaunchRequest, ApiError> {
-    update_node_launch_request_state(store, id, "running", started_count, result, None).await
+    update_node_launch_request_state(store, id, "fulfilled", started_count, result, None).await
 }
 
 pub async fn mark_node_launch_request_failed(

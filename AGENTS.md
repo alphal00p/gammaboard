@@ -181,3 +181,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   and desired-assignment writes must not acquire the shared task CPU row lock.
 - Completed fetches must stop before outstanding or subsequently started inserts;
   production-order IDs alone cannot prevent skipping an uncommitted bundle.
+
+- Launch request success is `fulfilled`, separate from current node health. Resume
+  reuses node names and changes `launch_request_id`; reconciliation must match
+  both the name and request. List all outstanding requests plus bounded terminal
+  history, so recent launches cannot hide older pending work or failures.

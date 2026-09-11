@@ -282,6 +282,13 @@ part of the saved roster; manage them through their existing launch requests.
 UBELIX `down` saves the roster before stopping jobs; `up --resume-workers --watch`
 re-enqueues saved workers with their original scheduler settings.
 
+The dashboard startup queue shows pending/starting requests and failures. Fulfilled
+and canceled requests appear in collapsed launch history (latest 100). A fulfilled
+request means its workers connected, not that they are still online; current health
+is shown in the node list. Resuming a worker reuses its name and creates a new
+launch request, preserving the earlier attempts. Outstanding requests survive
+redeployment and are never hidden by the history limit.
+
 PostgreSQL store tests require `GAMMABOARD_TEST_DATABASE_URL` pointing to an
 isolated, migrated test database. They fail if it is missing or unavailable;
 they never fall back to a running deployment. Full-stack tests also accept this

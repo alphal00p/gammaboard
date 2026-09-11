@@ -227,6 +227,8 @@ pub(crate) async fn announce_node(
     .await?;
 
     if row.is_some() {
+        // Record launch success even when no dashboard is polling the request list.
+        reconcile_fulfilled_node_launch_requests(pool).await?;
         Ok(())
     } else {
         Err(sqlx::Error::Protocol(format!(
@@ -457,8 +459,12 @@ pub(crate) async fn list_node_launch_requests(
             result,
             error
         FROM node_launch_requests
-        ORDER BY created_at DESC
-        LIMIT 100
+        WHERE state NOT IN ('fulfilled', 'canceled') OR id IN (
+            SELECT id FROM node_launch_requests
+            WHERE state IN ('fulfilled', 'canceled')
+            ORDER BY created_at DESC, id DESC LIMIT 100
+        )
+        ORDER BY created_at DESC, id DESC
         "#,
     )
     .fetch_all(pool)
@@ -506,22 +512,22 @@ pub(crate) async fn claim_external_node_launch_request(
     .await
 }
 
-pub(crate) async fn reconcile_running_node_launch_requests(
+pub(crate) async fn reconcile_fulfilled_node_launch_requests(
     pool: &PgPool,
 ) -> Result<PgQueryResult, sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE node_launch_requests request
         SET
-            state = 'running',
+            state = 'fulfilled',
             updated_at = now()
         WHERE request.state = 'starting'
           AND request.started_count >= request.requested_count
           AND (
               SELECT COUNT(*)
-              FROM jsonb_array_elements(COALESCE(request.result->'workers', '[]'::jsonb)) worker
-              JOIN nodes node ON node.name = worker->>'node_name'
-              WHERE node.lease_expires_at > now()
+              FROM nodes node
+              WHERE node.launch_request_id = request.id
+                AND node.lease_expires_at > now()
           ) >= request.requested_count
         "#,
     )

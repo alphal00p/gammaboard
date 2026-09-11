@@ -1522,8 +1522,8 @@ async fn update_node_launch_request_progress(
             )
             .await
         }
-        "running" => {
-            node_api::mark_node_launch_request_running(
+        "fulfilled" => {
+            node_api::mark_node_launch_request_fulfilled(
                 &state.store,
                 id,
                 payload.started_count,

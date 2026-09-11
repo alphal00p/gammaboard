@@ -4101,7 +4101,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     harness.start_nodes(&["queued-w-1", "queued-w-2"]).await?;
     harness
         .wait_for(
-            "launch request reconciles to running from live node leases",
+            "launch request is fulfilled after workers connect",
             Duration::from_secs(10),
             || async {
                 let body =
@@ -4115,7 +4115,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
                             .find(|item| item["id"].as_str() == Some(request_id.as_str()))
                     })
                     .and_then(|item| item["state"].as_str());
-                Ok(state == Some("running"))
+                Ok(state == Some("fulfilled"))
             },
         )
         .await?;

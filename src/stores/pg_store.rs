@@ -410,7 +410,7 @@ impl ControlPlaneStore for PgStore {
     async fn list_node_launch_requests(
         &self,
     ) -> Result<Vec<crate::core::NodeLaunchRequest>, StoreError> {
-        queries::reconcile_running_node_launch_requests(&self.pool)
+        queries::reconcile_fulfilled_node_launch_requests(&self.pool)
             .await
             .map_err(map_sqlx)?;
         let rows = queries::list_node_launch_requests(&self.pool)
@@ -446,6 +446,10 @@ impl ControlPlaneStore for PgStore {
         )
         .await
         .map_err(map_sqlx)?;
+        // Local workers can announce before the launcher finishes reporting submission.
+        queries::reconcile_fulfilled_node_launch_requests(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
         Ok(node_launch_request_from_raw(row))
     }
 

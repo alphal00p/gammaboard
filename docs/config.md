@@ -94,7 +94,7 @@ gammaboard auth hash-password
 
 `auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
 
-When `allow_local_node_spawn = true`, the server resolves node launch requests by spawning local child processes. Otherwise launch requests remain queued for an external launcher. External launchers should use the node-launch-request API; `starting` means workers were submitted, and `running` is reconciled from live node leases.
+When `allow_local_node_spawn = true`, the server resolves node launch requests by spawning local child processes. Otherwise launch requests remain queued for an external launcher. External launchers should use the node-launch-request API; `starting` means workers were submitted, and `fulfilled` records that all workers connected. Current worker health is separate from this historical launch outcome; the dashboard collapses fulfilled/canceled requests into launch history.
 
 The create-run, add-task, and node-request dialogs can load `.toml` templates from `run_templates_dir`, `task_templates_dir`, and `node_templates_dir`; admin users can also save edited TOML back as templates and delete templates from the dashboard.
 

@@ -1259,3 +1259,116 @@ async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
     assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
     store.remove_run(run_id).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
+    let (_test_guard, store) = locked_test_store().await;
+    let prefix = unique_id("launch-history");
+    let request_id = store
+        .reserve_worker_launch(
+            "external",
+            vec![serde_json::json!({
+                "count": 1, "name_prefix": prefix,
+            })],
+        )
+        .await
+        .unwrap();
+    let name = format!("{prefix}-1");
+    let result = serde_json::json!({"workers": [{"node_name": name}]});
+    sqlx::query(
+        "UPDATE node_launch_requests SET state='starting',started_count=1,result=$2 WHERE id=$1",
+    )
+    .bind(request_id)
+    .bind(&result)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    // Submission alone does not fulfill a request.
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "starting"
+    );
+    store
+        .announce_node(&name, &unique_id("launch-worker"), &Default::default())
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("SELECT state FROM node_launch_requests WHERE id=$1")
+        .bind(request_id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        state, "fulfilled",
+        "success is recorded without polling the request list"
+    );
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "fulfilled"
+    );
+    store.suspend_workers().await.unwrap();
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 minute' WHERE name=$1")
+        .bind(&name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(store.enqueue_resumed_workers().await.unwrap(), 1);
+    let replacement: i64 = sqlx::query_scalar("SELECT launch_request_id FROM nodes WHERE name=$1")
+        .bind(&name)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_ne!(replacement, request_id);
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "fulfilled",
+        "worker shutdown does not change the historical launch outcome"
+    );
+    let node_count: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes WHERE name=$1")
+        .bind(&name)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(node_count, 1);
+    // A replacement's live lease cannot fulfill an earlier, incomplete attempt.
+    sqlx::query("UPDATE node_launch_requests SET state='starting' WHERE id=$1")
+        .bind(request_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()+interval '1 minute' WHERE name=$1")
+        .bind(&name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let history_ids: Vec<i64> = sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count) SELECT 'fulfilled','external',1 FROM generate_series(1,101) RETURNING id")
+        .fetch_all(store.pool()).await.unwrap();
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == request_id).unwrap().state,
+        "starting"
+    );
+    assert_eq!(
+        requests.iter().find(|r| r.id == replacement).unwrap().state,
+        "pending"
+    );
+    assert_eq!(
+        requests.iter().filter(|r| r.state == "fulfilled").count(),
+        100
+    );
+    sqlx::query("DELETE FROM nodes WHERE name=$1")
+        .bind(name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let mut ids = history_ids;
+    ids.extend([request_id, replacement]);
+    sqlx::query("DELETE FROM node_launch_requests WHERE id=ANY($1)")
+        .bind(ids)
+        .execute(store.pool())
+        .await
+        .unwrap();
+}
