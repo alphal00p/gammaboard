@@ -20,6 +20,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import uuid
@@ -130,6 +131,7 @@ class Deployment:
         self.workers = []
         self.run_name = None
         self.log = None
+        self.sockets = None
         self.runtime = directory / 'runtime.toml'
 
     def cli(self, *args):
@@ -147,9 +149,12 @@ class Deployment:
         self.directory.mkdir(parents=True, exist_ok=True)
         # Separate resource root and PostgreSQL capacity for 65 ordinary workers.
         resources = self.directory / 'resources'
+        # Unix socket paths have a small platform limit; output paths need not.
+        self.sockets = tempfile.TemporaryDirectory(prefix='gmb-', dir='/tmp')
         self.runtime.write_text(f'''[resources]
 roots = [{inline(str(resources))}]
 [local_postgres]
+socket_dir = {inline(str(Path(self.sockets.name) / "socket"))}
 max_connections = 512
 ''')
         self.log = (self.directory / 'deploy.log').open('w')
@@ -211,6 +216,8 @@ max_connections = 512
                     raise RuntimeError(f'graceful shutdown timed out; inspect PID {self.process.pid}')
             if self.log:
                 self.log.close()
+            if self.sockets:
+                self.sockets.cleanup()
 
     def observe(self, run_id):
         query = f'''select json_build_object(

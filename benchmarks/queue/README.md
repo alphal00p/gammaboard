@@ -86,6 +86,8 @@ python3 scripts/benchmark_queue.py generate --output /tmp/queue-cards
 The automatic runner manages only its own isolated local deployment. It refuses
 occupied ports (default offset 30), uses a separate resource root with 512 allowed
 PostgreSQL connections, and retains database files and logs after shutdown.
+Unix sockets use a short private directory under `/tmp`, removed after shutdown,
+so deeply nested output paths do not exceed PostgreSQL socket-path limits.
 Use `--port-offset` to choose another isolated range. Avoid competing workloads
 when comparing results.
 
@@ -115,7 +117,8 @@ restart in a fresh deployment directory. Finish shutting down any interrupted
 deployment before resuming. Each invocation retains its five-minute budget.
 
 A recorded run and its repeatability checks are in the
-[compact baseline report](baselines/9ee7828.md).
+[compact baseline report](baselines/9ee7828.md). Queue setting comparisons and
+correctness fixes are recorded in the [optimization report](baselines/2026-09-11-optimization.md).
 
 ## Shared synthetic engines
 
