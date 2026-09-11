@@ -105,6 +105,24 @@ async fn active_task_accumulates_declared_cpu_time() {
         .set_current_assignment(&node_uuid, WorkerRole::Evaluator, run_id)
         .await
         .expect("assign node");
+    // A progress writer may hold the task row while pause/activity updates
+    // proceed. Those node updates must not acquire the CPU-accounting lock.
+    let mut task_writer = store.pool().begin().await.expect("task writer");
+    sqlx::query("SELECT id FROM run_tasks WHERE id = $1 FOR UPDATE")
+        .bind(task.id)
+        .fetch_one(&mut *task_writer)
+        .await
+        .expect("lock task");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        sqlx::query("UPDATE nodes SET activity = '{\"phase\":\"waiting\"}', desired_run_id = NULL, desired_role = NULL WHERE uuid = $1")
+            .bind(&node_uuid)
+            .execute(store.pool())
+            .await
+            .expect("activity and pause do not write task CPU time");
+    })
+    .await
+    .expect("node metadata must not wait for the task lock");
+    task_writer.rollback().await.expect("release task writer");
     sleep(Duration::from_millis(50)).await;
     store
         .announce_node(&node_name, &node_uuid, &capabilities)
