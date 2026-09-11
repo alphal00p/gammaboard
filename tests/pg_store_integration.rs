@@ -1,4 +1,3 @@
-use gammaboard::config::RuntimeConfig;
 use gammaboard::core::{
     AccumulatorMetricName, BatchFailOutcome, ControlPlaneStore, RunReadStore, RunTaskInput,
     RunTaskSpec, RunTaskStore, SampleStopCondition, StoreError, TaskMeasurementOutput,
@@ -20,20 +19,16 @@ fn unique_id(prefix: &str) -> String {
     format!("{prefix}-{nanos}")
 }
 
-async fn locked_test_store() -> Option<(tokio::sync::MutexGuard<'static, ()>, PgStore)> {
+async fn locked_test_store() -> (tokio::sync::MutexGuard<'static, ()>, PgStore) {
     let guard = TEST_LOCK.lock().await;
-    let db_url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap_or(
-        RuntimeConfig::load("ops/local/config/runtime.toml")
-            .ok()?
-            .database
-            .url,
-    );
+    let db_url = std::env::var("GAMMABOARD_TEST_DATABASE_URL")
+        .expect("set GAMMABOARD_TEST_DATABASE_URL to an isolated, migrated test database");
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&db_url)
         .await
-        .ok()?;
-    Some((guard, PgStore::new(pool)))
+        .expect("connect to explicitly configured test database");
+    (guard, PgStore::new(pool))
 }
 
 async fn insert_completed_pause_task(store: &PgStore, run_id: i32) -> i64 {
@@ -54,9 +49,7 @@ async fn insert_completed_pause_task(store: &PgStore, run_id: i32) -> i64 {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn active_task_accumulates_declared_cpu_time() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("cpu-node");
     let node_uuid = unique_id("cpu-uuid");
     let run_id: i32 = sqlx::query_scalar(
@@ -169,9 +162,7 @@ async fn active_task_accumulates_declared_cpu_time() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn parent_task_and_run_include_child_cpu_time() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let parent_run_id: i32 = sqlx::query_scalar(
         r#"
         INSERT INTO runs (name, integration_params, point_spec)
@@ -255,9 +246,7 @@ async fn parent_task_and_run_include_child_cpu_time() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_requires_active_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -319,9 +308,7 @@ async fn claim_batch_requires_active_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn task_measurement_output_round_trips() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -398,9 +385,7 @@ async fn task_measurement_output_round_trips() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -476,9 +461,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn claim_batch_claims_exactly_one_pending_batch() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -573,9 +556,7 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_a = unique_id("node-a");
     let node_b = unique_id("node-b");
     let node_a_uuid = unique_id("uuid-a");
@@ -634,9 +615,7 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
 
     let run_id: i32 = sqlx::query_scalar(
         r#"
@@ -704,9 +683,7 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let stale_node = unique_id("stale-sampler");
     let stale_uuid = unique_id("stale-sampler-uuid");
     let fresh_node = unique_id("fresh-sampler");
@@ -777,9 +754,7 @@ async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("node");
     let node_uuid = unique_id("uuid");
 
@@ -879,9 +854,7 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn assigning_dead_node_returns_not_found() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("dead-node");
     let node_uuid = unique_id("dead-uuid");
 
@@ -933,9 +906,7 @@ async fn assigning_dead_node_returns_not_found() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expiring_node_lease_clears_desired_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("expiring-node");
     let node_uuid = unique_id("expiring-uuid");
 
@@ -986,9 +957,7 @@ async fn expiring_node_lease_clears_desired_assignment() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("shutdown-node");
     let node_uuid = unique_id("shutdown-uuid");
 
@@ -1063,9 +1032,7 @@ async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn expired_shutdown_request_does_not_affect_replacement_node() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_name = unique_id("shutdown-replacement-node");
     let old_uuid = unique_id("shutdown-replacement-old");
     let new_uuid = unique_id("shutdown-replacement-new");
@@ -1097,9 +1064,7 @@ async fn expired_shutdown_request_does_not_affect_replacement_node() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn shutdown_all_nodes_clears_desired_assignments() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_a = unique_id("shutdown-all-a");
     let node_b = unique_id("shutdown-all-b");
     let uuid_a = unique_id("shutdown-all-uuid-a");
@@ -1176,9 +1141,7 @@ async fn shutdown_all_nodes_clears_desired_assignments() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn sampler_aggregator_current_assignment_is_unique_per_run() {
-    let Some((_test_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_test_guard, store) = locked_test_store().await;
     let node_a = unique_id("node-a");
     let node_b = unique_id("node-b");
     let uuid_a = unique_id("uuid-a");
@@ -1237,9 +1200,7 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
-    let Some((_guard, store)) = locked_test_store().await else {
-        return;
-    };
+    let (_guard, store) = locked_test_store().await;
     let run_id: i32 = sqlx::query_scalar(
         "INSERT INTO runs (name,integration_params,point_spec) VALUES ('fair-prefetch','{}','{\"continuous\":{\"dims\":1}}') RETURNING id"
     ).fetch_one(store.pool()).await.unwrap();
