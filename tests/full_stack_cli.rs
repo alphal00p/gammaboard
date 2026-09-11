@@ -3779,9 +3779,9 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
         let result = node_api::stop_all_nodes_gracefully(
             &store,
             node_api::GracefulNodeShutdownParams {
-                sampler_drain_timeout: Duration::from_secs(10),
-                node_stop_timeout: Duration::from_secs(10),
-                poll_interval: Duration::from_millis(50),
+                sampler_drain_timeout_seconds: 10,
+                node_stop_timeout_seconds: 10,
+                poll_interval_ms: 50,
             },
         )
         .await?;
@@ -6302,6 +6302,24 @@ target_batch_eval_ms = 32.0
     .await?;
     assert_eq!(diagnostics["training_updates"], 8);
     assert_eq!(diagnostics["pending_training_samples"], 0);
+    SamplerCheckpointProgram::new(&mut harness, run_id, name)
+        .wait_nodes_down(&["crash-s", "crash-e"], Duration::from_secs(10))
+        .await?;
+    let stages: i64 = sqlx::query_scalar("SELECT count(*) FROM run_stage_snapshots WHERE run_id=$1 AND task_id IS NOT NULL AND sampler_snapshot IS NOT NULL")
+        .bind(run_id).fetch_one(&harness.pool).await?;
+    assert_eq!(
+        stages, 2,
+        "one pause snapshot and one completion snapshot, with no duplicate on role stop"
+    );
+    let batches: i32 = sqlx::query_scalar("SELECT batches_completed FROM runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(
+        batches,
+        8192 / 16,
+        "final flush must not count pending batches twice"
+    );
     harness.cleanup().await?;
     Ok(())
 }

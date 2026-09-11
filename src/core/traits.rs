@@ -8,9 +8,9 @@ use super::models::{
     RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot,
 };
+use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
-use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
@@ -143,8 +143,6 @@ pub trait WorkQueueStore: Send + Sync {
         run_id: i32,
         completed_after_batch_id: Option<i64>,
     ) -> Result<BatchQueueCounts, StoreError>;
-    async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
-    async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn claim_batch(
         &self,
         run_id: i32,
@@ -245,6 +243,7 @@ pub trait AggregationStore: Send + Sync {
         &self,
         run_id: i32,
         checkpoint: &SamplerAggregatorCheckpoint,
+        stage: Option<&RunStageSnapshot>,
     ) -> Result<(), StoreError>;
     async fn save_run_sample_progress(
         &self,

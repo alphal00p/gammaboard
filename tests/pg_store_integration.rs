@@ -1466,3 +1466,119 @@ async fn completed_cleanup_preserves_committed_checkpoint_work() {
     assert_eq!(remaining, vec![ids[2]]);
     store.remove_run(run).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
+    use gammaboard::core::{AggregationStore, RunStageSnapshot, SamplerAggregatorCheckpoint};
+    use gammaboard::evaluation::AccumulatorState;
+    use gammaboard::sampling::SamplerAggregatorSnapshot;
+    use serde_json::json;
+
+    let (_guard, store) = locked_test_store().await;
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('checkpoint-atomic','{}','{\"continuous\":{\"dims\":1}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let task = insert_completed_pause_task(&store, run).await;
+    sqlx::query("UPDATE run_tasks SET state='active' WHERE id=$1")
+        .bind(task)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let sampler = SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) };
+    let observable = AccumulatorState::empty_scalar();
+    // A checkpoint written by the preceding version, including discarded live metrics.
+    let old = json!({
+        "completed_samples":0, "task_id":task, "output_snapshot_id":null, "batches_completed":null,
+        "sampler_snapshot":sampler, "observable_state":observable,
+        "runtime_state":{
+            "produced_batches_total":0, "produced_samples_total":0,
+            "ingested_batches_total":0, "ingested_samples_total":0,
+            "sampler_uptime_ms_accumulated":10.0, "accumulator_checkpoint_state":"NeedsInitialRoundTrip",
+            "completed_samples_per_second":99.0, "eta_seconds":1.0, "sampler_tick_busy_ratio":0.8,
+            "initial_round_trip_snapshot_pending":false, "pending_persisted_completed_batches":0,
+            "batch_size_current":128
+        },
+        "queue":{"last_completed_batch_id":null,"last_produced_batch_id":null,"batch_size_current":128}
+    });
+    sqlx::query(
+        "INSERT INTO run_sampler_checkpoints (run_id,task_id,sampler_checkpoint) VALUES ($1,$2,$3)",
+    )
+    .bind(run)
+    .bind(task)
+    .bind(old)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../migrations/202609110004_compact_checkpoints.sql"
+    ))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let mut checkpoint: SamplerAggregatorCheckpoint =
+        store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    store
+        .restore_sampler_checkpoint(run, &checkpoint)
+        .await
+        .expect("migrated checkpoint remains restorable");
+    let compact = serde_json::to_value(&checkpoint).unwrap();
+    assert_eq!(compact["runtime_state"].as_object().unwrap().len(), 6);
+    assert_eq!(compact["batches_completed"], 0);
+    let stage = RunStageSnapshot {
+        id: None,
+        run_id: run,
+        task_id: Some(task),
+        name: "saved".into(),
+        sequence_nr: Some(0),
+        queue_empty: true,
+        sampler_snapshot: Some(sampler),
+        observable_state: Some(observable),
+        evaluator: None,
+        sampler_aggregator: None,
+        batch_transforms: vec![],
+    };
+    store
+        .save_sampler_checkpoint(run, &checkpoint, Some(&stage))
+        .await
+        .unwrap();
+    let before = store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    // Fail after the stage INSERT, inside the checkpoint transaction.
+    let constraint = format!("reject_test_checkpoint_{run}");
+    sqlx::query(&format!("ALTER TABLE run_sampler_checkpoints ADD CONSTRAINT {constraint} CHECK (run_id <> {run} OR (sampler_checkpoint->>'completed_samples')::bigint < 1000)"))
+        .execute(store.pool()).await.unwrap();
+    checkpoint.completed_samples = 1000;
+    assert!(
+        store
+            .save_sampler_checkpoint(run, &checkpoint, Some(&stage))
+            .await
+            .is_err()
+    );
+    sqlx::query(&format!(
+        "ALTER TABLE run_sampler_checkpoints DROP CONSTRAINT {constraint}"
+    ))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let stages: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM run_stage_snapshots WHERE run_id=$1")
+            .bind(run)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        stages, 1,
+        "failed save cannot leave an orphan stage snapshot"
+    );
+    let after = store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    let status = store.checkpoint_status(run).await.unwrap();
+    assert_eq!(status["saved_samples"], 0);
+    // A mismatched embedded task must fail instead of silently changing recovery identity.
+    sqlx::query("UPDATE run_sampler_checkpoints SET sampler_checkpoint=jsonb_set(sampler_checkpoint,'{task_id}','-1') WHERE run_id=$1")
+        .bind(run).execute(store.pool()).await.unwrap();
+    assert!(store.load_sampler_checkpoint(run).await.is_err());
+    store.remove_run(run).await.unwrap();
+}

@@ -3,7 +3,7 @@ use crate::core::{
     CapabilityRequirements, ControlPlaneStore, NodeCapabilities, NodeLaunchRequest, RegisteredNode,
     RunReadStore, RunSpecStore, WorkerRole,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -36,11 +36,23 @@ pub struct StoppedAllNodes {
     pub rows_updated: u64,
 }
 
-#[derive(Debug, Clone)]
+/// Shared settings for deploy, dashboard shutdown and direct API callers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct GracefulNodeShutdownParams {
-    pub sampler_drain_timeout: Duration,
-    pub node_stop_timeout: Duration,
-    pub poll_interval: Duration,
+    pub sampler_drain_timeout_seconds: u64,
+    pub node_stop_timeout_seconds: u64,
+    pub poll_interval_ms: u64,
+}
+
+impl Default for GracefulNodeShutdownParams {
+    fn default() -> Self {
+        Self {
+            sampler_drain_timeout_seconds: 60,
+            node_stop_timeout_seconds: 15,
+            poll_interval_ms: 250,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -215,16 +227,7 @@ pub async fn stop_all_nodes_gracefully(
 ) -> Result<GracefulNodeShutdownResult, ApiError> {
     let assignments_cleared = store.clear_all_desired_assignments().await?;
     let rows_updated = store.request_all_nodes_shutdown().await?;
-    let wait_result = wait_for_graceful_node_shutdown(store, params).await?;
-
-    Ok(GracefulNodeShutdownResult {
-        assignments_cleared,
-        rows_updated,
-        sampler_drain_timed_out: wait_result.sampler_drain_timed_out,
-        node_stop_timed_out: wait_result.node_stop_timed_out,
-        active_samplers_remaining: wait_result.active_samplers_remaining,
-        live_nodes_remaining: wait_result.live_nodes_remaining,
-    })
+    wait_for_graceful_node_shutdown(store, params, assignments_cleared, rows_updated).await
 }
 
 /// Deployment shutdown preserves launch intent and assignments for explicit resume.
@@ -236,29 +239,17 @@ pub async fn suspend_nodes_gracefully(
         .suspend_workers()
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let wait = wait_for_graceful_node_shutdown(store, params).await?;
-    Ok(GracefulNodeShutdownResult {
-        assignments_cleared: 0,
-        rows_updated,
-        sampler_drain_timed_out: wait.sampler_drain_timed_out,
-        node_stop_timed_out: wait.node_stop_timed_out,
-        active_samplers_remaining: wait.active_samplers_remaining,
-        live_nodes_remaining: wait.live_nodes_remaining,
-    })
-}
-
-struct GracefulNodeShutdownWaitResult {
-    sampler_drain_timed_out: bool,
-    node_stop_timed_out: bool,
-    active_samplers_remaining: usize,
-    live_nodes_remaining: usize,
+    wait_for_graceful_node_shutdown(store, params, 0, rows_updated).await
 }
 
 async fn wait_for_graceful_node_shutdown(
     store: &impl ControlPlaneStore,
     params: GracefulNodeShutdownParams,
-) -> Result<GracefulNodeShutdownWaitResult, ApiError> {
-    let sampler_deadline = Instant::now() + params.sampler_drain_timeout;
+    assignments_cleared: u64,
+    rows_updated: u64,
+) -> Result<GracefulNodeShutdownResult, ApiError> {
+    let sampler_deadline =
+        Instant::now() + Duration::from_secs(params.sampler_drain_timeout_seconds);
     let mut node_deadline = None;
     let mut sampler_drain_timed_out = false;
     loop {
@@ -276,11 +267,14 @@ async fn wait_for_graceful_node_shutdown(
 
         if active_samplers_remaining == 0 || now >= sampler_deadline {
             sampler_drain_timed_out = active_samplers_remaining > 0;
-            node_deadline.get_or_insert(now + params.node_stop_timeout);
+            node_deadline
+                .get_or_insert(now + Duration::from_secs(params.node_stop_timeout_seconds));
         }
 
         if live_nodes_remaining == 0 {
-            return Ok(GracefulNodeShutdownWaitResult {
+            return Ok(GracefulNodeShutdownResult {
+                assignments_cleared,
+                rows_updated,
                 sampler_drain_timed_out,
                 node_stop_timed_out: false,
                 active_samplers_remaining,
@@ -289,7 +283,9 @@ async fn wait_for_graceful_node_shutdown(
         }
 
         if node_deadline.is_some_and(|deadline| now >= deadline) {
-            return Ok(GracefulNodeShutdownWaitResult {
+            return Ok(GracefulNodeShutdownResult {
+                assignments_cleared,
+                rows_updated,
                 sampler_drain_timed_out,
                 node_stop_timed_out: true,
                 active_samplers_remaining,
@@ -297,7 +293,7 @@ async fn wait_for_graceful_node_shutdown(
             });
         }
 
-        tokio::time::sleep(params.poll_interval).await;
+        tokio::time::sleep(Duration::from_millis(params.poll_interval_ms.max(1))).await;
     }
 }
 

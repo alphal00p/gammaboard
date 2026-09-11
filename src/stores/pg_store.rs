@@ -5,6 +5,7 @@ mod run_spec;
 mod runtime_log;
 
 use super::queries;
+use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{
     AggregationStore, BatchClaim, BatchQueueCounts, CompletedBatch, ControlPlaneStore,
     DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode, RunSampleProgress,
@@ -13,7 +14,6 @@ use crate::core::{
 };
 use crate::core::{IntegrationParams, RunSpec, SamplerQueueTuning, canonical_task_toml};
 use crate::evaluation::BatchResult;
-use crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint;
 use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
@@ -649,18 +649,6 @@ impl WorkQueueStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn get_pending_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
-        queries::get_pending_batch_count(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    async fn get_open_batch_count(&self, run_id: i32) -> Result<i64, StoreError> {
-        queries::get_open_batch_count(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
     async fn claim_batch(
         &self,
         run_id: i32,
@@ -888,9 +876,10 @@ impl AggregationStore for PgStore {
             return Ok(());
         }
 
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
         if let Some(persisted_observable) = persisted_observable {
             let _ = queries::insert_task_output_snapshot(
-                &self.pool,
+                &mut *tx,
                 run_id,
                 task_id,
                 persisted_observable,
@@ -899,7 +888,7 @@ impl AggregationStore for PgStore {
             .map_err(map_sqlx)?;
         }
         queries::update_run_current_accumulator(
-            &self.pool,
+            &mut *tx,
             run_id,
             current_accumulator,
             delta_batches_completed,
@@ -907,6 +896,7 @@ impl AggregationStore for PgStore {
         .await
         .map_err(map_sqlx)?;
 
+        tx.commit().await.map_err(map_sqlx)?;
         Ok(())
     }
 
@@ -914,8 +904,9 @@ impl AggregationStore for PgStore {
         &self,
         run_id: i32,
         checkpoint: &SamplerAggregatorCheckpoint,
+        stage: Option<&RunStageSnapshot>,
     ) -> Result<(), StoreError> {
-        queries::upsert_run_sampler_checkpoint(&self.pool, run_id, checkpoint)
+        queries::upsert_run_sampler_checkpoint(&self.pool, run_id, checkpoint, stage)
             .await
             .map_err(map_sqlx)
     }

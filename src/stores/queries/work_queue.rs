@@ -160,23 +160,6 @@ pub(crate) async fn insert_batches(
     })
 }
 
-pub(crate) async fn get_pending_batch_count(
-    pool: &PgPool,
-    run_id: i32,
-) -> Result<i64, sqlx::Error> {
-    let count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COALESCE(pending_batches, 0)
-        FROM run_batch_queue_counters
-        WHERE run_id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(count.unwrap_or(0))
-}
-
 pub(crate) async fn get_batch_queue_counts(
     pool: &PgPool,
     run_id: i32,
@@ -210,20 +193,6 @@ pub(crate) async fn get_batch_queue_counts(
         completed,
         failed,
     })
-}
-
-pub(crate) async fn get_open_batch_count(pool: &PgPool, run_id: i32) -> Result<i64, sqlx::Error> {
-    let count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COALESCE(pending_batches + claimed_batches + completed_batches, 0)
-        FROM run_batch_queue_counters
-        WHERE run_id = $1
-        "#,
-    )
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(count.unwrap_or(0))
 }
 
 pub(crate) async fn claim_batch(

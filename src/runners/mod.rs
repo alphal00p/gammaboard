@@ -17,6 +17,6 @@ pub(crate) mod window_metric;
 
 pub use evaluator::{EvaluatorRunner, EvaluatorRunnerError, EvaluatorRunnerParams};
 pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
-pub use queue::{QueueTickResult, SamplerQueue, SamplerQueueCheckpoint, SamplerQueueConfig};
+pub use queue::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
 pub use sampler_aggregator::{RunnerError, SamplerAggregatorRunner, SamplerAggregatorRunnerParams};
 pub use task_control::{TaskControlLoop, TaskControlLoopConfig};

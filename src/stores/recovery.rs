@@ -1,5 +1,5 @@
 use super::PgStore;
-use crate::{core::StoreError, runners::sampler_aggregator::SamplerAggregatorCheckpoint};
+use crate::core::{SamplerAggregatorCheckpoint, StoreError};
 
 impl PgStore {
     /// Roll back live progress and speculative work to the same boundary as the sampler.
@@ -68,7 +68,7 @@ impl PgStore {
         .execute(&mut *tx)
         .await?;
         sqlx::query("UPDATE runs SET batches_completed=$3,nr_produced_samples=(SELECT COALESCE(sum(nr_produced_samples),0) FROM run_tasks WHERE run_id=$1),nr_completed_samples=(SELECT COALESCE(sum(nr_completed_samples),0) FROM run_tasks WHERE run_id=$1),current_observable=$2 WHERE id=$1")
-            .bind(run_id).bind(observable).bind(checkpoint.batches_completed.unwrap_or(0)).execute(&mut *tx).await?;
+            .bind(run_id).bind(observable).bind(checkpoint.batches_completed).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }

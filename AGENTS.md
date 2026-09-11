@@ -197,3 +197,10 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Large process-sampler snapshots may remain external; references must identify
   immutable files published durably before returning the snapshot. Reuse the same
   sampler snapshot for the recovery checkpoint and its corresponding stage snapshot.
+
+- Recovery models live in `core::checkpoint`; the queue owns adaptive batch size.
+  Checkpoint only durable progress, not live timing windows or pending writes.
+  Finish pending aggregation writes before final persistence; commit checkpoint,
+  matching stage snapshot and saved status in one transaction. Cleanup on stop is
+  bounded and follows durable publication. Deploy and dashboard share the same
+  `api::nodes::GracefulNodeShutdownParams` configuration and wait result model.

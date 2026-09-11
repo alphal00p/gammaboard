@@ -1,3 +1,4 @@
+use crate::core::SamplerQueueCheckpoint;
 use crate::core::{
     BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, SamplerQueueRollingAverages,
     SamplerQueueRuntimeMetrics, SamplerQueueTuning, SamplerWorkerStore, StoreError, next_batch_ids,
@@ -72,14 +73,6 @@ fn apply_option<T>(destination: &mut T, value: Option<T>) {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SamplerQueueCheckpoint {
-    pub last_completed_batch_id: Option<i64>,
-    #[serde(default)]
-    pub last_produced_batch_id: Option<i64>,
-    pub batch_size_current: Option<usize>,
-}
-
 pub struct SamplerQueue<S> {
     run_id: i32,
     task_id: i64,
@@ -97,7 +90,6 @@ pub struct SamplerQueue<S> {
     cached_active_evaluator_count: Option<usize>,
     last_reclaim_at: Instant,
     last_completed_cleanup_at: Instant,
-    batch_size_current: usize,
     batch_size_tune_cooldown_remaining: u32,
     eval_ms_per_sample: RollingMetric,
     training_batch_sizing: TrainingBatchSizing,
@@ -230,14 +222,12 @@ where
         task_id: i64,
         requires_training_values: bool,
         config: SamplerQueueConfig,
-        checkpoint: SamplerQueueCheckpoint,
-        initial_batch_size: usize,
+        mut checkpoint: SamplerQueueCheckpoint,
     ) -> Self {
         let now = Instant::now();
         let max_batch_size = config.max_batch_size.max(MIN_BATCH_SIZE);
-        let batch_size_current = checkpoint
+        checkpoint.batch_size_current = checkpoint
             .batch_size_current
-            .unwrap_or(initial_batch_size)
             .clamp(MIN_BATCH_SIZE, max_batch_size);
         Self {
             run_id,
@@ -256,7 +246,6 @@ where
             cached_active_evaluator_count: None,
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
             last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
-            batch_size_current,
             batch_size_tune_cooldown_remaining: 0,
             eval_ms_per_sample: RollingMetric::default(),
             training_batch_sizing: TrainingBatchSizing::default(),
@@ -271,22 +260,19 @@ where
 
     pub fn apply_config(&mut self, config: SamplerQueueConfig) {
         self.config = config;
-        self.batch_size_current = self
+        self.checkpoint.batch_size_current = self
+            .checkpoint
             .batch_size_current
             .clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
         self.batch_size_tune_cooldown_remaining = 0;
     }
 
     pub fn checkpoint(&self) -> SamplerQueueCheckpoint {
-        SamplerQueueCheckpoint {
-            last_completed_batch_id: self.checkpoint.last_completed_batch_id,
-            last_produced_batch_id: self.checkpoint.last_produced_batch_id,
-            batch_size_current: Some(self.batch_size_current),
-        }
+        self.checkpoint.clone()
     }
 
     pub fn current_batch_size(&self) -> usize {
-        self.batch_size_current
+        self.checkpoint.batch_size_current
     }
 
     pub fn observe_completed_eval_batch(&mut self, batch_size: usize, total_eval_time_ms: f64) {
@@ -408,20 +394,20 @@ where
         Ok(counts)
     }
 
-    pub async fn open_batch_count(&self) -> Result<i64, StoreError> {
-        self.store.get_open_batch_count(self.run_id).await
-    }
-
     async fn reclaim_abandoned_batches(&self) -> Result<u64, StoreError> {
         self.store.reclaim_abandoned_batches(self.run_id).await
     }
 
-    async fn cleanup_consumed_completed_batches(&self, limit: usize) -> Result<u64, StoreError> {
+    async fn cleanup_consumed_completed_batches(&self) -> Result<u64, StoreError> {
         let Some(up_to_batch_id) = self.last_completed_batch_id() else {
             return Ok(0);
         };
         self.store
-            .cleanup_consumed_completed_batches(self.run_id, up_to_batch_id, limit)
+            .cleanup_consumed_completed_batches(
+                self.run_id,
+                up_to_batch_id,
+                COMPLETED_CLEANUP_BATCH_LIMIT,
+            )
             .await
     }
 
@@ -443,9 +429,7 @@ where
         })
     }
 
-    pub async fn force_cleanup_consumed_completed_batches(
-        &mut self,
-    ) -> Result<Option<Duration>, StoreError> {
+    pub async fn cleanup_completed_batches(&mut self) -> Result<Option<Duration>, StoreError> {
         if let Some(task) = self.pending_completed_cleanup.take() {
             let _ = self.consume_completed_cleanup_task(task).await?;
         }
@@ -453,14 +437,7 @@ where
             return Ok(None);
         };
         let cleanup_started = Instant::now();
-        loop {
-            let deleted = self
-                .cleanup_consumed_completed_batches(COMPLETED_CLEANUP_BATCH_LIMIT)
-                .await?;
-            if deleted < COMPLETED_CLEANUP_BATCH_LIMIT as u64 {
-                break;
-            }
-        }
+        self.cleanup_consumed_completed_batches().await?;
         self.last_completed_cleanup_at = Instant::now();
         Ok(Some(cleanup_started.elapsed()))
     }
@@ -479,7 +456,7 @@ where
         self.cached_active_evaluator_count = Some(active_evaluator_count);
         self.cached_tick_queue_counts = Some(queue_counts);
         let batch_size = self.training_batch_sizing.batch_size(
-            self.batch_size_current,
+            self.checkpoint.batch_size_current,
             training_remaining,
             active_evaluator_count,
         );
@@ -948,7 +925,7 @@ where
         {
             return;
         }
-        let current_eval_batch_ms = eval_ms_per_sample * self.batch_size_current as f64;
+        let current_eval_batch_ms = eval_ms_per_sample * self.checkpoint.batch_size_current as f64;
         if current_eval_batch_ms <= 0.0 || !current_eval_batch_ms.is_finite() {
             return;
         }
@@ -962,12 +939,12 @@ where
         if ratio >= lower && ratio <= upper {
             return;
         }
-        let next = ((self.batch_size_current as f64) * ratio).round() as usize;
+        let next = ((self.checkpoint.batch_size_current as f64) * ratio).round() as usize;
         let next = next.clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
-        if next == self.batch_size_current {
+        if next == self.checkpoint.batch_size_current {
             return;
         }
-        self.batch_size_current = next;
+        self.checkpoint.batch_size_current = next;
         self.batch_size_tune_cooldown_remaining = self.config.batch_size_cooldown_ticks;
     }
 
@@ -1060,14 +1037,6 @@ mod tests {
             _run_id: i32,
             _completed_after_batch_id: Option<i64>,
         ) -> Result<BatchQueueCounts, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_pending_batch_count(&self, _run_id: i32) -> Result<i64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_open_batch_count(&self, _run_id: i32) -> Result<i64, StoreError> {
             unreachable!("unused in test")
         }
 
@@ -1185,10 +1154,7 @@ mod tests {
         async fn load_sampler_checkpoint(
             &self,
             _run_id: i32,
-        ) -> Result<
-            Option<crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint>,
-            StoreError,
-        > {
+        ) -> Result<Option<crate::core::SamplerAggregatorCheckpoint>, StoreError> {
             unreachable!("unused in test")
         }
 
@@ -1236,7 +1202,8 @@ mod tests {
         async fn save_sampler_checkpoint(
             &self,
             _run_id: i32,
-            _checkpoint: &crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint,
+            _checkpoint: &crate::core::SamplerAggregatorCheckpoint,
+            _stage: Option<&crate::core::RunStageSnapshot>,
         ) -> Result<(), StoreError> {
             unreachable!("unused in test")
         }
@@ -1612,8 +1579,10 @@ mod tests {
                 completed_batch_fetch_limit: 16,
                 max_batch_retries: 3,
             },
-            SamplerQueueCheckpoint::default(),
-            128,
+            SamplerQueueCheckpoint {
+                batch_size_current: 128,
+                ..SamplerQueueCheckpoint::default()
+            },
         )
     }
 

@@ -309,7 +309,12 @@ retained. Missing checkpoint work causes an explicit activation failure.
 Only outstanding work included in the committed checkpoint must remain available
 for replay. Consumed work produced later can be cleaned up, keeping retention
 bounded without forcing frequent writes of large checkpoint files. Checkpoint
-publication waits for durable database commit before authorizing cleanup.
+publication waits for durable database commit before authorizing cleanup. A stop flushes local
+work and pending accumulator writes, then commits the recovery checkpoint and
+matching stage snapshot together. Cleanup does one bounded pass on stop and
+continues during normal operation; it need not empty the persistent queue.
+Only durable sampler progress is checkpointed; live rate/timing windows reset
+on activation. Dashboard shutdown and deploy use the same `[cleanup]` settings.
 
 Process samplers may store large checkpoints in external files. Each returned
 snapshot must reference immutable, durably published files accessible to resumed

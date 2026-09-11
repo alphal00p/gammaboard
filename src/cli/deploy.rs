@@ -418,15 +418,7 @@ async fn cleanup_deploy(
     let sampler_drain_result: Result<()> = async {
             let stopped = node_api::suspend_nodes_gracefully(
                 store,
-                node_api::GracefulNodeShutdownParams {
-                    sampler_drain_timeout: Duration::from_secs(
-                        server_config.cleanup.sampler_drain_timeout_seconds,
-                    ),
-                    node_stop_timeout: Duration::from_secs(
-                        server_config.cleanup.node_stop_timeout_seconds,
-                    ),
-                    poll_interval: Duration::from_millis(server_config.cleanup.poll_interval_ms),
-                },
+                server_config.cleanup.clone(),
             )
             .await?;
             tracing::info!(

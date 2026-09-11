@@ -60,7 +60,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     fn resolve_observable_state_for_sampler_task(
         run_id: i32,
         task_id: i64,
-        restored_snapshot: Option<&crate::runners::sampler_aggregator::SamplerAggregatorCheckpoint>,
+        restored_snapshot: Option<&crate::core::SamplerAggregatorCheckpoint>,
         accumulator_source_snapshot: Option<&RunStageSnapshot>,
         base_stage_snapshot: Option<&RunStageSnapshot>,
         new_accumulator_config: Option<crate::core::AccumulatorConfig>,

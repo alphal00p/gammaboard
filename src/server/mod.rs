@@ -51,7 +51,6 @@ use std::fs;
 use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
-    time::Duration,
 };
 use tracing::Instrument;
 
@@ -94,7 +93,7 @@ pub struct ServerConfig {
     #[serde(default)]
     pub database: ServerDatabaseConfig,
     #[serde(default)]
-    pub cleanup: ServerCleanupConfig,
+    pub cleanup: node_api::GracefulNodeShutdownParams,
     pub auth: Option<ServerAuthConfig>,
 }
 
@@ -180,17 +179,6 @@ pub struct ServerDatabaseConfig {
     pub ensure_started: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ServerCleanupConfig {
-    #[serde(default = "default_sampler_drain_timeout_seconds")]
-    pub sampler_drain_timeout_seconds: u64,
-    #[serde(default = "default_node_stop_timeout_seconds")]
-    pub node_stop_timeout_seconds: u64,
-    #[serde(default = "default_cleanup_poll_interval_ms")]
-    pub poll_interval_ms: u64,
-}
-
 impl Default for ServerFrontendConfig {
     fn default() -> Self {
         Self {
@@ -211,30 +199,8 @@ impl Default for ServerDatabaseConfig {
     }
 }
 
-impl Default for ServerCleanupConfig {
-    fn default() -> Self {
-        Self {
-            sampler_drain_timeout_seconds: default_sampler_drain_timeout_seconds(),
-            node_stop_timeout_seconds: default_node_stop_timeout_seconds(),
-            poll_interval_ms: default_cleanup_poll_interval_ms(),
-        }
-    }
-}
-
 fn default_database_ensure_started() -> bool {
     true
-}
-
-fn default_sampler_drain_timeout_seconds() -> u64 {
-    60
-}
-
-fn default_node_stop_timeout_seconds() -> u64 {
-    15
-}
-
-fn default_cleanup_poll_interval_ms() -> u64 {
-    250
 }
 
 impl ServerConfig {
@@ -369,6 +335,7 @@ pub async fn serve(
     }
     let state = AppState {
         store: store.clone(),
+        cleanup: config.cleanup.clone(),
         auth: config
             .auth
             .as_ref()
@@ -405,6 +372,7 @@ pub async fn serve(
 #[derive(Clone)]
 pub(crate) struct AppState {
     store: PgStore,
+    cleanup: node_api::GracefulNodeShutdownParams,
     pub(crate) auth: Option<AuthConfig>,
     server_name: String,
     allowed_origins: Vec<axum::http::HeaderValue>,
@@ -1624,15 +1592,7 @@ async fn shutdown_control_process(
     );
     let store = state.store.clone();
     tokio::spawn(async move {
-        let result = node_api::suspend_nodes_gracefully(
-            &store,
-            node_api::GracefulNodeShutdownParams {
-                sampler_drain_timeout: Duration::from_secs(60),
-                node_stop_timeout: Duration::from_secs(15),
-                poll_interval: Duration::from_millis(250),
-            },
-        )
-        .await;
+        let result = node_api::suspend_nodes_gracefully(&store, state.cleanup).await;
         match result {
             Ok(result) => tracing::info!(
                 source = "control",
