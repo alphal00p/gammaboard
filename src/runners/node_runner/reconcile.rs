@@ -531,14 +531,13 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 )
                 .await?;
         }
-        let restored_snapshot_for_runner = restored_snapshot.clone();
-        let task_for_runner = task.clone();
+        let needs_initial_checkpoint = restored_snapshot.is_none();
 
         let mut runner = SamplerAggregatorRunner::new(
             role_store,
             worker.run_id,
             self.node_name.clone(),
-            task_for_runner,
+            task,
             sampler,
             observable_state,
             evaluator_config,
@@ -548,10 +547,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             base_queue_config,
             initial_batch_size,
             run_progress,
-            restored_snapshot_for_runner,
+            restored_snapshot,
         );
 
-        if restored_snapshot.is_none() {
+        if needs_initial_checkpoint {
             runner
                 .save_initial_checkpoint()
                 .await

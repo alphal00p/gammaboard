@@ -66,27 +66,29 @@ pub fn completed_batch() {
 }
 
 pub struct PhaseGuard {
-    handle: Option<Handle>,
-    previous: Option<(String, DateTime<Utc>)>,
+    previous: Option<(Handle, String, DateTime<Utc>)>,
 }
 impl PhaseGuard {
     pub fn enter(handle: Option<Handle>, phase: &str) -> Self {
-        let previous = handle
-            .as_ref()
-            .and_then(|h| h.lock().ok().map(|a| (a.activity.clone(), a.since)));
-        if let Some(h) = &handle {
-            set_on(h, phase);
-        }
-        Self { handle, previous }
+        let previous = handle.and_then(|handle| {
+            let mut activity = handle.lock().ok()?;
+            let previous = (handle.clone(), activity.activity.clone(), activity.since);
+            if activity.activity != phase {
+                activity.activity = phase.into();
+                activity.since = Utc::now();
+            }
+            Some(previous)
+        });
+        Self { previous }
     }
 }
 impl Drop for PhaseGuard {
     fn drop(&mut self) {
-        if let (Some(h), Some((phase, since))) = (&self.handle, &self.previous) {
-            if let Ok(mut a) = h.lock() {
-                a.activity = phase.clone();
-                a.since = *since;
-            }
+        if let Some((handle, phase, since)) = &self.previous
+            && let Ok(mut activity) = handle.lock()
+        {
+            activity.activity = phase.clone();
+            activity.since = *since;
         }
     }
 }

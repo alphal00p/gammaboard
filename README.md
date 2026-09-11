@@ -358,15 +358,20 @@ repeating training updates. Defaults introduce no delay. Set
 selects inference. Synthetic worker panels show requested/actual delay and update
 counts. These engines are available in ordinary builds.
 
-The [queue benchmark suite](benchmarks/queue/README.md) covers 1, 4, 16 and 64
-evaluators with nominal deployment compute ceilings from 1,000 to 2,000,000
-samples/s. It supports generated run cards, isolated local runs, and paired A/B
-measurements using prebuilt binaries. The default 16-case suite has a five-minute
-wall-time budget, including paired A/B runs. Its burst cases alternate fast
-generation with 0.5-second training updates:
+Run the 16-case queue benchmark with a prebuilt binary:
 
 ```sh
-just benchmark-queue run --binary target/release/gammaboard --smoke --output /tmp/queue-smoke
+cargo build --release --no-default-features
+just benchmark-queue --binary target/release/gammaboard
 ```
 
-Use the timing tables instead of the former synthetic millisecond-delay fields.
+The script requires Python 3.11+ and `psql` (`nix develop` supplies both). It prints
+throughput, evaluator utilization and training stall measurements to the console,
+using an isolated temporary deployment. Defaults cover 1/4/16/64 evaluators,
+nominal capacities of 1,000/2,000,000 samples/s, and fast sampling with repeated
+0.5-second training stalls versus inference. The whole suite is limited to five
+minutes; compilation is separate. Use `--evaluators`, `--rates`, `--regimes` or
+`--duration` to focus a run, and `--port-offset` if its default ports are occupied.
+Successful runs remove their temporary database; failures retain diagnostics.
+Short runs measure coarse differences, and nominal capacity excludes overhead
+and training stalls.
