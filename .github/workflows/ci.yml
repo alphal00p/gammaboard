@@ -14,6 +14,8 @@ env:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    env:
+      GAMMABOARD_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5400/gammaboard_db
     services:
       postgres:
         image: postgres:16
@@ -94,6 +96,8 @@ jobs:
       - run: python -m pip install process_api/python/dist/*.whl
       - run: python -m pip install --no-deps -e integrations/madgraph
       - run: python -m pytest -q process_api/python/tests integrations/madgraph/tests
+      - name: Test queue benchmark script
+        run: python -m unittest discover -s scripts -p test_benchmark_queue.py
       - name: Reject retired CLI and protocol spellings
         run: |
           ! rg -n '(run add|run task add|node auto-run|deploy run|gammaboard-jsonrpc-v1)' \

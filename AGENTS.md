@@ -134,6 +134,9 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
 - Update this file for significant architecture/runtime/CLI/config shape changes.
 - Update `README.md` for setup/operator workflow changes.
 - If Rust code changes: run `cargo fmt`, `cargo check -q`, `cargo test -q`. Run `just test-e2e` only for larger changes touching relevant code.
+- Before pushing, run the workflow's strict Clippy check with its Rust toolchain:
+  `cargo clippy --locked --all-targets --all-features -- -D warnings`. Database
+  checks must explicitly set `GAMMABOARD_TEST_DATABASE_URL` in both CI and local runs.
 - After a coherent stage, provide a commit message as a bare fenced `text` block.
 - `run validate` shares run-creation preflight and requires no database; `--probe`
   initializes runtimes without producing samples or creating a run.

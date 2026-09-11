@@ -279,7 +279,7 @@ impl SamplerAggregatorConfig {
             SamplerAggregatorConfig::NaiveMonteCarlo { params, .. } => Box::new(
                 IdentityMaterializer::new_with_failure(params.fail_on_materialize_batch_nr),
             ),
-            SamplerAggregatorConfig::HavanaInference { params: _, .. } => {
+            SamplerAggregatorConfig::HavanaInference { .. } => {
                 Box::new(HavanaInferenceMaterializer::new(handoff)?)
             }
             _ => Box::new(IdentityMaterializer::new()),

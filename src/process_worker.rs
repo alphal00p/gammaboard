@@ -93,28 +93,6 @@ impl ProcessWorker {
         stderr_tail: ProcessStderrTail,
         shutdown_grace_seconds: u64,
     ) -> Self {
-        Self::with_timeouts(
-            label,
-            child,
-            stdin,
-            stdout,
-            stderr_tail,
-            DEFAULT_REQUEST_TIMEOUT,
-            Duration::from_secs(shutdown_grace_seconds),
-            DEFAULT_TERMINATE_GRACE,
-        )
-    }
-
-    fn with_timeouts(
-        label: impl Into<String>,
-        child: Child,
-        stdin: ChildStdin,
-        stdout: ChildStdout,
-        stderr_tail: ProcessStderrTail,
-        request_timeout: Duration,
-        shutdown_grace: Duration,
-        terminate_grace: Duration,
-    ) -> Self {
         Self {
             label: label.into(),
             diagnostic_context: String::new(),
@@ -126,9 +104,9 @@ impl ProcessWorker {
             next_id: 1,
             stdout_log_bytes_before_frame: 0,
             stderr_tail,
-            request_timeout,
-            shutdown_grace,
-            terminate_grace,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            shutdown_grace: Duration::from_secs(shutdown_grace_seconds),
+            terminate_grace: DEFAULT_TERMINATE_GRACE,
         }
     }
 
@@ -585,8 +563,10 @@ pub(crate) fn read_le_f64(
         )
     })?;
     let values = slice
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| f64::from_le_bytes(*chunk))
         .collect();
     Ok((values, end))
 }
@@ -606,8 +586,10 @@ pub(crate) fn read_le_i64(
         )
     })?;
     let values = slice
-        .chunks_exact(8)
-        .map(|chunk| i64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| i64::from_le_bytes(*chunk))
         .collect();
     Ok((values, end))
 }
@@ -765,14 +747,14 @@ fn redact_diagnostic(value: &str) -> String {
     let words = result
         .split_whitespace()
         .map(|word| {
-            if let Some(scheme) = word.find("://") {
-                if let Some(at) = word[scheme + 3..].find('@') {
-                    return format!(
-                        "{}[REDACTED]@{}",
-                        &word[..scheme + 3],
-                        &word[scheme + 3 + at + 1..]
-                    );
-                }
+            if let Some(scheme) = word.find("://")
+                && let Some(at) = word[scheme + 3..].find('@')
+            {
+                return format!(
+                    "{}[REDACTED]@{}",
+                    &word[..scheme + 3],
+                    &word[scheme + 3 + at + 1..]
+                );
             }
             word.to_string()
         })
@@ -1014,26 +996,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn stalled_worker_request_times_out_and_is_terminated() {
-        let mut child = Command::new("sh")
-            .args(["-c", "read _; sleep 5"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn test worker");
-        let stdin = child.stdin.take().expect("worker stdin");
-        let stdout = child.stdout.take().expect("worker stdout");
-        let stderr = child.stderr.take().expect("worker stderr");
-        let mut worker = ProcessWorker::with_timeouts(
-            "test worker",
-            child,
-            stdin,
-            stdout,
-            pipe_process_stderr("test worker", stderr),
-            Duration::from_millis(20),
+        let (mut worker, _) = test_worker(
+            "read _; sleep 5",
             Duration::from_millis(20),
             Duration::from_millis(20),
         );
+        worker.request_timeout = Duration::from_millis(20);
 
         assert!(
             worker
@@ -1061,19 +1029,18 @@ mod tests {
         let stdin = child.stdin.take().expect("worker stdin");
         let stdout = child.stdout.take().expect("worker stdout");
         let stderr = child.stderr.take().expect("worker stderr");
-        (
-            ProcessWorker::with_timeouts(
-                "test worker",
-                child,
-                stdin,
-                stdout,
-                pipe_process_stderr("test worker", stderr),
-                Duration::from_secs(1),
-                shutdown_grace,
-                terminate_grace,
-            ),
-            pid,
-        )
+        let mut worker = ProcessWorker::new(
+            "test worker",
+            child,
+            stdin,
+            stdout,
+            pipe_process_stderr("test worker", stderr),
+            shutdown_grace.as_secs(),
+        );
+        worker.request_timeout = Duration::from_secs(1);
+        worker.shutdown_grace = shutdown_grace;
+        worker.terminate_grace = terminate_grace;
+        (worker, pid)
     }
 
     #[cfg(unix)]

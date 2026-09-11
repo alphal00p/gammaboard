@@ -171,8 +171,10 @@ fn unpack_f64_le(bytes: &[u8], what: &str) -> Result<Vec<f64>, EvalError> {
         )));
     }
     Ok(bytes
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().expect("chunk is 8 bytes")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| f64::from_le_bytes(*chunk))
         .collect())
 }
 

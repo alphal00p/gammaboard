@@ -624,7 +624,7 @@ impl GammaLoopEvaluator {
                     }
                     let loop_momenta = point
                         .continuous
-                        .chunks_exact(3)
+                        .as_chunks::<3>().0.iter()
                         .map(|coords| gammalooprs::momentum::ThreeMomentum {
                             px: F(coords[0]),
                             py: F(coords[1]),

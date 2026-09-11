@@ -37,11 +37,11 @@ pub fn snapshot(handle: &Handle) -> serde_json::Value {
         .unwrap_or_default()
 }
 pub fn set_on(handle: &Handle, phase: &str) {
-    if let Ok(mut a) = handle.lock() {
-        if a.activity != phase {
-            a.activity = phase.into();
-            a.since = Utc::now();
-        }
+    if let Ok(mut a) = handle.lock()
+        && a.activity != phase
+    {
+        a.activity = phase.into();
+        a.since = Utc::now();
     }
 }
 pub fn set(phase: &str) {
@@ -50,18 +50,18 @@ pub fn set(phase: &str) {
     }
 }
 pub fn context(run_id: i32, task_id: i64) {
-    if let Some(handle) = current() {
-        if let Ok(mut a) = handle.lock() {
-            a.run_id = Some(run_id);
-            a.task_id = Some(task_id);
-        }
+    if let Some(handle) = current()
+        && let Ok(mut a) = handle.lock()
+    {
+        a.run_id = Some(run_id);
+        a.task_id = Some(task_id);
     }
 }
 pub fn completed_batch() {
-    if let Some(handle) = current() {
-        if let Ok(mut a) = handle.lock() {
-            a.last_completed_batch_at = Some(Utc::now());
-        }
+    if let Some(handle) = current()
+        && let Ok(mut a) = handle.lock()
+    {
+        a.last_completed_batch_at = Some(Utc::now());
     }
 }
 
