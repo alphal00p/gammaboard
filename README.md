@@ -258,7 +258,11 @@ the template's `state_folder` replacement.
 ```bash
 cargo test -q
 just test-e2e
+just test-recovery-soak 50
 ```
+
+The recovery soak repeats the campaign sampler/evaluator-loss E2E test and stops
+on the first failure. Omit the count to run ten iterations.
 
 Build without the heavy GammaLoop dependency:
 
