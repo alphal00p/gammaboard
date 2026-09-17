@@ -1,186 +1,34 @@
-# Hyperparameter tuning showcase: random search, grid search, and variance
-# objectives. Each task exposes objective and best-so-far history plus a stable
-# reference to the complete result of its current best trial.
-# Requires: a working Symbolica runtime license.
-# Scale: dozens of child runs; this is a tuning showcase, not a smoke test.
-# Run: ./gammaboard run create resources/templates/runs/hyperparameter-tuning-symbolica.toml
-#
-# Each trial integrates a 2D Symbolica family with the same exact central value:
-#
-#   f(x,y) = 1 + roughness * ((x-center)^2 + (y-center)^2 - offset(center))
-#
-# where offset(center) is the exact [0,1]^2 integral of
-# `(x-center)^2 + (y-center)^2`. This keeps the integral fixed at 1 while
-# changing the integrand shape and estimator variance.
-#
-# Tuned evaluator parameters:
-# - `center`
-# - `roughness`
-#
-# Tuned sampler parameters:
-# - `havana_bins`
-# - `samples_for_update`
-#
-# The tasks demonstrate:
-# - random-search over evaluator and sampler parameters
-# - grid-search over finite domains
-# - time-normalized variance with fourth moments and metric-targeted stopping
-
-replacements = { run_name = "hyperparameter-tuning-symbolica", trial_samples = 8192, variance_trial_samples = 16384, max_trials = 16, variance_max_trials = 12, max_concurrent_trials = 2 }
-
-name = '$(run_name:"hyperparameter-tuning-symbolica")'
-
-[[task_queue]]
-name = "random-search"
+# Hyperparameter tuning; integration settings belong to the child.
 kind = "hyperparameter_tuning"
+name = "$(run_name:\"hyperparameter-tuning-symbolica\")"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
-trial_run_toml = """
+replacements = { run_name = "hyperparameter-tuning-symbolica", trial_samples = 8192, max_trials = 16, max_concurrent_trials = 2 }
+optimizer = { algorithm = "random_search", params = { max_trials = "$(max_trials:12)", seed = 7 } }
+objective = { source_task = "sample", mode = "minimize", quantity = { metric = "error" } }
+
+[parameters]
+center = { kind = "categorical", values = ["3/20", "1/4", "7/20", "1/2", "13/20", "3/4", "17/20"] }
+roughness = { kind = "categorical", values = ["2", "4", "8"] }
+havana_bins = { kind = "integer", min = 8, max = 64, step = 8 }
+samples_for_update = { kind = "categorical", values = [512, 1024, 2048] }
+
+[child]
+replacements = { trial_samples = "$(trial_samples:8192)" }
+
+[child.run]
 name = "tune-center-$(center:1/2)-rough-$(roughness:4)-bins-$(havana_bins:16)-update-$(samples_for_update:1024)"
 target = { kind = "scalar", value = 1.0 }
 
-[evaluator]
+[child.run.evaluator]
 kind = "symbolica"
 expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
 args = ["x", "y"]
-constants = { center = '$(center:"1/2")', roughness = '$(roughness:"4")' }
+constants = { center = "$(center:\"1/2\")", roughness = "$(roughness:\"4\")" }
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "sample"
 kind = "sample"
-measurement = { quantity = { metric = "error" }, mode = "minimize" }
+measurement = { mode = "minimize", quantity = { metric = "error" } }
 stop_condition = { max_samples = "$(trial_samples:8192)" }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:16)", samples_for_update = "$(samples_for_update:1024)", initial_training_rate = 0.1, final_training_rate = 0.01 } }
-"""
-
-[task_queue.optimizer]
-algorithm = "random_search"
-
-[task_queue.optimizer.params]
-max_trials = "$(max_trials:12)"
-seed = 7
-
-[task_queue.objective]
-source_task = "sample"
-mode = "minimize"
-quantity = { metric = "error" }
-
-[task_queue.parameters.center]
-kind = "categorical"
-values = ["3/20", "1/4", "7/20", "1/2", "13/20", "3/4", "17/20"]
-
-[task_queue.parameters.roughness]
-kind = "categorical"
-values = ["2", "4", "8"]
-
-[task_queue.parameters.havana_bins]
-kind = "integer"
-min = 8
-max = 64
-step = 8
-
-[task_queue.parameters.samples_for_update]
-kind = "categorical"
-values = [512, 1024, 2048]
-
-[[task_queue]]
-name = "grid-search"
-kind = "hyperparameter_tuning"
-max_concurrent_trials = "$(max_concurrent_trials:2)"
-trial_run_toml = """
-name = "grid-center-$(center:1/2)-rough-$(roughness:2)-bins-$(havana_bins:16)"
-target = { kind = "scalar", value = 1.0 }
-
-[evaluator]
-kind = "symbolica"
-expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
-args = ["x", "y"]
-constants = { center = '$(center:"1/2")', roughness = '$(roughness:"2")' }
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-measurement = { quantity = { metric = "error" }, mode = "minimize" }
-stop_condition = { max_samples = "$(trial_samples:8192)" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:16)", samples_for_update = 512, initial_training_rate = 0.1, final_training_rate = 0.01 } }
-"""
-
-[task_queue.optimizer]
-algorithm = "grid_search"
-
-[task_queue.objective]
-source_task = "sample"
-mode = "minimize"
-quantity = { metric = "error" }
-
-[task_queue.parameters.center]
-kind = "categorical"
-values = ["1/4", "1/2", "3/4"]
-
-[task_queue.parameters.roughness]
-kind = "categorical"
-values = ["2", "4", "8"]
-
-[task_queue.parameters.havana_bins]
-kind = "integer"
-min = 16
-max = 32
-step = 16
-
-[[task_queue]]
-name = "variance-search"
-kind = "hyperparameter_tuning"
-max_concurrent_trials = "$(max_concurrent_trials:2)"
-trial_run_toml = """
-name = "variance-center-$(center:1/2)-rough-$(roughness:4)-bins-$(havana_bins:32)"
-target = { kind = "scalar", value = 1.0 }
-
-[evaluator]
-kind = "symbolica"
-expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
-args = ["x", "y"]
-constants = { center = '$(center:"1/2")', roughness = '$(roughness:"4")' }
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-measurement = { quantity = { metric = "time_normalized_variance" }, mode = "minimize" }
-stop_condition = { min_samples = 2048, max_samples = "$(variance_trial_samples:16384)", relative_error = 0.25, metric = { name = "variance" } }
-accumulator = { config = { kind = "scalar", moments = { max_order = 4 } } }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:32)", samples_for_update = "$(samples_for_update:1024)", initial_training_rate = 0.1, final_training_rate = 0.01 } }
-"""
-
-[task_queue.optimizer]
-algorithm = "egobox"
-
-[task_queue.optimizer.params]
-max_trials = "$(variance_max_trials:12)"
-seed = 11
-initial_design = 4
-parallel_candidates = "$(max_concurrent_trials:2)"
-infill = "ei"
-qei_strategy = "kriging_believer"
-
-[task_queue.objective]
-source_task = "sample"
-mode = "minimize"
-quantity = { metric = "time_normalized_variance" }
-
-[task_queue.parameters.center]
-kind = "categorical"
-values = ["1/5", "3/10", "2/5", "1/2", "3/5", "7/10", "4/5"]
-
-[task_queue.parameters.roughness]
-kind = "categorical"
-values = ["2", "4", "8"]
-
-[task_queue.parameters.havana_bins]
-kind = "integer"
-min = 16
-max = 64
-step = 16
-
-[task_queue.parameters.samples_for_update]
-kind = "categorical"
-values = [512, 1024, 2048]

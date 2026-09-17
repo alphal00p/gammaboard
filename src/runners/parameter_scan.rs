@@ -43,7 +43,7 @@ where
         let RunTaskSpec::ParameterScan {
             parameters,
             measurement,
-            trial_run_toml,
+            child: template,
             max_concurrent_runs,
         } = &self.task.task
         else {
@@ -224,8 +224,12 @@ where
                         parent_task_id: Some(self.task.id),
                         spawn_kind: PARAMETER_SCAN_SPAWN_KIND.to_string(),
                         spawn_label: Some(index_label),
-                        run_toml: trial_run_toml.clone(),
-                        replacements,
+                        run: template.run.clone(),
+                        replacements: {
+                            let mut bindings = template.replacements.clone();
+                            bindings.extend(replacements);
+                            bindings
+                        },
                     },
                 )
                 .await

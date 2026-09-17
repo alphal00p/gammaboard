@@ -41,6 +41,7 @@ pub fn load_template(dir: &Path, name: &str) -> Result<TemplateFile, ApiError> {
     let path = existing_template_path(dir, &name)?;
     let toml = fs::read_to_string(&path)
         .map_err(|err| ApiError::Internal(format!("failed reading {}: {err}", path.display())))?;
+    let toml = super::run_definition::freeze_template(&toml, dir)?;
     Ok(TemplateFile { name, toml })
 }
 

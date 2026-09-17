@@ -180,3 +180,13 @@ pub struct SamplerPerformanceHistoryEntry {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 use crate::evaluation::AccumulatorState;
+
+impl RunProgress {
+    pub fn kind(&self) -> &str {
+        self.integration_params
+            .as_ref()
+            .and_then(|params| params.get("run_kind"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("integration")
+    }
+}

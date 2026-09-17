@@ -1,0 +1,16 @@
+# Reusable polynomial integration for parameter scans.
+name = "polynomial-scale-$(scale:1)-offset-$(offset:1)-curvature-$(curvature:0)"
+
+[evaluator]
+kind = "symbolica"
+expr = "offset + scale * x + curvature * (x^2 - 1/3)"
+args = ["x"]
+constants = { offset = "$(offset:\"1\")", scale = "$(scale:\"1\")", curvature = "$(curvature:\"0\")" }
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+measurement = { quantity = "central_value" }
+stop_condition = { max_samples = "$(scan_samples:4096)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }

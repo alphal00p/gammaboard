@@ -1,13 +1,17 @@
 # Parameter scan; integration settings belong to the child.
 kind = "parameter_scan"
-name = "$(run_name:\"parameter-scan-symbolica\")"
+name = "scale-offset-scan-2d"
 max_concurrent_runs = "$(max_concurrent_runs:2)"
-replacements = { run_name = "parameter-scan-symbolica", scan_samples = 4096, max_concurrent_runs = 2 }
+replacements = { scan_samples = 4096, max_concurrent_runs = 2 }
 measurement = { source_task = "sample" }
 
 [[parameters]]
 name = "scale"
-values = ["0", "1/2", "1", "3/2", "2"]
+values = ["0", "1", "2"]
+
+[[parameters]]
+name = "offset"
+values = ["1/2", "1", "3/2"]
 
 [child]
 replacements = { scan_samples = "$(scan_samples:4096)" }

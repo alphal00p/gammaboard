@@ -287,6 +287,83 @@ async fn load_child_task_result_inner(
     })
 }
 
+/// Resolve the newest usable publishing stage, retaining a previous result
+/// while the next stage initializes. Lifecycle follows the entire child queue.
+pub async fn load_published_child_result(
+    store: &(impl AggregationStore + RunReadStore + RunTaskStore),
+    run_id: i32,
+) -> Result<(ChildTaskResult, bool, i64), StoreError> {
+    let tasks = store.list_run_tasks(run_id).await?;
+    let publishing = tasks
+        .iter()
+        .filter(|task| {
+            matches!(
+                task.task,
+                crate::core::RunTaskSpec::Sample {
+                    publish_result: true,
+                    ..
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    let final_task = publishing.last().ok_or_else(|| {
+        StoreError::store(format!(
+            "campaign child {run_id} has no publishing sample task"
+        ))
+    })?;
+    let work_samples = tasks.iter().map(|task| task.nr_completed_samples).sum();
+    let mut selected = None;
+    for task in publishing
+        .iter()
+        .rev()
+        .filter(|task| matches!(task.state, RunTaskState::Active | RunTaskState::Completed))
+    {
+        let result = load_child_task_result(store, run_id, &task.name).await?;
+        if (task.state == RunTaskState::Completed || task.nr_completed_samples > 0)
+            && result
+                .accumulator
+                .as_ref()
+                .is_some_and(|a| a.sample_count() > 0)
+        {
+            selected = Some(result);
+            break;
+        }
+    }
+    let mut result = match selected {
+        Some(result) => result,
+        None => load_child_task_result(store, run_id, &final_task.name).await?,
+    };
+    let ready = result.source.task_id == final_task.id
+        && matches!(
+            final_task.state,
+            RunTaskState::Active | RunTaskState::Completed
+        )
+        && result
+            .accumulator
+            .as_ref()
+            .is_some_and(|a| a.sample_count() > 1);
+    // Earlier failures must not leave a pending result stage scheduled forever.
+    if let Some(failed) = tasks.iter().find(|task| task.state == RunTaskState::Failed) {
+        result.task_state = RunTaskState::Failed;
+        result.output = Some(TaskMeasurementOutput::Failed {
+            reason: failed
+                .failure_reason
+                .clone()
+                .unwrap_or_else(|| format!("task '{}' failed", failed.name)),
+        });
+    } else {
+        result.task_state = if tasks
+            .iter()
+            .all(|task| task.state == RunTaskState::Completed)
+        {
+            RunTaskState::Completed
+        } else {
+            RunTaskState::Active
+        };
+    }
+    Ok((result, ready, work_samples))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

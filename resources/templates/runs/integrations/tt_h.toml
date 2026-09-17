@@ -1,0 +1,28 @@
+# Integration is the default run kind. Caller bindings override these defaults.
+name = "ttH-group-$(graph_group:0)-seed-$(seed:11)"
+replacements = { graph_group = 0, seed = 11, training_samples = 10_000, max_samples = 10_000_000 }
+
+[evaluator]
+kind = "gammaloop"
+state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)"
+integrand_name = "LO"
+graph_groups = ["$(graph_group:0)"]
+
+[evaluator.preprocessing]
+read_only = true
+commands = ["set model MT=173.0", "set model WT=0.0", "set model ymt=173.0", "set model aS=0.118", "set model aEWM1=132.507", "set model Gf=1.166390e-05", "set model MZ=91.188"]
+
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = "$(training_samples:10_000)" }
+accumulator = { config = "gammaloop" }
+sampler_aggregator = { config = { kind = "havana_training", seed = "$(seed:11)", bins = 64, samples_for_update = 2_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = { max_samples = "$(max_samples:10_000_000)" }
+accumulator = { config = "gammaloop" }
+sampler_aggregator = { config = { kind = "havana_inference", seed = "$(seed:11)" } }

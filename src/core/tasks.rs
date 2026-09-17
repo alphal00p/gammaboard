@@ -660,13 +660,23 @@ impl HyperparameterTuningOptimizerSpec {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildRunTemplate {
+    pub run: toml::Value,
+    #[serde(default)]
+    pub replacements: BTreeMap<String, toml::Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct IntegrationCampaignChildSpec {
     pub name: String,
     #[serde(default = "default_integration_campaign_coefficient")]
     pub coefficient: f64,
-    pub run_toml: String,
+    pub run: toml::Value,
+    #[serde(default)]
+    pub replacements: BTreeMap<String, toml::Value>,
 }
 
 fn default_integration_campaign_coefficient() -> f64 {
@@ -682,9 +692,9 @@ impl IntegrationCampaignChildSpec {
                 self.name
             ));
         }
-        if self.run_toml.trim().is_empty() {
+        if !self.run.is_table() {
             return Err(format!(
-                "integration_campaign child '{}' run_toml must be non-empty",
+                "integration_campaign child '{}' run must be an inline definition or a file reference",
                 self.name
             ));
         }
@@ -975,6 +985,10 @@ impl<T> StageSourceSpec<T> {
     }
 }
 
+fn default_publish_result() -> bool {
+    true
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -983,6 +997,8 @@ pub enum RunTaskSpec {
         accumulator: AccumulatorConfig,
     },
     Sample {
+        #[serde(default = "default_publish_result")]
+        publish_result: bool,
         stop_condition: SampleStopCondition,
         measurement: Option<TaskMeasurementSpec>,
         evaluator: Option<EvaluatorSourceSpec>,
@@ -1021,7 +1037,7 @@ pub enum RunTaskSpec {
         parameters: Vec<ParameterScanParameterSpec>,
         #[serde(default)]
         measurement: MeasurementSpec,
-        trial_run_toml: String,
+        child: ChildRunTemplate,
         #[serde(default = "default_parameter_scan_max_concurrent_runs")]
         max_concurrent_runs: usize,
     },
@@ -1029,14 +1045,14 @@ pub enum RunTaskSpec {
         optimizer: HyperparameterTuningOptimizerSpec,
         objective: MeasurementSpec,
         parameters: BTreeMap<String, HyperparameterTuningParameterDomain>,
-        trial_run_toml: String,
+        child: ChildRunTemplate,
         #[serde(default = "default_hyperparameter_tuning_max_concurrent_trials")]
         max_concurrent_trials: usize,
     },
     IntegrationCampaign {
         children: Vec<IntegrationCampaignChildSpec>,
         #[serde(default)]
-        measurement: MeasurementSpec,
+        measurement: TaskMeasurementSpec,
         stop_condition: IntegrationCampaignStopCondition,
         #[serde(default)]
         allocation: IntegrationCampaignAllocationSpec,
@@ -1155,7 +1171,7 @@ impl RunTaskSpec {
             Self::ParameterScan {
                 parameters,
                 measurement,
-                trial_run_toml,
+                child,
                 max_concurrent_runs,
             } => {
                 if parameters.is_empty() {
@@ -1165,8 +1181,8 @@ impl RunTaskSpec {
                     parameter.validate()?;
                 }
                 measurement.validate()?;
-                if trial_run_toml.trim().is_empty() {
-                    return Err("parameter_scan.trial_run_toml must be non-empty".to_string());
+                if !child.run.is_table() {
+                    return Err("parameter_scan.trial_run must be an inline definition or a file reference".to_string());
                 }
                 if *max_concurrent_runs == 0 {
                     return Err("parameter_scan.max_concurrent_runs must be > 0".to_string());
@@ -1177,7 +1193,7 @@ impl RunTaskSpec {
                 optimizer,
                 objective,
                 parameters,
-                trial_run_toml,
+                child,
                 max_concurrent_trials,
             } => {
                 optimizer.validate()?;
@@ -1190,9 +1206,9 @@ impl RunTaskSpec {
                 for (name, domain) in parameters {
                     domain.validate(name)?;
                 }
-                if trial_run_toml.trim().is_empty() {
+                if !child.run.is_table() {
                     return Err(
-                        "hyperparameter_tuning.trial_run_toml must be non-empty".to_string()
+                        "hyperparameter_tuning.trial_run must be an inline definition or a file reference".to_string()
                     );
                 }
                 if *max_concurrent_trials == 0 {
@@ -2020,6 +2036,7 @@ mod tests {
     #[test]
     fn sample_task_without_accumulator_reuses_previous_state() {
         let task = RunTaskSpec::Sample {
+            publish_result: true,
             stop_condition: SampleStopCondition {
                 max_samples: Some(10),
                 ..SampleStopCondition::default()
@@ -2222,7 +2239,7 @@ quantity = { component = "real", metric = "time_normalized_variance" }
 [task]
 kind = "hyperparameter_tuning"
 max_concurrent_trials = 2
-trial_run_toml = "name = \"trial\"\n"
+child = { run = { name = "trial" } }
 
 [task.optimizer]
 algorithm = "random_search"
@@ -2290,7 +2307,7 @@ values = ["auto", "none"]
 [task]
 kind = "hyperparameter_tuning"
 max_concurrent_trials = 2
-trial_run_toml = "name = \"trial\"\n"
+child = { run = { name = "trial" } }
 
 [task.optimizer]
 algorithm = "egobox"
@@ -2419,6 +2436,7 @@ max = 1.0
         let input = RunTaskInput {
             name: Some("sample-1".to_string()),
             task: RunTaskSpec::Sample {
+                publish_result: true,
                 stop_condition: SampleStopCondition {
                     max_samples: Some(10),
                     ..SampleStopCondition::default()
@@ -2442,6 +2460,7 @@ max = 1.0
     #[test]
     fn sample_task_rejects_dual_source() {
         let missing = RunTaskSpec::Sample {
+            publish_result: true,
             stop_condition: SampleStopCondition {
                 max_samples: Some(0),
                 ..SampleStopCondition::default()
@@ -2456,6 +2475,7 @@ max = 1.0
         assert!(missing.validate().is_ok());
 
         let both = RunTaskSpec::Sample {
+            publish_result: true,
             stop_condition: SampleStopCondition {
                 max_samples: Some(0),
                 ..SampleStopCondition::default()
@@ -2473,6 +2493,7 @@ max = 1.0
     #[test]
     fn sample_task_with_havana_training_requires_budget_in_config_mode() {
         let task = RunTaskSpec::Sample {
+            publish_result: true,
             stop_condition: SampleStopCondition::default(),
             measurement: None,
             evaluator: None,

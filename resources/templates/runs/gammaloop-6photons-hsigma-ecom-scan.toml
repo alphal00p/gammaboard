@@ -1,116 +1,76 @@
-# GammaLoop 1L massive six-photon h-function sigma / center-of-mass energy scan.
-# Requires: GammaLoop support and the generated six-photon state below.
-# Scale: a heavy multi-run loop calculation; reduce replacements when testing.
-# Run: ./gammaboard run create resources/templates/runs/gammaloop-6photons-hsigma-ecom-scan.toml
-#
-# Source state:
-#
-#   ../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state
-#
-# Recreate it from the GammaLoop checkout with:
-#
-#   ./gammaloop ./glnis_gammaloop_examples/6photons/massive/1L/1L_6photons_massive.toml run generate integrate -c "quit -o"
-#
-# The template scans two runtime parameters via `set process kv` preprocessing
-# commands, which write into the loaded integrand's settings (what the evaluator
-# reads). `set default-runtime kv` only mutates throwaway defaults and has no
-# effect here.
-#
-#   h_sigma -> process.h_function.sigma
-#           -> process.subtraction.integrated_ct_settings.range.h_function_settings.sigma
-#   e_com   -> process.kinematics.e_cm
-#
-# GammaLoop calls the center-of-mass energy setting `e_cm`; the scan parameter
-# is named `e_com` here to match the operator-facing search label.
-#
-# The default `state_folder` assumes the gammaloop checkout is a sister directory
-# of the gammaboard repo (../gammaloop). Adjust it if yours is elsewhere. For a
-# portable deployment, either pass a replacement for `state_folder` or start
-# GammaBoard with:
-#
-#   --resource-root ../gammaloop/glnis_gammaloop_examples/6photons/massive/1L
-#
-# and set `state_folder = "state"` in the replacements.
-
-replacements = { run_name = "gammaloop_6photons_hsigma_ecom_scan", state_folder = "../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state", havana_total_nr_of_samples = 50_000, havana_bins = 64, havana_samples_for_update = 10_000, trial_min_samples = 10_000, trial_max_samples = 100_000, trial_rsd_relative_error = 0.1, max_batch_size = 10000, max_concurrent_runs = 1 }
-
-name = '$(run_name:"gammaloop_6photons_hsigma_ecom_scan")'
-
-# The parent scan task only orchestrates child runs. The GammaLoop evaluator is
-# created inside each child with that child's scanned runtime settings.
-
-[[task_queue]]
-name = "h-sigma-e-com-scan"
+# Parameter scan; integration settings belong to the child.
 kind = "parameter_scan"
+name = "$(run_name:\"gammaloop_6photons_hsigma_ecom_scan\")"
 max_concurrent_runs = "$(max_concurrent_runs:1)"
-trial_run_toml = """
-name = '6photons-hsigma-$(h_sigma:1.0)-ecom-$(e_com:1000.0)'
+measurement = { source_task = "sample" }
 
-[evaluator]
+[replacements]
+run_name = "gammaloop_6photons_hsigma_ecom_scan"
+state_folder = "../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state"
+havana_total_nr_of_samples = 50000
+havana_bins = 64
+havana_samples_for_update = 10000
+trial_min_samples = 10000
+trial_max_samples = 100000
+trial_rsd_relative_error = 0.1
+max_batch_size = 10000
+max_concurrent_runs = 1
+
+[[parameters]]
+name = "h_sigma"
+values = [0.25, 0.5, 1.0, 2.0, 4.0]
+
+[[parameters]]
+name = "e_com"
+values = [500.0, 750.0, 1000.0, 1250.0, 1500.0]
+
+[child]
+
+[child.run]
+name = "6photons-hsigma-$(h_sigma:1.0)-ecom-$(e_com:1000.0)"
+
+[child.run.evaluator]
 kind = "gammaloop"
-state_folder = '$(state_folder:"../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state")'
+state_folder = "$(state_folder:\"../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state\")"
 integrand_name = "default"
 
-[evaluator.preprocessing]
+[child.run.evaluator.preprocessing]
 read_only = true
-commands = [
-  'set process kv h_function.sigma=$(h_sigma:1.0)',
-  'set process kv subtraction.integrated_ct_settings.range.type=infinite subtraction.integrated_ct_settings.range.h_function_settings.sigma=$(h_sigma:1.0)',
-  'set process kv kinematics.e_cm=$(e_com:1000.0)',
-]
+commands = ["set process kv h_function.sigma=$(h_sigma:1.0)", "set process kv subtraction.integrated_ct_settings.range.type=infinite subtraction.integrated_ct_settings.range.h_function_settings.sigma=$(h_sigma:1.0)", "set process kv kinematics.e_cm=$(e_com:1000.0)"]
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "accumulator"
 kind = "set_accumulator"
 accumulator = "gammaloop"
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "havana-train"
 kind = "sample"
-# This is the Havana adaptation budget. It only controls the training task and
-# the frozen sampler snapshot handed to the inference task below.
-stop_condition = { max_samples = "$(havana_total_nr_of_samples:50_000)" }
 accumulator = "latest"
+stop_condition = { max_samples = "$(havana_total_nr_of_samples:50_000)" }
+sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(havana_samples_for_update:50_000)", initial_training_rate = 0.05, final_training_rate = 0.005 } }
+queue_tuning = { target_batch_eval_ms = 1000.0, max_batch_size = "$(max_batch_size:5000)" }
 
-[task_queue.sampler_aggregator.config]
-kind = "havana_training"
-seed = 0
-bins = "$(havana_bins:64)"
-samples_for_update = "$(havana_samples_for_update:50_000)"
-initial_training_rate = 0.05
-final_training_rate = 0.005
-
-[task_queue.queue_tuning]
-target_batch_eval_ms = 1000.0
-max_batch_size = "$(max_batch_size:5000)"
-
-[[task_queue]]
+[[child.run.task_queue]]
 name = "reset-trial-accumulator"
 kind = "set_accumulator"
 accumulator = "gammaloop"
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "sample"
 kind = "sample"
-measurement = { quantity = { metric = "rsd" }, mode = "minimize" }
-# The inference task uses the trained Havana snapshot, but its stopping is
-# measured on a fresh trial accumulator and governed only by this condition.
+accumulator = "latest"
+measurement = { mode = "minimize", quantity = { metric = "rsd" } }
 stop_condition = { min_samples = "$(trial_min_samples:10_000)", max_samples = "$(trial_max_samples:10_000_000)", relative_error = "$(trial_rsd_relative_error:0.25)", metric = { name = "rsd" } }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
-accumulator = "latest"
+queue_tuning = { target_batch_eval_ms = 1000.0, max_batch_size = "$(max_batch_size:5000)" }
 
-[task_queue.queue_tuning]
-target_batch_eval_ms = 1000.0
-max_batch_size = "$(max_batch_size:5000)"
-"""
-
-[[task_queue.parameters]]
-name = "h_sigma"
-values = [0.25, 0.5, 1.0, 2.0, 4.0]
-
-[[task_queue.parameters]]
-name = "e_com"
-values = [500.0, 750.0, 1000.0, 1250.0, 1500.0]
-
-[task_queue.measurement]
-source_task = "sample"
+[child.replacements]
+state_folder = "$(state_folder:\"../gammaloop/glnis_gammaloop_examples/6photons/massive/1L/state\")"
+havana_total_nr_of_samples = "$(havana_total_nr_of_samples:50000)"
+havana_bins = "$(havana_bins:64)"
+havana_samples_for_update = "$(havana_samples_for_update:10000)"
+trial_min_samples = "$(trial_min_samples:10000)"
+trial_max_samples = "$(trial_max_samples:100000)"
+trial_rsd_relative_error = "$(trial_rsd_relative_error:0.1)"
+max_batch_size = "$(max_batch_size:10000)"

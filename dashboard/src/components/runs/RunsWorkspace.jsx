@@ -31,6 +31,7 @@ const ADD_TASKS_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.add_tasks.selected_tem
 
 const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelectRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
+  const isIntegration = !currentRun?.kind || currentRun.kind === "integration";
   const { tasks } = useRunTasks(selectedRun, 2000);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [snackbar, setSnackbar] = useState(null);
@@ -238,7 +239,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
           </Stack>
         </Box>
       ) : null}
-      <TaskQueuePanel
+      {isIntegration && <TaskQueuePanel
         tasks={taskList}
         selectedTaskId={selectedTask?.id ?? null}
         onSelectTask={setSelectedTaskId}
@@ -297,13 +298,14 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
             </Stack>
           ) : null
         }
-      />
-      <TaskOutputPanel
+      />}
+      {(selectedTask || isIntegration) && <TaskOutputPanel
+        title={isIntegration ? "Selected Task Output" : "Run Output"}
         key={selectedTask?.id ?? "no-task"}
         runId={selectedRun}
         task={selectedTask}
         onSelectRun={onSelectRun}
-      />
+      />}
       <RunInfo runId={selectedRun} />
       <CloneRunDialog
         open={cloneRunOpen}

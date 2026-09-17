@@ -68,6 +68,7 @@ async fn active_task_accumulates_declared_cpu_time() {
             &[RunTaskInput {
                 name: Some("sample".to_string()),
                 task: RunTaskSpec::Sample {
+                    publish_result: true,
                     stop_condition: SampleStopCondition {
                         max_samples: Some(1),
                         ..Default::default()
@@ -334,6 +335,7 @@ async fn task_measurement_output_round_trips() {
             &[RunTaskInput {
                 name: Some("sample".to_string()),
                 task: RunTaskSpec::Sample {
+                    publish_result: true,
                     stop_condition: SampleStopCondition {
                         max_samples: Some(10),
                         ..SampleStopCondition::default()

@@ -756,6 +756,7 @@ mod tests {
             name: name.to_string(),
             sequence_nr,
             task: RunTaskSpec::Sample {
+                publish_result: true,
                 stop_condition: SampleStopCondition {
                     max_samples: Some(100),
                     ..SampleStopCondition::default()

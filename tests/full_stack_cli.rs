@@ -2700,7 +2700,7 @@ discrete_dims = 0
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "top-level [point_spec] or [domain] is no longer supported",
+            "field 'point_spec' is not valid for run kind 'integration'",
         ));
 
     let valid_config = temp_config(
@@ -3616,44 +3616,45 @@ async fn full_stack_cli_removes_child_runs_with_parent() -> anyhow::Result<()> {
 
     let config = temp_config(
         r#"
-name = "delete-parent-run-e2e"
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "scan"
 kind = "parameter_scan"
+name = "delete-parent-run-e2e"
 max_concurrent_runs = 1
-trial_run_toml = """
+
+[[parameters]]
+name = "scale"
+values = [
+    1,
+]
+
+[measurement]
+source_task = "sample"
+
+[child.run]
 name = "delete-child-run-$(scale:1)"
 
-[evaluator]
+[child.run.evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-timing = { per_sample_seconds = 0.02 }
 
-[[task_queue]]
+[child.run.evaluator.timing]
+per_sample_seconds = 0.02
+
+[[child.run.task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 1_000_000 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
 
-[[task_queue.parameters]]
-name = "scale"
-values = [1]
+[child.run.task_queue.stop_condition]
+max_samples = 1000000
 
-[task_queue.measurement]
-source_task = "sample"
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -4597,58 +4598,79 @@ async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> 
 
     let config = temp_config(
         r#"
+kind = "integration_campaign"
 name = "integration-campaign-result-e2e"
 
-[evaluator_runner_params]
-min_tick_time_ms = 20
-db_pool_size = 1
+[measurement]
 
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
+[stop_condition]
+min_total_samples = 16
+max_total_samples = 64
+absolute_error = 1e-12
 
-[[task_queue]]
-name = "campaign"
-kind = "integration_campaign"
-measurement = { source_task = "sample" }
-stop_condition = { min_total_samples = 16, max_total_samples = 64, absolute_error = 1e-12 }
-allocation = { algorithm = "largest_variance", max_active_runs = 1, allocation_window_samples = 8, min_samples_per_child = 8 }
+[allocation]
+algorithm = "largest_variance"
+max_active_runs = 1
+allocation_window_samples = 8
+min_samples_per_child = 8
 
-[[task_queue.children]]
+[[children]]
 name = "left"
 coefficient = 2.0
-run_toml = '''
+
+[children.run]
 name = "campaign-result-left"
-[evaluator]
+
+[children.run.evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-[[task_queue]]
+
+[[children.run.task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 1000 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
-'''
 
-[[task_queue.children]]
+[children.run.task_queue.stop_condition]
+max_samples = 32
+
+[children.run.task_queue.measurement]
+quantity = "central_value"
+
+[children.run.task_queue.accumulator]
+config = "scalar"
+
+[children.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
+seed = 1
+
+[[children]]
 name = "right"
 coefficient = -0.5
-run_toml = '''
+
+[children.run]
 name = "campaign-result-right"
-[evaluator]
+
+[children.run.evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
-[[task_queue]]
+
+[[children.run.task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 1000 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
-'''
+
+[children.run.task_queue.stop_condition]
+max_samples = 32
+
+[children.run.task_queue.measurement]
+quantity = "central_value"
+
+[children.run.task_queue.accumulator]
+config = "scalar"
+
+[children.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
+seed = 2
 "#,
     );
 
@@ -4663,7 +4685,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
     wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'campaign'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'integration_campaign'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -4712,48 +4734,44 @@ async fn full_stack_cli_parameter_scan_creates_child_runs_and_collects_measureme
 
     let config = temp_config(
         r#"
-name = "parameter-scan-e2e"
-
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "scan"
 kind = "parameter_scan"
+name = "parameter-scan-e2e"
 max_concurrent_runs = 1
-trial_run_toml = """
+
+[[parameters]]
+name = "scale"
+values = [
+    1,
+    2,
+    3,
+]
+
+[measurement]
+source_task = "sample"
+
+[child.run]
 name = "parameter-scan-child-$(scale:1)"
 
-[evaluator]
+[child.run.evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
 
-[[task_queue.parameters]]
-name = "scale"
-values = [1, 2, 3]
+[child.run.task_queue.stop_condition]
+max_samples = 16
 
-[task_queue.measurement]
-source_task = "sample"
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -4772,7 +4790,7 @@ source_task = "sample"
             Duration::from_secs(90),
             || async {
                 let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'parameter_scan'",
                 )
                 .bind(run_id)
                 .fetch_optional(&harness.pool)
@@ -4813,7 +4831,7 @@ source_task = "sample"
     assert_eq!(child_count, 3);
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'parameter_scan'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -4869,52 +4887,50 @@ async fn full_stack_cli_parameter_scan_cartesian_product_parameters() -> anyhow:
 
     let config = temp_config(
         r#"
-name = "parameter-scan-grid-e2e"
-
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "scan"
 kind = "parameter_scan"
+name = "parameter-scan-grid-e2e"
 max_concurrent_runs = 2
-trial_run_toml = """
+
+[[parameters]]
+name = "scale"
+values = [
+    1,
+    2,
+]
+
+[[parameters]]
+name = "offset"
+values = [
+    0,
+    10,
+]
+
+[measurement]
+source_task = "sample"
+
+[child.run]
 name = "parameter-scan-grid-child-$(scale:1)-$(offset:0)"
 
-[evaluator]
+[child.run.evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
 
-[[task_queue.parameters]]
-name = "scale"
-values = [1, 2]
+[child.run.task_queue.stop_condition]
+max_samples = 16
 
-[[task_queue.parameters]]
-name = "offset"
-values = [0, 10]
+[child.run.task_queue.measurement]
+quantity = "central_value"
 
-[task_queue.measurement]
-source_task = "sample"
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -4930,7 +4946,7 @@ source_task = "sample"
     wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'parameter_scan'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -4969,139 +4985,17 @@ source_task = "sample"
     Ok(())
 }
 
-#[tokio::test]
-#[ignore = "requires local postgres with CREATE DATABASE privilege"]
-async fn full_stack_cli_parameter_scan_hands_over_to_next_scan_task() -> anyhow::Result<()> {
-    let mut harness = FullStackHarness::new().await?;
-    harness
-        .start_nodes(&["scan-chain-parent", "scan-chain-s1", "scan-chain-e1"])
-        .await?;
-
-    let config = temp_config(
+#[test]
+fn orchestration_cannot_be_queued_as_integration_tasks() {
+    let error = gammaboard::api::runs::parse_run_add_config_toml(
         r#"
-name = "parameter-scan-chain-e2e"
-
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
+name = "invalid-chain"
 [[task_queue]]
-name = "scan-a"
 kind = "parameter_scan"
-max_concurrent_runs = 1
-trial_run_toml = """
-name = "parameter-scan-chain-a-$(scale:1)"
-
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
-
-[[task_queue.parameters]]
-name = "scale"
-values = [1, 2]
-
-[task_queue.measurement]
-source_task = "sample"
-
-[[task_queue]]
-name = "scan-b"
-kind = "parameter_scan"
-max_concurrent_runs = 1
-trial_run_toml = """
-name = "parameter-scan-chain-b-$(offset:1)"
-
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
-
-[[task_queue.parameters]]
-name = "offset"
-values = [10, 20]
-
-[task_queue.measurement]
-source_task = "sample"
 "#,
-    );
-
-    harness.add_run(&config);
-    let run_id = harness.run_id("parameter-scan-chain-e2e").await?;
-
-    harness
-        .cli()
-        .args(["node", "auto-assign", &run_id.to_string()])
-        .assert()
-        .success();
-
-    if let Err(err) = harness
-        .wait_for(
-            "second parameter scan completes after first scan",
-            Duration::from_secs(90),
-            || async {
-                let completed: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND name IN ('scan-a', 'scan-b') AND state = 'completed'",
-                )
-                .bind(run_id)
-                .fetch_one(&harness.pool)
-                .await?;
-                Ok(completed == 2)
-            },
-        )
-        .await
-    {
-        let tasks: Vec<(String, String, Option<JsonValue>)> = sqlx::query_as(
-            "SELECT name, state, controller_output FROM run_tasks WHERE run_id = $1 ORDER BY sequence_nr",
-        )
-        .bind(run_id)
-        .fetch_all(&harness.pool)
-        .await?;
-        let nodes: Vec<(String, Option<i32>, Option<String>, Option<i32>, Option<String>)> =
-            sqlx::query_as(
-                "SELECT name, desired_run_id, desired_role, active_run_id, active_role FROM nodes ORDER BY name",
-            )
-            .fetch_all(&harness.pool)
-            .await?;
-        anyhow::bail!("{err}; tasks={tasks:?}; nodes={nodes:?}");
-    }
-
-    let child_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND spawn_kind = 'parameter_scan'",
     )
-    .bind(run_id)
-    .fetch_one(&harness.pool)
-    .await?;
-    assert_eq!(child_count, 4);
-
-    harness.cleanup().await?;
-    Ok(())
+    .unwrap_err();
+    assert!(error.to_string().contains("orchestration is a run kind"));
 }
 
 #[tokio::test]
@@ -5115,48 +5009,46 @@ async fn full_stack_cli_parameter_scan_redistributes_parent_assignments_and_upda
 
     let config = temp_config(
         r#"
-name = "parameter-scan-redistribute-e2e"
-
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "scan"
 kind = "parameter_scan"
+name = "parameter-scan-redistribute-e2e"
 max_concurrent_runs = 2
-trial_run_toml = """
+
+[[parameters]]
+name = "scale"
+values = [
+    1,
+    2,
+    3,
+    4,
+    5,
+]
+
+[measurement]
+source_task = "sample"
+
+[child.run]
 name = "parameter-scan-redistribute-child-$(scale:1)"
 
-[evaluator]
+[child.run.evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 512 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
 
-[[task_queue.parameters]]
-name = "scale"
-values = [1, 2, 3, 4, 5]
+[child.run.task_queue.stop_condition]
+max_samples = 512
 
-[task_queue.measurement]
-source_task = "sample"
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -5204,7 +5096,7 @@ source_task = "sample"
             Duration::from_secs(60),
             || async {
                 let output: Option<JsonValue> = sqlx::query_scalar::<_, Option<JsonValue>>(
-                    "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+                    "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'parameter_scan'",
                 )
                 .bind(run_id)
                 .fetch_optional(&harness.pool)
@@ -5228,7 +5120,7 @@ source_task = "sample"
     wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'scan'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'parameter_scan'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -5251,63 +5143,63 @@ async fn full_stack_cli_hyperparameter_tuning_random_search_creates_trials_and_c
 
     let config = temp_config(
         r#"
-name = "hyperparameter-tuning-random-e2e"
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "tune"
 kind = "hyperparameter_tuning"
+name = "hyperparameter-tuning-random-e2e"
 max_concurrent_trials = 2
-trial_run_toml = """
-name = "tuning-child-a-$(a:0.0)-bins-$(bins:16)-mode-$(mode:auto)"
 
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
-
-[task_queue.optimizer]
+[optimizer]
 algorithm = "random_search"
 
-[task_queue.optimizer.params]
+[optimizer.params]
 max_trials = 4
 seed = 3
 
-[task_queue.objective]
+[objective]
 source_task = "sample"
 mode = "minimize"
 quantity = "central_value"
 
-[task_queue.parameters.a]
+[parameters.a]
 kind = "float"
 min = 0.0
 max = 1.0
 
-[task_queue.parameters.bins]
+[parameters.bins]
 kind = "integer"
 min = 8
 max = 16
 step = 4
 
-[task_queue.parameters.mode]
+[parameters.mode]
 kind = "categorical"
-values = ["auto", "none"]
+values = [
+    "auto",
+    "none",
+]
+
+[child.run]
+name = "tuning-child-a-$(a:0.0)-bins-$(bins:16)-mode-$(mode:auto)"
+
+[child.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[child.run.task_queue]]
+name = "sample"
+kind = "sample"
+
+[child.run.task_queue.stop_condition]
+max_samples = 16
+
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -5331,7 +5223,7 @@ values = ["auto", "none"]
     assert_eq!(child_count, 4);
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -5379,56 +5271,53 @@ async fn full_stack_cli_hyperparameter_tuning_egobox_creates_adaptive_trials() -
 
     let config = temp_config(
         r#"
-name = "hyperparameter-tuning-egobox-e2e"
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "tune"
 kind = "hyperparameter_tuning"
+name = "hyperparameter-tuning-egobox-e2e"
 max_concurrent_trials = 1
-trial_run_toml = """
-name = "egobox-child-bins-$(bins:1)"
 
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
-
-[task_queue.optimizer]
+[optimizer]
 algorithm = "egobox"
 
-[task_queue.optimizer.params]
+[optimizer.params]
 max_trials = 3
 seed = 3
 initial_design = 2
 parallel_candidates = 1
 infill = "ei"
 
-[task_queue.objective]
+[objective]
 source_task = "sample"
 mode = "minimize"
 quantity = "central_value"
 
-[task_queue.parameters.bins]
+[parameters.bins]
 kind = "integer"
 min = 1
 max = 4
+
+[child.run]
+name = "egobox-child-bins-$(bins:1)"
+
+[child.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[child.run.task_queue]]
+name = "sample"
+kind = "sample"
+
+[child.run.task_queue.stop_condition]
+max_samples = 16
+
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -5447,7 +5336,7 @@ max = 4
             Duration::from_secs(90),
             || async {
                 let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
                 )
                 .bind(run_id)
                 .fetch_optional(&harness.pool)
@@ -5483,7 +5372,7 @@ max = 4
     }
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -5521,54 +5410,54 @@ async fn full_stack_cli_hyperparameter_tuning_grid_search_enumerates_finite_doma
 
     let config = temp_config(
         r#"
-name = "hyperparameter-tuning-grid-e2e"
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "tune"
 kind = "hyperparameter_tuning"
+name = "hyperparameter-tuning-grid-e2e"
 max_concurrent_trials = 2
-trial_run_toml = """
-name = "grid-child-bins-$(bins:8)-mode-$(mode:auto)"
 
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
-
-[task_queue.optimizer]
+[optimizer]
 algorithm = "grid_search"
 
-[task_queue.objective]
+[objective]
 source_task = "sample"
 mode = "minimize"
 quantity = "central_value"
 
-[task_queue.parameters.bins]
+[parameters.bins]
 kind = "integer"
 min = 8
 max = 16
 step = 4
 
-[task_queue.parameters.mode]
+[parameters.mode]
 kind = "categorical"
-values = ["auto", "none"]
+values = [
+    "auto",
+    "none",
+]
+
+[child.run]
+name = "grid-child-bins-$(bins:8)-mode-$(mode:auto)"
+
+[child.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[child.run.task_queue]]
+name = "sample"
+kind = "sample"
+
+[child.run.task_queue.stop_condition]
+max_samples = 16
+
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -5584,7 +5473,7 @@ values = ["auto", "none"]
     wait_for_task_state(&harness, run_id, "completed", Duration::from_secs(90)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -5610,74 +5499,23 @@ values = ["auto", "none"]
     Ok(())
 }
 
-#[tokio::test]
-#[ignore = "requires local postgres with CREATE DATABASE privilege"]
-async fn full_stack_cli_hyperparameter_tuning_fails_on_bad_trial_template() -> anyhow::Result<()> {
-    let mut harness = FullStackHarness::new().await?;
-    harness
-        .start_nodes(&["bad-tune-parent", "bad-tune-s1", "bad-tune-e1"])
-        .await?;
-
-    let config = temp_config(
+#[test]
+fn tuning_rejects_mixed_file_and_inline_child_definitions() {
+    let error = gammaboard::api::runs::parse_run_add_config_toml(
         r#"
-name = "hyperparameter-tuning-bad-template-e2e"
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "tune"
 kind = "hyperparameter_tuning"
-max_concurrent_trials = 1
-trial_run_toml = "name = \"broken-child"
-
-[task_queue.optimizer]
-algorithm = "random_search"
-
-[task_queue.optimizer.params]
-max_trials = 1
-seed = 3
-
-[task_queue.objective]
-source_task = "sample"
-mode = "minimize"
-quantity = "central_value"
-
-[task_queue.parameters.a]
-kind = "float"
-min = 0.0
-max = 1.0
+name = "invalid-child"
+[child.run]
+file = "child.toml"
+name = "inline-too"
 "#,
-    );
-
-    harness.add_run(&config);
-    let run_id = harness
-        .run_id("hyperparameter-tuning-bad-template-e2e")
-        .await?;
-
-    harness
-        .cli()
-        .args(["node", "auto-assign", &run_id.to_string()])
-        .assert()
-        .success();
-
-    wait_for_task_state(&harness, run_id, "failed", Duration::from_secs(60)).await?;
-
-    let failure_reason: String = sqlx::query_scalar(
-        "SELECT failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
     )
-    .bind(run_id)
-    .fetch_one(&harness.pool)
-    .await?;
-    assert!(failure_reason.contains("failed to create tuning trial 0"));
-
-    harness.cleanup().await?;
-    Ok(())
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot also contain an inline definition")
+    );
 }
 
 #[tokio::test]
@@ -5695,53 +5533,51 @@ async fn full_stack_cli_hyperparameter_tuning_fails_when_child_measurement_fails
 
     let config = temp_config(
         r#"
-name = "hyperparameter-tuning-failed-measurement-e2e"
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "tune"
 kind = "hyperparameter_tuning"
+name = "hyperparameter-tuning-failed-measurement-e2e"
 max_concurrent_trials = 1
-trial_run_toml = """
-name = "failed-measure-child-$(scale:1)"
 
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-stop_condition = { max_samples = 16 }
-measurement = { quantity = { metric = "variance", component = "missing" } }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
-
-[task_queue.optimizer]
+[optimizer]
 algorithm = "random_search"
 
-[task_queue.optimizer.params]
+[optimizer.params]
 max_trials = 1
 seed = 5
 
-[task_queue.objective]
+[objective]
 source_task = "sample"
 mode = "minimize"
 quantity = "central_value"
 
-[task_queue.parameters.scale]
+[parameters.scale]
 kind = "integer"
 min = 1
 max = 1
+
+[child.run]
+name = "failed-measure-child-$(scale:1)"
+
+[child.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[child.run.task_queue]]
+name = "sample"
+kind = "sample"
+
+[child.run.task_queue.stop_condition]
+max_samples = 16
+
+[child.run.task_queue.measurement.quantity]
+metric = "variance"
+component = "missing"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -5759,7 +5595,7 @@ max = 1
     wait_for_task_state(&harness, run_id, "failed", Duration::from_secs(60)).await?;
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -5778,7 +5614,7 @@ max = 1
     );
 
     let failure_reason: String = sqlx::query_scalar(
-        "SELECT failure_reason FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+        "SELECT failure_reason FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -5800,49 +5636,46 @@ async fn full_stack_cli_hyperparameter_tuning_redistributes_parent_assignments()
 
     let config = temp_config(
         r#"
-name = "hyperparameter-tuning-redistribute-e2e"
-
-[evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
-
-[sampler_aggregator_runner_params]
-min_tick_time_ms = 10
-db_pool_size = 1
-
-[[task_queue]]
-name = "tune"
 kind = "hyperparameter_tuning"
+name = "hyperparameter-tuning-redistribute-e2e"
 max_concurrent_trials = 2
-trial_run_toml = """
-name = "tune-redistribute-child-$(scale:1)"
 
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-stop_condition = { max_samples = 512 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
-
-[task_queue.optimizer]
+[optimizer]
 algorithm = "grid_search"
 
-[task_queue.objective]
+[objective]
 source_task = "sample"
 mode = "minimize"
 quantity = "central_value"
 
-[task_queue.parameters.scale]
+[parameters.scale]
 kind = "integer"
 min = 1
 max = 4
+
+[child.run]
+name = "tune-redistribute-child-$(scale:1)"
+
+[child.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+
+[[child.run.task_queue]]
+name = "sample"
+kind = "sample"
+
+[child.run.task_queue.stop_condition]
+max_samples = 512
+
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
     );
 
@@ -5892,7 +5725,7 @@ max = 4
             Duration::from_secs(90),
             || async {
                 let state: Option<String> = sqlx::query_scalar(
-                    "SELECT state FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+                    "SELECT state FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
                 )
                 .bind(run_id)
                 .fetch_optional(&harness.pool)
@@ -5928,7 +5761,7 @@ max = 4
     }
 
     let output: JsonValue = sqlx::query_scalar(
-        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND name = 'tune'",
+        "SELECT controller_output FROM run_tasks WHERE run_id = $1 AND task->>'kind' = 'hyperparameter_tuning'",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -6320,6 +6153,130 @@ target_batch_eval_ms = 32.0
         8192 / 16,
         "final flush must not count pending batches twice"
     );
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn campaign_follows_child_stages_and_freezes_shared_file() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let dir = tempfile::tempdir()?;
+    let child_path = dir.path().join("child.toml");
+    std::fs::write(
+        &child_path,
+        r#"
+name = "child-$(value:9)"
+replacements = { value = 9, final_name = "default-final" }
+[evaluator]
+kind = "symbolica"
+expr = "1"
+args = ["x"]
+[[task_queue]]
+name = "training"
+kind = "sample"
+stop_condition = { max_samples = 32 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
+[[task_queue]]
+name = "$(final_name:default-final)"
+kind = "sample"
+# A fresh inference accumulator has fewer samples than the training result.
+stop_condition = { max_samples = 16 }
+evaluator = { config = { kind = "symbolica", expr = "0 + $(value:9)", args = ["x"] } }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+"#,
+    )?;
+    let document = format!(
+        r#"
+kind = "integration_campaign"
+name = "stage-campaign"
+stop_condition = {{ absolute_error = 1e-10, max_total_samples = 10000 }}
+allocation = {{ min_samples_per_child = 4, allocation_window_samples = 8 }}
+[[children]]
+name = "left"
+replacements = {{ value = 2, final_name = "left-inference" }}
+run = {{ file = "{}" }}
+[[children]]
+name = "right"
+coefficient = -0.5
+replacements = {{ value = 3, final_name = "right-inference" }}
+run = {{ file = "{}" }}
+[[children]]
+name = "inline"
+[children.run]
+name = "inline-stages"
+[children.run.evaluator]
+kind = "symbolica"
+expr = "0"
+args = ["x"]
+[[children.run.task_queue]]
+name = "excluded-training"
+kind = "sample"
+publish_result = false
+stop_condition = {{ max_samples = 32 }}
+accumulator = {{ config = "scalar" }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
+[[children.run.task_queue]]
+name = "inline-inference"
+kind = "sample"
+stop_condition = {{ max_samples = 16 }}
+accumulator = {{ config = "scalar" }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
+"#,
+        child_path.display(),
+        child_path.display()
+    );
+    let config = temp_config(&document);
+    harness.add_run(&config);
+    // Children have not been spawned: restart/creation must use persisted contents.
+    std::fs::remove_file(&child_path)?;
+    harness.start_nodes(&["stage-s", "stage-e"]).await?;
+    let parent_id = harness.run_id("stage-campaign").await?;
+    harness
+        .cli()
+        .args(["node", "auto-assign", &parent_id.to_string()])
+        .assert()
+        .success();
+    wait_for_task_state(&harness, parent_id, "completed", Duration::from_secs(60)).await?;
+    let output: JsonValue =
+        sqlx::query_scalar("SELECT controller_output FROM run_tasks WHERE run_id = $1")
+            .bind(parent_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert_eq!(
+        output["combined_measurement"]["results"][0]["value"],
+        json!(0.5)
+    );
+    assert_eq!(output["total_samples"], json!(144));
+    for child in output["children"].as_array().unwrap() {
+        let task_id: i64 = child["result_source"]["task_id"]
+            .as_str()
+            .unwrap()
+            .parse()?;
+        let name: String = sqlx::query_scalar("SELECT name FROM run_tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(&harness.pool)
+            .await?;
+        assert!(
+            name.ends_with("-inference"),
+            "unexpected published source: {name}"
+        );
+    }
+    // Controller runs have no user-editable integration queue.
+    let appended = temp_config("[[task_queue]]\nkind = 'set_accumulator'\naccumulator = 'scalar'");
+    harness
+        .cli()
+        .args([
+            "run",
+            "task",
+            "append",
+            &parent_id.to_string(),
+            appended.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
     harness.cleanup().await?;
     Ok(())
 }

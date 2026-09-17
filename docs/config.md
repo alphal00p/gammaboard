@@ -123,7 +123,15 @@ Defaults are parsed as TOML when possible, otherwise they are treated as raw str
 
 ## Run Configs
 
-Run configs are TOML and are deep-merged over the built-in default run config template from `src/config_defaults/run.toml`.
+Run configs are TOML. Omitted `kind` means `integration`, preserving existing
+integration configurations. Only integrations merge the runner defaults from
+`src/config_defaults/run.toml` and accept `evaluator`, `target`, capability
+requirements, runner parameters, and `task_queue`.
+
+`integration_campaign`, `parameter_scan`, and `hyperparameter_tuning` are root
+run kinds with separate field sets. Integration-only fields and unknown fields
+are rejected. Controllers cannot be placed in an integration task queue, and
+integration tasks cannot be appended to controller runs.
 
 Minimal shape:
 
@@ -315,22 +323,79 @@ linspace = { start = -2.0, stop = 2.0, count = 512 }
 
 ## Integration Campaigns
 
-`integration_campaign` is a control-plane task that owns independent child runs.
-Each `[[task_queue.children]]` entry supplies a stable name, a finite coefficient,
-and a complete child `run_toml`. The common `measurement` selects the child task
-whose live or completed measurement is combined. Child estimates are assumed
-independent, so uncertainties are combined in quadrature after applying the
-coefficients. The controller also materializes live result snapshots from the
-same child accumulator revisions. Compatible histogram bins are combined as
-weighted values with independent variances in quadrature; incompatible or
-missing layouts are listed as omitted. These larger payloads are stored as task
-result snapshots rather than repeated in controller queue state.
+`integration_campaign` is a run kind that allocates workers among independent
+integration children. Each child has a `name`, optional `coefficient` (default
+one), its own `replacements`, and a structured `run` definition:
 
-Children may use entirely different evaluators, GammaLoop processes, or state
-folders. Histogram summation is evaluator-independent and accepts arbitrary
-GammaLoop continuous or discrete observables when every child publishes the
-same observable name and bin layout. Each native child bundle remains available
-through its child run even when an observable cannot be summed.
+```toml
+kind = "integration_campaign"
+name = "ttH"
+stop_condition = { relative_error = 0.01 }
+
+[[children]]
+name = "GL0"
+replacements = { graph_group = 0 }
+run = { file = "integrations/tt_h.toml" }
+
+[[children]]
+name = "GL2"
+replacements = { graph_group = 1 }
+run = { file = "integrations/tt_h.toml" }
+```
+
+An inline definition uses `[children.run]`, `[children.run.evaluator]`, and
+`[[children.run.task_queue]]`. File references resolve relative to the containing
+file, recursively; cycles and mixed file/inline definitions are rejected. All
+referenced contents are frozen at submission, including templates served to the
+dashboard. Resuming does not reread the source files.
+
+For each child, replacement precedence is **placeholder fallback < child-file
+replacements < caller replacements**. Merge bindings first, then expand the
+child. Parent replacements do not implicitly enter child scope: explicitly pass
+one through `children.replacements`, for example
+`state_folder = "$(state_folder:states/tt_h)"`. This applies equally to file and
+inline definitions, preserving TOML types without embedding TOML in strings.
+
+The campaign follows each child's newest usable publishing sample stage. Sample
+tasks publish by default; `publish_result = false` excludes a training stage.
+During initialization or non-publishing stages, the previous usable result stays
+available. A new stage replaces the old result; stages are never added together.
+Independent children combine as `I = sum(c_i I_i)` and
+`variance = sum(c_i^2 variance_i)`. Compatible histogram bins are also combined;
+incompatible layouts are reported as omitted. Child-native results remain
+available separately.
+
+Error-based stopping waits until every child has a usable result from its final
+publishing stage and has met its pilot minimum. Sample budgets and allocation
+windows count work across all stages, including excluded training, independently
+of accumulator resets. A hard budget can stop preparation; if some children have
+never published, the campaign fails with a missing-result explanation. Child
+failure detection covers the entire queue, including preparation tasks.
+
+## Parameter Scans and Tuning
+
+`kind = "parameter_scan"` accepts `parameters`, `measurement`,
+`max_concurrent_runs`, and `child`. `kind = "hyperparameter_tuning"` accepts
+`parameters`, `objective`, `optimizer`, `max_concurrent_trials`, and `child`.
+Campaign/scan measurements accept `quantity`; scans also accept `source_task`.
+Only tuning objectives accept `mode` (minimize/maximize).
+Their shared child template is structured:
+
+```toml
+kind = "parameter_scan"
+name = "scale-scan"
+measurement = { source_task = "sample" }
+parameters = [{ name = "scale", values = [0.5, 1.0, 2.0] }]
+
+[child]
+replacements = { scan_samples = 4096 }
+run = { file = "integrations/polynomial.toml" }
+```
+
+Generated scan/trial parameter values override `child.replacements`, which
+in turn override the template's own defaults. Scans and tuning still select a
+named task measurement; campaigns follow published stages. Separate scan/tuning
+experiments are separate run documents, rather than successive controller tasks.
 
 ### Variance-based campaign allocation
 

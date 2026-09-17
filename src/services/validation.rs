@@ -6,6 +6,9 @@ use serde_json::Value;
 use std::path::Path;
 
 pub(crate) fn validate_resources(config: &RunAddConfig) -> Result<(), BuildError> {
+    if config.kind != "integration" {
+        return Ok(());
+    }
     if let Some(evaluator) = &config.integration_params.evaluator {
         validate_value(&serde_json::to_value(evaluator).unwrap(), "evaluator")?;
     }

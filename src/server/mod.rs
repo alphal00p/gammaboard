@@ -500,6 +500,7 @@ struct RunPage<T> {
 
 #[derive(Serialize)]
 struct RunSummaryResponse {
+    kind: String,
     run_id: i32,
     run_name: String,
     parent_run_id: Option<i32>,
@@ -513,12 +514,16 @@ struct RunSummaryResponse {
 
 impl From<RunProgress> for RunSummaryResponse {
     fn from(run: RunProgress) -> Self {
-        let queue_tuning_defaults = run.integration_params.as_ref().and_then(|params| {
-            params
-                .pointer("/sampler_aggregator_runner_params/queue")
-                .cloned()
-        });
+        let queue_tuning_defaults = (run.kind() == "integration")
+            .then_some(run.integration_params.as_ref())
+            .flatten()
+            .and_then(|params| {
+                params
+                    .pointer("/sampler_aggregator_runner_params/queue")
+                    .cloned()
+            });
         Self {
+            kind: run.kind().to_owned(),
             run_id: run.run_id,
             run_name: run.run_name,
             parent_run_id: run.parent_run_id,

@@ -351,7 +351,10 @@ mod tests {
                     ),
                 ),
             ]),
-            trial_run_toml: "name = \"trial\"".to_string(),
+            child: crate::core::tasks::ChildRunTemplate {
+                run: toml::from_str("name = \"trial\"").unwrap(),
+                replacements: Default::default(),
+            },
             max_concurrent_trials: 1,
         };
         RunTask {

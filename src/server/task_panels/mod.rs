@@ -1030,6 +1030,7 @@ mod tests {
 
     fn inherited_vector_sample_task() -> RunTaskSpec {
         RunTaskSpec::Sample {
+            publish_result: true,
             stop_condition: crate::core::SampleStopCondition {
                 max_samples: Some(10),
                 ..crate::core::SampleStopCondition::default()

@@ -29,7 +29,7 @@ pub struct ChildRunRequest {
     pub parent_task_id: Option<i64>,
     pub spawn_kind: String,
     pub spawn_label: Option<String>,
-    pub run_toml: String,
+    pub run: toml::Value,
     pub replacements: BTreeMap<String, toml::Value>,
 }
 
@@ -106,64 +106,46 @@ impl TaskQueueFile {
 
 /// Parses run-add TOML, merging it over the default run config.
 pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
-    let mut merged = read_default_run_add_toml()?;
-    let overlay = toml::from_str(raw)
-        .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
-    let overlay_has_evaluator = toml_has_key(&overlay, "evaluator");
-    merge_toml(&mut merged, overlay);
-    if !overlay_has_evaluator {
-        remove_toml_key(&mut merged, "evaluator");
-    }
-    let expanded = toml_template::expand_toml_template(merged)?;
-    let mut config = parse_run_add_config_value(expanded.value)?;
-    config.original_toml = Some(raw.to_string());
-    Ok(config)
+    super::run_definition::parse(raw, BTreeMap::new(), None)
 }
 
 pub fn parse_run_add_config_toml_with_replacements(
     raw: &str,
     replacements: BTreeMap<String, toml::Value>,
 ) -> Result<RunAddConfig, ApiError> {
-    let mut merged = read_default_run_add_toml()?;
-    let overlay = toml::from_str(raw)
-        .map_err(|err| ApiError::BadRequest(format!("failed parsing run TOML: {err}")))?;
-    let overlay_has_evaluator = toml_has_key(&overlay, "evaluator");
-    merge_toml(&mut merged, overlay);
-    if !overlay_has_evaluator {
-        remove_toml_key(&mut merged, "evaluator");
-    }
-    toml_template::merge_replacements(&mut merged, replacements)?;
-    let expanded = toml_template::expand_toml_template(merged)?;
-    let mut config = parse_run_add_config_value(expanded.value)?;
-    config.original_toml = Some(raw.to_string());
-    Ok(config)
+    super::run_definition::parse(raw, replacements, None)
 }
 
-/// Loads a run-add TOML file and merges it over the built-in default run template.
 pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
-    let raw = fs::read_to_string(path).map_err(|err| {
-        ApiError::Internal(format!(
-            "failed reading run-add TOML {}: {err}",
-            path.display()
-        ))
-    })?;
-    let mut merged = read_default_run_add_toml()?;
-    let overlay = toml::from_str(&raw).map_err(|err| {
-        ApiError::BadRequest(format!("failed parsing TOML {}: {err}", path.display()))
-    })?;
+    let raw = fs::read_to_string(path)
+        .map_err(|e| ApiError::BadRequest(format!("{}: {e}", path.display())))?;
+    super::run_definition::parse(&raw, BTreeMap::new(), path.parent())
+}
+
+pub(super) fn parse_integration_value(overlay: toml::Value) -> Result<RunAddConfig, ApiError> {
     let overlay_has_evaluator = toml_has_key(&overlay, "evaluator");
+    let mut merged = read_default_run_add_toml()?;
     merge_toml(&mut merged, overlay);
     if !overlay_has_evaluator {
         remove_toml_key(&mut merged, "evaluator");
     }
-    let expanded = toml_template::expand_toml_template(merged)?;
-    let mut config = parse_run_add_config_value(expanded.value)?;
-    config.original_toml = Some(raw);
+    let mut config = parse_run_add_config_value(merged)?;
+    config.kind = "integration".into();
     Ok(config)
 }
 
 /// Parses task-append TOML supporting `task`, `task_queue`, or both.
 pub fn parse_task_queue_toml(raw: &str) -> Result<TaskQueueFile, ApiError> {
+    let value: toml::Value =
+        toml::from_str(raw).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    if let Some(task) = value.get("task") {
+        super::run_definition::validate_integration_task(task)?;
+    }
+    if let Some(tasks) = value.get("task_queue").and_then(toml::Value::as_array) {
+        for task in tasks {
+            super::run_definition::validate_integration_task(task)?;
+        }
+    }
     toml_template::parse_templated_toml(raw, "run-task payload")
 }
 
@@ -198,6 +180,11 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
     let mut probes = 0;
     for (index, task) in tasks.iter().enumerate() {
         context.validate_task(task)?;
+        if probe {
+            for child in super::run_definition::preflight_children(&task.task)? {
+                probes += validate_run(child, true)?.runtime_probes;
+            }
+        }
         if probe && task.task.runs_on_sampler_worker() {
             let evaluator = context
                 .current_evaluator
@@ -255,9 +242,11 @@ pub async fn create_run(
             .ok_or_else(|| {
                 ApiError::Internal("preprocessing did not resolve integration_params".to_string())
             })?;
-    let integration_params = serde_json::to_value(resolved_integration_params).map_err(|err| {
-        ApiError::Internal(format!("failed to serialize integration_params: {err}"))
-    })?;
+    let mut integration_params =
+        serde_json::to_value(resolved_integration_params).map_err(|err| {
+            ApiError::Internal(format!("failed to serialize integration_params: {err}"))
+        })?;
+    integration_params["run_kind"] = serde_json::json!(processed.kind);
     let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
     let mut initial_stage_snapshot = processed
         .initial_stage_snapshot
@@ -283,12 +272,18 @@ pub async fn create_run(
         processed.target.as_ref(),
         &initial_tasks,
     )?;
-    let effective_toml = canonical_run_toml(
-        &processed.name,
-        resolved_integration_params,
-        processed.target.as_ref(),
-        &initial_tasks,
-    )?;
+    let effective_toml = if let Some(document) = &processed.effective_document
+        && processed.kind != "integration"
+    {
+        toml::to_string(document).map_err(|e| ApiError::Internal(e.to_string()))?
+    } else {
+        canonical_run_toml(
+            &processed.name,
+            resolved_integration_params,
+            processed.target.as_ref(),
+            &initial_tasks,
+        )?
+    };
     let provenance = serde_json::to_value(RunProvenance::capture(
         processed.original_toml.clone(),
         effective_toml,
@@ -325,8 +320,7 @@ pub async fn create_child_run(
             "child run spawn_kind must be non-empty".to_string(),
         ));
     }
-    let config =
-        parse_run_add_config_toml_with_replacements(&request.run_toml, request.replacements)?;
+    let config = super::run_definition::instantiate(request.run, request.replacements, None)?;
     let created = create_run(store, config).await?;
     store
         .set_run_parent_metadata(
@@ -347,6 +341,10 @@ pub async fn clone_run(
     from_snapshot_id: i64,
     new_name: &str,
 ) -> Result<ClonedRun, ApiError> {
+    let source = load_run_progress(store, source_run_id).await?;
+    if source.kind() != "integration" {
+        return Err(ApiError::BadRequest("only integration runs can be cloned from a stage snapshot; submit the controller TOML to create a new orchestration run".into()));
+    }
     let new_name = new_name.trim();
     if new_name.is_empty() {
         return Err(ApiError::BadRequest(
@@ -455,6 +453,23 @@ pub async fn append_tasks(
 ) -> Result<AppendedTasks, ApiError> {
     let tasks = task_file.into_tasks();
     let run = load_run_progress(store, run_id).await?;
+    if run.kind() != "integration" {
+        return Err(ApiError::BadRequest(
+            "only integration runs have a task queue".into(),
+        ));
+    }
+    for task in &tasks {
+        if matches!(
+            task.task,
+            crate::core::RunTaskSpec::ParameterScan { .. }
+                | crate::core::RunTaskSpec::HyperparameterTuning { .. }
+                | crate::core::RunTaskSpec::IntegrationCampaign { .. }
+        ) {
+            return Err(ApiError::BadRequest(
+                "controllers must be defined as run kinds".into(),
+            ));
+        }
+    }
     let integration_params_value = run
         .integration_params
         .clone()
@@ -506,7 +521,12 @@ pub async fn remove_pending_task(
     run_id: i32,
     task_id: i64,
 ) -> Result<RemovedPendingTask, ApiError> {
-    let _run = load_run_progress(store, run_id).await?;
+    let run = load_run_progress(store, run_id).await?;
+    if run.kind() != "integration" {
+        return Err(ApiError::BadRequest(
+            "only integration runs have removable tasks".into(),
+        ));
+    }
     let removed = store.remove_pending_run_task(run_id, task_id).await?;
     if !removed {
         return Err(ApiError::BadRequest(format!(
@@ -539,6 +559,11 @@ pub async fn export_run_repro_toml(
     run_id: i32,
 ) -> Result<String, ApiError> {
     let run = load_run_progress(store, run_id).await?;
+    if run.kind() != "integration" {
+        return run.run_toml.ok_or_else(|| {
+            ApiError::Internal("controller run is missing its frozen definition".into())
+        });
+    }
     let integration_params_value = run
         .integration_params
         .clone()
@@ -863,16 +888,6 @@ fn read_default_run_add_toml() -> Result<toml::Value, ApiError> {
 }
 
 fn parse_run_add_config_value(merged: toml::Value) -> Result<RunAddConfig, ApiError> {
-    if merged
-        .as_table()
-        .and_then(|table| table.get("point_spec").or_else(|| table.get("domain")))
-        .is_some()
-    {
-        return Err(ApiError::BadRequest(
-            "top-level [point_spec] or [domain] is no longer supported; define layout in [evaluator]"
-                .to_string(),
-        ));
-    }
     let parsed: RunAddConfig = merged
         .try_into()
         .map_err(|err| ApiError::BadRequest(format!("invalid run-add payload: {err}")))?;
@@ -1117,40 +1132,39 @@ accumulator = "latest"
     fn parse_run_add_accepts_parameter_scan_task() {
         let config = parse_run_add_config_toml(
             r#"
-name = "scan-parent"
-
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
-
-[[task_queue]]
-name = "scan"
 kind = "parameter_scan"
+name = "scan-parent"
 max_concurrent_runs = 2
-trial_run_toml = """
+parameters = [
+    { name = "scale", linspace = { start = 1.0, stop = 3.0, count = 3 } },
+]
+
+[measurement]
+source_task = "sample"
+
+[child.run]
 name = "child-$(scale:1)"
 
-[evaluator]
+[child.run.evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[task_queue]]
+[[child.run.task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = 4 }
-measurement = { quantity = "central_value" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-"""
 
-[[task_queue.parameters]]
-name = "scale"
-linspace = { start = 1.0, stop = 3.0, count = 3 }
+[child.run.task_queue.stop_condition]
+max_samples = 4
 
-[task_queue.measurement]
-source_task = "sample"
+[child.run.task_queue.measurement]
+quantity = "central_value"
+
+[child.run.task_queue.accumulator]
+config = "scalar"
+
+[child.run.task_queue.sampler_aggregator.config]
+kind = "naive_monte_carlo"
 "#,
         )
         .expect("run config");
@@ -1180,24 +1194,29 @@ source_task = "sample"
     fn parse_run_add_accepts_multi_parameter_scan_task() {
         let config = parse_run_add_config_toml(
             r#"
-name = "scan-parent"
-
-[[task_queue]]
-name = "scan"
 kind = "parameter_scan"
+name = "scan-parent"
 max_concurrent_runs = 2
-trial_run_toml = "name = \"child\"\n"
 
-[[task_queue.parameters]]
+[[parameters]]
 name = "scale"
-values = [1, 2]
+values = [
+    1,
+    2,
+]
 
-[[task_queue.parameters]]
+[[parameters]]
 name = "offset"
-values = [0.0, 1.0]
+values = [
+    0.0,
+    1.0,
+]
 
-[task_queue.measurement]
+[measurement]
 source_task = "sample"
+
+[child.run]
+name = "child"
 "#,
         )
         .expect("run config");
@@ -1272,7 +1291,7 @@ accumulator = { config = "scalar" }
                 parse_task_queue_toml(&raw)
                     .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
             } else {
-                parse_run_add_config_toml(&raw)
+                load_run_add_config_file(&root.join(relative_path))
                     .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
             }
         }
@@ -1282,8 +1301,7 @@ accumulator = { config = "scalar" }
                 "resources/templates/runs/gammaloop.toml",
                 "ops/ubelix/resources/templates/runs/epem_a_tth.toml",
             ] {
-                let raw = fs::read_to_string(root.join(relative_path)).expect("template file");
-                parse_run_add_config_toml(&raw)
+                load_run_add_config_file(&root.join(relative_path))
                     .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
             }
         }
@@ -1398,6 +1416,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
         RunTaskInput {
             name: None,
             task: RunTaskSpec::Sample {
+                publish_result: true,
                 stop_condition: SampleStopCondition {
                     max_samples: Some(10),
                     ..SampleStopCondition::default()
@@ -1437,9 +1456,11 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
 
     #[test]
     fn parse_run_add_accepts_qft_like_integration_campaign_example() {
-        let config = parse_run_add_config_toml(include_str!(
-            "../../resources/templates/runs/integration-campaign-qft-like.toml"
-        ))
+        let config = load_run_add_config_file(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources/templates/runs/integration-campaign-qft-like.toml")
+                .as_path(),
+        )
         .expect("integration campaign config");
         let Some(
             [
@@ -1452,10 +1473,14 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
         else {
             panic!("expected one integration campaign task");
         };
-        assert_eq!(children.len(), 2);
+        assert_eq!(children.len(), 3);
         for (index, child) in children.iter().enumerate() {
-            let child_config = parse_run_add_config_toml(&child.run_toml)
-                .unwrap_or_else(|err| panic!("invalid child '{}': {err}", child.name));
+            let child_config = super::super::run_definition::instantiate(
+                child.run.clone(),
+                child.replacements.clone(),
+                None,
+            )
+            .unwrap_or_else(|err| panic!("invalid child '{}': {err}", child.name));
             let crate::core::EvaluatorConfig::Gammaloop { params } = child_config
                 .integration_params
                 .evaluator
@@ -1463,7 +1488,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
             else {
                 panic!("expected gammaloop child evaluator");
             };
-            assert_eq!(params.graph_groups, Some(vec![index]));
+            assert_eq!(params.graph_groups, Some(vec![usize::from(index > 0)]));
         }
     }
 
@@ -1492,19 +1517,25 @@ accumulator = { config = "scalar" }
     fn parse_run_add_allows_controller_only_run_without_root_evaluator() {
         let config = parse_run_add_config_toml(
             r#"
+kind = "parameter_scan"
 name = "controller-only"
 
-[[task_queue]]
-name = "scan"
-kind = "parameter_scan"
-trial_run_toml = "name = \"child\"\n[evaluator]\nkind = \"unit\"\ncontinuous_dims = 1\ndiscrete_dims = 0\n"
-
-[[task_queue.parameters]]
+[[parameters]]
 name = "scale"
-values = [1]
+values = [
+    1,
+]
 
-[task_queue.measurement]
+[measurement]
 source_task = "sample"
+
+[child.run]
+name = "child"
+
+[child.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
 "#,
         )
         .expect("controller-only run config");
@@ -1521,6 +1552,7 @@ source_task = "sample"
             .validate_batch(&[RunTaskInput {
                 name: Some("sample".to_string()),
                 task: RunTaskSpec::Sample {
+                    publish_result: true,
                     stop_condition: SampleStopCondition {
                         max_samples: Some(10),
                         ..SampleStopCondition::default()

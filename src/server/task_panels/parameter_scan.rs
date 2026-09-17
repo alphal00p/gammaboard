@@ -426,7 +426,10 @@ mod tests {
                 },
             }],
             measurement: MeasurementSpec::default(),
-            trial_run_toml: "name = \"trial\"".to_string(),
+            child: crate::core::tasks::ChildRunTemplate {
+                run: toml::from_str("name = \"trial\"").unwrap(),
+                replacements: Default::default(),
+            },
             max_concurrent_runs: 1,
         };
         RunTask {

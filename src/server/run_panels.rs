@@ -13,11 +13,13 @@ pub fn build_run_panel_response(
     workers: &[RegisteredWorkerEntry],
 ) -> Result<PanelResponse, EngineError> {
     let source_id = format!("run:{}:summary", run.run_id);
-    let panels = panel_specs(run_spec);
-    let updates = panel_states(run, run_spec, tasks, workers)?
-        .into_iter()
-        .map(replace_panel)
-        .collect();
+    let mut panels = panel_specs(run_spec);
+    let mut states = panel_states(run, run_spec, tasks, workers)?;
+    if run.kind() != "integration" {
+        panels.retain(|panel| matches!(panel.panel_id.as_str(), "run_identity" | "run_lifecycle"));
+        states.retain(|panel| matches!(panel.panel_id(), "run_identity" | "run_lifecycle"));
+    }
+    let updates = states.into_iter().map(replace_panel).collect();
     Ok(PanelResponse::new(
         source_id,
         None,
@@ -122,6 +124,7 @@ fn panel_states(
             vec![
                 key_value("run_id", "Run ID", run.run_id),
                 key_value("run_name", "Run Name", run.run_name.as_str()),
+                key_value("kind", "Run Kind", run.kind()),
                 key_value("state", "State", run.lifecycle_state.as_str()),
                 key_value(
                     "active_task",

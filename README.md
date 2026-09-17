@@ -131,7 +131,7 @@ workers that can come and go.
   wall time multiplied by the node's declared `cpus` capability, or one CPU when
   omitted. Task counters persist across reassignment and completion; controller
   tasks and parent runs include all descendant child-run CPU-hours.
-- The supervisor leader activates pending tasks, runs controller tasks, and
+- The supervisor leader activates pending tasks, runs controllers, and
   updates node assignments. It does not consume evaluator/sampler compute slots.
 - Sampler aggregators own sample production. They decide when to produce work,
   emit latent batches into the queue, ingest evaluator feedback when training is
@@ -197,9 +197,21 @@ JSON-RPC over stdin/stdout. The protocol is in
 working runtimes are in [process_api](process_api). GammaBoard isolates these
 workers from terminal signals and owns their EOF-first, bounded shutdown.
 
-## Controller results
+## Run kinds and controller results
 
-Controller tasks keep their children as normal inspectable runs and expose a
+Omitting `kind` selects `integration`, the only run kind with a task queue.
+`integration_campaign`, `parameter_scan`, and `hyperparameter_tuning` are root
+run kinds and reject integration-only settings. Children use structured inline
+`run` tables or `run = { file = "..." }`, with per-child `replacements` overriding
+the referenced file's defaults before expansion. Relative references are frozen
+at submission. See [configuration](docs/config.md#integration-campaigns).
+
+Campaigns follow the latest usable publishing sample stage of each child;
+`publish_result = false` excludes a training stage. Error-based convergence
+waits for each child's final publishing stage. Scans and tuning retain their
+named measurement selection.
+
+Controller runs keep their children as normal inspectable runs and expose a
 small result reference for each child. A reference identifies the source run,
 task, immutable stage snapshot when available, and live sample revision.
 Measurements are scalar selectors used for stopping and optimization; full

@@ -19,6 +19,10 @@ pub struct RunAddIntegrationParams {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunAddConfig {
+    #[serde(skip)]
+    pub kind: String,
+    #[serde(skip)]
+    pub effective_document: Option<toml::Value>,
     pub name: String,
     pub task_queue: Option<Vec<RunTaskInput>>,
     #[serde(flatten)]
@@ -42,6 +46,12 @@ pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, Buil
     if let Some(tasks) = resolved_task_queue.as_ref() {
         for task in tasks {
             task.validate().map_err(BuildError::invalid_input)?;
+            for child in crate::api::run_definition::preflight_children(&task.task)
+                .map_err(|error| BuildError::invalid_input(error.to_string()))?
+            {
+                crate::api::runs::validate_run(child, false)
+                    .map_err(|error| BuildError::invalid_input(error.to_string()))?;
+            }
         }
     }
     let resolved_integration_params = IntegrationParams {

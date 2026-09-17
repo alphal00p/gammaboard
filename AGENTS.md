@@ -65,11 +65,11 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   `mode`. Stopping stays on the sample `stop_condition`; external measurement
   references only add `source_task` around the same source-less measurement
   fields.
-- `parameter_scan` is a control-plane controller task. It spawns normal grouped
-  child runs from `trial_run_toml`, stores scan progress in
+- `parameter_scan` is a control-plane controller run. It spawns normal grouped
+  child runs from structured `child.run` templates, stores scan progress in
   `run_tasks.controller_output`, and reads child task `measurement_output`.
   It supports finite Cartesian scans via `[[parameters]]`.
-- `hyperparameter_tuning` is also a control-plane controller task. It owns
+- `hyperparameter_tuning` is also a control-plane controller run. It owns
   trial child-run lifecycle and measurement collection; optimizer algorithms
   only plan parameter candidates. `optimizer.algorithm` selects the adapter and
   all algorithm-specific knobs, including seeds and budgets, live in
@@ -207,3 +207,19 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   matching stage snapshot and saved status in one transaction. Cleanup on stop is
   bounded and follows durable publication. Deploy and dashboard share the same
   `api::nodes::GracefulNodeShutdownParams` configuration and wait result model.
+
+- Public run documents are discriminated by `kind`; omission means `integration`.
+  Only integrations accept integration settings/task queues. Controller roots have
+  strict per-kind fields and normalize to one durable controller execution record;
+  reuse the existing execution/output storage rather than duplicating lifecycle
+  machinery. That record is not an editable integration task queue.
+- Child templates are structured `run` tables with sibling `replacements`.
+  Freeze file references relative to each containing file at submission, detect
+  cycles, and preserve child lexical scope. Merge child defaults then caller
+  bindings before expansion; generated scan/tuning parameters override template
+  bindings. Browser-served templates also freeze references.
+- Campaigns read the latest usable `publish_result` sample stage (default true),
+  retaining prior results through transitions. Never add successive stages.
+  Check failures across the whole child queue; gate error convergence on final
+  publishing stages. Count allocation/budget samples across tasks, independently
+  of reset accumulator counts. Scan/tuning measurements remain task-selected.

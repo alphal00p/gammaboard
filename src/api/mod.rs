@@ -5,3 +5,5 @@ pub mod templates;
 pub mod toml_template;
 
 pub use crate::service_error::ServiceError as ApiError;
+
+pub(crate) mod run_definition;

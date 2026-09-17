@@ -7,7 +7,7 @@ use crate::core::{
     RunTaskStore, SamplerRuntimeMetrics, StoreError, StoreResultExt, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_result,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, load_published_child_result,
 };
 use crate::services::measurement::project_measurement_results;
 use crate::services::results::combine_independent_observables;
@@ -77,8 +77,8 @@ where
                     parent_task_id: Some(self.task.id),
                     spawn_kind: SPAWN_KIND.to_string(),
                     spawn_label: Some(child.name.clone()),
-                    run_toml: child.run_toml.clone(),
-                    replacements: BTreeMap::new(),
+                    run: child.run.clone(),
+                    replacements: child.replacements.clone(),
                 },
             )
             .await
@@ -104,14 +104,14 @@ where
             let run_id = *by_label
                 .get(&child.name)
                 .ok_or_else(|| StoreError::store("created campaign child is missing"))?;
-            let persisted =
-                load_child_task_result(&self.store, run_id, &measurement.source_task).await?;
+            let (persisted, final_stage_ready, work_samples) =
+                load_published_child_result(&self.store, run_id).await?;
             let task_failure_reason = persisted.task_failure_reason();
             let completed_samples_per_second = self.latest_throughput(run_id).await?;
             let projected = persisted.accumulator.as_ref().and_then(|accumulator| {
                 project_measurement_results(
                     accumulator,
-                    &measurement.task_measurement(),
+                    measurement,
                     completed_samples_per_second,
                     &persisted.source_task,
                 )
@@ -120,8 +120,7 @@ where
             });
             let output = match persisted.output {
                 failed @ Some(TaskMeasurementOutput::Failed { .. }) => failed,
-                _ if persisted.task_state == RunTaskState::Active => projected,
-                output => output.or(projected),
+                _ => projected,
             };
             let child_failure_reason = task_failure_reason
                 .map(|reason| format!("campaign child '{}' task failed: {reason}", child.name))
@@ -140,6 +139,8 @@ where
                 (_, state) => state.into(),
             };
             states.push(ChildState {
+                final_stage_ready,
+                work_samples,
                 name: child.name.clone(),
                 coefficient: child.coefficient,
                 run_id,
@@ -160,11 +161,21 @@ where
         let result_snapshot_id = self
             .persist_derived_result(&states, combined_results.as_deref(), previous_output)
             .await?;
-        let total_samples = states.iter().map(ChildState::sample_count).sum::<i64>();
-        let pilots_complete = states
-            .iter()
-            .all(|child| child.sample_count() >= allocation.min_samples_per_child);
+        let total_samples = states.iter().map(|child| child.work_samples).sum::<i64>();
+        let pilots_complete = states.iter().all(|child| {
+            child.final_stage_ready && child.sample_count() >= allocation.min_samples_per_child
+        });
 
+        if combined_results.is_none()
+            && stop_condition
+                .max_total_samples
+                .is_some_and(|limit| total_samples >= limit)
+        {
+            failure.get_or_insert_with(|| {
+                "campaign sample budget exhausted before every child published a usable result"
+                    .into()
+            });
+        }
         if let Some(reason) = failure {
             let output = build_output(
                 &states,
@@ -242,8 +253,17 @@ where
             return Ok(true);
         }
 
-        let keep_window = total_samples.saturating_sub(previous_allocation_start)
-            < allocation.allocation_window_samples;
+        let same_stages = previous_output.is_some_and(|output| {
+            output.children.iter().zip(&states).all(|(old, new)| {
+                old.child
+                    .result_source
+                    .as_ref()
+                    .is_some_and(|source| source.task_id == new.result_source.task_id)
+            })
+        });
+        let keep_window = same_stages
+            && total_samples.saturating_sub(previous_allocation_start)
+                < allocation.allocation_window_samples;
         let retained = previous_selected
             .iter()
             .copied()
@@ -368,6 +388,8 @@ where
 
 #[derive(Debug, Clone)]
 struct ChildState {
+    final_stage_ready: bool,
+    work_samples: i64,
     name: String,
     coefficient: f64,
     run_id: i32,
@@ -561,6 +583,8 @@ mod tests {
 
     fn child(run_id: i32, coefficient: f64, value: f64, error: f64, samples: i64) -> ChildState {
         ChildState {
+            final_stage_ready: true,
+            work_samples: samples,
             name: format!("graph-{run_id}"),
             coefficient,
             run_id,
