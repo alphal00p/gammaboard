@@ -41,7 +41,6 @@ pub fn load_template(dir: &Path, name: &str) -> Result<TemplateFile, ApiError> {
     let path = existing_template_path(dir, &name)?;
     let toml = fs::read_to_string(&path)
         .map_err(|err| ApiError::Internal(format!("failed reading {}: {err}", path.display())))?;
-    let toml = super::run_definition::freeze_template(&toml, dir)?;
     Ok(TemplateFile { name, toml })
 }
 
@@ -98,4 +97,20 @@ fn existing_template_path(dir: &Path, name: &str) -> Result<PathBuf, ApiError> {
         return Err(ApiError::NotFound(format!("template {name} not found")));
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loading_a_run_template_preserves_file_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = "kind = 'integration_campaign'\nname = 'campaign'\n[[children]]\nname = 'child'\nrun = { file = 'integrations/child.toml' }\n";
+        fs::write(dir.path().join("campaign.toml"), raw).unwrap();
+
+        let template = load_template(dir.path(), "campaign.toml").unwrap();
+
+        assert_eq!(template.toml, raw);
+    }
 }

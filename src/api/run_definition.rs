@@ -267,18 +267,6 @@ fn freeze_source(
     validate_document(source)
 }
 
-pub(crate) fn freeze_template(raw: &str, base: &Path) -> Result<String, ApiError> {
-    let mut value: toml::Value = toml::from_str(raw).map_err(|e| bad(e.to_string()))?;
-    if !matches!(
-        kind(&value)?,
-        "integration_campaign" | "parameter_scan" | "hyperparameter_tuning"
-    ) {
-        return Ok(raw.into());
-    }
-    freeze_sources(&mut value, base, &mut Vec::new())?;
-    toml::to_string(&value).map_err(|e| bad(e.to_string()))
-}
-
 fn bad(message: impl Into<String>) -> ApiError {
     ApiError::BadRequest(message.into())
 }
@@ -485,13 +473,19 @@ run = { name = "child" }
     fn nested_references_are_relative_to_each_file_and_cycles_fail() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("nested")).unwrap();
-        std::fs::write(dir.path().join("nested/leaf.toml"), "name = 'leaf'").unwrap();
+        std::fs::write(
+            dir.path().join("nested/leaf.toml"),
+            "name = 'leaf'\n[[task_queue]]\nkind = 'sample'\nstop_condition = { max_samples = 1 }\naccumulator = { config = 'scalar' }\nsampler_aggregator = { config = { kind = 'naive_monte_carlo' } }",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("nested/parent.toml"), "kind = 'integration_campaign'\nname = 'inner'\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'leaf'\nrun = { file = 'leaf.toml' }").unwrap();
         let raw = "kind = 'integration_campaign'\nname = 'outer'\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'inner'\nrun = { file = 'nested/parent.toml' }";
-        freeze_template(raw, dir.path()).unwrap();
+        let mut value: toml::Value = toml::from_str(raw).unwrap();
+        freeze_sources(&mut value, dir.path(), &mut Vec::new()).unwrap();
         std::fs::write(dir.path().join("nested/leaf.toml"), "kind = 'integration_campaign'\nname = 'cycle'\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'parent'\nrun = { file = 'parent.toml' }").unwrap();
+        let mut value: toml::Value = toml::from_str(raw).unwrap();
         assert!(
-            parse(raw, BTreeMap::new(), Some(dir.path()))
+            freeze_sources(&mut value, dir.path(), &mut Vec::new())
                 .unwrap_err()
                 .to_string()
                 .contains("cyclic")

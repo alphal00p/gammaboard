@@ -1151,8 +1151,9 @@ async fn create_run(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<CreateRunRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let config = run_api::parse_run_add_config_toml(&payload.toml)
-        .inspect_err(|err| log_control_api_error("run_create", err))?;
+    let config =
+        run_api::parse_run_add_config_toml_from_base(&payload.toml, &state.run_templates_dir)
+            .inspect_err(|err| log_control_api_error("run_create", err))?;
     let run = run_api::create_run(&state.store, config)
         .await
         .inspect_err(|err| log_control_api_error("run_create", err))?;

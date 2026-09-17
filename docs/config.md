@@ -130,8 +130,8 @@ requirements, runner parameters, and `task_queue`.
 
 `integration_campaign`, `parameter_scan`, and `hyperparameter_tuning` are root
 run kinds with separate field sets. Integration-only fields and unknown fields
-are rejected. Controllers cannot be placed in an integration task queue, and
-integration tasks cannot be appended to controller runs.
+are rejected. Controller definitions cannot be placed in an integration task
+queue, and integration tasks cannot be appended to controller runs.
 
 Minimal shape:
 
@@ -253,7 +253,7 @@ Sample tasks use direct source specs:
 
 Task names are unique per run and can be referenced by `from_name`.
 
-The top-level `[evaluator]` is shorthand for the initial evaluator stage. If it is omitted, the first explicit compute-task evaluator establishes the immutable run domain. Every later evaluator stage must resolve to that domain. Controller tasks (`parameter_scan`, `hyperparameter_tuning`, and `integration_campaign`) never resolve or inherit the parent evaluator; their child-run TOML owns each child evaluator. This keeps batches, materializers, and accumulator state compatible while allowing implementation and parameters to vary between compute stages.
+The top-level `[evaluator]` is shorthand for the initial evaluator stage. If it is omitted, the first explicit compute-task evaluator establishes the immutable run domain. Every later evaluator stage must resolve to that domain. Controller runs never resolve or inherit an evaluator; their child-run TOML owns each child evaluator. This keeps batches, materializers, and accumulator state compatible while allowing implementation and parameters to vary between compute stages.
 
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
 
@@ -335,19 +335,20 @@ stop_condition = { relative_error = 0.01 }
 [[children]]
 name = "GL0"
 replacements = { graph_group = 0 }
-run = { file = "integrations/tt_h.toml" }
+run = { file = "tt_h.toml" }
 
 [[children]]
 name = "GL2"
 replacements = { graph_group = 1 }
-run = { file = "integrations/tt_h.toml" }
+run = { file = "tt_h.toml" }
 ```
 
 An inline definition uses `[children.run]`, `[children.run.evaluator]`, and
 `[[children.run.task_queue]]`. File references resolve relative to the containing
 file, recursively; cycles and mixed file/inline definitions are rejected. All
-referenced contents are frozen at submission, including templates served to the
-dashboard. Resuming does not reread the source files.
+referenced contents are frozen when the run is submitted. The dashboard template
+editor shows the authored file and resolves its relative references against the
+run-template directory only on submission. Resuming does not reread source files.
 
 For each child, replacement precedence is **placeholder fallback < child-file
 replacements < caller replacements**. Merge bindings first, then expand the

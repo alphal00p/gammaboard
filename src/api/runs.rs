@@ -109,6 +109,13 @@ pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
     super::run_definition::parse(raw, BTreeMap::new(), None)
 }
 
+pub fn parse_run_add_config_toml_from_base(
+    raw: &str,
+    base: &Path,
+) -> Result<RunAddConfig, ApiError> {
+    super::run_definition::parse(raw, BTreeMap::new(), Some(base))
+}
+
 pub fn parse_run_add_config_toml_with_replacements(
     raw: &str,
     replacements: BTreeMap<String, toml::Value>,
@@ -341,8 +348,8 @@ pub async fn clone_run(
     from_snapshot_id: i64,
     new_name: &str,
 ) -> Result<ClonedRun, ApiError> {
-    let source = load_run_progress(store, source_run_id).await?;
-    if source.kind() != "integration" {
+    let source_run = load_run_progress(store, source_run_id).await?;
+    if source_run.kind() != "integration" {
         return Err(ApiError::BadRequest("only integration runs can be cloned from a stage snapshot; submit the controller TOML to create a new orchestration run".into()));
     }
     let new_name = new_name.trim();
@@ -352,7 +359,6 @@ pub async fn clone_run(
         ));
     }
 
-    let source_run = load_run_progress(store, source_run_id).await?;
     let domain = source_run.domain.clone().ok_or_else(|| {
         ApiError::Internal(format!("source run {source_run_id} is missing domain"))
     })?;
@@ -542,7 +548,12 @@ pub async fn update_task_queue_tuning(
     task_id: i64,
     queue_tuning: Option<SamplerQueueTuning>,
 ) -> Result<UpdatedTaskQueueTuning, ApiError> {
-    let _run = load_run_progress(store, run_id).await?;
+    let run = load_run_progress(store, run_id).await?;
+    if run.kind() != "integration" {
+        return Err(ApiError::BadRequest(
+            "only integration runs have tunable task queues".into(),
+        ));
+    }
     if let Some(queue_tuning) = queue_tuning.as_ref() {
         queue_tuning
             .validate()
@@ -635,7 +646,6 @@ impl TaskPreflightContext {
             .collect::<BTreeSet<_>>();
         let prior_sourceable_names = existing_tasks
             .iter()
-            .filter(|task| task.task.is_sourceable())
             .map(|task| task.name.clone())
             .collect::<BTreeSet<_>>();
         let next_sequence = existing_tasks
@@ -691,7 +701,7 @@ impl TaskPreflightContext {
             )));
         }
         let effective_accumulator = self.resolve_effective_accumulator(task)?;
-        // Only compute tasks consume evaluator stage state. Controller tasks
+        // Only compute tasks consume evaluator stage state. Controller executions
         // orchestrate child runs and never inherit the parent evaluator.
         let effective_evaluator = if task.task.runs_on_sampler_worker() {
             Some(self.resolve_effective_evaluator(task)?)
@@ -718,9 +728,7 @@ impl TaskPreflightContext {
                 self.validate_accumulator_against_evaluator(effective_evaluator, config)?;
             }
         }
-        if task.task.is_sourceable() {
-            self.prior_sourceable_names.insert(task_name.clone());
-        }
+        self.prior_sourceable_names.insert(task_name.clone());
         if let Some(effective_evaluator) = effective_evaluator {
             self.effective_evaluator_by_name
                 .insert(task_name.clone(), effective_evaluator.clone());
@@ -1270,8 +1278,10 @@ accumulator = { config = "scalar" }
         for relative_path in [
             "resources/templates/runs/installation-smoke.toml",
             "resources/templates/runs/ghost_bump.toml",
-            "resources/templates/runs/gammaloop-6photons-hsigma-ecom-scan.toml",
+            "resources/templates/runs/hyperparameter-tuning-symbolica-grid-search.toml",
+            "resources/templates/runs/hyperparameter-tuning-symbolica-variance-search.toml",
             "resources/templates/runs/hyperparameter-tuning-symbolica.toml",
+            "resources/templates/runs/parameter-scan-symbolica-scale-offset-scan-2d.toml",
             "resources/templates/runs/parameter-scan-symbolica.toml",
             "resources/templates/runs/symbolica-havana-pdf-1d2d.toml",
             "resources/templates/runs/symbolica-variable-smooth-compiled.toml",
@@ -1299,6 +1309,8 @@ accumulator = { config = "scalar" }
         if cfg!(feature = "gammaloop") {
             for relative_path in [
                 "resources/templates/runs/gammaloop.toml",
+                "resources/templates/runs/integration-campaign-qft-like.toml",
+                "resources/templates/runs/tt_h.toml",
                 "ops/ubelix/resources/templates/runs/epem_a_tth.toml",
             ] {
                 load_run_add_config_file(&root.join(relative_path))

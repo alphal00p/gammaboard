@@ -1182,7 +1182,7 @@ impl RunTaskSpec {
                 }
                 measurement.validate()?;
                 if !child.run.is_table() {
-                    return Err("parameter_scan.trial_run must be an inline definition or a file reference".to_string());
+                    return Err("parameter_scan.child.run must be an inline definition or a file reference".to_string());
                 }
                 if *max_concurrent_runs == 0 {
                     return Err("parameter_scan.max_concurrent_runs must be > 0".to_string());
@@ -1208,7 +1208,7 @@ impl RunTaskSpec {
                 }
                 if !child.run.is_table() {
                     return Err(
-                        "hyperparameter_tuning.trial_run must be an inline definition or a file reference".to_string()
+                        "hyperparameter_tuning.child.run must be an inline definition or a file reference".to_string()
                     );
                 }
                 if *max_concurrent_trials == 0 {
@@ -1281,8 +1281,6 @@ impl RunTaskSpec {
 
     pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
-            Self::SetAccumulator { .. } => None,
-            Self::Sample { .. } => None,
             Self::Image { geometry, .. } => Some(SamplerAggregatorConfig::RasterPlane {
                 params: RasterPlaneSamplerParams {
                     geometry: geometry.clone(),
@@ -1311,15 +1309,12 @@ impl RunTaskSpec {
                 },
                 materializer: None,
             }),
-            Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn sample_sampler_source(&self) -> Option<SourceRefSpec> {
         match self {
-            Self::SetAccumulator { .. } => None,
             Self::Sample {
                 sampler_aggregator, ..
             } => match sampler_aggregator {
@@ -1347,40 +1342,22 @@ impl RunTaskSpec {
                 }
                 Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
             },
-            Self::Image { .. }
-            | Self::PlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn sample_sampler_config(&self) -> Option<SamplerAggregatorConfig> {
         match self {
-            Self::SetAccumulator { .. } => None,
             Self::Sample {
                 sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
                 ..
             } => Some(config.clone()),
-            Self::Sample { .. } => None,
-            Self::Image { .. }
-            | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn evaluator_source(&self) -> Option<SourceRefSpec> {
         match self {
-            Self::SetAccumulator { .. }
-            | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
             Self::Sample { evaluator, .. }
             | Self::Image { evaluator, .. }
             | Self::PlotLine { evaluator, .. } => match evaluator {
@@ -1390,6 +1367,7 @@ impl RunTaskSpec {
                 }
                 Some(EvaluatorSourceSpec::Config { .. }) => None,
             },
+            _ => None,
         }
     }
 
@@ -1413,7 +1391,6 @@ impl RunTaskSpec {
 
     pub fn batch_transforms_config(&self) -> Option<Vec<BatchTransformConfig>> {
         match self {
-            Self::SetAccumulator { .. } => None,
             Self::Sample {
                 batch_transforms, ..
             } => batch_transforms.clone(),
@@ -1429,15 +1406,12 @@ impl RunTaskSpec {
             | Self::PlotLine {
                 batch_transforms, ..
             } => batch_transforms.clone(),
-            Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn sample_accumulator_source(&self) -> Option<SourceRefSpec> {
         match self {
-            Self::SetAccumulator { .. } => None,
             Self::Sample { accumulator, .. } => match accumulator {
                 None | Some(AccumulatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
                 Some(AccumulatorSourceSpec::FromName { from_name }) => {
@@ -1445,13 +1419,7 @@ impl RunTaskSpec {
                 }
                 Some(AccumulatorSourceSpec::Config { .. }) => None,
             },
-            Self::Image { .. }
-            | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
@@ -1469,10 +1437,6 @@ impl RunTaskSpec {
         out
     }
 
-    pub fn is_sourceable(&self) -> bool {
-        true
-    }
-
     pub fn new_accumulator_config(&self) -> Result<Option<AccumulatorConfig>, BuildError> {
         match self {
             Self::SetAccumulator { accumulator } => Ok(Some(accumulator.clone())),
@@ -1480,22 +1444,18 @@ impl RunTaskSpec {
                 accumulator: Some(AccumulatorSourceSpec::Config { config }),
                 ..
             } => Ok(Some(config.clone())),
-            Self::Sample { .. } => Ok(None),
             Self::PdfAdaptationImage { .. } | Self::PdfAdaptationPlotLine { .. } => {
                 Ok(Some(AccumulatorConfig::Empty))
             }
             Self::Image { accumulator, .. } | Self::PlotLine { accumulator, .. } => {
                 Ok(Some(accumulator.full_config()))
             }
-            Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => Ok(None),
+            _ => Ok(None),
         }
     }
 
     pub fn nr_expected_samples(&self) -> Option<i64> {
         match self {
-            Self::SetAccumulator { .. } => None,
             Self::Sample { stop_condition, .. } => stop_condition.max_samples,
             Self::Image { geometry, .. } => Some(geometry.nr_points() as i64),
             Self::PdfAdaptationImage { geometry, .. } => Some(geometry.nr_points() as i64),
@@ -1509,63 +1469,35 @@ impl RunTaskSpec {
                 parameters,
                 ..
             } => hyperparameter_tuning_trial_count(optimizer, parameters).map(|count| count as i64),
-            Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn sample_stop_condition(&self) -> Option<&SampleStopCondition> {
         match self {
-            Self::SetAccumulator { .. } => None,
             Self::Sample { stop_condition, .. } => Some(stop_condition),
-            Self::Image { .. }
-            | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn sample_measurement(&self) -> Option<&TaskMeasurementSpec> {
         match self {
             Self::Sample { measurement, .. } => measurement.as_ref(),
-            Self::SetAccumulator { .. }
-            | Self::Image { .. }
-            | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn effective_sample_measurement(&self) -> Option<TaskMeasurementSpec> {
         match self {
             Self::Sample { measurement, .. } => Some(measurement.clone().unwrap_or_default()),
-            Self::SetAccumulator { .. }
-            | Self::Image { .. }
-            | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 
     pub fn sample_queue_tuning(&self) -> Option<&SamplerQueueTuning> {
         match self {
-            Self::SetAccumulator { .. } => None,
             Self::Sample { queue_tuning, .. } => queue_tuning.as_ref(),
-            Self::Image { .. }
-            | Self::PdfAdaptationImage { .. }
-            | Self::PdfAdaptationPlotLine { .. }
-            | Self::PlotLine { .. }
-            | Self::ParameterScan { .. }
-            | Self::HyperparameterTuning { .. }
-            | Self::IntegrationCampaign { .. } => None,
+            _ => None,
         }
     }
 

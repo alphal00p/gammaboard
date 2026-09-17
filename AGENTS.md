@@ -217,7 +217,8 @@ Use `README.md` for setup and operator workflows. This file is only for codebase
   Freeze file references relative to each containing file at submission, detect
   cycles, and preserve child lexical scope. Merge child defaults then caller
   bindings before expansion; generated scan/tuning parameters override template
-  bindings. Browser-served templates also freeze references.
+  bindings. Dashboard template selection returns authored TOML; dashboard run
+  submission resolves relative references against the run-template directory.
 - Campaigns read the latest usable `publish_result` sample stage (default true),
   retaining prior results through transitions. Never add successive stages.
   Check failures across the whole child queue; gate error convergence on final

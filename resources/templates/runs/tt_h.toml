@@ -1,4 +1,4 @@
-# Integration is the default run kind. Caller bindings override these defaults.
+# Standalone GammaLoop ttH integration; campaign bindings can select graph groups.
 name = "ttH-group-$(graph_group:0)-seed-$(seed:11)"
 replacements = { graph_group = 0, seed = 11, training_samples = 10_000, max_samples = 10_000_000 }
 

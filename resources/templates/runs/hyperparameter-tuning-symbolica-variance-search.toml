@@ -3,7 +3,7 @@ kind = "hyperparameter_tuning"
 name = "variance-search"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
 replacements = { variance_trial_samples = 16384, variance_max_trials = 12, max_concurrent_trials = 2 }
-optimizer = { algorithm = "egobox", params = { seed = 11, initial_design = 4, parallel_candidates = "$(max_concurrent_trials:2)", infill = "ei", qei_strategy = "kriging_believer" } }
+optimizer = { algorithm = "egobox", params = { max_trials = "$(variance_max_trials:12)", seed = 11, initial_design = 4, parallel_candidates = "$(max_concurrent_trials:2)", infill = "ei", qei_strategy = "kriging_believer" } }
 objective = { source_task = "sample", mode = "minimize", quantity = { metric = "time_normalized_variance" } }
 
 [parameters]

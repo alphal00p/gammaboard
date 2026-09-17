@@ -1,6 +1,6 @@
 # Same ttH integral, independently sampled graph contributions.
 # GL2 is split between two independent replicas with coefficients 1/2 + 1/2;
-# this demonstrates an inline child without counting the graph twice.
+# one uses trained Havana sampling and the other naive Monte Carlo.
 kind = "integration_campaign"
 name = "ttH-campaign"
 replacements = { state_folder = "states/epem_a_ttxh/LO/state" }
@@ -15,18 +15,18 @@ allocation_window_samples = 10_000
 [[children]]
 name = "GL0"
 replacements = { graph_group = 0, seed = 11, state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)" }
-run = { file = "integrations/tt_h.toml" }
+run = { file = "tt_h.toml" }
 
 [[children]]
 name = "GL2-trained"
 coefficient = 0.5
 replacements = { graph_group = 1, seed = 29, state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)" }
-run = { file = "integrations/tt_h.toml" }
+run = { file = "tt_h.toml" }
 
 [[children]]
 name = "GL2-naive"
 coefficient = 0.5
-replacements = { state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)" }
+replacements = { graph_group = 1, seed = 41, state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)" }
 
 [children.run]
 name = "ttH-GL2-naive"
@@ -35,7 +35,7 @@ name = "ttH-GL2-naive"
 kind = "gammaloop"
 state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)"
 integrand_name = "LO"
-graph_groups = [1]
+graph_groups = ["$(graph_group:1)"]
 
 [children.run.evaluator.preprocessing]
 read_only = true
@@ -46,4 +46,4 @@ name = "integrate"
 kind = "sample"
 stop_condition = { max_samples = 10_000_000 }
 accumulator = { config = "gammaloop" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 41 } }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = "$(seed:41)" } }

@@ -14,21 +14,4 @@ samples_for_update = { kind = "categorical", values = [512, 1024, 2048] }
 
 [child]
 replacements = { trial_samples = "$(trial_samples:8192)" }
-
-[child.run]
-name = "tune-center-$(center:1/2)-rough-$(roughness:4)-bins-$(havana_bins:16)-update-$(samples_for_update:1024)"
-target = { kind = "scalar", value = 1.0 }
-
-[child.run.evaluator]
-kind = "symbolica"
-expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
-args = ["x", "y"]
-constants = { center = "$(center:\"1/2\")", roughness = "$(roughness:\"4\")" }
-
-[[child.run.task_queue]]
-name = "sample"
-kind = "sample"
-measurement = { mode = "minimize", quantity = { metric = "error" } }
-stop_condition = { max_samples = "$(trial_samples:8192)" }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:16)", samples_for_update = "$(samples_for_update:1024)", initial_training_rate = 0.1, final_training_rate = 0.01 } }
+run = { file = "integrations/polynomial-havana.toml" }
