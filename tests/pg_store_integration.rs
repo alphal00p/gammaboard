@@ -1519,6 +1519,16 @@ async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
     .unwrap();
     let mut checkpoint: SamplerAggregatorCheckpoint =
         store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    let mut stale_checkpoint = checkpoint.clone();
+    stale_checkpoint.completed_samples += 1;
+    let conflict = store
+        .restore_sampler_checkpoint(run, &stale_checkpoint)
+        .await
+        .expect_err("stale checkpoint must not restore");
+    assert!(
+        conflict.is_retry_activation(),
+        "stale checkpoint should request fresh runtime activation: {conflict}"
+    );
     store
         .restore_sampler_checkpoint(run, &checkpoint)
         .await

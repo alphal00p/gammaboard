@@ -10,6 +10,8 @@ pub enum StoreError {
     NotFound(String),
     #[error("database error: {0}")]
     Database(String),
+    #[error("runtime activation must be retried: {0}")]
+    RetryActivation(String),
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("batch {batch_id} is no longer owned by node uuid '{node_uuid}'")]
@@ -34,6 +36,14 @@ impl StoreError {
             batch_id,
             node_uuid: node_uuid.into(),
         }
+    }
+
+    pub fn retry_activation(message: impl Into<String>) -> Self {
+        Self::RetryActivation(message.into())
+    }
+
+    pub fn is_retry_activation(&self) -> bool {
+        matches!(self, Self::RetryActivation(_))
     }
 
     pub fn is_batch_ownership_lost(&self) -> bool {

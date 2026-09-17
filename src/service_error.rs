@@ -21,6 +21,7 @@ impl From<StoreError> for ServiceError {
             StoreError::NotFound(message) => Self::NotFound(message),
             StoreError::Internal(message)
             | StoreError::Database(message)
+            | StoreError::RetryActivation(message)
             | StoreError::Serialization(message) => Self::Internal(message),
             StoreError::BatchOwnershipLost {
                 batch_id,

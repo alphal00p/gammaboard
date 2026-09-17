@@ -192,6 +192,15 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             Ok(Some(runner)) => Ok(Some((target, runner))),
             Ok(None) => Ok(None),
             Err(err) if err.is_database_error() => Err(err),
+            Err(err) if err.is_retry_activation() => {
+                warn!(
+                    role = %target.role,
+                    run_id = target.run_id,
+                    error = %err,
+                    "runtime state changed during role activation; retrying"
+                );
+                Ok(None)
+            }
             Err(err) => {
                 let now_blocked = self.note_start_failure(target);
                 error!(

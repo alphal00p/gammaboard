@@ -30,8 +30,8 @@ impl PgStore {
         .fetch_one(&mut *tx)
         .await?;
         if saved != payload {
-            return Err(StoreError::store(
-                "recovery checkpoint changed during runtime initialization; retry activation",
+            return Err(StoreError::retry_activation(
+                "recovery checkpoint changed during runtime initialization",
             ));
         }
         let retained: i64 = sqlx::query_scalar(
