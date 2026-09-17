@@ -325,7 +325,7 @@ linspace = { start = -2.0, stop = 2.0, count = 512 }
 
 `integration_campaign` is a run kind that allocates workers among independent
 integration children. Each child has a `name`, optional `coefficient` (default
-one), its own `replacements`, and a structured `run` definition:
+one), its own `replacements`, and a `run` containing TOML text or a file reference:
 
 ```toml
 kind = "integration_campaign"
@@ -343,10 +343,39 @@ replacements = { graph_group = 1 }
 run = { file = "tt_h.toml" }
 ```
 
-An inline definition uses `[children.run]`, `[children.run.evaluator]`, and
-`[[children.run.task_queue]]`. File references resolve relative to the containing
-file, recursively; cycles and mixed file/inline definitions are rejected. All
-referenced contents are frozen when the run is submitted. The dashboard template
+All three controller kinds accept exactly two child source forms:
+
+- Inline TOML text: `run = '''...'''`.
+- A file reference: `run = { file = "child.toml" }`.
+
+Nested run-definition tables such as `[children.run]` or `[child.run]` are
+rejected. For example, an inline campaign child is:
+
+```toml
+[[children]]
+name = "constant"
+replacements = { samples = 1000 }
+run = '''
+name = "constant-integral"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+discrete_dims = 0
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = "$(samples:100)" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+'''
+```
+
+Both forms use one pipeline: resolve to TOML text, parse, merge replacements,
+expand typed placeholders, and validate. File references resolve relative to the
+containing file, recursively; an inline child's references inherit its containing
+document's directory. Cycles and file references with extra fields are rejected.
+All referenced contents, including nested references inside inline text, are
+frozen into inline TOML text when the run is submitted. The dashboard template
 editor shows the authored file and resolves its relative references against the
 run-template directory only on submission. Resuming does not reread source files.
 
@@ -355,7 +384,8 @@ replacements < caller replacements**. Merge bindings first, then expand the
 child. Parent replacements do not implicitly enter child scope: explicitly pass
 one through `children.replacements`, for example
 `state_folder = "$(state_folder:states/tt_h)"`. This applies equally to file and
-inline definitions, preserving TOML types without embedding TOML in strings.
+inline definitions: the child TOML is parsed before expansion, preserving the
+types of numeric, boolean, array, and quoted-string replacements.
 
 The campaign follows each child's newest usable publishing sample stage. Sample
 tasks publish by default; `publish_result = false` excludes a training stage.
@@ -373,6 +403,13 @@ of accumulator resets. A hard budget can stop preparation; if some children have
 never published, the campaign fails with a missing-result explanation. Child
 failure detection covers the entire queue, including preparation tasks.
 
+Controller ticks keep unchanged worker assignments intact. When allocation
+changes, the worker pool moves atomically, so evaluators do not see a temporary
+unassigned state and rebuild between ticks. A sampler's training batch boundary
+can still pause sampling for an optimizer step; it does not itself reassign
+workers. Campaigns reconsider children at allocation-window and publishing-stage
+changes.
+
 ## Parameter Scans and Tuning
 
 `kind = "parameter_scan"` accepts `parameters`, `measurement`,
@@ -380,7 +417,7 @@ failure detection covers the entire queue, including preparation tasks.
 `parameters`, `objective`, `optimizer`, `max_concurrent_trials`, and `child`.
 Campaign/scan measurements accept `quantity`; scans also accept `source_task`.
 Only tuning objectives accept `mode` (minimize/maximize).
-Their shared child template is structured:
+Their shared `[child]` template accepts the same TOML string or file reference:
 
 ```toml
 kind = "parameter_scan"
@@ -393,6 +430,8 @@ replacements = { scan_samples = 4096 }
 run = { file = "integrations/polynomial.toml" }
 ```
 
+The `run` above can equivalently be a multiline TOML string containing the
+file's contents. The parent does not expand placeholders inside that string.
 Generated scan/trial parameter values override `child.replacements`, which
 in turn override the template's own defaults. Scans and tuning still select a
 named task measurement; campaigns follow published stages. Separate scan/tuning

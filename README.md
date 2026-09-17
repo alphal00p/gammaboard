@@ -201,9 +201,10 @@ workers from terminal signals and owns their EOF-first, bounded shutdown.
 
 Omitting `kind` selects `integration`, the only run kind with a task queue.
 `integration_campaign`, `parameter_scan`, and `hyperparameter_tuning` are root
-run kinds and reject integration-only settings. Children use structured inline
-`run` tables or `run = { file = "..." }`, with per-child `replacements` overriding
-the referenced file's defaults before expansion. Relative references are frozen
+run kinds and reject integration-only settings. Children use inline TOML strings
+(`run = '''...'''`) or
+`run = { file = "..." }`, with per-child `replacements` overriding
+the child document's defaults before expansion. Relative references are frozen
 at submission. See [configuration](docs/config.md#integration-campaigns).
 
 Campaigns follow the latest usable publishing sample stage of each child;

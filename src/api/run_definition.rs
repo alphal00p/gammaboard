@@ -1,6 +1,7 @@
 //! Public run documents. Integration defaults never leak into controller schemas.
 //! Child sources are frozen at submission; bindings are applied before expansion.
 use super::{ApiError, toml_template};
+use crate::core::tasks::ChildRunSource;
 use crate::core::{RunTaskInput, RunTaskSpec};
 use crate::preprocess::RunAddConfig;
 use std::collections::BTreeMap;
@@ -37,7 +38,7 @@ pub fn instantiate(
     let base = base
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().map_err(|e| bad(e.to_string()))?);
-    freeze_sources(&mut value, &base, &mut Vec::new())?;
+    freeze_sources(&mut value, &base, &mut Vec::new(), 0)?;
     toml_template::merge_replacements(&mut value, bindings)?;
     let frozen = toml::to_string(&value).map_err(|e| bad(e.to_string()))?;
     let value = toml_template::expand_toml_template(value)?.value;
@@ -67,7 +68,8 @@ pub fn instantiate(
         controller.validate().map_err(bad)?;
         if let RunTaskSpec::IntegrationCampaign { children, .. } = &controller {
             for child in children {
-                let config = instantiate(child.run.clone(), child.replacements.clone(), None)?;
+                let config =
+                    instantiate_child(child.run.clone(), child.replacements.clone(), None)?;
                 if config.kind != "integration" {
                     return Err(bad(format!(
                         "campaign child '{}' must be an integration run",
@@ -198,13 +200,29 @@ pub(crate) fn validate_integration_task(task: &toml::Value) -> Result<(), ApiErr
     Ok(())
 }
 
-// Follow file references without expanding child bodies in the parent's scope.
+/// Resolve either child source through the same document pipeline. Submitted
+/// controllers already contain frozen inline sources, so spawning never rereads files.
+pub(crate) fn instantiate_child(
+    source: ChildRunSource,
+    bindings: BTreeMap<String, toml::Value>,
+    base: Option<&Path>,
+) -> Result<RunAddConfig, ApiError> {
+    let base = match base {
+        Some(base) => base.to_path_buf(),
+        None => std::env::current_dir().map_err(|e| bad(e.to_string()))?,
+    };
+    let value = resolve_child(source, &base, &mut Vec::new(), 1)?;
+    instantiate(value, bindings, Some(&base))
+}
+
+// Freeze nested sources before expanding the enclosing document's replacements.
 fn freeze_sources(
     value: &mut toml::Value,
     base: &Path,
     stack: &mut Vec<PathBuf>,
+    depth: usize,
 ) -> Result<(), ApiError> {
-    if stack.len() > 32 {
+    if depth > 32 {
         return Err(bad("child run reference nesting exceeds 32"));
     }
     let table = value
@@ -213,7 +231,7 @@ fn freeze_sources(
     if let Some(child) = table.get_mut("child")
         && let Some(source) = child.get_mut("run")
     {
-        freeze_source(source, base, stack)?;
+        freeze_source(source, base, stack, depth + 1)?;
     }
     if let Some(children) = table
         .get_mut("children")
@@ -221,7 +239,7 @@ fn freeze_sources(
     {
         for child in children {
             if let Some(source) = child.get_mut("run") {
-                freeze_source(source, base, stack)?;
+                freeze_source(source, base, stack, depth + 1)?;
             }
         }
     }
@@ -232,39 +250,62 @@ fn freeze_source(
     source: &mut toml::Value,
     base: &Path,
     stack: &mut Vec<PathBuf>,
+    depth: usize,
 ) -> Result<(), ApiError> {
-    let table = source
-        .as_table()
-        .ok_or_else(|| bad("child.run must be a table"))?;
-    if let Some(file) = table.get("file") {
-        if table.len() != 1 {
-            return Err(bad(
-                "run = { file = ... } cannot also contain an inline definition",
-            ));
+    let child: ChildRunSource = source.clone().try_into().map_err(|_| {
+        bad("child.run must be a TOML string or a file reference (run = { file = \"...\" }); nested run-definition tables are not supported")
+    })?;
+    let value = resolve_child(child, base, stack, depth)?;
+    *source = toml::Value::String(toml::to_string(&value).map_err(|e| bad(e.to_string()))?);
+    Ok(())
+}
+
+fn resolve_child(
+    source: ChildRunSource,
+    base: &Path,
+    stack: &mut Vec<PathBuf>,
+    depth: usize,
+) -> Result<toml::Value, ApiError> {
+    source.validate().map_err(bad)?;
+    let (raw, file) = match source {
+        ChildRunSource::Inline(raw) => (raw, None),
+        ChildRunSource::File(source) => {
+            let path = base.join(&source.file).canonicalize().map_err(|e| {
+                bad(format!(
+                    "child run file {}: {e}",
+                    base.join(&source.file).display()
+                ))
+            })?;
+            if stack.contains(&path) {
+                return Err(bad(format!(
+                    "cyclic child run reference: {}",
+                    path.display()
+                )));
+            }
+            let raw = std::fs::read_to_string(&path)
+                .map_err(|e| bad(format!("{}: {e}", path.display())))?;
+            (raw, Some(path))
         }
-        let file = file
-            .as_str()
-            .ok_or_else(|| bad("run.file must be a string"))?;
-        let path = base
-            .join(file)
-            .canonicalize()
-            .map_err(|e| bad(format!("child run file {}: {e}", base.join(file).display())))?;
-        if stack.contains(&path) {
-            return Err(bad(format!(
-                "cyclic child run reference: {}",
-                path.display()
-            )));
-        }
-        let raw =
-            std::fs::read_to_string(&path).map_err(|e| bad(format!("{}: {e}", path.display())))?;
-        *source = toml::from_str(&raw).map_err(|e| bad(format!("{}: {e}", path.display())))?;
+    };
+    let mut value: toml::Value = toml::from_str(&raw).map_err(|e| {
+        bad(format!(
+            "invalid child run TOML{}: {e}",
+            file.as_ref()
+                .map(|path| format!(" in {}", path.display()))
+                .unwrap_or_default()
+        ))
+    })?;
+    let child_base = file.as_ref().and_then(|path| path.parent()).unwrap_or(base);
+    if let Some(path) = &file {
         stack.push(path.clone());
-        freeze_sources(source, path.parent().unwrap_or(base), stack)?;
-        stack.pop();
-    } else {
-        freeze_sources(source, base, stack)?;
     }
-    validate_document(source)
+    let result = freeze_sources(&mut value, child_base, stack, depth);
+    if file.is_some() {
+        stack.pop();
+    }
+    result?;
+    validate_document(&value)?;
+    Ok(value)
 }
 
 fn bad(message: impl Into<String>) -> ApiError {
@@ -315,7 +356,7 @@ pub(crate) fn preflight_children(task: &RunTaskSpec) -> Result<Vec<RunAddConfig>
     };
     sources
         .into_iter()
-        .map(|(run, bindings)| instantiate(run, bindings, None))
+        .map(|(run, bindings)| instantiate_child(run, bindings, None))
         .collect()
 }
 
@@ -389,13 +430,14 @@ name = "scan"
 parameters = [{ name = "dims", values = [3, 4] }]
 [child]
 replacements = { dims = 2 }
-[child.run]
+run = '''
 name = "child-$(dims:0)"
 replacements = { dims = 1 }
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = "$(dims:0)"
 discrete_dims = 0
+'''
 "#,
             BTreeMap::new(),
             None,
@@ -426,7 +468,7 @@ stop_condition = { max_total_samples = 10 }
 [[children]]
 name = "a"
 coefficent = 2
-run = { name = "child" }
+run = 'name = "child"'
 "#,
             BTreeMap::new(),
             None,
@@ -449,9 +491,14 @@ run = { name = "child" }
             panic!()
         };
         // The enclosing scope must not consume placeholders in child definitions.
-        assert_eq!(children[0].run["name"].as_str(), Some("child-$(dims:1)"));
+        let ChildRunSource::Inline(raw) = &children[0].run else {
+            panic!()
+        };
+        let document: toml::Value = toml::from_str(raw).unwrap();
+        assert_eq!(document["name"].as_str(), Some("child-$(dims:1)"));
         for (child, dims) in children.iter().zip([3, 2]) {
-            let config = instantiate(child.run.clone(), child.replacements.clone(), None).unwrap();
+            let config =
+                instantiate_child(child.run.clone(), child.replacements.clone(), None).unwrap();
             assert_eq!(config.name, format!("child-{dims}"));
             let EvaluatorConfig::Unit { params } = config.integration_params.evaluator.unwrap()
             else {
@@ -481,11 +528,11 @@ run = { name = "child" }
         std::fs::write(dir.path().join("nested/parent.toml"), "kind = 'integration_campaign'\nname = 'inner'\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'leaf'\nrun = { file = 'leaf.toml' }").unwrap();
         let raw = "kind = 'integration_campaign'\nname = 'outer'\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'inner'\nrun = { file = 'nested/parent.toml' }";
         let mut value: toml::Value = toml::from_str(raw).unwrap();
-        freeze_sources(&mut value, dir.path(), &mut Vec::new()).unwrap();
+        freeze_sources(&mut value, dir.path(), &mut Vec::new(), 0).unwrap();
         std::fs::write(dir.path().join("nested/leaf.toml"), "kind = 'integration_campaign'\nname = 'cycle'\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'parent'\nrun = { file = 'parent.toml' }").unwrap();
         let mut value: toml::Value = toml::from_str(raw).unwrap();
         assert!(
-            freeze_sources(&mut value, dir.path(), &mut Vec::new())
+            freeze_sources(&mut value, dir.path(), &mut Vec::new(), 0)
                 .unwrap_err()
                 .to_string()
                 .contains("cyclic")
@@ -516,5 +563,282 @@ run = { name = "child" }
                 .len(),
             2
         );
+    }
+    const CHILD_DOCUMENT: &str = r#"
+name = "child-$(dims:1)-$(label:fallback)"
+replacements = { dims = 1, samples = 6, label = "local" }
+[evaluator]
+kind = "unit"
+continuous_dims = "$(dims:1)"
+discrete_cardinalities = "$(channels:[2, 4])"
+[[task_queue]]
+name = "sample"
+kind = "sample"
+publish_result = "$(publish:true)"
+stop_condition = { max_samples = "$(samples:4)" }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#;
+
+    const CONTROLLERS: [&str; 3] = [
+        "integration_campaign",
+        "parameter_scan",
+        "hyperparameter_tuning",
+    ];
+
+    fn controller_document(kind: &str, source: toml::Value) -> String {
+        let common = "name = 'parent'\nreplacements = { dims = 99, selected = 2, label = 'parent-must-not-leak' }\n";
+        let body = match kind {
+            "integration_campaign" => {
+                "stop_condition = { max_total_samples = 12 }\n[[children]]\nname = 'a'\nreplacements = { dims = '$(selected:4)', samples = 12 }"
+            }
+            "parameter_scan" => {
+                "parameters = [{ name = 'dims', values = [3, 4] }]\n[child]\nreplacements = { dims = '$(selected:4)', samples = 12 }"
+            }
+            "hyperparameter_tuning" => {
+                "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', quantity = 'central_value' }\nparameters = { dims = { kind = 'integer', min = 3, max = 4, step = 1 } }\n[child]\nreplacements = { dims = '$(selected:4)', samples = 12 }"
+            }
+            _ => unreachable!(),
+        };
+        let mut document: toml::Value =
+            toml::from_str(&format!("kind = '{kind}'\n{common}{body}")).unwrap();
+        let child = if kind == "integration_campaign" {
+            &mut document["children"].as_array_mut().unwrap()[0]
+        } else {
+            document.get_mut("child").unwrap()
+        };
+        child.as_table_mut().unwrap().insert("run".into(), source);
+        toml::to_string(&document).unwrap()
+    }
+
+    fn file_source(path: &str) -> toml::Value {
+        toml::Value::Table(toml::map::Map::from_iter([(
+            "file".into(),
+            toml::Value::String(path.into()),
+        )]))
+    }
+
+    #[test]
+    fn inline_and_file_children_share_expansion_validation_and_freezing_for_every_controller() {
+        for kind in CONTROLLERS {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("child.toml");
+            std::fs::write(&path, CHILD_DOCUMENT).unwrap();
+            let inline = controller_document(kind, toml::Value::String(CHILD_DOCUMENT.into()));
+            let file = controller_document(kind, file_source("child.toml"));
+            let inline = parse(&inline, BTreeMap::new(), Some(dir.path())).unwrap();
+            let file = parse(&file, BTreeMap::new(), Some(dir.path())).unwrap();
+            assert_eq!(inline.effective_document, file.effective_document, "{kind}");
+            let inline_child = preflight_children(&inline.task_queue.as_ref().unwrap()[0].task)
+                .unwrap()
+                .remove(0);
+            let file_child = preflight_children(&file.task_queue.as_ref().unwrap()[0].task)
+                .unwrap()
+                .remove(0);
+            assert_eq!(
+                inline_child.effective_document, file_child.effective_document,
+                "{kind}"
+            );
+            let dims = if kind == "integration_campaign" { 2 } else { 3 };
+            assert_eq!(file_child.name, format!("child-{dims}-local"));
+            let document = file_child.effective_document.unwrap();
+            assert_eq!(
+                document["evaluator"]["continuous_dims"].as_integer(),
+                Some(dims)
+            );
+            assert_eq!(
+                document["evaluator"]["discrete_cardinalities"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+            assert_eq!(
+                document["task_queue"][0]["publish_result"].as_bool(),
+                Some(true)
+            );
+            assert_eq!(
+                document["task_queue"][0]["stop_condition"]["max_samples"].as_integer(),
+                Some(12)
+            );
+            std::fs::remove_file(path).unwrap();
+            for config in [inline, file] {
+                let restored = parse(
+                    config.original_toml.as_ref().unwrap(),
+                    BTreeMap::new(),
+                    None,
+                )
+                .unwrap();
+                let child = preflight_children(&restored.task_queue.unwrap()[0].task)
+                    .unwrap()
+                    .remove(0);
+                assert_eq!(child.effective_document.unwrap(), document, "{kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_controller_rejects_nested_tables_and_invalid_source_shapes() {
+        for kind in CONTROLLERS {
+            let nested: toml::Value = toml::from_str(CHILD_DOCUMENT).unwrap();
+            let mixed: toml::Value =
+                toml::from_str("file = 'missing.toml'\nname = 'nested'").unwrap();
+            let bad_file: toml::Value = toml::from_str("file = 42").unwrap();
+            for source in [
+                nested,
+                mixed,
+                bad_file,
+                toml::Value::Integer(3),
+                toml::Value::Array(vec![]),
+            ] {
+                let error = parse(&controller_document(kind, source), BTreeMap::new(), None)
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains("TOML string or a file reference"),
+                    "{kind}: {error}"
+                );
+            }
+            for raw in [
+                "",
+                "name = [",
+                "kind = 'unknown'\nname = 'bad'",
+                "name = 'bad'\nchildren = []",
+            ] {
+                let error = parse(
+                    &controller_document(kind, toml::Value::String(raw.into())),
+                    BTreeMap::new(),
+                    None,
+                );
+                assert!(error.is_err(), "{kind}: {raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn nested_inline_and_file_sources_preserve_relative_bases_and_freeze_recursively() {
+        for kind in CONTROLLERS {
+            let dir = tempfile::tempdir().unwrap();
+            let nested = dir.path().join("nested");
+            std::fs::create_dir(&nested).unwrap();
+            std::fs::write(nested.join("leaf.toml"), CHILD_DOCUMENT).unwrap();
+            let inner = controller_document(kind, file_source("leaf.toml"));
+            let middle = controller_document("parameter_scan", toml::Value::String(inner));
+            std::fs::write(nested.join("middle.toml"), middle).unwrap();
+            let outer = controller_document("parameter_scan", file_source("nested/middle.toml"));
+            let frozen = parse(&outer, BTreeMap::new(), Some(dir.path()))
+                .unwrap()
+                .original_toml
+                .unwrap();
+            std::fs::remove_dir_all(nested).unwrap();
+            let mut config = parse(&frozen, BTreeMap::new(), None).unwrap();
+            for _ in 0..3 {
+                config = preflight_children(&config.task_queue.as_ref().unwrap()[0].task)
+                    .unwrap()
+                    .remove(0);
+            }
+            assert_eq!(config.kind, "integration");
+            assert_eq!(
+                config.name,
+                if kind == "integration_campaign" {
+                    "child-2-local"
+                } else {
+                    "child-3-local"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn cycles_through_inline_sources_are_rejected_for_every_controller() {
+        for kind in CONTROLLERS {
+            let dir = tempfile::tempdir().unwrap();
+            let inner = controller_document(kind, file_source("loop.toml"));
+            let raw = controller_document(kind, toml::Value::String(inner));
+            std::fs::write(dir.path().join("loop.toml"), &raw).unwrap();
+            let error = parse(&raw, BTreeMap::new(), Some(dir.path()))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("cyclic child run reference"),
+                "{kind}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_bindings_are_applied_after_parsing_both_source_forms() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("child.toml"), CHILD_DOCUMENT).unwrap();
+        let bindings = BTreeMap::from([
+            (
+                "label".into(),
+                toml::Value::String("quoted \\\"label\\\" and \\ path".into()),
+            ),
+            (
+                "channels".into(),
+                toml::Value::Array(vec![toml::Value::Integer(3)]),
+            ),
+        ]);
+        let inline = instantiate_child(
+            ChildRunSource::Inline(CHILD_DOCUMENT.into()),
+            bindings.clone(),
+            Some(dir.path()),
+        )
+        .unwrap();
+        let file = instantiate_child(
+            ChildRunSource::File(crate::core::tasks::ChildRunFile {
+                file: "child.toml".into(),
+            }),
+            bindings,
+            Some(dir.path()),
+        )
+        .unwrap();
+        assert_eq!(inline.effective_document, file.effective_document);
+        assert_eq!(inline.name, "child-1-quoted \\\"label\\\" and \\ path");
+    }
+
+    #[test]
+    fn invalid_children_fail_the_same_submission_validation_for_both_forms() {
+        let invalid = CHILD_DOCUMENT.replace("max_samples = \"$(samples:4)\"", "max_samples = -1");
+        for kind in CONTROLLERS {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("invalid.toml"), &invalid).unwrap();
+            let mut errors = Vec::new();
+            for source in [
+                toml::Value::String(invalid.clone()),
+                file_source("invalid.toml"),
+            ] {
+                let error = parse(
+                    &controller_document(kind, source),
+                    BTreeMap::new(),
+                    Some(dir.path()),
+                )
+                .and_then(|config| super::super::runs::validate_run(config, false))
+                .unwrap_err()
+                .to_string();
+                assert!(error.contains("max_samples"), "{kind}: {error}");
+                errors.push(error);
+            }
+            assert_eq!(errors[0], errors[1], "{kind}");
+        }
+    }
+
+    #[test]
+    fn deep_file_chains_fail_before_freezing_unbounded_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..35 {
+            let raw = controller_document(
+                "parameter_scan",
+                file_source(&format!("{}.toml", index + 1)),
+            );
+            std::fs::write(dir.path().join(format!("{index}.toml")), raw).unwrap();
+        }
+        let root = controller_document("parameter_scan", file_source("0.toml"));
+        let error = parse(&root, BTreeMap::new(), Some(dir.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nesting exceeds 32"), "{error}");
     }
 }

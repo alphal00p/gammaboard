@@ -5,7 +5,7 @@ use crate::core::{
 };
 use crate::evaluation::AccumulatorState;
 use crate::services::measurement::load_task_measurement_output;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone)]
 pub struct ChildTaskResult {
@@ -74,6 +74,18 @@ pub async fn apply_controller_assignment_plan(
     store: &impl ControlPlaneStore,
     plan: ControllerAssignmentPlan,
 ) -> Result<(), StoreError> {
+    // Plan from one snapshot, then publish only actual changes in one transaction.
+    // A stale snapshot is harmless: the next controller tick retries it.
+    let nodes = store.list_nodes(None).await?;
+    let updates = controller_assignment_updates(&nodes, plan);
+    store.update_desired_assignments(&updates).await?;
+    Ok(())
+}
+
+fn controller_assignment_updates(
+    nodes: &[RegisteredNode],
+    plan: ControllerAssignmentPlan,
+) -> Vec<crate::core::NodeAssignmentUpdate> {
     let managed = plan
         .managed_child_run_ids
         .into_iter()
@@ -84,80 +96,125 @@ pub async fn apply_controller_assignment_plan(
         .into_iter()
         .filter(|run_id| managed.contains(run_id) && selected_seen.insert(*run_id))
         .collect::<Vec<_>>();
-    let all_assignments = store.list_desired_assignments(None).await?;
-    let reusable_assignments = all_assignments
-        .into_iter()
+    let reusable_assignments = nodes
+        .iter()
+        .filter_map(|node| node.desired_assignment.as_ref())
         .filter(|assignment| {
             assignment.run_id == plan.parent_run_id
                 || (!plan.preserve_selected_assignments && managed.contains(&assignment.run_id))
         })
+        .cloned()
         .collect::<Vec<_>>();
-
-    store
-        .clear_desired_assignments_for_run(plan.parent_run_id)
-        .await?;
-    if !plan.preserve_selected_assignments {
-        for run_id in &managed {
-            store.clear_desired_assignments_for_run(*run_id).await?;
+    let mut desired = nodes
+        .iter()
+        .filter_map(|node| {
+            node.desired_assignment
+                .as_ref()
+                .map(|a| (node.name.clone(), a.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for assignment in &reusable_assignments {
+        desired.remove(&assignment.node_name);
+    }
+    if !selected.is_empty() {
+        let selected_set = selected.iter().copied().collect::<BTreeSet<_>>();
+        let mut activated = if plan.preserve_selected_assignments {
+            child_sampler_run_ids(nodes, &selected_set)
+        } else {
+            BTreeSet::new()
+        };
+        let reusable_assignments =
+            if plan.preserve_selected_assignments && !reusable_assignments.is_empty() {
+                reusable_assignments
+            } else {
+                let has_sampler = reusable_assignments
+                    .iter()
+                    .any(|assignment| assignment.role == WorkerRole::SamplerAggregator);
+                let mut idle = idle_node_assignments_from_nodes(nodes);
+                if has_sampler {
+                    // Replacement nodes can register on different ticks. Once the
+                    // sampler has recovered, newly idle nodes must join as evaluators.
+                    for assignment in &mut idle {
+                        assignment.role = WorkerRole::Evaluator;
+                    }
+                }
+                let mut available = reusable_assignments;
+                available.extend(idle);
+                available
+            };
+        if !plan.preserve_selected_assignments {
+            // Keep samplers on children that are still selected, even when
+            // priority order changes or another child leaves the selected set.
+            for assignment in &reusable_assignments {
+                if assignment.role == WorkerRole::SamplerAggregator
+                    && selected_set.contains(&assignment.run_id)
+                    && activated.insert(assignment.run_id)
+                {
+                    desired.insert(assignment.node_name.clone(), assignment.clone());
+                }
+            }
+        }
+        let mut sampler_nodes = reusable_assignments
+            .iter()
+            .filter(|a| {
+                a.role == WorkerRole::SamplerAggregator && !desired.contains_key(&a.node_name)
+            })
+            .map(|a| a.node_name.as_str())
+            .collect::<Vec<_>>();
+        let mut evaluator_nodes = reusable_assignments
+            .iter()
+            .filter(|a| a.role == WorkerRole::Evaluator)
+            .map(|a| a.node_name.as_str())
+            .collect::<Vec<_>>();
+        sampler_nodes.sort_unstable();
+        evaluator_nodes.sort_unstable();
+        let children_needing_sampler = selected
+            .iter()
+            .copied()
+            .filter(|run_id| !activated.contains(run_id))
+            .collect::<Vec<_>>();
+        for (run_id, node_name) in children_needing_sampler.into_iter().zip(sampler_nodes) {
+            desired.insert(
+                node_name.to_owned(),
+                DesiredAssignment {
+                    node_name: node_name.to_owned(),
+                    role: WorkerRole::SamplerAggregator,
+                    run_id,
+                    run_name: None,
+                },
+            );
+            activated.insert(run_id);
+        }
+        // Stable evaluator distribution depends on membership, not priority.
+        let activated = activated.into_iter().collect::<Vec<_>>();
+        if !activated.is_empty() {
+            for (index, node_name) in evaluator_nodes.into_iter().enumerate() {
+                desired.insert(
+                    node_name.to_owned(),
+                    DesiredAssignment {
+                        node_name: node_name.to_owned(),
+                        role: WorkerRole::Evaluator,
+                        run_id: activated[index % activated.len()],
+                        run_name: None,
+                    },
+                );
+            }
         }
     }
-    if selected.is_empty() {
-        return Ok(());
-    }
-
-    let nodes = store.list_nodes(None).await?;
-    let selected_set = selected.iter().copied().collect::<BTreeSet<_>>();
-    let mut activated = if plan.preserve_selected_assignments {
-        child_sampler_run_ids(&nodes, &selected_set)
-    } else {
-        BTreeSet::new()
-    };
-    let reusable_assignments = if reusable_assignments.is_empty() {
-        idle_node_assignments_from_nodes(&nodes)
-    } else {
-        reusable_assignments
-    };
-    let mut sampler_nodes = reusable_assignments
+    nodes
         .iter()
-        .filter(|assignment| assignment.role == WorkerRole::SamplerAggregator)
-        .map(|assignment| assignment.node_name.as_str())
-        .collect::<Vec<_>>();
-    let evaluator_nodes = reusable_assignments
-        .iter()
-        .filter(|assignment| assignment.role == WorkerRole::Evaluator)
-        .map(|assignment| assignment.node_name.as_str())
-        .collect::<Vec<_>>();
-    sampler_nodes.sort_unstable();
-
-    let children_needing_sampler = selected
-        .iter()
-        .copied()
-        .filter(|run_id| !activated.contains(run_id))
-        .collect::<Vec<_>>();
-    for (run_id, node_name) in children_needing_sampler.into_iter().zip(sampler_nodes) {
-        store
-            .upsert_desired_assignment(node_name, WorkerRole::SamplerAggregator, run_id)
-            .await?;
-        activated.insert(run_id);
-    }
-    let activated = selected
-        .iter()
-        .copied()
-        .filter(|run_id| activated.contains(run_id))
-        .collect::<Vec<_>>();
-    if activated.is_empty() {
-        return Ok(());
-    }
-    for (index, node_name) in evaluator_nodes.into_iter().enumerate() {
-        store
-            .upsert_desired_assignment(
-                node_name,
-                WorkerRole::Evaluator,
-                activated[index % activated.len()],
-            )
-            .await?;
-    }
-    Ok(())
+        .filter_map(|node| {
+            let next = desired.remove(&node.name);
+            let target = |a: &DesiredAssignment| (a.role, a.run_id);
+            (node.desired_assignment.as_ref().map(target) != next.as_ref().map(target)).then(|| {
+                crate::core::NodeAssignmentUpdate {
+                    node_uuid: node.uuid.clone(),
+                    expected: node.desired_assignment.clone(),
+                    desired: next,
+                }
+            })
+        })
+        .collect()
 }
 
 fn child_sampler_run_ids(nodes: &[RegisteredNode], child_run_ids: &BTreeSet<i32>) -> BTreeSet<i32> {
@@ -367,6 +424,156 @@ pub async fn load_published_child_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node(name: &str, role: WorkerRole, run_id: i32) -> RegisteredNode {
+        RegisteredNode {
+            name: name.into(),
+            uuid: name.into(),
+            capabilities: Default::default(),
+            desired_assignment: Some(DesiredAssignment {
+                node_name: name.into(),
+                role,
+                run_id,
+                run_name: None,
+            }),
+            current_assignment: None,
+            last_seen: None,
+        }
+    }
+
+    #[test]
+    fn unchanged_campaign_selection_does_not_reassign_workers() {
+        let nodes = vec![
+            node("s", WorkerRole::SamplerAggregator, 2),
+            node("e1", WorkerRole::Evaluator, 2),
+            node("e2", WorkerRole::Evaluator, 2),
+        ];
+        assert!(
+            controller_assignment_updates(
+                &nodes,
+                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![2])
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn selection_priority_changes_do_not_swap_worker_pools() {
+        let nodes = vec![
+            node("s1", WorkerRole::SamplerAggregator, 2),
+            node("s2", WorkerRole::SamplerAggregator, 3),
+            node("e1", WorkerRole::Evaluator, 2),
+            node("e2", WorkerRole::Evaluator, 3),
+        ];
+        assert!(
+            controller_assignment_updates(
+                &nodes,
+                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3, 2, 3])
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn campaign_recovers_workers_that_register_on_different_ticks() {
+        for surviving_role in [WorkerRole::SamplerAggregator, WorkerRole::Evaluator] {
+            let mut replacement = node("replacement", WorkerRole::Evaluator, 2);
+            replacement.desired_assignment = None;
+            let nodes = vec![node("survivor", surviving_role, 2), replacement];
+            let updates = controller_assignment_updates(
+                &nodes,
+                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![2]),
+            );
+            assert_eq!(updates.len(), 1);
+            assert_eq!(updates[0].node_uuid, "replacement");
+            let next = updates[0].desired.as_ref().unwrap();
+            assert_eq!(next.run_id, 2);
+            assert_ne!(next.role, surviving_role);
+        }
+    }
+
+    #[test]
+    fn retained_child_keeps_its_sampler_when_another_child_leaves() {
+        let nodes = vec![
+            node("s1", WorkerRole::SamplerAggregator, 2),
+            node("s2", WorkerRole::SamplerAggregator, 3),
+        ];
+        let updates = controller_assignment_updates(
+            &nodes,
+            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3]),
+        );
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].node_uuid, "s1");
+        assert!(updates[0].desired.is_none());
+    }
+
+    #[test]
+    fn new_samplers_follow_selection_priority() {
+        let nodes = vec![node("s", WorkerRole::SamplerAggregator, 1)];
+        let updates = controller_assignment_updates(
+            &nodes,
+            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3, 2]),
+        );
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].desired.as_ref().unwrap().run_id, 3);
+    }
+
+    #[test]
+    fn campaign_moves_only_its_pool_and_releases_it_on_completion() {
+        let nodes = vec![
+            node("s", WorkerRole::SamplerAggregator, 2),
+            node("e", WorkerRole::Evaluator, 2),
+            node("other", WorkerRole::Evaluator, 9),
+        ];
+        let moved = controller_assignment_updates(
+            &nodes,
+            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3]),
+        );
+        assert_eq!(moved.len(), 2);
+        assert!(
+            moved
+                .iter()
+                .all(|u| u.expected.as_ref().unwrap().run_id == 2
+                    && u.desired.as_ref().unwrap().run_id == 3)
+        );
+        let stopped = controller_assignment_updates(
+            &nodes,
+            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![]),
+        );
+        assert_eq!(stopped.len(), 2);
+        assert!(stopped.iter().all(|u| u.desired.is_none()));
+    }
+
+    #[test]
+    fn preserving_controller_keeps_children_and_assigns_new_parent_workers() {
+        let nodes = vec![
+            node("s1", WorkerRole::SamplerAggregator, 2),
+            node("e1", WorkerRole::Evaluator, 2),
+            node("s2", WorkerRole::SamplerAggregator, 1),
+            node("e2", WorkerRole::Evaluator, 1),
+        ];
+        let updates = controller_assignment_updates(
+            &nodes,
+            ControllerAssignmentPlan::preserving(1, vec![2, 3]),
+        );
+        assert_eq!(updates.len(), 2);
+        assert!(
+            updates
+                .iter()
+                .all(|u| u.expected.as_ref().unwrap().run_id == 1)
+        );
+        assert_eq!(
+            updates
+                .iter()
+                .find(|u| u.node_uuid == "s2")
+                .unwrap()
+                .desired
+                .as_ref()
+                .unwrap()
+                .run_id,
+            3
+        );
+    }
 
     #[test]
     fn failed_child_task_overrides_cached_measurement_state() {

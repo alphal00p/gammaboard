@@ -28,22 +28,23 @@ name = "GL2-naive"
 coefficient = 0.5
 replacements = { graph_group = 1, seed = 41, state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)" }
 
-[children.run]
+run = '''
 name = "ttH-GL2-naive"
 
-[children.run.evaluator]
+[evaluator]
 kind = "gammaloop"
 state_folder = "$(state_folder:states/epem_a_ttxh/LO/state)"
 integrand_name = "LO"
 graph_groups = ["$(graph_group:1)"]
 
-[children.run.evaluator.preprocessing]
+[evaluator.preprocessing]
 read_only = true
 commands = ["set model MT=173.0", "set model WT=0.0", "set model ymt=173.0", "set model aS=0.118", "set model aEWM1=132.507", "set model Gf=1.166390e-05", "set model MZ=91.188"]
 
-[[children.run.task_queue]]
+[[task_queue]]
 name = "integrate"
 kind = "sample"
 stop_condition = { max_samples = 10_000_000 }
 accumulator = { config = "gammaloop" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = "$(seed:41)" } }
+'''

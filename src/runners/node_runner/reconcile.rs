@@ -292,7 +292,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         );
         let role_scope_span = context_span.clone();
         let _role_scope = role_scope_span.enter();
-        info!("starting role runner");
+        info!(run_id = target.run_id, node_name = %self.node_name, role = %target.role, "starting role runner");
 
         let worker = ActiveWorker::new(
             self.store.clone(),
@@ -668,7 +668,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return;
         };
         let _role_scope = active_runner.context_span.enter();
-        info!("stopping role runner");
+        info!(run_id = active_runner.target.run_id, node_name = %self.node_name, role = %active_runner.target.role, "stopping role runner");
         if let Err(err) = active_runner.runner.stop().await {
             warn!("failed to stop role runner cleanly: {err}");
         }

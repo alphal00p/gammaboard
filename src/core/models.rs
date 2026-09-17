@@ -52,6 +52,15 @@ pub struct DesiredAssignment {
     pub run_name: Option<String>,
 }
 
+/// One conditional assignment change. A batch is published atomically only if
+/// every node still has the UUID and desired assignment observed by the planner.
+#[derive(Debug, Clone)]
+pub struct NodeAssignmentUpdate {
+    pub node_uuid: String,
+    pub expected: Option<DesiredAssignment>,
+    pub desired: Option<DesiredAssignment>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredNode {
     pub name: String,

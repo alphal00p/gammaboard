@@ -2,6 +2,11 @@
 
 ## 0.2.0 - Unreleased
 
+- Fixed repeated campaign worker restarts caused by clearing and restoring
+  unchanged assignments on every controller tick; pool changes are now atomic.
+- Fixed campaign recovery when replacement workers register on different ticks
+  or an expired sampler still occupies its assignment slot.
+
 - Added persisted distributed sampler/evaluator execution with live dashboard
   panels, provenance, and CPU-hour accounting.
 - Added parameter scans, hyperparameter tuning, and variance-directed

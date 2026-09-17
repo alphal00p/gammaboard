@@ -427,7 +427,7 @@ mod tests {
             }],
             measurement: MeasurementSpec::default(),
             child: crate::core::tasks::ChildRunTemplate {
-                run: toml::from_str("name = \"trial\"").unwrap(),
+                run: crate::core::tasks::ChildRunSource::Inline("name = \"trial\"".into()),
                 replacements: Default::default(),
             },
             max_concurrent_runs: 1,

@@ -29,7 +29,7 @@ pub struct ChildRunRequest {
     pub parent_task_id: Option<i64>,
     pub spawn_kind: String,
     pub spawn_label: Option<String>,
-    pub run: toml::Value,
+    pub run: crate::core::tasks::ChildRunSource,
     pub replacements: BTreeMap<String, toml::Value>,
 }
 
@@ -327,7 +327,7 @@ pub async fn create_child_run(
             "child run spawn_kind must be non-empty".to_string(),
         ));
     }
-    let config = super::run_definition::instantiate(request.run, request.replacements, None)?;
+    let config = super::run_definition::instantiate_child(request.run, request.replacements, None)?;
     let created = create_run(store, config).await?;
     store
         .set_run_parent_metadata(
@@ -1150,29 +1150,31 @@ parameters = [
 [measurement]
 source_task = "sample"
 
-[child.run]
+[child]
+run = '''
 name = "child-$(scale:1)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 4
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
         )
         .expect("run config");
@@ -1223,8 +1225,10 @@ values = [
 [measurement]
 source_task = "sample"
 
-[child.run]
+[child]
+run = '''
 name = "child"
+'''
 "#,
         )
         .expect("run config");
@@ -1487,7 +1491,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
         };
         assert_eq!(children.len(), 3);
         for (index, child) in children.iter().enumerate() {
-            let child_config = super::super::run_definition::instantiate(
+            let child_config = super::super::run_definition::instantiate_child(
                 child.run.clone(),
                 child.replacements.clone(),
                 None,
@@ -1541,13 +1545,15 @@ values = [
 [measurement]
 source_task = "sample"
 
-[child.run]
+[child]
+run = '''
 name = "child"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
+'''
 "#,
         )
         .expect("controller-only run config");

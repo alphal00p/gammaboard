@@ -37,6 +37,14 @@ pub trait ControlPlaneStore: Send + Sync {
         Ok(())
     }
 
+    /// Publish all changes together, without exposing an unassigned interval.
+    /// Returns false (with no changes) if a node expired, restarted, or was
+    /// reassigned since planning; the controller can retry on its next tick.
+    async fn update_desired_assignments(
+        &self,
+        updates: &[super::models::NodeAssignmentUpdate],
+    ) -> Result<bool, StoreError>;
+
     async fn upsert_desired_assignment(
         &self,
         node_name: &str,

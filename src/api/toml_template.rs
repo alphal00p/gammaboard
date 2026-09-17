@@ -353,13 +353,15 @@ value = "$(x:1)"
         let expanded = expand(
             r#"
 replacements = { scale = 99 }
-[child.run]
+[child]
+run = '''
 name = "child-$(scale:1)"
+'''
 "#,
         );
         assert_eq!(
-            expanded["child"]["run"]["name"].as_str(),
-            Some("child-$(scale:1)")
+            expanded["child"]["run"].as_str(),
+            Some("name = \"child-$(scale:1)\"\n")
         );
     }
 }

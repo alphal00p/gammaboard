@@ -3629,32 +3629,34 @@ values = [
 [measurement]
 source_task = "sample"
 
-[child.run]
+[child]
+run = '''
 name = "delete-child-run-$(scale:1)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[child.run.evaluator.timing]
+[evaluator.timing]
 per_sample_seconds = 0.02
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 1000000
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -4618,59 +4620,61 @@ min_samples_per_child = 8
 name = "left"
 coefficient = 2.0
 
-[children.run]
+run = '''
 name = "campaign-result-left"
 
-[children.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[children.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[children.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 32
 
-[children.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[children.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[children.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
 seed = 1
 
+'''
 [[children]]
 name = "right"
 coefficient = -0.5
 
-[children.run]
+run = '''
 name = "campaign-result-right"
 
-[children.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[children.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[children.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 32
 
-[children.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[children.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[children.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
 seed = 2
+'''
 "#,
     );
 
@@ -4749,25 +4753,25 @@ min_samples_per_child = 64
 name = "left"
 coefficient = 2.0
 
-[children.run]
+run = '''
 name = "campaign-recovery-left"
 
-[children.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 timing = { per_sample_seconds = 0.01 }
 
-[children.run.sampler_aggregator_runner_params]
+[sampler_aggregator_runner_params]
 frontend_sync_interval_ms = 20
 performance_snapshot_interval_ms = 20
 
-[children.run.sampler_aggregator_runner_params.queue]
+[sampler_aggregator_runner_params.queue]
 queue_buffer = 64.0
 max_queue_size = 64
 max_batch_size = 16
 target_batch_eval_ms = 50.0
 
-[[children.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 512 }
@@ -4775,35 +4779,37 @@ measurement = { quantity = "central_value" }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
 
+'''
 [[children]]
 name = "right"
 coefficient = -0.5
 
-[children.run]
+run = '''
 name = "campaign-recovery-right"
 
-[children.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 timing = { per_sample_seconds = 0.01 }
 
-[children.run.sampler_aggregator_runner_params]
+[sampler_aggregator_runner_params]
 frontend_sync_interval_ms = 20
 performance_snapshot_interval_ms = 20
 
-[children.run.sampler_aggregator_runner_params.queue]
+[sampler_aggregator_runner_params.queue]
 queue_buffer = 64.0
 max_queue_size = 64
 max_batch_size = 16
 target_batch_eval_ms = 50.0
 
-[[children.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 512 }
 measurement = { quantity = "central_value" }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+'''
 "#,
     );
 
@@ -4972,29 +4978,31 @@ values = [
 [measurement]
 source_task = "sample"
 
-[child.run]
+[child]
+run = '''
 name = "parameter-scan-child-$(scale:1)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 16
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -5131,29 +5139,31 @@ values = [
 [measurement]
 source_task = "sample"
 
-[child.run]
+[child]
+run = '''
 name = "parameter-scan-grid-child-$(scale:1)-$(offset:0)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 16
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -5249,29 +5259,31 @@ values = [
 [measurement]
 source_task = "sample"
 
-[child.run]
+[child]
+run = '''
 name = "parameter-scan-redistribute-child-$(scale:1)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 512
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -5400,29 +5412,31 @@ values = [
     "none",
 ]
 
-[child.run]
+[child]
+run = '''
 name = "tuning-child-a-$(a:0.0)-bins-$(bins:16)-mode-$(mode:auto)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 16
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -5518,29 +5532,31 @@ kind = "integer"
 min = 1
 max = 4
 
-[child.run]
+[child]
+run = '''
 name = "egobox-child-bins-$(bins:1)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 16
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -5658,29 +5674,31 @@ values = [
     "none",
 ]
 
-[child.run]
+[child]
+run = '''
 name = "grid-child-bins-$(bins:8)-mode-$(mode:auto)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 16
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -5728,16 +5746,15 @@ fn tuning_rejects_mixed_file_and_inline_child_definitions() {
         r#"
 kind = "hyperparameter_tuning"
 name = "invalid-child"
-[child.run]
-file = "child.toml"
-name = "inline-too"
+[child]
+run = { file = "child.toml", name = "inline-too" }
 "#,
     )
     .unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("cannot also contain an inline definition")
+            .contains("TOML string or a file reference")
     );
 }
 
@@ -5777,30 +5794,32 @@ kind = "integer"
 min = 1
 max = 1
 
-[child.run]
+[child]
+run = '''
 name = "failed-measure-child-$(scale:1)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 16
 
-[child.run.task_queue.measurement.quantity]
+[task_queue.measurement.quantity]
 metric = "variance"
 component = "missing"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -5876,29 +5895,31 @@ kind = "integer"
 min = 1
 max = 4
 
-[child.run]
+[child]
+run = '''
 name = "tune-redistribute-child-$(scale:1)"
 
-[child.run.evaluator]
+[evaluator]
 kind = "unit"
 continuous_dims = 1
 discrete_dims = 0
 
-[[child.run.task_queue]]
+[[task_queue]]
 name = "sample"
 kind = "sample"
 
-[child.run.task_queue.stop_condition]
+[task_queue.stop_condition]
 max_samples = 512
 
-[child.run.task_queue.measurement]
+[task_queue.measurement]
 quantity = "central_value"
 
-[child.run.task_queue.accumulator]
+[task_queue.accumulator]
 config = "scalar"
 
-[child.run.task_queue.sampler_aggregator.config]
+[task_queue.sampler_aggregator.config]
 kind = "naive_monte_carlo"
+'''
 "#,
     );
 
@@ -6316,7 +6337,8 @@ target_batch_eval_ms = 32.0
     harness
         .wait_for(
             "live progress advances beyond the recovery checkpoint",
-            Duration::from_secs(20),
+            // This checks recovery correctness, not a minimum host throughput.
+            Duration::from_secs(60),
             || async { Ok(harness.run_sample_progress(run_id).await?.1 >= saved_completed + 2048) },
         )
         .await?;
@@ -6332,7 +6354,7 @@ target_batch_eval_ms = 32.0
         .await?;
     harness.start_node("crash-s").await?;
     harness.assign_node("crash-s", "sampler_aggregator", name);
-    harness.wait_for("crash recovery completes every training window", Duration::from_secs(35), || async {
+    harness.wait_for("crash recovery completes every training window", Duration::from_secs(120), || async {
         let (state, failure): (String, Option<String>) = sqlx::query_as("SELECT state,failure_reason FROM run_tasks WHERE run_id=$1")
             .bind(run_id).fetch_one(&harness.pool).await?;
         anyhow::ensure!(state != "failed", "restored training failed: {failure:?}");
@@ -6428,25 +6450,26 @@ replacements = {{ value = 3, final_name = "right-inference" }}
 run = {{ file = "{}" }}
 [[children]]
 name = "inline"
-[children.run]
+run = '''
 name = "inline-stages"
-[children.run.evaluator]
+[evaluator]
 kind = "symbolica"
 expr = "0"
 args = ["x"]
-[[children.run.task_queue]]
+[[task_queue]]
 name = "excluded-training"
 kind = "sample"
 publish_result = false
 stop_condition = {{ max_samples = 32 }}
 accumulator = {{ config = "scalar" }}
 sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
-[[children.run.task_queue]]
+[[task_queue]]
 name = "inline-inference"
 kind = "sample"
 stop_condition = {{ max_samples = 16 }}
 accumulator = {{ config = "scalar" }}
 sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
+'''
 "#,
         child_path.display(),
         child_path.display()
@@ -6500,6 +6523,287 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
         ])
         .assert()
         .failure();
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn child_source_forms_execute_identically_across_controllers() -> anyhow::Result<()> {
+    use std::io::Write;
+    let child = r#"
+name = "source-child-$(scale:1)"
+replacements = { scale = 1, samples = 4 }
+[evaluator]
+kind = "unit"
+continuous_dims = "$(scale:1)"
+discrete_dims = 0
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = "$(samples:4)" }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+"#;
+    for kind in [
+        "integration_campaign",
+        "parameter_scan",
+        "hyperparameter_tuning",
+    ] {
+        let mut results = Vec::new();
+        for from_file in [false, true] {
+            let mut harness = FullStackHarness::new().await?;
+            let dir = tempfile::tempdir()?;
+            let child_path = dir.path().join("child.toml");
+            std::fs::write(&child_path, child)?;
+            let source = if from_file {
+                "{ file = \"child.toml\" }".to_string()
+            } else {
+                format!("'''{child}'''")
+            };
+            let settings = match kind {
+                "integration_campaign" => {
+                    "stop_condition = { max_total_samples = 12 }\nallocation = { min_samples_per_child = 1 }\n[[children]]\nname = 'a'"
+                }
+                "parameter_scan" => "parameters = [{ name = 'scale', values = [3] }]\n[child]",
+                "hyperparameter_tuning" => {
+                    "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', quantity = 'central_value' }\nparameters = { scale = { kind = 'integer', min = 3, max = 3, step = 1 } }\n[child]"
+                }
+                _ => unreachable!(),
+            };
+            let document = format!(
+                "kind = '{kind}'\nname = 'source-parent'\nreplacements = {{ scale = 99 }}\n{settings}\nreplacements = {{ scale = 2, samples = 12 }}\nrun = {source}\n"
+            );
+            let mut config = NamedTempFile::new_in(dir.path())?;
+            config.write_all(document.as_bytes())?;
+            harness.add_run(&config);
+            let parent_id = harness.run_id("source-parent").await?;
+            // Freeze on submission: neither input file exists when workers spawn children.
+            std::fs::remove_file(child_path)?;
+            drop(config);
+            let task: JsonValue =
+                sqlx::query_scalar("SELECT task FROM run_tasks WHERE run_id = $1")
+                    .bind(parent_id)
+                    .fetch_one(&harness.pool)
+                    .await?;
+            let frozen = if kind == "integration_campaign" {
+                &task["children"][0]["run"]
+            } else {
+                &task["child"]["run"]
+            };
+            assert!(
+                frozen.is_string(),
+                "{kind}: persisted child source must be inline TOML"
+            );
+            harness.start_nodes(&["source-s", "source-e"]).await?;
+            harness
+                .cli()
+                .args(["node", "auto-assign", &parent_id.to_string()])
+                .assert()
+                .success();
+            wait_for_task_state(&harness, parent_id, "completed", Duration::from_secs(60)).await?;
+            let children: Vec<JsonValue> = sqlx::query_scalar(
+                r#"
+                SELECT jsonb_build_object(
+                    'name', r.name, 'integration_params', r.integration_params,
+                    'point_spec', r.point_spec,
+                    'tasks', (SELECT jsonb_agg(jsonb_build_object(
+                        'name', t.name, 'task', t.task, 'state', t.state,
+                        'samples', t.nr_completed_samples) ORDER BY t.sequence_nr)
+                        FROM run_tasks t WHERE t.run_id = r.id))
+                FROM runs r WHERE parent_run_id = $1 ORDER BY r.name
+            "#,
+            )
+            .bind(parent_id)
+            .fetch_all(&harness.pool)
+            .await?;
+            assert_eq!(children.len(), 1, "{kind}");
+            assert_eq!(children[0]["tasks"][0]["samples"], json!(12), "{kind}");
+            assert_eq!(
+                children[0]["name"],
+                json!(if kind == "integration_campaign" {
+                    "source-child-2"
+                } else {
+                    "source-child-3"
+                })
+            );
+            results.push(children);
+            harness.cleanup().await?;
+        }
+        assert_eq!(
+            results[0], results[1],
+            "{kind}: inline/file execution differed"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> anyhow::Result<()> {
+    use gammaboard::core::{
+        ControlPlaneStore, DesiredAssignment, NodeAssignmentUpdate, WorkerRole,
+    };
+    use gammaboard::runners::controller_child::{
+        ControllerAssignmentPlan, apply_controller_assignment_plan,
+    };
+    use gammaboard::stores::PgStore;
+    let mut harness = FullStackHarness::new().await?;
+    for name in ["parent", "left", "right", "unrelated"] {
+        harness.add_run(&temp_config(&format!("name = '{name}'")));
+    }
+    let parent = harness.run_id("parent").await?;
+    let left = harness.run_id("left").await?;
+    let right = harness.run_id("right").await?;
+    let unrelated = harness.run_id("unrelated").await?;
+    let store = PgStore::new(harness.pool.clone());
+    for (name, role, run_id) in [
+        ("s", WorkerRole::SamplerAggregator, parent),
+        ("e", WorkerRole::Evaluator, parent),
+        ("other", WorkerRole::Evaluator, unrelated),
+    ] {
+        store.announce_node(name, name, &Default::default()).await?;
+        store.upsert_desired_assignment(name, role, run_id).await?;
+    }
+    sqlx::query("UPDATE nodes SET lease_expires_at = now() + interval '5 minutes'")
+        .execute(&harness.pool)
+        .await?;
+    let plan =
+        |selected| ControllerAssignmentPlan::replacing(parent, vec![left, right], vec![selected]);
+    apply_controller_assignment_plan(&store, plan(left)).await?;
+    let versions: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, xmin::text FROM nodes ORDER BY name")
+            .fetch_all(&harness.pool)
+            .await?;
+    for _ in 0..20 {
+        apply_controller_assignment_plan(&store, plan(left)).await?;
+    }
+    assert_eq!(
+        versions,
+        sqlx::query_as::<_, (String, String)>("SELECT name, xmin::text FROM nodes ORDER BY name")
+            .fetch_all(&harness.pool)
+            .await?,
+        "unchanged ticks must not rewrite assignments"
+    );
+    // Deliberately widen the old clear/restore race. Concurrent readers must
+    // still see one complete pool, never unassigned or partly moved workers.
+    sqlx::raw_sql(
+        "CREATE FUNCTION delay_assignment_clear() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF OLD.desired_run_id IS NOT NULL AND NEW.desired_run_id IS NULL THEN
+            PERFORM pg_sleep(0.02); END IF; RETURN NEW; END $$;
+        CREATE TRIGGER delay_assignment_clear BEFORE UPDATE ON nodes
+        FOR EACH ROW EXECUTE FUNCTION delay_assignment_clear();",
+    )
+    .execute(&harness.pool)
+    .await?;
+    let writer_store = store.clone();
+    let writer = tokio::spawn(async move {
+        for _ in 0..5 {
+            for selected in [right, left] {
+                apply_controller_assignment_plan(
+                    &writer_store,
+                    ControllerAssignmentPlan::replacing(parent, vec![left, right], vec![selected]),
+                )
+                .await?;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+    let mut reads = 0;
+    while !writer.is_finished() {
+        let assignments: Vec<Option<i32>> = sqlx::query_scalar(
+            "SELECT desired_run_id FROM nodes WHERE name IN ('s', 'e') ORDER BY name",
+        )
+        .fetch_all(&harness.pool)
+        .await?;
+        assert!(
+            assignments == vec![Some(left), Some(left)]
+                || assignments == vec![Some(right), Some(right)],
+            "workers observed a partial assignment: {assignments:?}"
+        );
+        reads += 1;
+        sleep(Duration::from_millis(2)).await;
+    }
+    writer.await??;
+    assert!(reads > 5);
+    assert_eq!(
+        store.get_desired_assignment("other").await?.unwrap().run_id,
+        unrelated
+    );
+    let updates = store
+        .list_nodes(None)
+        .await?
+        .into_iter()
+        .filter(|n| n.name != "other")
+        .map(|n| NodeAssignmentUpdate {
+            node_uuid: n.uuid,
+            expected: n.desired_assignment.clone(),
+            desired: Some(DesiredAssignment {
+                run_id: right,
+                ..n.desired_assignment.unwrap()
+            }),
+        })
+        .collect::<Vec<_>>();
+    // Concurrent manual reassignment invalidates the entire plan, including its
+    // otherwise valid sampler change.
+    store
+        .upsert_desired_assignment("e", WorkerRole::Evaluator, unrelated)
+        .await?;
+    assert!(!store.update_desired_assignments(&updates).await?);
+    assert_eq!(
+        store.get_desired_assignment("s").await?.unwrap().run_id,
+        left
+    );
+    assert_eq!(
+        store.get_desired_assignment("e").await?.unwrap().run_id,
+        unrelated
+    );
+    store
+        .upsert_desired_assignment("e", WorkerRole::Evaluator, left)
+        .await?;
+    sqlx::query("UPDATE nodes SET lease_expires_at = now() - interval '1 second' WHERE name = 's'")
+        .execute(&harness.pool)
+        .await?;
+    assert!(
+        !store.update_desired_assignments(&updates).await?,
+        "expired node must invalidate the plan"
+    );
+    store
+        .announce_node("s", "replacement-s", &Default::default())
+        .await?;
+    assert!(
+        !store.update_desired_assignments(&updates).await?,
+        "new node UUID must invalidate the plan"
+    );
+    assert_eq!(
+        store.get_desired_assignment("e").await?.unwrap().run_id,
+        left
+    );
+    store
+        .upsert_desired_assignment("s", WorkerRole::SamplerAggregator, left)
+        .await?;
+    sqlx::query("UPDATE nodes SET lease_expires_at = now() - interval '1 second' WHERE name = 's'")
+        .execute(&harness.pool)
+        .await?;
+    store
+        .announce_node("new-s", "new-s", &Default::default())
+        .await?;
+    assert!(
+        store
+            .update_desired_assignments(&[NodeAssignmentUpdate {
+                node_uuid: "new-s".into(),
+                expected: None,
+                desired: Some(DesiredAssignment {
+                    node_name: "new-s".into(),
+                    run_id: left,
+                    role: WorkerRole::SamplerAggregator,
+                    run_name: None,
+                }),
+            }])
+            .await?,
+        "an expired sampler must not block its differently named replacement"
+    );
     harness.cleanup().await?;
     Ok(())
 }

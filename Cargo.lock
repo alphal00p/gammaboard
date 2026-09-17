@@ -2093,7 +2093,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -2108,7 +2108,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-api"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "ahash",
  "bincode",
@@ -2147,11 +2147,12 @@ dependencies = [
  "shlex 1.3.0",
  "smartstring",
  "spenso",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "symbolica-utils",
  "sysinfo",
  "tabled",
  "thiserror 2.0.20",
+ "three-dimensional-reps",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-indicatif",
@@ -2164,7 +2165,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-tracing-filter"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "chrono",
  "clap",
@@ -2175,7 +2176,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spenso",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "tabled",
  "thiserror 2.0.20",
  "tracing",
@@ -2185,7 +2186,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-tracing-filter-macros"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2194,9 +2195,10 @@ dependencies = [
 [[package]]
 name = "gammaloop-workspace-hack"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "ahash",
+ "aho-corasick",
  "anstream",
  "arrayvec",
  "bincode",
@@ -2223,7 +2225,7 @@ dependencies = [
  "num-complex",
  "num-integer",
  "num-traits",
- "numerica",
+ "numerica 2.2.0 (git+https://github.com/alphal00p/symbolica?rev=a277a8dadbaae5a8d6605f2f381991a601e1f345)",
  "once_cell",
  "papergrid",
  "rand 0.9.5",
@@ -2232,6 +2234,7 @@ dependencies = [
  "regex-automata",
  "regex-syntax",
  "rug",
+ "rust-embed-utils",
  "rustix 1.1.4",
  "serde",
  "serde_core",
@@ -2240,7 +2243,7 @@ dependencies = [
  "similar",
  "smallvec",
  "smartstring",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/alphal00p/symbolica?rev=a277a8dadbaae5a8d6605f2f381991a601e1f345)",
  "syn 1.0.109",
  "syn 2.0.119",
  "tabled",
@@ -2260,7 +2263,7 @@ dependencies = [
 [[package]]
 name = "gammalooprs"
 version = "0.3.4"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "ahash",
  "base62",
@@ -2306,10 +2309,11 @@ dependencies = [
  "spenso",
  "spenso-hep-lib",
  "statrs 0.16.1",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "symbolica-utils",
  "tabled",
  "thiserror 2.0.20",
+ "three-dimensional-reps",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-appender",
@@ -2411,7 +2415,7 @@ source = "git+https://github.com/symbolica-dev/symbolica?branch=dev#0441bd7a5112
 dependencies = [
  "ahash",
  "dyn-clone",
- "numerica",
+ "numerica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "rand 0.9.5",
 ]
 
@@ -2758,7 +2762,7 @@ dependencies = [
 [[package]]
 name = "idenso"
 version = "0.3.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "base64",
  "bincode",
@@ -2771,7 +2775,7 @@ dependencies = [
  "nu-ansi-term",
  "spenso",
  "spenso-macros",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "symbolica-utils",
  "thiserror 2.0.20",
  "tracing",
@@ -3237,7 +3241,7 @@ dependencies = [
 [[package]]
 name = "linnet"
 version = "0.17.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "ahash",
  "bincode",
@@ -3255,7 +3259,7 @@ dependencies = [
  "rand 0.8.7",
  "serde",
  "serde_repr",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "symbolica-utils",
  "thiserror 2.0.20",
 ]
@@ -3827,6 +3831,31 @@ dependencies = [
 name = "numerica"
 version = "2.2.0"
 source = "git+https://github.com/symbolica-dev/symbolica?branch=dev#0441bd7a511209dce2ca99925fe87f8b18e4bf03"
+dependencies = [
+ "ahash",
+ "astro-float",
+ "bincode",
+ "bincode-trait-derive",
+ "colored 3.1.1",
+ "dyn-clone",
+ "itertools 0.14.0",
+ "malachite-nz",
+ "malachite-q",
+ "num-traits",
+ "rand 0.9.5",
+ "rayon",
+ "rug",
+ "serde",
+ "simba 0.9.1",
+ "smallvec",
+ "wide 1.6.1",
+ "xprec",
+]
+
+[[package]]
+name = "numerica"
+version = "2.2.0"
+source = "git+https://github.com/alphal00p/symbolica?rev=a277a8dadbaae5a8d6605f2f381991a601e1f345#a277a8dadbaae5a8d6605f2f381991a601e1f345"
 dependencies = [
  "ahash",
  "astro-float",
@@ -5638,7 +5667,7 @@ checksum = "02ef091d4e8b981dbaa4cc17789d00b53d5d2c001ae689f14e6093f30c529036"
 [[package]]
 name = "spenso"
 version = "0.6.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "ahash",
  "append-only-vec",
@@ -5671,7 +5700,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spenso-macros",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "symbolica-utils",
  "tabled",
  "thiserror 2.0.20",
@@ -5681,26 +5710,26 @@ dependencies = [
 [[package]]
 name = "spenso-hep-lib"
 version = "0.1.7"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "ahash",
  "gammaloop-workspace-hack",
  "idenso",
  "spenso",
  "spenso-macros",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "xpct",
 ]
 
 [[package]]
 name = "spenso-macros"
 version = "0.3.2"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "syn 2.0.119",
 ]
 
@@ -6085,7 +6114,39 @@ dependencies = [
  "graphica",
  "inventory",
  "libloading",
- "numerica",
+ "numerica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
+ "once_cell",
+ "rand 0.9.5",
+ "rayon",
+ "rug",
+ "self_cell",
+ "serde",
+ "smallvec",
+ "smartstring",
+ "symjit",
+ "tinyjson",
+ "tracing",
+ "tracing-subscriber",
+ "wide 1.6.1",
+]
+
+[[package]]
+name = "symbolica"
+version = "2.2.0"
+source = "git+https://github.com/alphal00p/symbolica?rev=a277a8dadbaae5a8d6605f2f381991a601e1f345#a277a8dadbaae5a8d6605f2f381991a601e1f345"
+dependencies = [
+ "ahash",
+ "append-only-vec",
+ "bincode",
+ "bincode-trait-derive",
+ "brotli 8.0.4",
+ "byteorder",
+ "bytes",
+ "dyn-clone",
+ "graphica",
+ "inventory",
+ "libloading",
+ "numerica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "once_cell",
  "rand 0.9.5",
  "rayon",
@@ -6104,13 +6165,13 @@ dependencies = [
 [[package]]
 name = "symbolica-utils"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "bincode",
  "bincode-trait-derive",
  "itertools 0.14.0",
  "serde",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
 ]
 
 [[package]]
@@ -6406,6 +6467,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "three-dimensional-reps"
+version = "0.1.0"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
+dependencies = [
+ "bincode",
+ "bincode-trait-derive",
+ "itertools 0.14.0",
+ "linnet",
+ "nu-ansi-term",
+ "serde",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
+ "tabled",
+ "thiserror 2.0.20",
+ "typed-index-collections",
 ]
 
 [[package]]
@@ -7051,7 +7129,7 @@ dependencies = [
 [[package]]
 name = "vakint"
 version = "0.1.2"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=395610143576507503fd2c785db3ba62340f4277#395610143576507503fd2c785db3ba62340f4277"
+source = "git+https://github.com/alphal00p/gammaloop.git?rev=451a36212f7ec0271094eed21e8ff09ddf8b3255#451a36212f7ec0271094eed21e8ff09ddf8b3255"
 dependencies = [
  "ahash",
  "arrayvec",
@@ -7062,7 +7140,7 @@ dependencies = [
  "regex",
  "rug",
  "string-template-plus",
- "symbolica",
+ "symbolica 2.2.0 (git+https://github.com/symbolica-dev/symbolica?branch=dev)",
  "thiserror 2.0.20",
  "version-compare",
 ]

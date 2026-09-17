@@ -660,10 +660,37 @@ impl HyperparameterTuningOptimizerSpec {
     }
 }
 
+/// A child document, resolved and frozen to `Inline` at submission.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ChildRunSource {
+    Inline(String),
+    File(ChildRunFile),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ChildRunFile {
+    pub file: String,
+}
+
+impl ChildRunSource {
+    pub fn validate(&self) -> Result<(), String> {
+        let text = match self {
+            Self::Inline(text) => text,
+            Self::File(source) => &source.file,
+        };
+        if text.trim().is_empty() {
+            return Err("child.run TOML text or file path must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChildRunTemplate {
-    pub run: toml::Value,
+    pub run: ChildRunSource,
     #[serde(default)]
     pub replacements: BTreeMap<String, toml::Value>,
 }
@@ -674,7 +701,7 @@ pub struct IntegrationCampaignChildSpec {
     pub name: String,
     #[serde(default = "default_integration_campaign_coefficient")]
     pub coefficient: f64,
-    pub run: toml::Value,
+    pub run: ChildRunSource,
     #[serde(default)]
     pub replacements: BTreeMap<String, toml::Value>,
 }
@@ -692,12 +719,7 @@ impl IntegrationCampaignChildSpec {
                 self.name
             ));
         }
-        if !self.run.is_table() {
-            return Err(format!(
-                "integration_campaign child '{}' run must be an inline definition or a file reference",
-                self.name
-            ));
-        }
+        self.run.validate()?;
         Ok(())
     }
 }
@@ -1181,9 +1203,7 @@ impl RunTaskSpec {
                     parameter.validate()?;
                 }
                 measurement.validate()?;
-                if !child.run.is_table() {
-                    return Err("parameter_scan.child.run must be an inline definition or a file reference".to_string());
-                }
+                child.run.validate()?;
                 if *max_concurrent_runs == 0 {
                     return Err("parameter_scan.max_concurrent_runs must be > 0".to_string());
                 }
@@ -1206,11 +1226,7 @@ impl RunTaskSpec {
                 for (name, domain) in parameters {
                     domain.validate(name)?;
                 }
-                if !child.run.is_table() {
-                    return Err(
-                        "hyperparameter_tuning.child.run must be an inline definition or a file reference".to_string()
-                    );
-                }
+                child.run.validate()?;
                 if *max_concurrent_trials == 0 {
                     return Err(
                         "hyperparameter_tuning.max_concurrent_trials must be > 0".to_string()
@@ -2171,7 +2187,7 @@ quantity = { component = "real", metric = "time_normalized_variance" }
 [task]
 kind = "hyperparameter_tuning"
 max_concurrent_trials = 2
-child = { run = { name = "trial" } }
+child = { run = 'name = "trial"' }
 
 [task.optimizer]
 algorithm = "random_search"
@@ -2239,7 +2255,7 @@ values = ["auto", "none"]
 [task]
 kind = "hyperparameter_tuning"
 max_concurrent_trials = 2
-child = { run = { name = "trial" } }
+child = { run = 'name = "trial"' }
 
 [task.optimizer]
 algorithm = "egobox"

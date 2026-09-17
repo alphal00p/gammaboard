@@ -598,6 +598,13 @@ mod tests {
 
     #[async_trait]
     impl ControlPlaneStore for TestStore {
+        async fn update_desired_assignments(
+            &self,
+            _updates: &[crate::core::NodeAssignmentUpdate],
+        ) -> Result<bool, crate::core::StoreError> {
+            unreachable!("unused in test")
+        }
+
         async fn upsert_desired_assignment(
             &self,
             _node_name: &str,

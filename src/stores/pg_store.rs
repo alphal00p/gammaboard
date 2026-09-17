@@ -244,6 +244,15 @@ impl ControlPlaneStore for PgStore {
         Ok(())
     }
 
+    async fn update_desired_assignments(
+        &self,
+        updates: &[crate::core::NodeAssignmentUpdate],
+    ) -> Result<bool, StoreError> {
+        queries::update_desired_assignments(&self.pool, updates)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn upsert_desired_assignment(
         &self,
         node_name: &str,

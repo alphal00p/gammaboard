@@ -59,7 +59,9 @@ fn require_live_uuid(result: PgQueryResult, node_uuid: &str) -> Result<(), sqlx:
     }
 }
 
-async fn clear_expired_assignments(pool: &PgPool) -> Result<(), sqlx::Error> {
+async fn clear_expired_assignments<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         UPDATE nodes
@@ -78,7 +80,7 @@ async fn clear_expired_assignments(pool: &PgPool) -> Result<(), sqlx::Error> {
           )
         "#,
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -131,6 +133,56 @@ fn node_raw(
         current_run_name,
         last_seen,
     }
+}
+
+pub(crate) async fn update_desired_assignments(
+    pool: &PgPool,
+    updates: &[crate::core::NodeAssignmentUpdate],
+) -> Result<bool, sqlx::Error> {
+    if updates.is_empty() {
+        return Ok(true);
+    }
+    let mut tx = pool.begin().await?;
+    // Dead owners still occupy the unique sampler slot until their assignments
+    // are cleared, including when a replacement registers under a new name.
+    clear_expired_assignments(&mut *tx).await?;
+    // Consistent lock ordering avoids deadlocks between concurrent controllers.
+    let mut ordered = updates.iter().collect::<Vec<_>>();
+    ordered.sort_by(|a, b| a.node_uuid.cmp(&b.node_uuid));
+    for update in &ordered {
+        let matched = sqlx::query_scalar::<_, String>(
+            "SELECT uuid FROM nodes WHERE uuid = $1 AND lease_expires_at > now()
+             AND desired_run_id IS NOT DISTINCT FROM $2
+             AND desired_role IS NOT DISTINCT FROM $3 FOR UPDATE",
+        )
+        .bind(&update.node_uuid)
+        .bind(update.expected.as_ref().map(|a| a.run_id))
+        .bind(update.expected.as_ref().map(|a| a.role.as_str()))
+        .fetch_optional(&mut *tx)
+        .await?;
+        if matched.is_none() {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+    }
+    // Release sampler uniqueness constraints before moving a pool. These
+    // intermediate clears are invisible to workers outside the transaction.
+    for update in &ordered {
+        sqlx::query("UPDATE nodes SET desired_run_id = NULL, desired_role = NULL WHERE uuid = $1")
+            .bind(&update.node_uuid)
+            .execute(&mut *tx)
+            .await?;
+    }
+    for update in ordered {
+        sqlx::query("UPDATE nodes SET desired_run_id = $2, desired_role = $3, updated_at = now() WHERE uuid = $1")
+            .bind(&update.node_uuid)
+            .bind(update.desired.as_ref().map(|a| a.run_id))
+            .bind(update.desired.as_ref().map(|a| a.role.as_str()))
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(true)
 }
 
 pub(crate) async fn upsert_desired_assignment(
