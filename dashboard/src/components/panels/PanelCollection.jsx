@@ -1454,7 +1454,7 @@ const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = nu
       return Math.hypot(re, im);
     });
   }, [colorMode, imagValues, values]);
-  if (width <= 0 || height <= 0 || values.length === 0) return <EmptyPlotPanel title={title} />;
+  if (width <= 0 || height <= 0 || values.length === 0 || invalidIndices.size >= values.length) return <EmptyPlotPanel title={title} />;
   return (
     <ScalarImageHeatmapPanel
       title={title}
