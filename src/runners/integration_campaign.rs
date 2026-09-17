@@ -253,17 +253,11 @@ where
             return Ok(true);
         }
 
-        let same_stages = previous_output.is_some_and(|output| {
-            output.children.iter().zip(&states).all(|(old, new)| {
-                old.child
-                    .result_source
-                    .as_ref()
-                    .is_some_and(|source| source.task_id == new.result_source.task_id)
-            })
-        });
-        let keep_window = same_stages
-            && total_samples.saturating_sub(previous_allocation_start)
-                < allocation.allocation_window_samples;
+        // First result publication and another child's stage changes do not
+        // consume the allocation window. Eligibility below still removes a
+        // finished/failed child; otherwise retain its pool until the budget ends.
+        let keep_window = total_samples.saturating_sub(previous_allocation_start)
+            < allocation.allocation_window_samples;
         let retained = previous_selected
             .iter()
             .copied()

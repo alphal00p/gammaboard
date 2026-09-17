@@ -234,6 +234,16 @@ fn decode_node_assignment(
 
 #[async_trait::async_trait]
 impl ControlPlaneStore for PgStore {
+    async fn try_lock_task_control(&self) -> Result<Option<Box<dyn Send>>, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        // Transaction-scoped: pool reuse cannot leak a session advisory lock.
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(1196245588, 1)")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(locked.then(|| Box::new(tx) as Box<dyn Send>))
+    }
+
     async fn record_worker_activity(
         &self,
         node_uuid: &str,
@@ -303,6 +313,21 @@ impl ControlPlaneStore for PgStore {
         queries::clear_desired_assignment(&self.pool, node_name)
             .await
             .map_err(map_sqlx)
+    }
+
+    async fn finish_run_assignments(&self, run_id: i32) -> Result<u64, StoreError> {
+        let result = sqlx::query(r#"
+            WITH destination AS (
+                SELECT r.parent_run_id AS id FROM runs r
+                JOIN run_tasks t ON t.id=r.parent_task_id AND t.run_id=r.parent_run_id
+                WHERE r.id=$1 AND t.state='active'
+            ) UPDATE nodes SET
+                desired_run_id=(SELECT id FROM destination),
+                desired_role=CASE WHEN EXISTS(SELECT 1 FROM destination) THEN desired_role ELSE NULL END,
+                updated_at=now()
+            WHERE desired_run_id=$1
+        "#).bind(run_id).execute(&self.pool).await.map_err(map_sqlx)?;
+        Ok(result.rows_affected())
     }
 
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError> {
@@ -502,9 +527,28 @@ impl ControlPlaneStore for PgStore {
         domain: &Domain,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskInput],
+        parent: Option<&crate::core::traits::RunParentMetadata>,
     ) -> Result<i32, StoreError> {
         let sanitized_params = parse_run_create_payload(integration_params)?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        if let Some(parent) = parent {
+            // Serialize child creation against retries and deletion. A crash
+            // cannot leave a visible child without its parent identity.
+            sqlx::query("SELECT id FROM runs WHERE id=$1 FOR UPDATE")
+                .bind(parent.run_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(map_sqlx)?;
+            if let (Some(task_id), Some(label)) = (parent.task_id, parent.spawn_label.as_ref()) {
+                let existing: Option<i32> = sqlx::query_scalar(
+                    "SELECT id FROM runs WHERE parent_run_id=$1 AND parent_task_id=$2 AND spawn_kind=$3 AND spawn_label=$4 ORDER BY id LIMIT 1"
+                ).bind(parent.run_id).bind(task_id).bind(&parent.spawn_kind).bind(label)
+                    .fetch_optional(&mut *tx).await.map_err(map_sqlx)?;
+                if let Some(id) = existing {
+                    return Ok(id);
+                }
+            }
+        }
         let run_id = sqlx::query_scalar(
             r#"
             INSERT INTO runs (
@@ -513,9 +557,9 @@ impl ControlPlaneStore for PgStore {
                 provenance,
                 integration_params,
                 target,
-                point_spec
+                point_spec, parent_run_id, parent_task_id, spawn_kind, spawn_label
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id
             "#,
         )
@@ -525,6 +569,10 @@ impl ControlPlaneStore for PgStore {
         .bind(&sanitized_params)
         .bind(target)
         .bind(sqlx::types::Json(domain))
+        .bind(parent.map(|p| p.run_id))
+        .bind(parent.and_then(|p| p.task_id))
+        .bind(parent.map(|p| p.spawn_kind.as_str()))
+        .bind(parent.and_then(|p| p.spawn_label.as_deref()))
         .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx)?;
@@ -579,26 +627,6 @@ impl ControlPlaneStore for PgStore {
         Ok(run_id)
     }
 
-    async fn set_run_parent_metadata(
-        &self,
-        run_id: i32,
-        parent_run_id: i32,
-        parent_task_id: Option<i64>,
-        spawn_kind: &str,
-        spawn_label: Option<&str>,
-    ) -> Result<(), StoreError> {
-        queries::set_run_parent_metadata(
-            &self.pool,
-            run_id,
-            parent_run_id,
-            parent_task_id,
-            spawn_kind,
-            spawn_label,
-        )
-        .await
-        .map_err(map_sqlx)
-    }
-
     async fn record_evaluator_metadata(
         &self,
         run_id: i32,
@@ -616,6 +644,41 @@ impl ControlPlaneStore for PgStore {
     }
 
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let _guard = loop {
+            if let Some(guard) = self.try_lock_task_control().await? {
+                break guard;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(store_err("controller is busy; run retained, retry removal"));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        self.clear_desired_assignments_for_run(run_id).await?;
+        loop {
+            let active: bool = sqlx::query_scalar(
+                r#"
+                WITH RECURSIVE tree AS (
+                    SELECT id FROM runs WHERE id=$1
+                    UNION ALL SELECT r.id FROM runs r JOIN tree t ON r.parent_run_id=t.id
+                ) SELECT EXISTS(SELECT 1 FROM nodes WHERE active_run_id IN (SELECT id FROM tree)
+                    AND lease_expires_at > now())
+            "#,
+            )
+            .bind(run_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+            if !active {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(store_err(
+                    "workers are still draining; run retained, retry removal",
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         let rows = queries::remove_run(&self.pool, run_id)
             .await
             .map_err(map_sqlx)?;

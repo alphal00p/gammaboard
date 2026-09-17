@@ -462,6 +462,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                             self.store.clone(),
                             TaskControlLoopConfig::default(),
                             self.node_name.clone(),
+                            self.node_uuid.clone(),
                         )
                         .run(task_control_rx),
                     );

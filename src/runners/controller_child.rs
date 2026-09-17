@@ -123,25 +123,8 @@ fn controller_assignment_updates(
         } else {
             BTreeSet::new()
         };
-        let reusable_assignments =
-            if plan.preserve_selected_assignments && !reusable_assignments.is_empty() {
-                reusable_assignments
-            } else {
-                let has_sampler = reusable_assignments
-                    .iter()
-                    .any(|assignment| assignment.role == WorkerRole::SamplerAggregator);
-                let mut idle = idle_node_assignments_from_nodes(nodes);
-                if has_sampler {
-                    // Replacement nodes can register on different ticks. Once the
-                    // sampler has recovered, newly idle nodes must join as evaluators.
-                    for assignment in &mut idle {
-                        assignment.role = WorkerRole::Evaluator;
-                    }
-                }
-                let mut available = reusable_assignments;
-                available.extend(idle);
-                available
-            };
+        // Only explicitly assigned nodes belong to this controller. Taking all
+        // idle nodes would undo operator unassign/pause and steal other pools.
         if !plan.preserve_selected_assignments {
             // Keep samplers on children that are still selected, even when
             // priority order changes or another child leaves the selected set.
@@ -201,6 +184,19 @@ fn controller_assignment_updates(
             }
         }
     }
+    if !selected.is_empty() {
+        // Retain pool ownership while waiting for a sampler or for capacity in
+        // another child. Freeing these nodes would lose them on the next tick.
+        for assignment in &reusable_assignments {
+            desired
+                .entry(assignment.node_name.clone())
+                .or_insert_with(|| DesiredAssignment {
+                    run_id: plan.parent_run_id,
+                    run_name: None,
+                    ..assignment.clone()
+                });
+        }
+    }
     nodes
         .iter()
         .filter_map(|node| {
@@ -233,34 +229,6 @@ fn child_sampler_run_ids(nodes: &[RegisteredNode], child_run_ids: &BTreeSet<i32>
         })
         .map(|assignment| assignment.run_id)
         .collect()
-}
-
-fn idle_node_assignments_from_nodes(nodes: &[RegisteredNode]) -> Vec<DesiredAssignment> {
-    let mut idle_nodes = nodes
-        .iter()
-        .filter(|node| node.desired_assignment.is_none() && node.current_assignment.is_none())
-        .map(|node| node.name.clone())
-        .collect::<Vec<_>>();
-    idle_nodes.sort();
-    let sampler_count = usize::from(!idle_nodes.is_empty());
-    let mut assignments = Vec::new();
-    for node_name in idle_nodes.iter().take(sampler_count) {
-        assignments.push(DesiredAssignment {
-            node_name: node_name.clone(),
-            role: WorkerRole::SamplerAggregator,
-            run_id: 0,
-            run_name: None,
-        });
-    }
-    for node_name in idle_nodes.into_iter().skip(sampler_count) {
-        assignments.push(DesiredAssignment {
-            node_name,
-            role: WorkerRole::Evaluator,
-            run_id: 0,
-            run_name: None,
-        });
-    }
-    assignments
 }
 
 pub async fn load_child_task_result(
@@ -475,21 +443,17 @@ mod tests {
     }
 
     #[test]
-    fn campaign_recovers_workers_that_register_on_different_ticks() {
-        for surviving_role in [WorkerRole::SamplerAggregator, WorkerRole::Evaluator] {
-            let mut replacement = node("replacement", WorkerRole::Evaluator, 2);
-            replacement.desired_assignment = None;
-            let nodes = vec![node("survivor", surviving_role, 2), replacement];
-            let updates = controller_assignment_updates(
+    fn campaign_respects_unassigned_and_unrelated_idle_workers() {
+        let mut idle = node("idle", WorkerRole::Evaluator, 2);
+        idle.desired_assignment = None;
+        let nodes = vec![node("sampler", WorkerRole::SamplerAggregator, 2), idle];
+        assert!(
+            controller_assignment_updates(
                 &nodes,
-                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![2]),
-            );
-            assert_eq!(updates.len(), 1);
-            assert_eq!(updates[0].node_uuid, "replacement");
-            let next = updates[0].desired.as_ref().unwrap();
-            assert_eq!(next.run_id, 2);
-            assert_ne!(next.role, surviving_role);
-        }
+                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![2])
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -504,7 +468,7 @@ mod tests {
         );
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].node_uuid, "s1");
-        assert!(updates[0].desired.is_none());
+        assert_eq!(updates[0].desired.as_ref().unwrap().run_id, 1);
     }
 
     #[test]

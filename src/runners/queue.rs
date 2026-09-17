@@ -871,11 +871,13 @@ where
             return Ok(());
         }
 
+        // Account the occupied slot before removing its handle. This includes
+        // time a completed result waits for the sampler to consume it.
+        self.account_utilization(Instant::now());
         let task = self
             .pending_processed_fetch
             .take()
             .expect("checked pending processed fetch");
-        self.account_utilization(Instant::now());
         self.consume_processed_fetch_task(task).await
     }
 
@@ -1326,6 +1328,12 @@ mod tests {
 
     #[async_trait]
     impl ControlPlaneStore for RecordingStore {
+        async fn try_lock_task_control(
+            &self,
+        ) -> Result<Option<Box<dyn Send>>, crate::core::StoreError> {
+            Ok(Some(Box::new(())))
+        }
+
         async fn update_desired_assignments(
             &self,
             _updates: &[crate::core::NodeAssignmentUpdate],
@@ -1471,18 +1479,8 @@ mod tests {
             _domain: &Domain,
             _initial_stage_snapshot: &RunStageSnapshot,
             _initial_tasks: &[RunTaskInput],
+            _parent: Option<&crate::core::traits::RunParentMetadata>,
         ) -> Result<i32, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn set_run_parent_metadata(
-            &self,
-            _run_id: i32,
-            _parent_run_id: i32,
-            _parent_task_id: Option<i64>,
-            _spawn_kind: &str,
-            _spawn_label: Option<&str>,
-        ) -> Result<(), StoreError> {
             unreachable!("unused in test")
         }
 

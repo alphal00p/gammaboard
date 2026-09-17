@@ -92,8 +92,9 @@ impl RunProgressBaseRow {
         } else {
             0.0
         };
-        let lifecycle_state = if self.desired_assignment_count > 0 || self.active_task_id.is_some()
-        {
+        // An active task remains resumable while paused; assignments determine
+        // whether its runtime is actually running or draining.
+        let lifecycle_state = if self.desired_assignment_count > 0 {
             RunLifecycleState::Running
         } else if batch_stats.claimed_batches > 0 || self.active_worker_count > 0 {
             RunLifecycleState::Pausing
@@ -657,8 +658,8 @@ fn apply_child_run_totals(runs: &mut [RunProgress]) {
         index: usize,
         runs: &[RunProgress],
         children_by_parent: &HashMap<i32, Vec<usize>>,
-        totals: &mut HashMap<i32, (i64, i64, f64)>,
-    ) -> (i64, i64, f64) {
+        totals: &mut HashMap<i32, (i64, i64, f64, RunLifecycleState)>,
+    ) -> (i64, i64, f64, RunLifecycleState) {
         let run = &runs[index];
         if let Some(total) = totals.get(&run.run_id) {
             return *total;
@@ -666,17 +667,27 @@ fn apply_child_run_totals(runs: &mut [RunProgress]) {
         let mut produced = run.nr_produced_samples;
         let mut completed = run.nr_completed_samples;
         let mut cpu_seconds = run.cpu_seconds;
+        let mut lifecycle = run.lifecycle_state;
         if let Some(children) = children_by_parent.get(&run.run_id) {
             for &child_index in children {
-                let (child_produced, child_completed, child_cpu_seconds) =
+                let (child_produced, child_completed, child_cpu_seconds, child_lifecycle) =
                     accumulate(child_index, runs, children_by_parent, totals);
                 produced = produced.saturating_add(child_produced);
                 completed = completed.saturating_add(child_completed);
                 cpu_seconds += child_cpu_seconds;
+                lifecycle = match (lifecycle, child_lifecycle) {
+                    (RunLifecycleState::Running, _) | (_, RunLifecycleState::Running) => {
+                        RunLifecycleState::Running
+                    }
+                    (RunLifecycleState::Pausing, _) | (_, RunLifecycleState::Pausing) => {
+                        RunLifecycleState::Pausing
+                    }
+                    _ => RunLifecycleState::Paused,
+                };
             }
         }
-        totals.insert(run.run_id, (produced, completed, cpu_seconds));
-        (produced, completed, cpu_seconds)
+        totals.insert(run.run_id, (produced, completed, cpu_seconds, lifecycle));
+        (produced, completed, cpu_seconds, lifecycle)
     }
 
     let mut children_by_parent: HashMap<i32, Vec<usize>> = HashMap::new();
@@ -691,11 +702,12 @@ fn apply_child_run_totals(runs: &mut [RunProgress]) {
 
     let mut totals = HashMap::new();
     for index in 0..runs.len() {
-        let (produced, completed, cpu_seconds) =
+        let (produced, completed, cpu_seconds, lifecycle) =
             accumulate(index, runs, &children_by_parent, &mut totals);
         runs[index].nr_produced_samples_including_children = produced;
         runs[index].nr_completed_samples_including_children = completed;
         runs[index].cpu_seconds_including_children = cpu_seconds;
+        runs[index].lifecycle_state = lifecycle;
     }
 }
 

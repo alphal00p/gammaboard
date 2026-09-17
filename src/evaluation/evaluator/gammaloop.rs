@@ -132,12 +132,26 @@ impl GammaLoopEvaluator {
             ))
         })?;
         _ = initialise();
-        let mut state = State::load(params.state_folder.clone(), None, None).map_err(|err| {
-            BuildError::build(format!(
-                "failed to load state from {}: {err:#}",
-                params.state_folder.display()
-            ))
-        })?;
+        let selection = if params.preprocessing.commands.is_empty() && params.process_id.is_none() {
+            params.integrand_name.as_ref().map(|name| {
+                gammalooprs::processes::ProcessLoadSelection {
+                    integrand_selectors: vec![
+                        gammalooprs::processes::ProcessLoadIntegrandSelector::Name(name.clone()),
+                    ],
+                    ..Default::default()
+                }
+            })
+        } else {
+            None
+        };
+        let mut state =
+            State::load_with_selection(params.state_folder.clone(), None, None, selection.as_ref())
+                .map_err(|err| {
+                    BuildError::build(format!(
+                        "failed to load state from {}: {err:#}",
+                        params.state_folder.display()
+                    ))
+                })?;
         Self::run_preprocessing(&params, &mut state)?;
 
         let (process_id, integrand_name) = state

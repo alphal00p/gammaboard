@@ -183,6 +183,10 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
         processed.integration_params.evaluator.clone(),
         domain.clone(),
     )?;
+    // Preprocessing has already resolved this exact initial evaluator's domain.
+    context
+        .validated_evaluators
+        .extend(processed.integration_params.evaluator.clone());
     let tasks = processed.resolved_task_queue.as_deref().unwrap_or_default();
     let mut probes = 0;
     for (index, task) in tasks.iter().enumerate() {
@@ -236,6 +240,14 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
 pub async fn create_run(
     store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),
     config: RunAddConfig,
+) -> Result<CreatedRun, ApiError> {
+    create_run_with_parent(store, config, None).await
+}
+
+async fn create_run_with_parent(
+    store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),
+    config: RunAddConfig,
+    parent: Option<&crate::core::traits::RunParentMetadata>,
 ) -> Result<CreatedRun, ApiError> {
     let processed = preprocess_run_add(config)?;
     let domain = processed
@@ -307,6 +319,7 @@ pub async fn create_run(
             domain,
             &initial_stage_snapshot,
             &initial_tasks,
+            parent,
         )
         .await?;
 
@@ -328,17 +341,17 @@ pub async fn create_child_run(
         ));
     }
     let config = super::run_definition::instantiate_child(request.run, request.replacements, None)?;
-    let created = create_run(store, config).await?;
-    store
-        .set_run_parent_metadata(
-            created.run_id,
-            request.parent_run_id,
-            request.parent_task_id,
-            spawn_kind,
-            request.spawn_label.as_deref(),
-        )
-        .await?;
-    Ok(created)
+    create_run_with_parent(
+        store,
+        config,
+        Some(&crate::core::traits::RunParentMetadata {
+            run_id: request.parent_run_id,
+            task_id: request.parent_task_id,
+            spawn_kind: spawn_kind.to_owned(),
+            spawn_label: request.spawn_label,
+        }),
+    )
+    .await
 }
 
 /// Clones a run from a specific persisted stage snapshot into a new idle run.
@@ -423,6 +436,7 @@ pub async fn clone_run(
                 batch_transforms: snapshot.batch_transforms.clone(),
             },
             &cloned_tasks,
+            None,
         )
         .await?;
 
@@ -620,6 +634,11 @@ async fn preflight_task_batch(
     };
     let mut context =
         TaskPreflightContext::from_existing_tasks(&existing_tasks, evaluator, domain)?;
+    if run_id == 0 {
+        context
+            .validated_evaluators
+            .extend(context.current_evaluator.clone());
+    }
     context.validate_batch(tasks)
 }
 
@@ -632,6 +651,7 @@ struct TaskPreflightContext {
     current_evaluator: Option<EvaluatorConfig>,
     next_sequence: i32,
     run_domain: Domain,
+    validated_evaluators: Vec<EvaluatorConfig>,
 }
 
 impl TaskPreflightContext {
@@ -663,6 +683,7 @@ impl TaskPreflightContext {
             current_evaluator: evaluator.clone(),
             next_sequence,
             run_domain,
+            validated_evaluators: Vec::new(),
         };
         let mut ordered_tasks = existing_tasks.iter().collect::<Vec<_>>();
         ordered_tasks.sort_by_key(|task| (task.sequence_nr, task.id));
@@ -838,7 +859,10 @@ impl TaskPreflightContext {
         Ok(())
     }
 
-    fn validate_evaluator_domain(&self, evaluator: &EvaluatorConfig) -> Result<(), ApiError> {
+    fn validate_evaluator_domain(&mut self, evaluator: &EvaluatorConfig) -> Result<(), ApiError> {
+        if self.validated_evaluators.contains(evaluator) {
+            return Ok(());
+        }
         let evaluator_domain = evaluator
             .resolve_domain()
             .map_err(|err| ApiError::BadRequest(err.to_string()))?;
@@ -848,6 +872,7 @@ impl TaskPreflightContext {
                 evaluator_domain, self.run_domain
             )));
         }
+        self.validated_evaluators.push(evaluator.clone());
         Ok(())
     }
 }

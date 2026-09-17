@@ -624,7 +624,7 @@ fn sampler_current_panels(
                 ),
                 key_value(
                     "completed_fetch_utilization",
-                    "Fetch Utilization",
+                    "Result Prefetch Occupancy",
                     runtime.queue.completed_fetch_utilization,
                 ),
                 key_value(
@@ -985,7 +985,7 @@ fn sampler_utilization_history_panel(
             },
             PlotSeries {
                 id: "completed_fetch_utilization".to_string(),
-                label: "Fetch Utilization".to_string(),
+                label: "Result Prefetch Occupancy".to_string(),
                 color: Some("#16a34a".to_string()),
                 smooth: Some(true),
                 points: completed_fetch_points,

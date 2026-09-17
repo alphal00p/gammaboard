@@ -6923,3 +6923,253 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
     harness.cleanup().await?;
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_campaign_leader_handover_and_operator_controls() -> anyhow::Result<()> {
+    use gammaboard::core::{ControlPlaneStore, WorkerRole};
+    let mut harness = FullStackHarness::new().await?;
+    let child = r#"
+name = "lifecycle-child"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+cpu_iterations_per_sample = 10000
+[[task_queue]]
+name = "train"
+kind = "sample"
+stop_condition = { max_samples = 100000000 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+[task_queue.queue_tuning]
+max_batch_size = 100
+"#;
+    let mut card = String::from(
+        "kind = 'integration_campaign'\nname = 'lifecycle-parent'\nstop_condition = { max_total_samples = 1000000000 }\nallocation = { min_samples_per_child = 50000000, allocation_window_samples = 1000000 }\n",
+    );
+    for i in 0..11 {
+        card.push_str(&format!(
+            "[[children]]\nname = 'child-{i}'\nrun = '''{child}'''\n"
+        ));
+    }
+    harness.add_run(&temp_config(&card));
+    let parent = harness.run_id("lifecycle-parent").await?;
+    // Deliberately keep the first leader inside child creation while a lower
+    // name registers. This used to make both leaders create the same children.
+    sqlx::raw_sql("CREATE FUNCTION slow_child_creation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.parent_run_id IS NOT NULL THEN PERFORM pg_sleep(0.2); END IF; RETURN NEW; END $$; CREATE TRIGGER slow_child BEFORE INSERT ON runs FOR EACH ROW EXECUTE FUNCTION slow_child_creation();").execute(&harness.pool).await?;
+    harness.start_nodes(&["z-sampler", "z-evaluator"]).await?;
+    harness.assign_node("z-sampler", "sampler_aggregator", "lifecycle-parent");
+    harness.assign_node("z-evaluator", "evaluator", "lifecycle-parent");
+    harness
+        .wait_for("first child", Duration::from_secs(15), || async {
+            Ok(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM runs WHERE parent_run_id=$1")
+                    .bind(parent)
+                    .fetch_one(&harness.pool)
+                    .await?
+                    > 0,
+            )
+        })
+        .await?;
+    harness.start_node("a-new-leader").await?;
+    harness.wait_for("all eleven children and work", Duration::from_secs(20), || async {
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE parent_run_id=$1").bind(parent).fetch_one(&harness.pool).await?;
+        let samples: i64 = sqlx::query_scalar("SELECT coalesce(sum(nr_completed_samples),0)::bigint FROM runs WHERE parent_run_id=$1").bind(parent).fetch_one(&harness.pool).await?;
+        Ok(count >= 11 && samples > 100)
+    }).await?;
+    let store = gammaboard::PgStore::new(harness.pool.clone());
+    let selected = store
+        .get_desired_assignment("z-sampler")
+        .await?
+        .unwrap()
+        .run_id;
+    sleep(Duration::from_secs(2)).await;
+    let counts: (i64, i64) = sqlx::query_as(
+        "SELECT count(*),count(DISTINCT spawn_label) FROM runs WHERE parent_run_id=$1",
+    )
+    .bind(parent)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(counts, (11, 11));
+    assert_eq!(
+        store
+            .get_desired_assignment("z-sampler")
+            .await?
+            .unwrap()
+            .run_id,
+        selected,
+        "first publication must not end the million-sample window"
+    );
+    assert!(
+        store
+            .get_desired_assignment("a-new-leader")
+            .await?
+            .is_none(),
+        "idle nodes must not be stolen"
+    );
+    store.clear_desired_assignment("z-evaluator").await?;
+    harness
+        .wait_for(
+            "explicit unassign drains",
+            Duration::from_secs(10),
+            || async {
+                Ok(sqlx::query_scalar::<_, bool>(
+                    "SELECT active_run_id IS NULL FROM nodes WHERE name='z-evaluator'",
+                )
+                .fetch_one(&harness.pool)
+                .await?)
+            },
+        )
+        .await?;
+    sleep(Duration::from_secs(1)).await;
+    assert!(store.get_desired_assignment("z-evaluator").await?.is_none());
+    store
+        .upsert_desired_assignment("z-evaluator", WorkerRole::Evaluator, parent)
+        .await?;
+    harness
+        .wait_for(
+            "parent-assigned evaluator joins child",
+            Duration::from_secs(10),
+            || async {
+                Ok(store
+                    .get_desired_assignment("z-evaluator")
+                    .await?
+                    .is_some_and(|a| a.run_id == selected))
+            },
+        )
+        .await?;
+    store.clear_desired_assignment("z-sampler").await?;
+    harness
+        .wait_for(
+            "sampler unassign parks remaining pool",
+            Duration::from_secs(15),
+            || async {
+                Ok(store
+                    .get_desired_assignment("z-evaluator")
+                    .await?
+                    .is_some_and(|a| a.run_id == parent)
+                    && sqlx::query_scalar::<_, bool>(
+                        "SELECT active_run_id IS NULL FROM nodes WHERE name='z-sampler'",
+                    )
+                    .fetch_one(&harness.pool)
+                    .await?)
+            },
+        )
+        .await?;
+    store
+        .upsert_desired_assignment("z-sampler", WorkerRole::SamplerAggregator, parent)
+        .await?;
+    harness
+        .wait_for(
+            "sampler reassignment restores retained pool",
+            Duration::from_secs(15),
+            || async {
+                Ok(store
+                    .get_desired_assignment("z-evaluator")
+                    .await?
+                    .is_some_and(|a| a.run_id == selected))
+            },
+        )
+        .await?;
+    gammaboard::api::runs::pause_run(&store, parent).await?;
+    harness.wait_for("parent pause drains all descendants", Duration::from_secs(15), || async {
+        Ok(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE desired_run_id IS NOT NULL OR active_run_id IS NOT NULL").fetch_one(&harness.pool).await? == 0)
+    }).await?;
+    sleep(Duration::from_secs(1)).await;
+    assert!(store.list_desired_assignments(None).await?.is_empty());
+    use gammaboard::core::RunReadStore;
+    assert_eq!(
+        store
+            .get_run_progress(parent)
+            .await?
+            .unwrap()
+            .lifecycle_state,
+        gammaboard::stores::RunLifecycleState::Paused
+    );
+    assert_eq!(
+        store
+            .get_run_progress(selected)
+            .await?
+            .unwrap()
+            .lifecycle_state,
+        gammaboard::stores::RunLifecycleState::Paused
+    );
+    store
+        .upsert_desired_assignment("z-sampler", WorkerRole::SamplerAggregator, parent)
+        .await?;
+    store
+        .upsert_desired_assignment("z-evaluator", WorkerRole::Evaluator, parent)
+        .await?;
+    harness
+        .wait_for("resume child runtime", Duration::from_secs(15), || async {
+            Ok(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes WHERE active_run_id=$1")
+                    .bind(selected)
+                    .fetch_one(&harness.pool)
+                    .await?
+                    == 2,
+            )
+        })
+        .await?;
+    gammaboard::api::runs::remove_run(&store, parent).await?;
+    sleep(Duration::from_millis(500)).await;
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(remaining, 0);
+    let errors: i64 = sqlx::query_scalar("SELECT count(*) FROM runtime_logs WHERE message LIKE '%foreign key%' OR message LIKE '%failed to stop role runner cleanly%'").fetch_one(&harness.pool).await?;
+    assert_eq!(
+        errors, 0,
+        "active deletion must drain writers before removing rows"
+    );
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_child_creation_is_atomic_and_idempotent() -> anyhow::Result<()> {
+    use gammaboard::api::runs::{ChildRunRequest, create_child_run};
+    use gammaboard::core::tasks::ChildRunSource;
+    let mut harness = FullStackHarness::new().await?;
+    let child = "name='atomic-child'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nkind='sample'\nstop_condition={max_samples=100}\nmeasurement={quantity='central_value'}\naccumulator={config='scalar'}\nsampler_aggregator={config={kind='naive_monte_carlo'}}\n";
+    let parent = temp_config(&format!(
+        "kind='integration_campaign'\nname='atomic-parent'\nstop_condition={{ max_total_samples=100 }}\n[[children]]\nname='a'\nrun='''{child}'''\n"
+    ));
+    harness.add_run(&parent);
+    let parent_id = harness.run_id("atomic-parent").await?;
+    let task_id: i64 = sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id=$1")
+        .bind(parent_id)
+        .fetch_one(&harness.pool)
+        .await?;
+    let store = gammaboard::PgStore::new(harness.pool.clone());
+    let request = ChildRunRequest {
+        parent_run_id: parent_id,
+        parent_task_id: Some(task_id),
+        spawn_kind: "integration_campaign".into(),
+        spawn_label: Some("a".into()),
+        run: ChildRunSource::Inline(child.into()),
+        replacements: Default::default(),
+    };
+    let (a, b) = tokio::join!(
+        create_child_run(&store, request.clone()),
+        create_child_run(&store, request.clone())
+    );
+    assert_eq!(a?.run_id, b?.run_id);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(count, 2, "concurrent retry creates one parented child");
+    let bad = ChildRunRequest {
+        parent_run_id: i32::MAX,
+        spawn_label: Some("bad-parent".into()),
+        ..request
+    };
+    assert!(create_child_run(&store, bad).await.is_err());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(count, 2, "failed parenting must not leave an orphan");
+    harness.cleanup().await?;
+    Ok(())
+}

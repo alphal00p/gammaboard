@@ -28,14 +28,21 @@ pub struct TaskControlLoop<S> {
     store: S,
     config: TaskControlLoopConfig,
     node_name: String,
+    node_uuid: String,
 }
 
 impl<S> TaskControlLoop<S> {
-    pub fn new(store: S, config: TaskControlLoopConfig, node_name: String) -> Self {
+    pub fn new(
+        store: S,
+        config: TaskControlLoopConfig,
+        node_name: String,
+        node_uuid: String,
+    ) -> Self {
         Self {
             store,
             config,
             node_name,
+            node_uuid,
         }
     }
 }
@@ -81,6 +88,14 @@ where
         if !self.is_current_leader().await? {
             return Ok(());
         }
+        let Some(_guard) = self.store.try_lock_task_control().await? else {
+            return Ok(());
+        };
+        // A newly registered lower-name node may take over, but must wait for
+        // the previous tick to finish before reading children or task outputs.
+        if !self.is_current_leader().await? {
+            return Ok(());
+        }
         let mut first_error = None;
         for run_id in self.store.get_control_plane_run_ids().await? {
             if let Err(err) = self.reconcile_run(run_id).await {
@@ -104,9 +119,8 @@ where
             .list_nodes(None)
             .await?
             .into_iter()
-            .map(|node| node.name)
-            .min();
-        Ok(leader.as_deref() == Some(self.node_name.as_str()))
+            .min_by(|a, b| a.name.cmp(&b.name));
+        Ok(leader.is_some_and(|node| node.name == self.node_name && node.uuid == self.node_uuid))
     }
 
     async fn reconcile_run(&self, run_id: i32) -> Result<(), StoreError> {
@@ -141,7 +155,7 @@ where
 
         loop {
             let Some(task) = self.store.activate_next_run_task(run_id).await? else {
-                let cleared = self.store.clear_desired_assignments_for_run(run_id).await?;
+                let cleared = self.store.finish_run_assignments(run_id).await?;
                 if cleared > 0 {
                     debug!(
                         run_id,

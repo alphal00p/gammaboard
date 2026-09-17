@@ -26,9 +26,22 @@ pub trait RunSpecStore: Send + Sync {
     async fn load_run_spec(&self, run_id: i32) -> Result<Option<RunSpec>, StoreError>;
 }
 
+/// Identity of a child creation request, committed with the child's initial data.
+#[derive(Debug, Clone)]
+pub struct RunParentMetadata {
+    pub run_id: i32,
+    pub task_id: Option<i64>,
+    pub spawn_kind: String,
+    pub spawn_label: Option<String>,
+}
+
 /// Desired-state control-plane operations for node assignments and run steering.
 #[async_trait]
 pub trait ControlPlaneStore: Send + Sync {
+    /// Exclude overlapping controller ticks, including during leader handover.
+    /// Dropping the guard releases the lock, also on cancellation or failure.
+    async fn try_lock_task_control(&self) -> Result<Option<Box<dyn Send>>, StoreError>;
+
     async fn record_worker_activity(
         &self,
         _node_uuid: &str,
@@ -66,6 +79,11 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn clear_current_assignment(&self, node_uuid: &str) -> Result<(), StoreError>;
     async fn clear_desired_assignment(&self, node_name: &str) -> Result<(), StoreError>;
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError>;
+    /// Return a finished child's assigned workers to its still-active parent pool.
+    async fn finish_run_assignments(&self, run_id: i32) -> Result<u64, StoreError> {
+        self.clear_desired_assignments_for_run(run_id).await
+    }
+
     async fn clear_desired_assignments_for_run_except_node(
         &self,
         run_id: i32,
@@ -116,15 +134,9 @@ pub trait ControlPlaneStore: Send + Sync {
         domain: &Domain,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskInput],
+        _parent: Option<&crate::core::traits::RunParentMetadata>,
     ) -> Result<i32, StoreError>;
-    async fn set_run_parent_metadata(
-        &self,
-        run_id: i32,
-        parent_run_id: i32,
-        parent_task_id: Option<i64>,
-        spawn_kind: &str,
-        spawn_label: Option<&str>,
-    ) -> Result<(), StoreError>;
+
     async fn record_evaluator_metadata(
         &self,
         _run_id: i32,

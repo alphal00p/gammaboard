@@ -184,7 +184,8 @@ async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Res
         source = "worker",
         node_name = %node_name
     );
-    with_cli_store(config, 1, quiet, span, |store| async move {
+    // One connection holds the controller guard; another serves heartbeats and queries.
+    with_cli_store(config, 2, quiet, span, |store| async move {
         let node_runner = NodeRunner::new(
             store,
             config.database.url.clone(),

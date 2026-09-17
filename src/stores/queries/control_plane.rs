@@ -66,8 +66,8 @@ async fn clear_expired_assignments<'e>(
         r#"
         UPDATE nodes
         SET
-            desired_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_run_id ELSE NULL END,
-            desired_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_role ELSE NULL END,
+            desired_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_run_id ELSE NULL END,
+            desired_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_role ELSE NULL END,
             active_run_id = NULL,
             active_role = NULL,
             updated_at = now()
@@ -242,12 +242,12 @@ pub(crate) async fn announce_node(
             last_seen = EXCLUDED.last_seen,
             updated_at = EXCLUDED.updated_at,
             desired_run_id = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_run_id
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_run_id
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_run_id
             END,
             desired_role = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_role
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_role
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_role
             END,
@@ -317,7 +317,12 @@ pub(crate) async fn clear_desired_assignments_for_run(
         UPDATE nodes
         SET
             {set_clause}
-        WHERE desired_run_id = $1
+        WHERE desired_run_id IN (
+            WITH RECURSIVE tree AS (
+                SELECT id FROM runs WHERE id = $1
+                UNION ALL SELECT r.id FROM runs r JOIN tree t ON r.parent_run_id = t.id
+            ) SELECT id FROM tree
+        )
         "#,
         set_clause = CLEAR_DESIRED_ASSIGNMENT_SET
     ))

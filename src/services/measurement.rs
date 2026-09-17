@@ -598,6 +598,12 @@ mod tests {
 
     #[async_trait]
     impl ControlPlaneStore for TestStore {
+        async fn try_lock_task_control(
+            &self,
+        ) -> Result<Option<Box<dyn Send>>, crate::core::StoreError> {
+            Ok(Some(Box::new(())))
+        }
+
         async fn update_desired_assignments(
             &self,
             _updates: &[crate::core::NodeAssignmentUpdate],
@@ -738,19 +744,11 @@ mod tests {
             _domain: &crate::utils::domain::Domain,
             _initial_stage_snapshot: &crate::core::RunStageSnapshot,
             _initial_tasks: &[RunTaskInput],
+            _parent: Option<&crate::core::traits::RunParentMetadata>,
         ) -> Result<i32, crate::core::StoreError> {
             unreachable!("unused")
         }
-        async fn set_run_parent_metadata(
-            &self,
-            _run_id: i32,
-            _parent_run_id: i32,
-            _parent_task_id: Option<i64>,
-            _spawn_kind: &str,
-            _spawn_label: Option<&str>,
-        ) -> Result<(), crate::core::StoreError> {
-            unreachable!("unused")
-        }
+
         async fn remove_run(&self, _run_id: i32) -> Result<(), crate::core::StoreError> {
             unreachable!("unused")
         }

@@ -54,8 +54,19 @@ Runs are created from TOML templates or custom TOML. Run names are human-facing
 and not unique; ambiguous CLI name references fail.
 
 Cloning starts from a persisted snapshot, not from in-memory worker state.
-Removing a run clears worker assignments immediately and prevents new work from
-being claimed for that run.
+Pausing a controller clears desired assignments throughout its child tree. Workers
+finish their current work and checkpoint before becoming idle. Unassigning a node
+keeps it unassigned; controllers only redistribute workers explicitly assigned to
+the parent or its children. Reassigning a node to another run removes it from the
+old controller's pool. Use `run resume RUN` or `node auto-assign RUN` to add idle
+workers back. Finished children return their assigned workers to the parent pool. After an
+unexpected worker loss, restarting the same node name restores its controller
+assignment; an explicit unassign or stop clears that intent.
+
+Removing a run first unassigns its whole tree and waits for live workers to drain,
+then deletes the records. If controller activity or draining exceeds 60 seconds,
+removal fails and retains the records; retry after workers finish. This prevents
+checkpoint and queue writes from racing with deletion.
 
 ## Logs
 
@@ -106,9 +117,10 @@ used during an upgrade. In scripts, acknowledge replacement with `--yes`.
 
 ## Capacity Planning
 
-Each `node run` process keeps one PostgreSQL connection for leases and control
-traffic. Its active evaluator or sampler role is capped at two additional
-connections, so plan for at most three database connections per live node plus
+Each `node run` process uses up to two PostgreSQL connections for leases and control
+traffic, including controller exclusion during leadership changes. Its active
+evaluator or sampler role is capped at two additional connections, so plan for
+at most four database connections per live node plus
 the server and occasional CLI commands. The default local PostgreSQL limit is
 128; reserve at least 16 connections for the server, maintenance, and operator
 commands before choosing a worker count.
@@ -131,3 +143,15 @@ nix develop --command scripts/benchmark_campaign.sh --workers 4 --duration-secon
 Set `GAMMABOARD_BENCHMARK_DATABASE_URL` for a non-default local database URL.
 Increase workers only while the queue stays bounded and database latency
 remains stable.
+
+## Reading Fetch Metrics
+
+`Result Prefetch Occupancy` (previously `Fetch Utilization`) is the sampler's
+completed-result prefetch slot occupancy. A finished query still occupies that
+slot until the sampler consumes it. This percentage includes overlap with
+training, other sampler work, and tick sleeps; it is not evaluator utilization
+or database CPU utilization. Use `Avg Completed Batch Fetch Ms` for measured
+fetch latency, and evaluator `Concurrent Fetch Wait Per Sample` for exposed
+latency on successful batches. `Queue Starvation Ratio` counts unsuccessful
+polls rather than elapsed idle time. Training barriers can make this ratio large
+without expensive database queries.
