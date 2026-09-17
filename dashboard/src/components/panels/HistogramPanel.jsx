@@ -3,6 +3,7 @@ import { Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, T
 import { asArray } from "../../utils/collections";
 import { formatScientific } from "../../utils/formatters";
 import FigureExportActions from "./FigureExportActions";
+import { EmptyPlotPanel } from "./BasicPanels";
 import {
   HISTOGRAM_MODE_CDF,
   HISTOGRAM_MODE_PDF,
@@ -647,7 +648,7 @@ const HistogramPanel = ({
     [isBundleControlled, onValueChange, sourcePanelId, value, yZoomRange, zoomRange],
   );
 
-  if (bins.length === 0) return null;
+  if (bins.length === 0) return <EmptyPlotPanel title={title} />;
   return (
     <Card variant="outlined">
       <CardContent>

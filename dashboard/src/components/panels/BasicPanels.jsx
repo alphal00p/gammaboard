@@ -286,6 +286,19 @@ const TargetComparisonValueBlock = ({ value }) => {
   );
 };
 
+export const EmptyPlotPanel = ({ title }) => (
+  <Card variant="outlined">
+    <CardContent>
+      <Typography variant="subtitle1" sx={{ mb: 1 }}>
+        {title}
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        No plot data available.
+      </Typography>
+    </CardContent>
+  </Card>
+);
+
 export const TextPanel = ({ title, state }) => (
   <Card variant="outlined">
     <CardContent>

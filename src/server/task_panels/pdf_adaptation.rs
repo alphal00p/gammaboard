@@ -63,7 +63,7 @@ fn plane_oversampling_scalar_projector() -> TaskPanelProjector {
             PanelHistoryMode::None,
             PanelWidth::Half,
         ),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        TaskPanelCurrentSourcePolicy::PersistedAlways,
         move |ctx| {
             let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
@@ -195,7 +195,7 @@ fn oversampling_metric_projector() -> TaskPanelProjector {
     ));
     panel_projector_with_source(
         spec,
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        TaskPanelCurrentSourcePolicy::PersistedAlways,
         |_ctx| Ok(None),
         |_ctx| Ok(None),
     )
@@ -210,7 +210,7 @@ fn progress_projector(total: usize, label: &'static str, unit: &'static str) -> 
             PanelHistoryMode::None,
             PanelWidth::Full,
         ),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        TaskPanelCurrentSourcePolicy::PersistedAlways,
         move |ctx| {
             let processed = current_processed(ctx);
             Ok(Some(progress_panel(
@@ -350,7 +350,7 @@ fn derived_projector(
 ) -> TaskPanelProjector {
     panel_projector_with_source(
         sized_panel_spec(panel_id, label, panel_kind, PanelHistoryMode::None, width),
-        TaskPanelCurrentSourcePolicy::PersistedFirst,
+        TaskPanelCurrentSourcePolicy::PersistedAlways,
         move |ctx| {
             let Some(derived) = current_derived(ctx)? else {
                 return Ok(None);
@@ -405,9 +405,14 @@ fn target_abs_from_json(run_target: Option<&JsonValue>) -> Option<f64> {
             .and_then(finite_positive_abs);
     }
     let source = object
-        .get("value")
+        .get("components")
+        .or_else(|| object.get("values"))
+        .or_else(|| object.get("value"))
         .and_then(JsonValue::as_object)
         .unwrap_or(object);
+    if let Some(scalar) = source.get("value").and_then(JsonValue::as_f64) {
+        return finite_positive_abs(scalar);
+    }
     let re = source
         .get("re")
         .or_else(|| source.get("real"))
@@ -833,12 +838,13 @@ mod tests {
     use super::{
         ImageKind, OversamplingMetric, build_image_panel, build_line_panel,
         comparison_histogram_panel, histogram_bins, line_projectors, oversampling_values,
-        projectors,
+        projectors, target_abs_from_json,
     };
     use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry};
     use crate::sampling::PdfAdaptationImagePersistedOutput;
     use crate::server::panels::{ImageNormalizationMode, PanelState};
     use crate::server::task_panels::pdf_adaptation::DerivedValues;
+    use serde_json::json;
 
     fn geometry() -> PlaneRasterGeometry {
         PlaneRasterGeometry {
@@ -866,6 +872,59 @@ mod tests {
             global_pdf_norm: 1.0,
             integrand_values: vec![Some(-2.0), Some(4.0)],
             pdf_values: vec![Some(1.0), Some(2.0)],
+        }
+    }
+
+    #[test]
+    fn target_norm_accepts_vector_components_and_existing_scalar_and_complex_shapes() {
+        for target in [
+            json!({"kind": "vector", "components": {"real": 3.0, "imag": -4.0}}),
+            json!({"kind": "vector", "components": {"value": -5.0}}),
+            json!({"kind": "vector", "components": {"real": -5.0}}),
+            json!({"kind": "vector", "values": {"re": 3.0, "im": 4.0}}),
+            json!(-5.0),
+            json!({"kind": "scalar", "value": -5.0}),
+            json!({"type": "value", "value": 5.0}),
+            json!({"real": 3.0, "imag": 4.0}),
+            json!({"value": {"re": 3.0, "im": 4.0}}),
+        ] {
+            assert_eq!(target_abs_from_json(Some(&target)), Some(5.0), "{target}");
+        }
+    }
+
+    #[test]
+    fn target_norm_rejects_zero_and_unsupported_vector_components() {
+        assert_eq!(target_abs_from_json(None), None);
+        for target in [
+            json!({"kind": "vector", "components": {"real": 0.0, "imag": 0.0}}),
+            json!({"kind": "vector", "components": {"value": 0.0}}),
+            json!({"kind": "vector", "components": {}}),
+            json!({"kind": "vector", "components": {"other": 5.0}}),
+        ] {
+            assert_eq!(target_abs_from_json(Some(&target)), None, "{target}");
+        }
+    }
+
+    #[test]
+    fn vector_target_normalizes_integrand_and_accuracy_before_fallback_norms() {
+        let target = json!({"kind": "vector", "components": {"real": 6.0, "imag": 8.0}});
+        for global_abs_integrand_norm in [None, Some(5.0)] {
+            let mut output = output();
+            output.global_abs_integrand_norm = global_abs_integrand_norm;
+            let derived = DerivedValues::from_output(output, target_abs_from_json(Some(&target)));
+            assert_eq!(derived.reference_abs_integrand_norm, Some(10.0));
+            assert_eq!(
+                derived.log_reference_normalized_integrand,
+                vec![
+                    Some((2.0_f64 / 10.0).log10()),
+                    Some((4.0_f64 / 10.0).log10())
+                ]
+            );
+            assert_eq!(derived.oversampling_ratio, vec![Some(5.0), Some(5.0)]);
+            assert_eq!(
+                derived.log_plane_normalized_pdf,
+                vec![Some((1.0_f64 / 1.5).log10()), Some((2.0_f64 / 1.5).log10())]
+            );
         }
     }
 

@@ -12,6 +12,7 @@ import {
 import { formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 import {
+  EmptyPlotPanel,
   KeyValuePanel,
   ProgressPanel,
   SelectPanel,
@@ -1453,7 +1454,7 @@ const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = nu
       return Math.hypot(re, im);
     });
   }, [colorMode, imagValues, values]);
-  if (width <= 0 || height <= 0 || values.length === 0) return null;
+  if (width <= 0 || height <= 0 || values.length === 0 || invalidIndices.size >= values.length) return <EmptyPlotPanel title={title} />;
   return (
     <ScalarImageHeatmapPanel
       title={title}
@@ -1528,7 +1529,7 @@ const PanelRenderer = ({
       if (!state) return null;
       return <KeyValuePanel title={descriptor.label} state={state} />;
     case "image2d":
-      if (!state) return null;
+      if (!state) return <EmptyPlotPanel title={descriptor.label} />;
       return (
         <Image2dPanel
           title={descriptor.label}
@@ -1551,7 +1552,7 @@ const PanelRenderer = ({
         />
       );
     case "histogram":
-      if (!state) return null;
+      if (!state) return <EmptyPlotPanel title={descriptor.label} />;
       return (
         <HistogramPanel
           title={descriptor.label}

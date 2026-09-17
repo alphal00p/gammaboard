@@ -41,9 +41,12 @@ pub struct TaskPanelProjector {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TaskPanelCurrentSourcePolicy {
+    /// Prefer the live accumulator, then the stage snapshot, then persisted output.
     #[default]
     StageFirst,
+    /// Prefer the live accumulator, then persisted output, then the stage snapshot.
     PersistedFirst,
+    /// Prefer persisted output even when a live accumulator is available.
     PersistedAlways,
 }
 
@@ -792,6 +795,9 @@ fn resolve_current_source<'a>(
         }
         TaskPanelCurrentSourcePolicy::PersistedFirst
         | TaskPanelCurrentSourcePolicy::PersistedAlways => {
+            if let Some(snapshot) = latest_persisted_snapshot {
+                return TaskPanelCurrentSource::Persisted(&snapshot.persisted_output);
+            }
             if let Some(snapshot) = latest_stage_snapshot {
                 return TaskPanelCurrentSource::StageSnapshot(snapshot);
             }
@@ -1100,6 +1106,164 @@ mod tests {
             TaskPanelCurrentSourcePolicy::PersistedAlways,
         );
         assert!(matches!(source, TaskPanelCurrentSource::Persisted(_)));
+    }
+
+    #[test]
+    fn persisted_first_uses_saved_output_after_task_completion() {
+        let task = run_task_with_state(inherited_vector_sample_task(), RunTaskState::Completed);
+        let stage = TaskStageSnapshot {
+            id: "8".to_string(),
+            run_id: 1,
+            task_id: "1".to_string(),
+            observable_state: AccumulatorState::empty(),
+            created_at: None,
+        };
+        let persisted = TaskOutputSnapshot {
+            id: "9".to_string(),
+            run_id: 1,
+            task_id: "1".to_string(),
+            persisted_output: serde_json::json!({"estimate": {"mean": 2.0}}),
+            created_at: None,
+        };
+        for stage in [None, Some(&stage)] {
+            let source = resolve_current_source(
+                &task,
+                None,
+                stage,
+                Some(&persisted),
+                TaskPanelCurrentSourcePolicy::PersistedFirst,
+            );
+            assert_eq!(source.persisted(), Some(&persisted.persisted_output));
+        }
+    }
+
+    #[test]
+    fn pdf_responses_include_saved_plots_while_active_and_after_completion() {
+        use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry};
+
+        let tasks = [
+            RunTaskSpec::PdfAdaptationImage {
+                geometry: PlaneRasterGeometry {
+                    offset: vec![0.0, 0.0],
+                    u_vector: vec![1.0, 0.0],
+                    v_vector: vec![0.0, 1.0],
+                    u_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    v_linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 2,
+                    },
+                    discrete: vec![],
+                },
+                sampler_aggregator: None,
+                batch_transforms: None,
+            },
+            RunTaskSpec::PdfAdaptationPlotLine {
+                geometry: LineRasterGeometry {
+                    offset: vec![0.0],
+                    direction: vec![1.0],
+                    linspace: Linspace {
+                        start: 0.0,
+                        stop: 1.0,
+                        count: 4,
+                    },
+                    discrete: vec![],
+                },
+                sampler_aggregator: None,
+                batch_transforms: None,
+            },
+        ];
+        let accumulator = AccumulatorState::empty();
+        let stage = TaskStageSnapshot {
+            id: "8".to_string(),
+            run_id: 1,
+            task_id: "1".to_string(),
+            observable_state: AccumulatorState::empty(),
+            created_at: None,
+        };
+        let persisted = TaskOutputSnapshot {
+            id: "9".to_string(),
+            run_id: 1,
+            task_id: "1".to_string(),
+            persisted_output: serde_json::json!({
+                "processed": 4,
+                "global_abs_integrand_norm": null,
+                "global_pdf_norm": 1.0,
+                "integrand_values": [-1.0, 2.0, -3.0, 4.0],
+                "pdf_values": [1.0, 2.0, 3.0, 4.0],
+            }),
+            created_at: None,
+        };
+        for task in tasks {
+            let source = TaskPanelSource::new(&task, None).expect("PDF panel source");
+            for state in [RunTaskState::Active, RunTaskState::Completed] {
+                let mut run_task = run_task_with_state(task.clone(), state);
+                run_task.nr_produced_samples = 4;
+                run_task.nr_completed_samples = 4;
+                for cursor in [
+                    TaskPanelCursor::default(),
+                    parse_cursor(Some("9:0")).unwrap(),
+                ] {
+                    let response = source
+                        .build_response(
+                            "run:1:task:1".to_string(),
+                            cursor,
+                            &run_task,
+                            &serde_json::json!({}),
+                            None,
+                            None,
+                            None,
+                            None,
+                            (state == RunTaskState::Active).then_some(&accumulator),
+                            (state == RunTaskState::Completed).then_some(&stage),
+                            Some(&persisted),
+                            &[],
+                            &[],
+                        )
+                        .expect("PDF panel response");
+                    for descriptor in source.panel_specs() {
+                        if matches!(descriptor.kind, PanelKind::Select) {
+                            continue;
+                        }
+                        assert!(
+                            response
+                                .updates
+                                .iter()
+                                .any(|update| { update.panel.panel_id() == descriptor.panel_id }),
+                            "missing {} for {state:?}",
+                            descriptor.panel_id
+                        );
+                    }
+                    if matches!(task, RunTaskSpec::PdfAdaptationImage { .. }) {
+                        let panel = response
+                            .updates
+                            .iter()
+                            .find(|update| update.panel.panel_id() == "pdf_adaptation_log_pdf")
+                            .expect("PDF image");
+                        let PanelState::Image2d {
+                            width,
+                            height,
+                            values,
+                            invalid_indices,
+                            ..
+                        } = &panel.panel
+                        else {
+                            panic!("expected PDF image data");
+                        };
+                        assert_eq!((*width, *height), (2, 2));
+                        assert_eq!(values.len(), 4);
+                        assert!(invalid_indices.is_none());
+                        assert!((f64::from(values[0]) - (1.0_f64 / 2.5).log10()).abs() < 1e-7);
+                        assert!((f64::from(values[3]) - (4.0_f64 / 2.5).log10()).abs() < 1e-7);
+                    }
+                    assert_eq!(response.cursor.as_deref(), Some("9:0"));
+                }
+            }
+        }
     }
 
     #[test]
