@@ -12,6 +12,7 @@ pub struct UnitEvaluator {
     domain: Domain,
     fail_on_batch_nrs: Vec<usize>,
     timing: TimingModel,
+    cpu_iterations_per_sample: u64,
     eval_batches_total: usize,
     timing_stats: TimingStats,
 }
@@ -22,6 +23,7 @@ impl UnitEvaluator {
             domain,
             fail_on_batch_nrs,
             timing,
+            cpu_iterations_per_sample: 0,
             eval_batches_total: 0,
             timing_stats: TimingStats::default(),
         }
@@ -32,11 +34,13 @@ impl UnitEvaluator {
         if params.fail_on_build {
             return Err(BuildError::build("unit evaluator injected build failure"));
         }
-        Ok(Self::new(
+        let mut evaluator = Self::new(
             Domain::rectangular(params.continuous_dims, params.discrete_dims),
             params.fail_on_batch_nrs,
             params.timing,
-        ))
+        );
+        evaluator.cpu_iterations_per_sample = params.cpu_iterations_per_sample;
+        Ok(evaluator)
     }
 
     fn scalar_ingestor(state: &mut AccumulatorState) -> Result<&mut dyn IngestScalar, EvalError> {
@@ -69,6 +73,8 @@ pub struct UnitEvaluatorParams {
     pub fail_on_build: bool,
     #[serde(default)]
     pub timing: TimingModel,
+    /// Fixed arithmetic work, independent of clocks and worker count.
+    pub cpu_iterations_per_sample: u64,
 }
 
 impl Default for UnitEvaluatorParams {
@@ -79,13 +85,14 @@ impl Default for UnitEvaluatorParams {
             fail_on_batch_nrs: Vec::new(),
             fail_on_build: false,
             timing: TimingModel::default(),
+            cpu_iterations_per_sample: 0,
         }
     }
 }
 
 impl Evaluator for UnitEvaluator {
     fn metadata(&self) -> serde_json::Value {
-        serde_json::json!({"synthetic":true,"kind":"unit","timing":self.timing})
+        serde_json::json!({"synthetic":true,"kind":"unit","timing":self.timing,"cpu_iterations_per_sample":self.cpu_iterations_per_sample})
     }
 
     fn diagnostics(&self) -> serde_json::Value {
@@ -129,6 +136,7 @@ impl Evaluator for UnitEvaluator {
         }
         self.timing
             .wait(batch.size(), key, &mut self.timing_stats)?;
+        cpu_work(self.cpu_iterations_per_sample, batch.size());
         let values = vec![1.0; batch.size()];
         let weighted_values = ingest_scalar_values(
             &values,
@@ -137,6 +145,20 @@ impl Evaluator for UnitEvaluator {
             Self::scalar_ingestor(&mut observable_state)?,
         )?;
         Ok(BatchResult::new(weighted_values, observable_state))
+    }
+}
+
+/// Fixed work rather than a wall-clock spin, so contention remains measurable.
+pub(crate) fn cpu_work(iterations: u64, samples: usize) {
+    if iterations == 0 {
+        return;
+    }
+    let mut value = std::hint::black_box(0x9e3779b97f4a7c15_u64);
+    for _ in 0..samples {
+        for _ in 0..iterations {
+            value = value.wrapping_mul(6364136223846793005).rotate_left(17) ^ 1442695040888963407;
+        }
+        std::hint::black_box(value);
     }
 }
 

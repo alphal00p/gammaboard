@@ -58,6 +58,8 @@ pub struct EvaluatorRunner<S> {
     draining: bool,
     performance_snapshot_interval: Duration,
     last_snapshot_at: Instant,
+    epoch: String,
+    cumulative: crate::core::models::EvaluatorCumulativeMetrics,
     batches_completed_total: i64,
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
@@ -392,6 +394,8 @@ where
             draining: false,
             performance_snapshot_interval,
             last_snapshot_at: Instant::now(),
+            epoch: uuid::Uuid::new_v4().to_string(),
+            cumulative: Default::default(),
             batches_completed_total: 0,
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
@@ -812,6 +816,11 @@ where
         submit_time_ms: f64,
         submit_stall_time_ms: f64,
     ) {
+        self.cumulative.evaluate_seconds += eval_time_ms / 1000.0;
+        self.cumulative.materialize_seconds += materialization_time_ms / 1000.0;
+        self.cumulative.fetch_wait_seconds += fetch_stall_time_ms / 1000.0;
+        self.cumulative.submit_seconds += submit_time_ms / 1000.0;
+        self.cumulative.submit_wait_seconds += submit_stall_time_ms / 1000.0;
         self.batches_completed_total += 1;
         crate::runners::activity::completed_batch();
         crate::runners::activity::set("waiting");
@@ -874,6 +883,10 @@ where
             run_id: self.run_id,
             node_name: self.node_name.clone(),
             metrics: EvaluatorPerformanceMetrics {
+                epoch: Some(self.epoch.clone()),
+                node_uuid: Some(self.prefetch_buffer.node_uuid.clone()),
+                task_id: self.current_task_id.map(|id| id.to_string()),
+                cumulative: Some(self.cumulative.clone()),
                 engine_diagnostics: self.evaluator.diagnostics(),
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,

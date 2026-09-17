@@ -6807,3 +6807,119 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
     harness.cleanup().await?;
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_performance_cli_measures_ready_run_and_exports_history() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_nodes(&["metrics-s", "metrics-e"]).await?;
+    let config = temp_config(
+        r#"
+name = "metrics-inspection"
+[evaluator]
+kind = "unit"
+continuous_dims = 2
+cpu_iterations_per_sample = 1000
+[evaluator_runner_params]
+min_tick_time_ms = 1
+performance_snapshot_interval_ms = 100
+[sampler_aggregator_runner_params]
+min_tick_time_ms = 1
+frontend_sync_interval_ms = 100
+performance_snapshot_interval_ms = 100
+[sampler_aggregator_runner_params.queue]
+fixed_batch_size = 64
+max_batch_size = 64
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 100000000 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
+"#,
+    );
+    harness.add_run(&config);
+    harness.assign_node("metrics-s", "sampler_aggregator", "metrics-inspection");
+    harness.assign_node("metrics-e", "evaluator", "metrics-inspection");
+    harness
+        .cli()
+        .args([
+            "--json",
+            "run",
+            "wait",
+            "metrics-inspection",
+            "--evaluators",
+            "1",
+            "--timeout",
+            "30s",
+        ])
+        .assert()
+        .success();
+    let measured = harness
+        .cli()
+        .args([
+            "--json",
+            "run",
+            "performance",
+            "metrics-inspection",
+            "--duration",
+            "2s",
+            "--interval",
+            "250ms",
+        ])
+        .assert()
+        .success();
+    let value: JsonValue = serde_json::from_slice(&measured.get_output().stdout)?;
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["valid"], true, "{value}");
+    assert!(value["completed_samples"].as_i64().unwrap() > 0);
+    assert!(value["samples_per_second"].as_f64().unwrap() > 0.0);
+    assert_eq!(value["observed_evaluator_epoch_changes"], 0);
+    assert!(
+        value["evaluator_deltas"][0]["evaluate_seconds"]
+            .as_f64()
+            .unwrap()
+            > 0.0
+    );
+    let snapshot = value["snapshots"].as_array().unwrap().last().unwrap();
+    assert_eq!(
+        snapshot["samplers"][0]["runtime_metrics"]["batch_size_current"],
+        64
+    );
+    let history = harness
+        .cli()
+        .args([
+            "--json",
+            "run",
+            "performance",
+            "metrics-inspection",
+            "--since",
+            "2020-01-01T00:00:00Z",
+            "--limit",
+            "1",
+        ])
+        .assert()
+        .success();
+    let history: JsonValue = serde_json::from_slice(&history.get_output().stdout)?;
+    assert_eq!(history["truncated"], true);
+    assert_eq!(history["rows"].as_array().unwrap().len(), 1);
+    harness
+        .cli()
+        .args(["run", "pause", "metrics-inspection"])
+        .assert()
+        .success();
+    harness
+        .cli()
+        .args([
+            "--json",
+            "run",
+            "wait",
+            "metrics-inspection",
+            "--until",
+            "idle",
+        ])
+        .assert()
+        .success();
+    harness.cleanup().await?;
+    Ok(())
+}

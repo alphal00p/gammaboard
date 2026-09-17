@@ -28,6 +28,9 @@ pub struct SamplerQueueConfig {
     #[serde(default = "default_batch_size_cooldown_ticks")]
     pub batch_size_cooldown_ticks: u32,
     pub max_batch_size: usize,
+    /// Disable adaptation; training boundaries and remaining budgets still cap batches.
+    #[serde(default)]
+    pub fixed_batch_size: Option<usize>,
     pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub max_insert_bundle_size: usize,
@@ -226,8 +229,9 @@ where
     ) -> Self {
         let now = Instant::now();
         let max_batch_size = config.max_batch_size.max(MIN_BATCH_SIZE);
-        checkpoint.batch_size_current = checkpoint
-            .batch_size_current
+        checkpoint.batch_size_current = config
+            .fixed_batch_size
+            .unwrap_or(checkpoint.batch_size_current)
             .clamp(MIN_BATCH_SIZE, max_batch_size);
         Self {
             run_id,
@@ -261,8 +265,9 @@ where
     pub fn apply_config(&mut self, config: SamplerQueueConfig) {
         self.config = config;
         self.checkpoint.batch_size_current = self
-            .checkpoint
-            .batch_size_current
+            .config
+            .fixed_batch_size
+            .unwrap_or(self.checkpoint.batch_size_current)
             .clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
         self.batch_size_tune_cooldown_remaining = 0;
     }
@@ -914,6 +919,11 @@ where
     }
 
     fn tune_batch_size(&mut self) {
+        if let Some(size) = self.config.fixed_batch_size {
+            self.checkpoint.batch_size_current =
+                size.clamp(MIN_BATCH_SIZE, self.effective_max_batch_size());
+            return;
+        }
         let Some(eval_ms_per_sample) = self.eval_ms_per_sample.value() else {
             return;
         };
@@ -1579,6 +1589,7 @@ mod tests {
                 batch_size_deadband_ratio: 0.15,
                 batch_size_cooldown_ticks: 3,
                 max_batch_size: 4096,
+                fixed_batch_size: None,
                 max_queue_size: 16,
                 max_batches_per_tick: 16,
                 max_insert_bundle_size: 1,
@@ -1591,6 +1602,21 @@ mod tests {
                 ..SamplerQueueCheckpoint::default()
             },
         )
+    }
+
+    #[test]
+    fn fixed_batches_survive_adaptation_and_config_updates() {
+        let mut queue = recording_queue(RecordingStore::default());
+        let mut config = queue.config().clone();
+        config.fixed_batch_size = Some(256);
+        queue.apply_config(config.clone());
+        assert_eq!(queue.current_batch_size(), 256);
+        queue.eval_ms_per_sample.observe_batch(10000.0, 16);
+        queue.tune_batch_size();
+        assert_eq!(queue.current_batch_size(), 256);
+        config.max_batch_size = 128;
+        queue.apply_config(config);
+        assert_eq!(queue.current_batch_size(), 128);
     }
 
     #[tokio::test]

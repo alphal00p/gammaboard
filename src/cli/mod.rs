@@ -1,9 +1,11 @@
 pub mod auth;
 pub mod auto_assign;
+pub mod benchmark;
 pub mod completion;
 pub mod db;
 pub mod deploy;
 pub mod node;
+pub mod performance;
 pub mod run;
 pub mod server;
 pub mod shared;
@@ -61,6 +63,8 @@ pub fn format_error_json(code: &str, message: impl std::fmt::Display) -> String 
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Direct evaluator baselines and CPU workload calibration
+    Benchmark(benchmark::BenchmarkArgs),
     /// Run lifecycle commands
     Run(RunArgs),
     /// Node assignment and node lifecycle commands
@@ -96,6 +100,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
     )?;
     let config = runtime.runtime_config();
     match cli.command {
+        Command::Benchmark(args) => benchmark::run(args),
         Command::Run(args) => run_run_commands(args.command, config, quiet).await,
         Command::Node(args) => run_node_commands(args.command, &runtime, quiet).await,
         Command::Server(args) => run_server(args, &runtime, quiet).await,

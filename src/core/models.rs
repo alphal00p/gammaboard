@@ -204,9 +204,26 @@ pub struct EvaluatorIdleProfileMetrics {
     pub idle_ratio: f64,
 }
 
+/// Cumulative seconds for successfully submitted batches in one runner epoch.
+/// Asynchronous phases overlap; these are not an additive wall-time breakdown.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct EvaluatorCumulativeMetrics {
+    pub evaluate_seconds: f64,
+    pub materialize_seconds: f64,
+    pub fetch_wait_seconds: f64,
+    pub submit_seconds: f64,
+    pub submit_wait_seconds: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct EvaluatorPerformanceMetrics {
+    /// Identifies a runner incarnation; absent on older snapshots.
+    pub epoch: Option<String>,
+    pub node_uuid: Option<String>,
+    pub task_id: Option<String>,
+    pub cumulative: Option<EvaluatorCumulativeMetrics>,
     pub engine_diagnostics: serde_json::Value,
     pub batches_completed: i64,
     pub samples_evaluated: i64,
@@ -337,6 +354,10 @@ pub struct SamplerQueueRuntimeMetrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerRuntimeMetrics {
+    #[serde(default)]
+    pub runner_epoch: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
     pub produced_batches_total: i64,
     pub produced_samples_total: i64,
     pub ingested_batches_total: i64,

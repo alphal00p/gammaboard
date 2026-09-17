@@ -4,6 +4,7 @@
 //! numerical integration using PostgreSQL as a work queue.
 
 pub mod api;
+pub mod benchmark;
 pub mod config;
 pub mod core;
 pub mod evaluation;

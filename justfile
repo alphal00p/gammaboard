@@ -19,3 +19,7 @@ benchmark-campaign *args:
 
 benchmark-queue *args:
     python3 scripts/benchmark_queue.py {{args}}
+
+# CPU-bounded scaling sweep; use resources/templates/benchmarks/smoke.toml for a quick check.
+benchmark *args:
+    python3 scripts/benchmark.py {{args}}

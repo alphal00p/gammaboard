@@ -20,6 +20,10 @@ pub struct RunArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RunCommand {
+    /// Inspect raw metrics or measure a bounded interval
+    Performance(super::performance::PerformanceArgs),
+    /// Wait for initialized roles, idle assignments, or completed tasks
+    Wait(super::performance::WaitArgs),
     /// Validate a run without creating database records; optionally initialize runtimes
     Validate {
         config_file: PathBuf,
@@ -96,6 +100,14 @@ pub async fn run_run_commands(
         |store| async move {
             match command {
                 RunCommand::Validate { .. } => unreachable!(),
+                RunCommand::Performance(args) => {
+                    let run = resolve_run_ref(&store, &args.run).await?;
+                    super::performance::inspect(&store, run.run_id, args).await?;
+                }
+                RunCommand::Wait(args) => {
+                    let run = resolve_run_ref(&store, &args.run).await?;
+                    super::performance::wait(&store, run.run_id, args).await?;
+                }
                 RunCommand::Create { config_file } => run_create(&store, &config_file).await?,
                 RunCommand::Clone {
                     source_run,
@@ -123,6 +135,8 @@ pub async fn run_run_commands(
 fn run_command_name(command: &RunCommand) -> &'static str {
     match command {
         RunCommand::Validate { .. } => "run_validate",
+        RunCommand::Performance(_) => "run_performance",
+        RunCommand::Wait(_) => "run_wait",
         RunCommand::Create { .. } => "run_create",
         RunCommand::Clone { .. } => "run_clone",
         RunCommand::List { .. } => "run_list",

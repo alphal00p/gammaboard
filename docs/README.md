@@ -17,3 +17,5 @@ Repository-local operator notes that are not copied into this directory:
 - `ops/ubelix/README.md`: UBELIX Slurm/Apptainer workflow.
 - `ops/itphlies/README.md`: ITPhlies profile notes.
 - `process_api/README.md`: process API examples and wrappers.
+
+- `benchmarking.md`: CLI inspection, direct baselines, bounded scaling suites, and plots.

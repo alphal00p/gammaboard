@@ -1,4 +1,19 @@
 use crate::api::node_launch::AutoRunNodesRequest;
+async fn get_run_metrics(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i32>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if state.store.get_run_progress(id).await?.is_none() {
+        return Err(ApiError::NotFound(format!("run {id}")));
+    }
+    let snapshot = crate::api::performance::snapshot(&state.store, id)
+        .await
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    json_response(
+        serde_json::to_value(snapshot).map_err(|err| ApiError::Internal(err.to_string()))?,
+    )
+}
+
 #[cfg(test)]
 use crate::api::node_launch::{derive_capabilities_from_config, resolve_node_launch_groups};
 mod auth;

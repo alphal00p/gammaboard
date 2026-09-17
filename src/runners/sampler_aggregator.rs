@@ -97,6 +97,7 @@ pub enum RunnerError {
 }
 
 pub struct SamplerAggregatorRunner<S> {
+    epoch: String,
     run_id: i32,
     node_name: String,
     task: RunTask,
@@ -320,6 +321,8 @@ where
         evaluator_fleet: EvaluatorFleetSnapshot,
     ) -> SamplerRuntimeMetrics {
         SamplerRuntimeMetrics {
+            runner_epoch: Some(self.epoch.clone()),
+            task_id: Some(self.task.id.to_string()),
             produced_batches_total: self.runtime_state.produced_batches_total,
             produced_samples_total: self.runtime_state.produced_samples_total,
             ingested_batches_total: self.runtime_state.ingested_batches_total,
@@ -398,6 +401,7 @@ where
 
         Self {
             run_id,
+            epoch: uuid::Uuid::new_v4().to_string(),
             node_name: node_name.into(),
             task,
             sampler,

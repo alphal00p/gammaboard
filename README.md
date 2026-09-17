@@ -366,6 +366,14 @@ version. Enable it with `GAMMABOARD_RUN_MADNIS_E2E=1`; set
 Resumed workers use the new deployment/launcher environment, so make runtime
 credentials and shared resource paths available as for an ordinary launch.
 
+### Overhead and scaling measurements
+
+Use `gammaboard --json run performance RUN --duration 30s` to measure an active
+run, and `gammaboard benchmark evaluator` for a direct execution baseline. The
+CLI-only Python suite compares fixed CPU workloads across evaluator counts within
+a small CPU affinity set and a 30-minute budget. See [docs/benchmarking.md](docs/benchmarking.md)
+for commands, presets, raw results, plots, and measurement semantics.
+
 ### Synthetic workloads and queue benchmarks
 
 The built-in `unit` evaluator and `naive_monte_carlo` sampler support optional,
