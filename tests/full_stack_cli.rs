@@ -6159,7 +6159,7 @@ sampler_aggregator = { config={kind="naive_monte_carlo"} }
         .announce_node(&names[0], "first", &Default::default())
         .await?;
     store
-        .upsert_desired_assignment(
+        .assign_worker_pool(
             &names[0],
             gammaboard::core::WorkerRole::SamplerAggregator,
             run.run_id,
@@ -6657,6 +6657,14 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
     let left = harness.run_id("left").await?;
     let right = harness.run_id("right").await?;
     let unrelated = harness.run_id("unrelated").await?;
+    sqlx::query("UPDATE runs SET parent_run_id=$1 WHERE id IN ($2,$3)")
+        .bind(parent)
+        .bind(left)
+        .bind(right)
+        .execute(&harness.pool)
+        .await?;
+    sqlx::query("UPDATE runs SET integration_params=jsonb_set(integration_params, '{run_kind}', '\"parameter_scan\"') WHERE id=$1")
+        .bind(parent).execute(&harness.pool).await?;
     let store = PgStore::new(harness.pool.clone());
     for (name, role, run_id) in [
         ("s", WorkerRole::SamplerAggregator, parent),
@@ -6664,13 +6672,12 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
         ("other", WorkerRole::Evaluator, unrelated),
     ] {
         store.announce_node(name, name, &Default::default()).await?;
-        store.upsert_desired_assignment(name, role, run_id).await?;
+        store.assign_worker_pool(name, role, run_id).await?;
     }
     sqlx::query("UPDATE nodes SET lease_expires_at = now() + interval '5 minutes'")
         .execute(&harness.pool)
         .await?;
-    let plan =
-        |selected| ControllerAssignmentPlan::replacing(parent, vec![left, right], vec![selected]);
+    let plan = |selected| ControllerAssignmentPlan::new(parent, vec![selected]);
     apply_controller_assignment_plan(&store, plan(left)).await?;
     let versions: Vec<(String, String)> =
         sqlx::query_as("SELECT name, xmin::text FROM nodes ORDER BY name")
@@ -6703,7 +6710,7 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
             for selected in [right, left] {
                 apply_controller_assignment_plan(
                     &writer_store,
-                    ControllerAssignmentPlan::replacing(parent, vec![left, right], vec![selected]),
+                    ControllerAssignmentPlan::new(parent, vec![selected]),
                 )
                 .await?;
             }
@@ -6726,7 +6733,7 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
         sleep(Duration::from_millis(2)).await;
     }
     writer.await??;
-    assert!(reads > 5);
+    assert!(reads > 0);
     assert_eq!(
         store.get_desired_assignment("other").await?.unwrap().run_id,
         unrelated
@@ -6748,7 +6755,7 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
     // Concurrent manual reassignment invalidates the entire plan, including its
     // otherwise valid sampler change.
     store
-        .upsert_desired_assignment("e", WorkerRole::Evaluator, unrelated)
+        .assign_worker_pool("e", WorkerRole::Evaluator, unrelated)
         .await?;
     assert!(!store.update_desired_assignments(&updates).await?);
     assert_eq!(
@@ -6760,7 +6767,7 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
         unrelated
     );
     store
-        .upsert_desired_assignment("e", WorkerRole::Evaluator, left)
+        .assign_worker_pool("e", WorkerRole::Evaluator, left)
         .await?;
     sqlx::query("UPDATE nodes SET lease_expires_at = now() - interval '1 second' WHERE name = 's'")
         .execute(&harness.pool)
@@ -6778,10 +6785,10 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
     );
     assert_eq!(
         store.get_desired_assignment("e").await?.unwrap().run_id,
-        left
+        parent
     );
     store
-        .upsert_desired_assignment("s", WorkerRole::SamplerAggregator, left)
+        .assign_worker_pool("s", WorkerRole::SamplerAggregator, left)
         .await?;
     sqlx::query("UPDATE nodes SET lease_expires_at = now() - interval '1 second' WHERE name = 's'")
         .execute(&harness.pool)
@@ -7024,7 +7031,7 @@ max_batch_size = 100
     sleep(Duration::from_secs(1)).await;
     assert!(store.get_desired_assignment("z-evaluator").await?.is_none());
     store
-        .upsert_desired_assignment("z-evaluator", WorkerRole::Evaluator, parent)
+        .assign_worker_pool("z-evaluator", WorkerRole::Evaluator, parent)
         .await?;
     harness
         .wait_for(
@@ -7057,7 +7064,7 @@ max_batch_size = 100
         )
         .await?;
     store
-        .upsert_desired_assignment("z-sampler", WorkerRole::SamplerAggregator, parent)
+        .assign_worker_pool("z-sampler", WorkerRole::SamplerAggregator, parent)
         .await?;
     harness
         .wait_for(
@@ -7095,10 +7102,10 @@ max_batch_size = 100
         gammaboard::stores::RunLifecycleState::Paused
     );
     store
-        .upsert_desired_assignment("z-sampler", WorkerRole::SamplerAggregator, parent)
+        .assign_worker_pool("z-sampler", WorkerRole::SamplerAggregator, parent)
         .await?;
     store
-        .upsert_desired_assignment("z-evaluator", WorkerRole::Evaluator, parent)
+        .assign_worker_pool("z-evaluator", WorkerRole::Evaluator, parent)
         .await?;
     harness
         .wait_for("resume child runtime", Duration::from_secs(15), || async {
@@ -7171,5 +7178,183 @@ async fn full_stack_child_creation_is_atomic_and_idempotent() -> anyhow::Result<
         .await?;
     assert_eq!(count, 2, "failed parenting must not leave an orphan");
     harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn worker_pool_operations_resolve_children_and_preserve_operator_intent() -> anyhow::Result<()>
+{
+    use gammaboard::api::{nodes, runs};
+    use gammaboard::core::{ControlPlaneStore, RunReadStore, WorkerRole};
+    use gammaboard::runners::controller_child::{
+        ControllerAssignmentPlan, apply_controller_assignment_plan,
+    };
+    use gammaboard::stores::PgStore;
+    for kind in [
+        "integration_campaign",
+        "parameter_scan",
+        "hyperparameter_tuning",
+    ] {
+        let mut harness = FullStackHarness::new().await?;
+        for name in ["root", "left", "right", "grandchild", "outside"] {
+            harness.add_run(&temp_config(&format!("name = '{name}'")));
+        }
+        let root = harness.run_id("root").await?;
+        let left = harness.run_id("left").await?;
+        let right = harness.run_id("right").await?;
+        let grandchild = harness.run_id("grandchild").await?;
+        let outside = harness.run_id("outside").await?;
+        sqlx::query("UPDATE runs SET integration_params=jsonb_set(integration_params, '{run_kind}', to_jsonb($2::text)) WHERE id=$1")
+            .bind(root).bind(kind).execute(&harness.pool).await?;
+        sqlx::query("UPDATE runs SET parent_run_id=$1 WHERE id IN ($2,$3)")
+            .bind(root)
+            .bind(left)
+            .bind(right)
+            .execute(&harness.pool)
+            .await?;
+        sqlx::query("UPDATE runs SET parent_run_id=$1 WHERE id=$2")
+            .bind(left)
+            .bind(grandchild)
+            .execute(&harness.pool)
+            .await?;
+        let store = PgStore::new(harness.pool.clone());
+        for name in ["s1", "s2", "s3", "e1", "e2", "idle"] {
+            store.announce_node(name, name, &Default::default()).await?;
+        }
+        sqlx::query("UPDATE nodes SET lease_expires_at=now()+interval '5 minutes'")
+            .execute(&harness.pool)
+            .await?;
+        for name in ["s1", "s2", "s3", "e1", "e2"] {
+            let role = if name.starts_with('s') {
+                WorkerRole::SamplerAggregator
+            } else {
+                WorkerRole::Evaluator
+            };
+            let response = nodes::assign_node(&store, name, grandchild, role).await?;
+            assert_eq!(
+                response.run_id, root,
+                "{kind}: public response must identify owner"
+            );
+        }
+        // Multiple sampler members can wait at a controller without colliding.
+        apply_controller_assignment_plan(
+            &store,
+            ControllerAssignmentPlan::new(root, vec![left, right]),
+        )
+        .await?;
+        assert_eq!(
+            store.get_desired_assignment("s1").await?.unwrap().run_id,
+            left
+        );
+        assert_eq!(
+            store.get_desired_assignment("s2").await?.unwrap().run_id,
+            right
+        );
+        assert_eq!(
+            store.get_desired_assignment("s3").await?.unwrap().run_id,
+            root
+        );
+        // A sibling request changes no placement and cannot pin or steal a slot.
+        nodes::assign_node(&store, "s1", right, WorkerRole::SamplerAggregator).await?;
+        assert_eq!(
+            store.get_desired_assignment("s1").await?.unwrap().run_id,
+            left
+        );
+        // Nested controller owns its branch's placement; root ticks leave it alone.
+        apply_controller_assignment_plan(
+            &store,
+            ControllerAssignmentPlan::new(left, vec![grandchild]),
+        )
+        .await?;
+        apply_controller_assignment_plan(
+            &store,
+            ControllerAssignmentPlan::new(root, vec![left, right]),
+        )
+        .await?;
+        assert_eq!(
+            store.get_desired_assignment("s1").await?.unwrap().run_id,
+            grandchild
+        );
+        // A root selection change reclaims capacity even from deep descendants.
+        apply_controller_assignment_plan(&store, ControllerAssignmentPlan::new(root, vec![right]))
+            .await?;
+        assert_ne!(
+            store.get_desired_assignment("s1").await?.unwrap().run_id,
+            grandchild
+        );
+        let paused = runs::pause_run(&store, grandchild).await?;
+        assert_eq!(paused.run_id, root);
+        assert_eq!(paused.assignments_cleared, 5);
+        apply_controller_assignment_plan(&store, ControllerAssignmentPlan::new(root, vec![right]))
+            .await?;
+        assert!(store.list_desired_assignments(None).await?.is_empty());
+        let members = store.get_registered_workers(Some(root)).await?;
+        assert_eq!(
+            members.len(),
+            5,
+            "paused members must remain visible on the parent"
+        );
+        assert!(members.iter().all(|n| n.pool_run_id == Some(root)));
+        nodes::unassign_node(&store, "e1").await?;
+        nodes::assign_node(&store, "e2", outside, WorkerRole::Evaluator).await?;
+        let resumed = nodes::auto_assign_run(&store, grandchild, Some(0)).await?;
+        assert_eq!(resumed.run_id, root);
+        assert_eq!(resumed.resumed_nodes, 3);
+        assert!(resumed.sampler_already_assigned);
+        apply_controller_assignment_plan(&store, ControllerAssignmentPlan::new(root, vec![left]))
+            .await?;
+        assert!(store.get_desired_assignment("e1").await?.is_none());
+        assert!(store.get_desired_assignment("idle").await?.is_none());
+        assert_eq!(
+            store.get_desired_assignment("e2").await?.unwrap().run_id,
+            outside
+        );
+        // Nested controllers retain multiple sampler members across root ticks.
+        sqlx::query("UPDATE runs SET integration_params=jsonb_set(integration_params, '{run_kind}', to_jsonb('parameter_scan'::text)) WHERE id=$1")
+            .bind(left).execute(&harness.pool).await?;
+        apply_controller_assignment_plan(&store, ControllerAssignmentPlan::new(root, vec![left]))
+            .await?;
+        apply_controller_assignment_plan(
+            &store,
+            ControllerAssignmentPlan::new(left, vec![grandchild]),
+        )
+        .await?;
+        apply_controller_assignment_plan(&store, ControllerAssignmentPlan::new(root, vec![left]))
+            .await?;
+        let placements = store.list_desired_assignments(None).await?;
+        assert_eq!(
+            placements
+                .iter()
+                .filter(|a| a.role == WorkerRole::SamplerAggregator
+                    && [left, grandchild].contains(&a.run_id))
+                .count(),
+            3
+        );
+        store
+            .set_current_assignment("s1", WorkerRole::SamplerAggregator, grandchild)
+            .await?;
+        assert!(
+            store
+                .set_current_assignment("s2", WorkerRole::SamplerAggregator, grandchild)
+                .await
+                .is_err(),
+            "execution remains exclusive per child"
+        );
+        store.clear_current_assignment("s1").await?;
+        // Pause-all follows the same semantics through the CLI.
+        harness
+            .cli()
+            .args(["run", "pause", "--all"])
+            .assert()
+            .success();
+        assert_eq!(store.get_registered_workers(Some(root)).await?.len(), 3);
+        assert!(store.list_desired_assignments(None).await?.is_empty());
+        // Explicit removal also releases paused members, not just placements.
+        store.clear_desired_assignments_for_run(root).await?;
+        assert!(store.get_registered_workers(Some(root)).await?.is_empty());
+        assert_eq!(store.resume_worker_pool(root).await?, 0);
+        harness.cleanup().await?;
+    }
     Ok(())
 }

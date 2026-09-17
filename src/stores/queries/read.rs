@@ -226,6 +226,9 @@ struct RegisteredWorkerRow {
     node_name: String,
     node_uuid: String,
     capabilities: JsonValue,
+    pool_run_id: Option<i32>,
+    pool_run_name: Option<String>,
+    pool_role: Option<String>,
     desired_run_id: Option<i32>,
     desired_run_name: Option<String>,
     desired_role: Option<String>,
@@ -252,6 +255,9 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             node_name: value.node_name,
             node_uuid: value.node_uuid,
             capabilities: value.capabilities,
+            pool_run_id: value.pool_run_id,
+            pool_run_name: value.pool_run_name,
+            pool_role: parse_worker_role(value.pool_role),
             desired_run_id: value.desired_run_id,
             desired_run_name: value.desired_run_name,
             desired_role: parse_worker_role(value.desired_role),
@@ -275,6 +281,9 @@ struct RegisteredWorkerSummaryRow {
     node_name: String,
     node_uuid: String,
     capabilities: JsonValue,
+    pool_run_id: Option<i32>,
+    pool_run_name: Option<String>,
+    pool_role: Option<String>,
     desired_run_id: Option<i32>,
     desired_run_name: Option<String>,
     desired_role: Option<String>,
@@ -295,6 +304,9 @@ impl From<RegisteredWorkerSummaryRow> for RegisteredWorkerSummary {
             node_name: value.node_name,
             node_uuid: value.node_uuid,
             capabilities: value.capabilities,
+            pool_run_id: value.pool_run_id,
+            pool_run_name: value.pool_run_name,
+            pool_role: parse_worker_role(value.pool_role),
             desired_run_id: value.desired_run_id,
             desired_run_name: value.desired_run_name,
             desired_role: parse_worker_role(value.desired_role),
@@ -902,6 +914,7 @@ pub(crate) async fn get_registered_workers(
                     n.name AS node_name,
                     n.uuid AS node_uuid,
                     n.capabilities,
+                    n.pool_run_id, pr.name AS pool_run_name, n.pool_role,
                     n.desired_run_id,
                     dr.name AS desired_run_name,
                     n.desired_role,
@@ -917,15 +930,16 @@ pub(crate) async fn get_registered_workers(
                     p.rss_bytes AS sampler_rss_bytes
                 FROM nodes n
                 LEFT JOIN sampler_aggregator_performance_latest p
-                    ON p.run_id = COALESCE($1::integer, n.active_run_id, n.desired_run_id)
+                    ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
                    AND p.worker_id = n.name
                 LEFT JOIN evaluator_performance_latest e
-                    ON e.run_id = COALESCE($1::integer, n.active_run_id, n.desired_run_id)
+                    ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
                    AND e.worker_id = n.name
+                LEFT JOIN runs pr ON pr.id = n.pool_run_id
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
                 WHERE n.lease_expires_at > now()
-                  AND ($1::integer IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
+                  AND ($1::integer IS NULL OR n.pool_run_id = $1 OR n.desired_run_id = $1 OR n.active_run_id = $1)
                 ORDER BY
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 0
@@ -952,6 +966,7 @@ pub(crate) async fn get_registered_worker(
             n.name AS node_name,
             n.uuid AS node_uuid,
             n.capabilities,
+                    n.pool_run_id, pr.name AS pool_run_name, n.pool_role,
             n.desired_run_id,
             dr.name AS desired_run_name,
             n.desired_role,
@@ -972,7 +987,8 @@ pub(crate) async fn get_registered_worker(
         LEFT JOIN evaluator_performance_latest e
             ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
            AND e.worker_id = n.name
-        LEFT JOIN runs dr ON dr.id = n.desired_run_id
+        LEFT JOIN runs pr ON pr.id = n.pool_run_id
+                LEFT JOIN runs dr ON dr.id = n.desired_run_id
         LEFT JOIN runs cr ON cr.id = n.active_run_id
         WHERE n.name = $1 AND n.lease_expires_at > now()
         "#,
@@ -993,6 +1009,7 @@ pub(crate) async fn get_registered_worker_summaries(
                     n.name AS node_name,
                     n.uuid AS node_uuid,
                     n.capabilities,
+                    n.pool_run_id, pr.name AS pool_run_name, n.pool_role,
                     n.desired_run_id,
                     dr.name AS desired_run_name,
                     n.desired_role,
@@ -1001,10 +1018,11 @@ pub(crate) async fn get_registered_worker_summaries(
                     n.active_role AS current_role,
                     n.last_seen
                 FROM nodes n
+                LEFT JOIN runs pr ON pr.id = n.pool_run_id
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
                 WHERE n.lease_expires_at > now()
-                  AND ($1::integer IS NULL OR n.desired_run_id = $1 OR n.active_run_id = $1)
+                  AND ($1::integer IS NULL OR n.pool_run_id = $1 OR n.desired_run_id = $1 OR n.active_run_id = $1)
                 ORDER BY
                     CASE
                         WHEN n.active_role IS NOT NULL THEN 0

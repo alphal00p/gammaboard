@@ -31,6 +31,7 @@ const ADD_TASKS_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.add_tasks.selected_tem
 
 const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelectRun }) => {
   const currentRun = runs.find((entry) => entry.run_id === selectedRun);
+  const isChild = currentRun?.parent_run_id != null;
   const isIntegration = !currentRun?.kind || currentRun.kind === "integration";
   const { tasks } = useRunTasks(selectedRun, 2000);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
@@ -111,9 +112,13 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
 
   return (
     <>
+      {isChild && <Alert severity="info" sx={{ mb: 2 }} action={
+        <Button color="inherit" onClick={() => onSelectRun?.(currentRun.parent_run_id)}>Manage parent workers</Button>
+      }>Workers are allocated by the parent. Manage its pool to assign, remove, pause, or resume workers.</Alert>}
       {authenticated ? (
         <Box sx={{ mb: 2, display: "flex", justifyContent: "flex-end" }}>
           <Stack direction={{ xs: "column", md: "row" }} spacing={1.5}>
+            {!isChild && <>
             <TextField
               size="small"
               value={evaluatorCount}
@@ -139,7 +144,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
                     : 0;
                   const assignedSampler = response?.assigned_sampler ? 1 : 0;
                   setSnackbar({
-                    message: `Auto-assign updated ${assignedSampler + assignedEvaluators} node(s).`,
+                    message: `Assigned ${assignedSampler + assignedEvaluators} node(s); resumed ${response?.resumed_nodes || 0} pool member(s).`,
                     severity: "success",
                   });
                 } catch (err) {
@@ -149,7 +154,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
                 }
               }}
             >
-              Assign
+              Assign / Resume
             </Button>
             <Button
               variant="contained"
@@ -167,8 +172,8 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
                   const assignedEvaluators = asArray(nodes).filter(
                     (worker) =>
                       worker?.node_name &&
-                      worker?.desired_run_id === selectedRun &&
-                      worker?.desired_role === "evaluator",
+                      worker?.pool_run_id === selectedRun &&
+                      worker?.pool_role === "evaluator",
                   );
                   const target = requested == null ? assignedEvaluators.length : Math.max(0, requested);
                   const evaluators = assignedEvaluators.slice(0, target);
@@ -188,7 +193,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
                 }
               }}
             >
-              Unassign
+              Remove evaluators
             </Button>
             <Button
               variant="contained"
@@ -208,6 +213,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
             >
               Pause Run
             </Button>
+            </>}
             <Button
               variant="outlined"
               color="error"

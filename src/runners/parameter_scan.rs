@@ -181,7 +181,7 @@ where
             .await?;
             apply_controller_assignment_plan(
                 &self.store,
-                ControllerAssignmentPlan::preserving(self.run_id, Vec::new()),
+                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
             )
             .await?;
             self.store.fail_run_task(self.task.id, &reason).await?;
@@ -198,7 +198,7 @@ where
             .await?;
             apply_controller_assignment_plan(
                 &self.store,
-                ControllerAssignmentPlan::preserving(self.run_id, Vec::new()),
+                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
             )
             .await?;
             self.store.complete_run_task(self.task.id).await?;
@@ -252,7 +252,7 @@ where
         runnable_child_run_ids.extend(created_child_run_ids);
         apply_controller_assignment_plan(
             &self.store,
-            ControllerAssignmentPlan::preserving(self.run_id, runnable_child_run_ids),
+            ControllerAssignmentPlan::new(self.run_id, runnable_child_run_ids),
         )
         .await?;
 

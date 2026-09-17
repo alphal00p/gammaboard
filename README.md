@@ -287,8 +287,8 @@ evaluators. Developers who explicitly compile with
 Graceful `deploy` shutdown automatically marks live workers for later recreation and
 preserves their intended assignments. Use `gammaboard deploy --resume-workers` to
 consume those markers through the normal launch-request queue. Plain `deploy`
-leaves them dormant. Explicit `node stop` clears a worker's marker. Pausing or
-unassigning a run still clears its assignments. Crashes and forced kills cannot
+leaves them dormant. Explicit `node stop` clears a worker's marker. Pausing retains worker pool membership for resume; explicit unassignment removes it.
+Assignments targeting children resolve to the root parent, which controls placement. Crashes and forced kills cannot
 save a new shutdown roster or guarantee a checkpoint.
 
 Launch workers through `node start-local`, the dashboard launch form, or the

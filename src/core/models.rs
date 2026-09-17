@@ -66,6 +66,9 @@ pub struct RegisteredNode {
     pub name: String,
     pub uuid: String,
     pub capabilities: NodeCapabilities,
+    /// Operator-owned pool, independent of scheduled placement.
+    #[serde(default)]
+    pub pool_assignment: Option<DesiredAssignment>,
     pub desired_assignment: Option<DesiredAssignment>,
     pub current_assignment: Option<DesiredAssignment>,
     pub last_seen: Option<DateTime<Utc>>,

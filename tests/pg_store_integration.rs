@@ -592,12 +592,12 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
         .expect("announce second node");
 
     store
-        .upsert_desired_assignment(&node_a, WorkerRole::SamplerAggregator, run_id)
+        .assign_worker_pool(&node_a, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect("assign first sampler");
 
     let err = store
-        .upsert_desired_assignment(&node_b, WorkerRole::SamplerAggregator, run_id)
+        .assign_worker_pool(&node_b, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect_err("second sampler assignment should fail");
 
@@ -714,7 +714,7 @@ async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
         .await
         .expect("announce stale node");
     store
-        .upsert_desired_assignment(&stale_node, WorkerRole::SamplerAggregator, run_id)
+        .assign_worker_pool(&stale_node, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect("assign stale sampler");
 
@@ -737,7 +737,7 @@ async fn expired_sampler_assignment_does_not_block_new_sampler_assignment() {
         .await
         .expect("announce fresh node");
     store
-        .upsert_desired_assignment(&fresh_node, WorkerRole::SamplerAggregator, run_id)
+        .assign_worker_pool(&fresh_node, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect("fresh sampler assignment should reap stale sampler assignment first");
 
@@ -802,11 +802,11 @@ async fn assigning_new_role_replaces_existing_desired_assignment_for_node() {
         .expect("announce node");
 
     store
-        .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, run_a)
+        .assign_worker_pool(&node_name, WorkerRole::Evaluator, run_a)
         .await
         .expect("assign evaluator");
     store
-        .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_b)
+        .assign_worker_pool(&node_name, WorkerRole::SamplerAggregator, run_b)
         .await
         .expect("replace desired assignment");
 
@@ -888,7 +888,7 @@ async fn assigning_dead_node_returns_not_found() {
         .expect("expire node lease");
 
     let err = store
-        .upsert_desired_assignment(&node_name, WorkerRole::Evaluator, run_id)
+        .assign_worker_pool(&node_name, WorkerRole::Evaluator, run_id)
         .await
         .expect_err("dead node assignment should fail");
 
@@ -935,7 +935,7 @@ async fn expiring_node_lease_clears_desired_assignment() {
         .await
         .expect("announce node");
     store
-        .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_id)
+        .assign_worker_pool(&node_name, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect("assign sampler role");
 
@@ -986,7 +986,7 @@ async fn shutdown_request_clears_desired_assignment_but_keeps_current_assignment
         .await
         .expect("announce node");
     store
-        .upsert_desired_assignment(&node_name, WorkerRole::SamplerAggregator, run_id)
+        .assign_worker_pool(&node_name, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect("assign desired sampler role");
     store
@@ -1099,36 +1099,36 @@ async fn shutdown_all_nodes_clears_desired_assignments() {
         .await
         .expect("announce node b");
     store
-        .upsert_desired_assignment(&node_a, WorkerRole::SamplerAggregator, run_id)
+        .assign_worker_pool(&node_a, WorkerRole::SamplerAggregator, run_id)
         .await
         .expect("assign desired sampler");
     store
-        .upsert_desired_assignment(&node_b, WorkerRole::Evaluator, run_id)
+        .assign_worker_pool(&node_b, WorkerRole::Evaluator, run_id)
         .await
         .expect("assign desired evaluator");
 
-    let live_nodes: i64 = sqlx::query_scalar(
+    let shutdown_targets: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*)
         FROM nodes
-        WHERE lease_expires_at > now()
+        WHERE lease_expires_at > now() OR resume_requested
         "#,
     )
     .fetch_one(store.pool())
     .await
-    .expect("count live nodes");
+    .expect("count live and retained shutdown targets");
     let rows_updated = store
         .request_all_nodes_shutdown()
         .await
         .expect("request all node shutdown");
-    assert_eq!(rows_updated, live_nodes as u64);
+    assert_eq!(rows_updated, shutdown_targets as u64);
 
     let desired_count: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*)
         FROM nodes
         WHERE name = ANY($1)
-          AND desired_run_id IS NOT NULL
+          AND (desired_run_id IS NOT NULL OR pool_run_id IS NOT NULL)
         "#,
     )
     .bind(&[node_a, node_b])

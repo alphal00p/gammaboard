@@ -34,12 +34,12 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   const [snackbar, setSnackbar] = useState(null);
   const [confirmStopOpen, setConfirmStopOpen] = useState(false);
 
-  const runOptions = useMemo(() => runs.filter((run) => Number.isFinite(Number(run?.run_id))), [runs]);
+  const runOptions = useMemo(() => runs.filter((run) => run?.parent_run_id == null && Number.isFinite(Number(run?.run_id))), [runs]);
 
   useEffect(() => {
-    setSelectedRunId(worker?.desired_run_id ?? "");
-    setSelectedRole(worker?.desired_role ?? "evaluator");
-  }, [worker?.desired_role, worker?.desired_run_id]);
+    setSelectedRunId(worker?.pool_run_id ?? "");
+    setSelectedRole(worker?.pool_role ?? "evaluator");
+  }, [worker?.pool_role, worker?.pool_run_id]);
 
   if (!worker) return null;
 
@@ -48,15 +48,21 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
       <Typography variant="h6" gutterBottom>
         Node Details
       </Typography>
+      {worker.pool_run_id != null && <Typography sx={{ mb: 2 }}>
+        Pool: {worker.pool_run_name || `#${worker.pool_run_id}`}.
+        {worker.current_run_id != null && worker.current_run_id !== worker.pool_run_id
+          ? ` Allocated by parent to ${worker.current_run_name || `#${worker.current_run_id}`}.`
+          : worker.desired_run_id == null ? " Paused; pool membership retained." : ""}
+      </Typography>}
       {error ? <Alert severity="error">{error}</Alert> : null}
       {authenticated ? (
         <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
           <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
             <FormControl size="small" sx={{ minWidth: 220 }}>
-              <InputLabel id="assign-run-label">Run</InputLabel>
+              <InputLabel id="assign-run-label">Worker pool</InputLabel>
               <Select
                 labelId="assign-run-label"
-                label="Run"
+                label="Worker pool"
                 value={selectedRunId}
                 onChange={(event) => setSelectedRunId(Number(event.target.value))}
               >
@@ -111,7 +117,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
                   }
                 }}
               >
-                Unassign
+                Remove from pool
               </Button>
               <Button color="error" disabled={busy} onClick={() => setConfirmStopOpen(true)}>
                 Stop Node

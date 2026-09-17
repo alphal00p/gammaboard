@@ -39,10 +39,11 @@ pub async fn snapshot(store: &PgStore, run_id: i32) -> Result<PerformanceSnapsho
             'queue', COALESCE((SELECT to_jsonb(q)-'run_id' FROM run_batch_queue_counters q WHERE q.run_id=r.id),'{}'),
             'nodes', COALESCE((SELECT jsonb_agg(jsonb_build_object(
                 'name', n.name, 'uuid', n.uuid, 'live', n.lease_expires_at>statement_timestamp(),
+                'pool_run_id', n.pool_run_id, 'pool_role', n.pool_role,
                 'desired_run_id', n.desired_run_id, 'desired_role', n.desired_role,
                 'active_run_id', n.active_run_id, 'active_role', n.active_role,
                 'capabilities', n.capabilities, 'last_seen', n.last_seen
-            ) ORDER BY n.name) FROM nodes n WHERE n.active_run_id=r.id OR n.desired_run_id=r.id),'[]'),
+            ) ORDER BY n.name) FROM nodes n WHERE n.pool_run_id=r.id OR n.active_run_id=r.id OR n.desired_run_id=r.id),'[]'),
             'evaluators', COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.worker_id)
                 FROM evaluator_performance_latest e WHERE e.run_id=r.id),'[]'),
             'samplers', COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.worker_id)

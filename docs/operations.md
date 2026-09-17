@@ -54,14 +54,24 @@ Runs are created from TOML templates or custom TOML. Run names are human-facing
 and not unique; ambiguous CLI name references fail.
 
 Cloning starts from a persisted snapshot, not from in-memory worker state.
-Pausing a controller clears desired assignments throughout its child tree. Workers
-finish their current work and checkpoint before becoming idle. Unassigning a node
-keeps it unassigned; controllers only redistribute workers explicitly assigned to
-the parent or its children. Reassigning a node to another run removes it from the
-old controller's pool. Use `run resume RUN` or `node auto-assign RUN` to add idle
-workers back. Finished children return their assigned workers to the parent pool. After an
-unexpected worker loss, restarting the same node name restores its controller
-assignment; an explicit unassign or stop clears that intent.
+Workers belong to a root run's pool. Controllers alone choose child placements;
+this rule is shared by campaigns, parameter scans, and hyperparameter tuning.
+Assigning to any child (including nested descendants) resolves to the root pool,
+and the CLI/API response reports that root. Assigning within the same pool and
+role preserves the existing placement; it does not pin a child or restart work.
+A transfer to another family changes pool ownership. Explicit unassignment or
+node shutdown removes membership, so the old controller cannot reclaim the node.
+
+Pausing any member of a run family pauses the root pool. Workers checkpoint and
+become idle while retaining membership. `run resume RUN` / `node auto-assign RUN`
+first resume retained members, then add eligible idle workers up to the requested
+limit. The evaluator limit applies to newly added workers, not retained members.
+Finished children return capacity to their immediate controller; exhausted root
+runs release their pool. Controllers leave surplus workers parked at the parent,
+and multiple samplers can belong to a pool while execution remains exclusive per
+child. The dashboard manages worker pools on root pages and shows child placement
+as an allocation by the parent. Node JSON includes pool, desired, and current
+assignments separately.
 
 Removing a run first unassigns its whole tree and waits for live workers to drain,
 then deletes the records. If controller activity or draining exceeds 60 seconds,

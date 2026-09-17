@@ -40,3 +40,20 @@ BEGIN
         RAISE EXCEPTION 'CPU-time trigger did not account the upgraded node: %', accounted;
     END IF;
 END $$;
+
+
+INSERT INTO runs (name, point_spec, parent_run_id)
+SELECT 'upgrade-child', point_spec, id FROM runs WHERE name='upgrade-survivor';
+UPDATE nodes SET desired_run_id=(SELECT id FROM runs WHERE name='upgrade-child'),
+                 desired_role='evaluator'
+WHERE name='upgrade-worker';
+\ir ../migrations/202609170001_worker_pools.sql
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM nodes n JOIN runs p ON p.id=n.pool_run_id
+        JOIN runs c ON c.id=n.desired_run_id
+        WHERE n.name='upgrade-worker' AND p.name='upgrade-survivor'
+          AND c.name='upgrade-child' AND n.pool_role='evaluator'
+    ) THEN RAISE EXCEPTION 'worker pool migration lost ownership or placement'; END IF;
+END $$;

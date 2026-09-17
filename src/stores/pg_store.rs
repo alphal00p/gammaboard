@@ -90,11 +90,6 @@ fn store_err(message: impl Into<String>) -> StoreError {
 fn map_sqlx(err: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(db_err) = &err {
         if db_err.code().as_deref() == Some("23505") {
-            if db_err.constraint() == Some("idx_nodes_desired_sampler_run") {
-                return StoreError::invalid_input(
-                    "run already has a sampler_aggregator assignment; clear the existing sampler assignment before assigning another node",
-                );
-            }
             if db_err.constraint() == Some("idx_nodes_current_sampler_run") {
                 return StoreError::invalid_input(
                     "run already has a current sampler_aggregator node; clear the existing current sampler before starting another node",
@@ -107,12 +102,13 @@ fn map_sqlx(err: sqlx::Error) -> StoreError {
         if db_err.code().as_deref() == Some("23514")
             && matches!(
                 db_err.constraint(),
-                Some("nodes_desired_assignment_pair_check")
+                Some("nodes_pool_assignment_pair_check")
+                    | Some("nodes_desired_assignment_pair_check")
                     | Some("nodes_current_assignment_pair_check")
             )
         {
             return StoreError::invalid_input(
-                "node desired/current role and run fields must be both set or both null",
+                "node pool/desired/current role and run fields must be both set or both null",
             );
         }
     }
@@ -254,6 +250,21 @@ impl ControlPlaneStore for PgStore {
         Ok(())
     }
 
+    async fn worker_pool_branches(&self, run_id: i32) -> Result<Vec<(i32, i32, bool)>, StoreError> {
+        sqlx::query_as(
+            r#"
+            WITH RECURSIVE branches AS (
+                SELECT id, id AS branch, COALESCE(integration_params->>'run_kind', 'integration') <> 'integration' AS controller FROM runs WHERE parent_run_id=$1
+                UNION ALL SELECT r.id, b.branch, b.controller FROM runs r JOIN branches b ON r.parent_run_id=b.id
+            ) SELECT id, branch, controller FROM branches
+        "#,
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx)
+    }
+
     async fn update_desired_assignments(
         &self,
         updates: &[crate::core::NodeAssignmentUpdate],
@@ -263,21 +274,23 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn upsert_desired_assignment(
+    async fn assign_worker_pool(
         &self,
         node_name: &str,
         role: WorkerRole,
         run_id: i32,
     ) -> Result<(), StoreError> {
-        let updated = queries::upsert_desired_assignment(&self.pool, node_name, role, run_id)
+        match queries::assign_worker_pool(&self.pool, node_name, role, run_id)
             .await
-            .map_err(map_sqlx)?;
-        if updated {
-            Ok(())
-        } else {
-            Err(StoreError::not_found(format!(
+            .map_err(map_sqlx)?
+        {
+            queries::PoolAssignmentOutcome::Assigned => Ok(()),
+            queries::PoolAssignmentOutcome::NodeNotLive => Err(StoreError::not_found(format!(
                 "node '{node_name}' is not live"
-            )))
+            ))),
+            queries::PoolAssignmentOutcome::SamplerOccupied => Err(StoreError::invalid_input(
+                "run already has a sampler_aggregator assignment; remove its existing sampler from the pool before assigning another node",
+            )),
         }
     }
 
@@ -315,6 +328,18 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn pause_worker_pool(&self, run_id: i32) -> Result<u64, StoreError> {
+        let result = sqlx::query("UPDATE nodes SET desired_run_id=NULL, desired_role=NULL, updated_at=now() WHERE pool_run_id=worker_pool_root($1) AND desired_run_id IS NOT NULL")
+            .bind(run_id).execute(&self.pool).await.map_err(map_sqlx)?;
+        Ok(result.rows_affected())
+    }
+
+    async fn resume_worker_pool(&self, run_id: i32) -> Result<u64, StoreError> {
+        let result = sqlx::query("UPDATE nodes SET desired_run_id=pool_run_id, desired_role=pool_role, updated_at=now() WHERE pool_run_id=worker_pool_root($1) AND desired_run_id IS NULL")
+            .bind(run_id).execute(&self.pool).await.map_err(map_sqlx)?;
+        Ok(result.rows_affected())
+    }
+
     async fn finish_run_assignments(&self, run_id: i32) -> Result<u64, StoreError> {
         let result = sqlx::query(r#"
             WITH destination AS (
@@ -324,8 +349,10 @@ impl ControlPlaneStore for PgStore {
             ) UPDATE nodes SET
                 desired_run_id=(SELECT id FROM destination),
                 desired_role=CASE WHEN EXISTS(SELECT 1 FROM destination) THEN desired_role ELSE NULL END,
+                pool_run_id=CASE WHEN EXISTS(SELECT 1 FROM destination) THEN pool_run_id ELSE NULL END,
+                pool_role=CASE WHEN EXISTS(SELECT 1 FROM destination) THEN pool_role ELSE NULL END,
                 updated_at=now()
-            WHERE desired_run_id=$1
+            WHERE desired_run_id=$1 OR pool_run_id=$1
         "#).bind(run_id).execute(&self.pool).await.map_err(map_sqlx)?;
         Ok(result.rows_affected())
     }
@@ -411,9 +438,16 @@ impl ControlPlaneStore for PgStore {
                 "invalid current node assignment row",
             )?;
             out.push(RegisteredNode {
-                name: row.name,
+                name: row.name.clone(),
                 uuid: row.uuid,
                 capabilities: serde_json::from_value(row.capabilities).unwrap_or_default(),
+                pool_assignment: decode_node_assignment(
+                    &row.name,
+                    row.pool_role,
+                    row.pool_run_id,
+                    row.pool_run_name,
+                    "invalid node pool row",
+                )?,
                 desired_assignment,
                 current_assignment,
                 last_seen: row.last_seen,

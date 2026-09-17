@@ -182,9 +182,10 @@ async fn resume_run(store: &PgStore, run_ref: &str, max_evaluators: Option<usize
         print_json(&result);
     } else {
         println!(
-            "resumed run_id={} run_name={} assigned_sampler={} assigned_evaluators={}",
+            "resumed run_id={} run_name={} resumed_nodes={} assigned_sampler={} assigned_evaluators={}",
             result.run_id,
             result.run_name,
+            result.resumed_nodes,
             result.assigned_sampler.as_deref().unwrap_or("none"),
             result.assigned_evaluators.join(",")
         );
@@ -249,7 +250,15 @@ async fn list_runs(store: &PgStore, run_name: Option<&str>) -> Result<()> {
 
 async fn pause_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
     if selection.all {
-        let assignments_cleared = store.clear_all_desired_assignments().await?;
+        let mut assignments_cleared = 0;
+        for run in store
+            .get_all_runs()
+            .await?
+            .into_iter()
+            .filter(|r| r.parent_run_id.is_none())
+        {
+            assignments_cleared += store.pause_worker_pool(run.run_id).await?;
+        }
         if json_output_enabled() {
             print_json(
                 &serde_json::json!({"all": true, "assignments_cleared": assignments_cleared}),
@@ -268,7 +277,7 @@ async fn pause_runs(store: &PgStore, selection: RunSelection) -> Result<()> {
         if !json_output_enabled() {
             println!(
                 "run {} ({}) paused assignments_cleared={}",
-                run.run_id, run.run_name, result.assignments_cleared
+                result.run_id, result.run_name, result.assignments_cleared
             );
         }
         paused.push(result);

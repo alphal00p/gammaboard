@@ -611,7 +611,7 @@ mod tests {
             unreachable!("unused in test")
         }
 
-        async fn upsert_desired_assignment(
+        async fn assign_worker_pool(
             &self,
             _node_name: &str,
             _role: crate::core::WorkerRole,

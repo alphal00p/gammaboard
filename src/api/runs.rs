@@ -508,13 +508,14 @@ pub async fn append_tasks(
     Ok(AppendedTasks { tasks })
 }
 
-/// Pauses a run by clearing desired node assignments for that run.
+/// Pauses the owning pool, retaining membership for resume.
 pub async fn pause_run(
     store: &(impl ControlPlaneStore + crate::core::RunReadStore),
     run_id: i32,
 ) -> Result<PausedRun, ApiError> {
-    let run = load_run_progress(store, run_id).await?;
-    let assignments_cleared = store.clear_desired_assignments_for_run(run_id).await?;
+    let run = crate::api::nodes::worker_pool_run(store, run_id).await?;
+    let run_id = run.run_id;
+    let assignments_cleared = store.pause_worker_pool(run_id).await?;
     Ok(PausedRun {
         run_id,
         run_name: run.run_name,

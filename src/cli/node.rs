@@ -33,7 +33,7 @@ pub enum NodeCommand {
         role: RoleArg,
         run: String,
     },
-    /// Clear a node's desired assignment
+    /// Remove a node from its worker pool and stop its current role
     Unassign { node_name: String },
     /// List registered nodes
     List { node_name: Option<String> },
@@ -265,6 +265,7 @@ struct NodeRow {
     node_name: String,
     node_uuid: String,
     capabilities: String,
+    pool: String,
     run: String,
     role: String,
     last_seen: String,
@@ -277,6 +278,11 @@ fn build_node_rows(nodes: Vec<RegisteredNode>) -> Vec<NodeRow> {
             node_name: node.name,
             node_uuid: node.uuid,
             capabilities: format_capabilities(&node.capabilities),
+            pool: node
+                .pool_assignment
+                .as_ref()
+                .map(|a| format!("{} (#{})", a.run_name.as_deref().unwrap_or("run"), a.run_id))
+                .unwrap_or_else(|| "None".into()),
             run: node
                 .desired_assignment
                 .as_ref()
@@ -307,7 +313,8 @@ fn print_node_table(rows: Vec<NodeRow>) {
         Cell::new("Name").set_alignment(CellAlignment::Center),
         Cell::new("UUID").set_alignment(CellAlignment::Center),
         Cell::new("Capabilities").set_alignment(CellAlignment::Center),
-        Cell::new("Run").set_alignment(CellAlignment::Center),
+        Cell::new("Pool").set_alignment(CellAlignment::Center),
+        Cell::new("Placement").set_alignment(CellAlignment::Center),
         Cell::new("Role").set_alignment(CellAlignment::Center),
         Cell::new("Last Seen").set_alignment(CellAlignment::Center),
     ]);
@@ -317,6 +324,7 @@ fn print_node_table(rows: Vec<NodeRow>) {
             row.node_name,
             row.node_uuid,
             row.capabilities,
+            row.pool,
             row.run,
             row.role,
             row.last_seen,

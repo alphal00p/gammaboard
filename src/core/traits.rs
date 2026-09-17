@@ -50,6 +50,14 @@ pub trait ControlPlaneStore: Send + Sync {
         Ok(())
     }
 
+    /// Descendant run ID -> direct child branch, for hierarchical scheduling.
+    async fn worker_pool_branches(
+        &self,
+        _run_id: i32,
+    ) -> Result<Vec<(i32, i32, bool)>, StoreError> {
+        Ok(Vec::new())
+    }
+
     /// Publish all changes together, without exposing an unassigned interval.
     /// Returns false (with no changes) if a node expired, restarted, or was
     /// reassigned since planning; the controller can retry on its next tick.
@@ -58,7 +66,8 @@ pub trait ControlPlaneStore: Send + Sync {
         updates: &[super::models::NodeAssignmentUpdate],
     ) -> Result<bool, StoreError>;
 
-    async fn upsert_desired_assignment(
+    /// Operator admission: resolve descendants to the root pool; preserve existing placement within the same pool/role.
+    async fn assign_worker_pool(
         &self,
         node_name: &str,
         role: super::models::WorkerRole,
@@ -78,6 +87,13 @@ pub trait ControlPlaneStore: Send + Sync {
     ) -> Result<(), StoreError>;
     async fn clear_current_assignment(&self, node_uuid: &str) -> Result<(), StoreError>;
     async fn clear_desired_assignment(&self, node_name: &str) -> Result<(), StoreError>;
+    /// Suspend scheduling while retaining pool membership for resume.
+    async fn pause_worker_pool(&self, run_id: i32) -> Result<u64, StoreError> {
+        self.clear_desired_assignments_for_run(run_id).await
+    }
+    async fn resume_worker_pool(&self, _run_id: i32) -> Result<u64, StoreError> {
+        Ok(0)
+    }
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError>;
     /// Return a finished child's assigned workers to its still-active parent pool.
     async fn finish_run_assignments(&self, run_id: i32) -> Result<u64, StoreError> {

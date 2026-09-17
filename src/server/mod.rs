@@ -1375,12 +1375,7 @@ async fn auto_assign_run(
         requested_evaluator_limit = payload.max_evaluators,
         "dashboard action completed"
     );
-    json_response(serde_json::json!({
-        "run_id": result.run_id,
-        "sampler_already_assigned": result.sampler_already_assigned,
-        "assigned_sampler": result.assigned_sampler,
-        "assigned_evaluators": result.assigned_evaluators,
-    }))
+    json_response(serde_json::json!(result))
 }
 
 async fn unassign_node(

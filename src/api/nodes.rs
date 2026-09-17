@@ -21,6 +21,7 @@ pub struct AutoAssignResult {
     pub run_id: i32,
     pub run_name: String,
     pub sampler_already_assigned: bool,
+    pub resumed_nodes: u64,
     pub assigned_sampler: Option<String>,
     pub assigned_evaluators: Vec<String>,
 }
@@ -165,6 +166,27 @@ async fn update_node_launch_request_state(
         .await?)
 }
 
+/// External worker operations always address the root pool, never a placement.
+pub async fn worker_pool_run(
+    store: &impl RunReadStore,
+    mut run_id: i32,
+) -> Result<crate::stores::RunProgress, ApiError> {
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(run_id) {
+            return Err(ApiError::Internal("cycle in run parent hierarchy".into()));
+        }
+        let run = store
+            .get_run_progress(run_id)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+        match run.parent_run_id {
+            Some(parent) => run_id = parent,
+            None => return Ok(run),
+        }
+    }
+}
+
 /// Assigns a node to a run/role in desired control-plane state.
 pub async fn assign_node(
     store: &(impl ControlPlaneStore + RunReadStore),
@@ -172,13 +194,9 @@ pub async fn assign_node(
     run_id: i32,
     role: WorkerRole,
 ) -> Result<AssignedNode, ApiError> {
-    let run = store
-        .get_run_progress(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    store
-        .upsert_desired_assignment(node_name, role, run_id)
-        .await?;
+    let run = worker_pool_run(store, run_id).await?;
+    let run_id = run.run_id;
+    store.assign_worker_pool(node_name, role, run_id).await?;
     Ok(AssignedNode {
         node_name: node_name.to_string(),
         run_id,
@@ -303,23 +321,22 @@ pub async fn auto_assign_run(
     run_id: i32,
     max_evaluators: Option<usize>,
 ) -> Result<AutoAssignResult, ApiError> {
-    let run = store
-        .get_run_progress(run_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let run = worker_pool_run(store, run_id).await?;
+    let run_id = run.run_id;
     let run_spec = store
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} spec not found")))?;
+    let resumed_nodes = store.resume_worker_pool(run_id).await?;
     let nodes = store.list_nodes(None).await?;
     let sampler_already_assigned = nodes.iter().any(|node| {
-        node.desired_assignment.as_ref().is_some_and(|assignment| {
+        node.pool_assignment.as_ref().is_some_and(|assignment| {
             assignment.run_id == run_id && assignment.role == WorkerRole::SamplerAggregator
         })
     });
     let mut free_nodes = nodes
         .into_iter()
-        .filter(|node| node.desired_assignment.is_none())
+        .filter(|node| node.pool_assignment.is_none() && node.desired_assignment.is_none())
         .collect::<Vec<_>>();
 
     let evaluator_limit = max_evaluators.unwrap_or(usize::MAX);
@@ -333,7 +350,7 @@ pub async fn auto_assign_run(
         )
     {
         store
-            .upsert_desired_assignment(&node.name, WorkerRole::SamplerAggregator, run_id)
+            .assign_worker_pool(&node.name, WorkerRole::SamplerAggregator, run_id)
             .await?;
         assigned_sampler = Some(node.name);
     }
@@ -344,7 +361,7 @@ pub async fn auto_assign_run(
         evaluator_limit,
     ) {
         store
-            .upsert_desired_assignment(&node.name, WorkerRole::Evaluator, run_id)
+            .assign_worker_pool(&node.name, WorkerRole::Evaluator, run_id)
             .await?;
         assigned_evaluators.push(node.name);
     }
@@ -353,6 +370,7 @@ pub async fn auto_assign_run(
         run_id,
         run_name: run.run_name,
         sampler_already_assigned,
+        resumed_nodes,
         assigned_sampler,
         assigned_evaluators,
     })

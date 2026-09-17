@@ -97,6 +97,8 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
                     .map(WorkerRole::as_str)
                     .unwrap_or("none"),
             ),
+            key_value("pool_run_id", "Worker Pool ID", worker.pool_run_id),
+            key_value("pool_run_name", "Worker Pool", worker.pool_run_name.clone()),
             key_value("desired_run_id", "Desired Run ID", worker.desired_run_id),
             key_value("last_seen", "Last Seen", worker.last_seen),
             key_value(

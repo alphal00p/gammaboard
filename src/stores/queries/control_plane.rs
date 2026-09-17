@@ -3,6 +3,8 @@ use serde_json::Value as JsonValue;
 use sqlx::{PgPool, postgres::PgQueryResult};
 
 const CLEAR_DESIRED_ASSIGNMENT_SET: &str = r#"
+    pool_run_id = NULL,
+    pool_role = NULL,
     desired_run_id = NULL,
     desired_role = NULL,
     updated_at = now()
@@ -20,10 +22,14 @@ pub(crate) struct DesiredAssignmentRaw {
     pub run_id: i32,
 }
 
+#[derive(sqlx::FromRow)]
 pub(crate) struct NodeRaw {
     pub name: String,
     pub uuid: String,
     pub capabilities: JsonValue,
+    pub pool_role: Option<String>,
+    pub pool_run_id: Option<i32>,
+    pub pool_run_name: Option<String>,
     pub desired_role: Option<String>,
     pub desired_run_id: Option<i32>,
     pub desired_run_name: Option<String>,
@@ -66,8 +72,10 @@ async fn clear_expired_assignments<'e>(
         r#"
         UPDATE nodes
         SET
-            desired_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_run_id ELSE NULL END,
-            desired_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_role ELSE NULL END,
+            pool_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN pool_run_id ELSE NULL END,
+            desired_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_run_id ELSE NULL END,
+            pool_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN pool_role ELSE NULL END,
+            desired_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_role ELSE NULL END,
             active_run_id = NULL,
             active_role = NULL,
             updated_at = now()
@@ -92,46 +100,6 @@ fn desired_assignment_raw(
         node_name,
         role,
         run_id,
-    }
-}
-
-#[allow(clippy::type_complexity)]
-fn node_raw(
-    (
-        name,
-        uuid,
-        capabilities,
-        desired_role,
-        desired_run_id,
-        desired_run_name,
-        current_role,
-        current_run_id,
-        current_run_name,
-        last_seen,
-    ): (
-        String,
-        String,
-        JsonValue,
-        Option<String>,
-        Option<i32>,
-        Option<String>,
-        Option<String>,
-        Option<i32>,
-        Option<String>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    ),
-) -> NodeRaw {
-    NodeRaw {
-        name,
-        uuid,
-        capabilities,
-        desired_role,
-        desired_run_id,
-        desired_run_name,
-        current_role,
-        current_run_id,
-        current_run_name,
-        last_seen,
     }
 }
 
@@ -165,14 +133,6 @@ pub(crate) async fn update_desired_assignments(
             return Ok(false);
         }
     }
-    // Release sampler uniqueness constraints before moving a pool. These
-    // intermediate clears are invisible to workers outside the transaction.
-    for update in &ordered {
-        sqlx::query("UPDATE nodes SET desired_run_id = NULL, desired_role = NULL WHERE uuid = $1")
-            .bind(&update.node_uuid)
-            .execute(&mut *tx)
-            .await?;
-    }
     for update in ordered {
         sqlx::query("UPDATE nodes SET desired_run_id = $2, desired_role = $3, updated_at = now() WHERE uuid = $1")
             .bind(&update.node_uuid)
@@ -185,30 +145,58 @@ pub(crate) async fn update_desired_assignments(
     Ok(true)
 }
 
-pub(crate) async fn upsert_desired_assignment(
+pub(crate) enum PoolAssignmentOutcome {
+    Assigned,
+    NodeNotLive,
+    SamplerOccupied,
+}
+
+pub(crate) async fn assign_worker_pool(
     pool: &PgPool,
     node_name: &str,
     role: WorkerRole,
     run_id: i32,
-) -> Result<bool, sqlx::Error> {
-    clear_expired_assignments(pool).await?;
+) -> Result<PoolAssignmentOutcome, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    clear_expired_assignments(&mut *tx).await?;
+    // Serialize admission to standalone sampler slots; controller pools have
+    // unlimited membership and schedule one sampler per executable child.
+    let (root, kind): (i32, Option<String>) = sqlx::query_as(
+        "SELECT id, integration_params->>'run_kind' FROM runs WHERE id=worker_pool_root($1) FOR UPDATE"
+    ).bind(run_id).fetch_one(&mut *tx).await?;
+    if role == WorkerRole::SamplerAggregator
+        && kind.as_deref().unwrap_or("integration") == "integration"
+    {
+        let occupied: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM nodes WHERE pool_run_id=$1 AND pool_role='sampler_aggregator' AND name<>$2)"
+        ).bind(root).bind(node_name).fetch_one(&mut *tx).await?;
+        if occupied {
+            return Ok(PoolAssignmentOutcome::SamplerOccupied);
+        }
+    }
     let result = sqlx::query(
         r#"
-        UPDATE nodes
-        SET
-            desired_run_id = $2,
+        UPDATE nodes SET
+            desired_run_id = CASE WHEN pool_run_id=$2 AND pool_role=$3
+                THEN COALESCE(desired_run_id, $2) ELSE $2 END,
             desired_role = $3,
+            pool_run_id = $2,
+            pool_role = $3,
             updated_at = now()
-        WHERE name = $1
-          AND lease_expires_at > now()
+        WHERE name=$1 AND lease_expires_at > now()
         "#,
     )
     .bind(node_name)
-    .bind(run_id)
+    .bind(root)
     .bind(role.as_str())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(result.rows_affected() > 0)
+    tx.commit().await?;
+    Ok(if result.rows_affected() > 0 {
+        PoolAssignmentOutcome::Assigned
+    } else {
+        PoolAssignmentOutcome::NodeNotLive
+    })
 }
 
 pub(crate) async fn announce_node(
@@ -241,13 +229,23 @@ pub(crate) async fn announce_node(
             lease_expires_at = EXCLUDED.lease_expires_at,
             last_seen = EXCLUDED.last_seen,
             updated_at = EXCLUDED.updated_at,
+            pool_run_id = CASE
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.pool_run_id
+                WHEN nodes.lease_expires_at <= now() THEN NULL
+                ELSE nodes.pool_run_id
+            END,
+            pool_role = CASE
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.pool_role
+                WHEN nodes.lease_expires_at <= now() THEN NULL
+                ELSE nodes.pool_role
+            END,
             desired_run_id = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_run_id
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_run_id
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_run_id
             END,
             desired_role = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.desired_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_role
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_role
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_role
             END,
@@ -317,12 +315,12 @@ pub(crate) async fn clear_desired_assignments_for_run(
         UPDATE nodes
         SET
             {set_clause}
-        WHERE desired_run_id IN (
+        WHERE (desired_run_id IN (
             WITH RECURSIVE tree AS (
                 SELECT id FROM runs WHERE id = $1
                 UNION ALL SELECT r.id FROM runs r JOIN tree t ON r.parent_run_id = t.id
             ) SELECT id FROM tree
-        )
+        ) OR pool_run_id = $1)
         "#,
         set_clause = CLEAR_DESIRED_ASSIGNMENT_SET
     ))
@@ -412,26 +410,13 @@ pub(crate) async fn list_nodes(
     pool: &PgPool,
     node_name: Option<&str>,
 ) -> Result<Vec<NodeRaw>, sqlx::Error> {
-    let rows = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            JsonValue,
-            Option<String>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<i32>,
-            Option<String>,
-            Option<chrono::DateTime<chrono::Utc>>,
-        ),
-    >(
+    let rows = sqlx::query_as::<_, NodeRaw>(
         r#"
         SELECT
             n.name,
             n.uuid,
             n.capabilities,
+            n.pool_role, n.pool_run_id, pr.name AS pool_run_name,
             n.desired_role,
             n.desired_run_id,
             dr.name AS desired_run_name,
@@ -440,6 +425,7 @@ pub(crate) async fn list_nodes(
             cr.name AS current_run_name,
             n.last_seen
         FROM nodes n
+        LEFT JOIN runs pr ON pr.id = n.pool_run_id
         LEFT JOIN runs dr ON dr.id = n.desired_run_id
         LEFT JOIN runs cr ON cr.id = n.active_run_id
         WHERE n.lease_expires_at > now()
@@ -451,7 +437,7 @@ pub(crate) async fn list_nodes(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(node_raw).collect())
+    Ok(rows)
 }
 
 pub(crate) async fn create_node_launch_request(
@@ -718,6 +704,8 @@ pub(crate) async fn request_node_shutdown(
         ON CONFLICT (name) DO UPDATE
         SET
             resume_requested = false,
+            pool_run_id = NULL,
+            pool_role = NULL,
             desired_run_id = NULL,
             desired_role = NULL,
             shutdown_requested_at = now(),
@@ -737,6 +725,8 @@ pub(crate) async fn request_all_nodes_shutdown(pool: &PgPool) -> Result<u64, sql
         UPDATE nodes
         SET
             resume_requested = false,
+            pool_run_id = NULL,
+            pool_role = NULL,
             desired_run_id = NULL,
             desired_role = NULL,
             shutdown_requested_at = now(),
@@ -781,6 +771,8 @@ pub(crate) async fn expire_node_lease(pool: &PgPool, node_uuid: &str) -> Result<
         UPDATE nodes
         SET
             lease_expires_at = now(),
+            pool_run_id = CASE WHEN resume_requested THEN pool_run_id ELSE NULL END,
+            pool_role = CASE WHEN resume_requested THEN pool_role ELSE NULL END,
             desired_run_id = CASE WHEN resume_requested THEN desired_run_id ELSE NULL END,
             desired_role = CASE WHEN resume_requested THEN desired_role ELSE NULL END,
             active_run_id = NULL,
@@ -811,6 +803,8 @@ pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::
         )
         UPDATE nodes
         SET
+            pool_run_id = CASE WHEN pool_run_id IN (SELECT id FROM deleted_runs) THEN NULL ELSE pool_run_id END,
+            pool_role = CASE WHEN pool_run_id IN (SELECT id FROM deleted_runs) THEN NULL ELSE pool_role END,
             desired_run_id = CASE
                 WHEN desired_run_id IN (SELECT id FROM deleted_runs) THEN NULL
                 ELSE desired_run_id
@@ -828,7 +822,8 @@ pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::
                 ELSE active_role
             END,
             updated_at = now()
-        WHERE desired_run_id IN (SELECT id FROM deleted_runs)
+        WHERE pool_run_id IN (SELECT id FROM deleted_runs)
+           OR desired_run_id IN (SELECT id FROM deleted_runs)
            OR active_run_id IN (SELECT id FROM deleted_runs)
         "#,
     )

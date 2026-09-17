@@ -41,41 +41,34 @@ fn task_failure_reason(
 #[derive(Debug, Clone)]
 pub struct ControllerAssignmentPlan {
     pub parent_run_id: i32,
-    pub managed_child_run_ids: Vec<i32>,
     pub selected_child_run_ids: Vec<i32>,
-    pub preserve_selected_assignments: bool,
+    branches: BTreeMap<i32, i32>,
+    controllers: BTreeSet<i32>,
 }
 
 impl ControllerAssignmentPlan {
-    pub fn preserving(parent_run_id: i32, selected_child_run_ids: Vec<i32>) -> Self {
+    pub fn new(parent_run_id: i32, selected_child_run_ids: Vec<i32>) -> Self {
         Self {
             parent_run_id,
-            managed_child_run_ids: selected_child_run_ids.clone(),
+            controllers: BTreeSet::new(),
+            branches: selected_child_run_ids.iter().map(|id| (*id, *id)).collect(),
             selected_child_run_ids,
-            preserve_selected_assignments: true,
-        }
-    }
-
-    pub fn replacing(
-        parent_run_id: i32,
-        managed_child_run_ids: Vec<i32>,
-        selected_child_run_ids: Vec<i32>,
-    ) -> Self {
-        Self {
-            parent_run_id,
-            managed_child_run_ids,
-            selected_child_run_ids,
-            preserve_selected_assignments: false,
         }
     }
 }
 
 pub async fn apply_controller_assignment_plan(
     store: &impl ControlPlaneStore,
-    plan: ControllerAssignmentPlan,
+    mut plan: ControllerAssignmentPlan,
 ) -> Result<(), StoreError> {
     // Plan from one snapshot, then publish only actual changes in one transaction.
     // A stale snapshot is harmless: the next controller tick retries it.
+    for (id, branch, controller) in store.worker_pool_branches(plan.parent_run_id).await? {
+        plan.branches.insert(id, branch);
+        if controller {
+            plan.controllers.insert(branch);
+        }
+    }
     let nodes = store.list_nodes(None).await?;
     let updates = controller_assignment_updates(&nodes, plan);
     store.update_desired_assignments(&updates).await?;
@@ -86,22 +79,32 @@ fn controller_assignment_updates(
     nodes: &[RegisteredNode],
     plan: ControllerAssignmentPlan,
 ) -> Vec<crate::core::NodeAssignmentUpdate> {
-    let managed = plan
-        .managed_child_run_ids
-        .into_iter()
-        .collect::<BTreeSet<_>>();
     let mut selected_seen = BTreeSet::new();
+    // Compare placements at this controller's level. Preserve deeper placements
+    // when their direct branch remains selected; only that branch schedules them.
+    let original = nodes;
+    let normalized = nodes
+        .iter()
+        .cloned()
+        .map(|mut node| {
+            if let Some(a) = node.desired_assignment.as_mut() {
+                a.run_id = plan.branches.get(&a.run_id).copied().unwrap_or(a.run_id);
+            }
+            node
+        })
+        .collect::<Vec<_>>();
+    let nodes = &normalized;
     let selected = plan
         .selected_child_run_ids
         .into_iter()
-        .filter(|run_id| managed.contains(run_id) && selected_seen.insert(*run_id))
+        .filter(|run_id| plan.branches.contains_key(run_id) && selected_seen.insert(*run_id))
         .collect::<Vec<_>>();
     let reusable_assignments = nodes
         .iter()
         .filter_map(|node| node.desired_assignment.as_ref())
         .filter(|assignment| {
             assignment.run_id == plan.parent_run_id
-                || (!plan.preserve_selected_assignments && managed.contains(&assignment.run_id))
+                || plan.branches.contains_key(&assignment.run_id)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -118,23 +121,16 @@ fn controller_assignment_updates(
     }
     if !selected.is_empty() {
         let selected_set = selected.iter().copied().collect::<BTreeSet<_>>();
-        let mut activated = if plan.preserve_selected_assignments {
-            child_sampler_run_ids(nodes, &selected_set)
-        } else {
-            BTreeSet::new()
-        };
-        // Only explicitly assigned nodes belong to this controller. Taking all
-        // idle nodes would undo operator unassign/pause and steal other pools.
-        if !plan.preserve_selected_assignments {
-            // Keep samplers on children that are still selected, even when
-            // priority order changes or another child leaves the selected set.
-            for assignment in &reusable_assignments {
-                if assignment.role == WorkerRole::SamplerAggregator
-                    && selected_set.contains(&assignment.run_id)
-                    && activated.insert(assignment.run_id)
-                {
-                    desired.insert(assignment.node_name.clone(), assignment.clone());
-                }
+        let mut activated = BTreeSet::new();
+        // Keep samplers on children that are still selected, even when
+        // priority order changes or another child leaves the selected set.
+        for assignment in &reusable_assignments {
+            if assignment.role == WorkerRole::SamplerAggregator
+                && selected_set.contains(&assignment.run_id)
+                && (activated.insert(assignment.run_id)
+                    || plan.controllers.contains(&assignment.run_id))
+            {
+                desired.insert(assignment.node_name.clone(), assignment.clone());
             }
         }
         let mut sampler_nodes = reusable_assignments
@@ -156,7 +152,11 @@ fn controller_assignment_updates(
             .copied()
             .filter(|run_id| !activated.contains(run_id))
             .collect::<Vec<_>>();
-        for (run_id, node_name) in children_needing_sampler.into_iter().zip(sampler_nodes) {
+        let mut sampler_nodes = sampler_nodes.into_iter();
+        for (run_id, node_name) in children_needing_sampler
+            .into_iter()
+            .zip(sampler_nodes.by_ref())
+        {
             desired.insert(
                 node_name.to_owned(),
                 DesiredAssignment {
@@ -167,6 +167,28 @@ fn controller_assignment_updates(
                 },
             );
             activated.insert(run_id);
+        }
+        // A nested controller can schedule several samplers below its branch.
+        // Fill each selected branch first, then distribute surplus to controllers.
+        let nested = selected
+            .iter()
+            .copied()
+            .filter(|id| plan.controllers.contains(id))
+            .collect::<Vec<_>>();
+        if !nested.is_empty() {
+            for (index, node_name) in sampler_nodes.enumerate() {
+                let run_id = nested[index % nested.len()];
+                desired.insert(
+                    node_name.to_owned(),
+                    DesiredAssignment {
+                        node_name: node_name.to_owned(),
+                        role: WorkerRole::SamplerAggregator,
+                        run_id,
+                        run_name: None,
+                    },
+                );
+                activated.insert(run_id);
+            }
         }
         // Stable evaluator distribution depends on membership, not priority.
         let activated = activated.into_iter().collect::<Vec<_>>();
@@ -184,23 +206,26 @@ fn controller_assignment_updates(
             }
         }
     }
-    if !selected.is_empty() {
-        // Retain pool ownership while waiting for a sampler or for capacity in
-        // another child. Freeing these nodes would lose them on the next tick.
-        for assignment in &reusable_assignments {
-            desired
-                .entry(assignment.node_name.clone())
-                .or_insert_with(|| DesiredAssignment {
-                    run_id: plan.parent_run_id,
-                    run_name: None,
-                    ..assignment.clone()
-                });
-        }
+    // Retain pool ownership while waiting for a sampler or for capacity in
+    // another child. Freeing these nodes would lose them on the next tick.
+    for assignment in &reusable_assignments {
+        desired
+            .entry(assignment.node_name.clone())
+            .or_insert_with(|| DesiredAssignment {
+                run_id: plan.parent_run_id,
+                run_name: None,
+                ..assignment.clone()
+            });
     }
-    nodes
+    original
         .iter()
         .filter_map(|node| {
-            let next = desired.remove(&node.name);
+            let mut next = desired.remove(&node.name);
+            if let (Some(before), Some(after)) = (&node.desired_assignment, &mut next)
+                && plan.branches.get(&before.run_id) == Some(&after.run_id)
+            {
+                after.run_id = before.run_id;
+            }
             let target = |a: &DesiredAssignment| (a.role, a.run_id);
             (node.desired_assignment.as_ref().map(target) != next.as_ref().map(target)).then(|| {
                 crate::core::NodeAssignmentUpdate {
@@ -210,24 +235,6 @@ fn controller_assignment_updates(
                 }
             })
         })
-        .collect()
-}
-
-fn child_sampler_run_ids(nodes: &[RegisteredNode], child_run_ids: &BTreeSet<i32>) -> BTreeSet<i32> {
-    nodes
-        .iter()
-        .flat_map(|node| {
-            [
-                node.desired_assignment.as_ref(),
-                node.current_assignment.as_ref(),
-            ]
-        })
-        .flatten()
-        .filter(|assignment| {
-            assignment.role == WorkerRole::SamplerAggregator
-                && child_run_ids.contains(&assignment.run_id)
-        })
-        .map(|assignment| assignment.run_id)
         .collect()
 }
 
@@ -393,11 +400,18 @@ pub async fn load_published_child_result(
 mod tests {
     use super::*;
 
+    fn plan(parent: i32, managed: Vec<i32>, selected: Vec<i32>) -> ControllerAssignmentPlan {
+        let mut plan = ControllerAssignmentPlan::new(parent, selected);
+        plan.branches = managed.into_iter().map(|id| (id, id)).collect();
+        plan
+    }
+
     fn node(name: &str, role: WorkerRole, run_id: i32) -> RegisteredNode {
         RegisteredNode {
             name: name.into(),
             uuid: name.into(),
             capabilities: Default::default(),
+            pool_assignment: None,
             desired_assignment: Some(DesiredAssignment {
                 node_name: name.into(),
                 role,
@@ -416,13 +430,7 @@ mod tests {
             node("e1", WorkerRole::Evaluator, 2),
             node("e2", WorkerRole::Evaluator, 2),
         ];
-        assert!(
-            controller_assignment_updates(
-                &nodes,
-                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![2])
-            )
-            .is_empty()
-        );
+        assert!(controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![2])).is_empty());
     }
 
     #[test]
@@ -434,11 +442,7 @@ mod tests {
             node("e2", WorkerRole::Evaluator, 3),
         ];
         assert!(
-            controller_assignment_updates(
-                &nodes,
-                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3, 2, 3])
-            )
-            .is_empty()
+            controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![3, 2, 3])).is_empty()
         );
     }
 
@@ -447,13 +451,7 @@ mod tests {
         let mut idle = node("idle", WorkerRole::Evaluator, 2);
         idle.desired_assignment = None;
         let nodes = vec![node("sampler", WorkerRole::SamplerAggregator, 2), idle];
-        assert!(
-            controller_assignment_updates(
-                &nodes,
-                ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![2])
-            )
-            .is_empty()
-        );
+        assert!(controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![2])).is_empty());
     }
 
     #[test]
@@ -462,10 +460,7 @@ mod tests {
             node("s1", WorkerRole::SamplerAggregator, 2),
             node("s2", WorkerRole::SamplerAggregator, 3),
         ];
-        let updates = controller_assignment_updates(
-            &nodes,
-            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3]),
-        );
+        let updates = controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![3]));
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].node_uuid, "s1");
         assert_eq!(updates[0].desired.as_ref().unwrap().run_id, 1);
@@ -474,10 +469,7 @@ mod tests {
     #[test]
     fn new_samplers_follow_selection_priority() {
         let nodes = vec![node("s", WorkerRole::SamplerAggregator, 1)];
-        let updates = controller_assignment_updates(
-            &nodes,
-            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3, 2]),
-        );
+        let updates = controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![3, 2]));
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].desired.as_ref().unwrap().run_id, 3);
     }
@@ -489,10 +481,7 @@ mod tests {
             node("e", WorkerRole::Evaluator, 2),
             node("other", WorkerRole::Evaluator, 9),
         ];
-        let moved = controller_assignment_updates(
-            &nodes,
-            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![3]),
-        );
+        let moved = controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![3]));
         assert_eq!(moved.len(), 2);
         assert!(
             moved
@@ -500,12 +489,13 @@ mod tests {
                 .all(|u| u.expected.as_ref().unwrap().run_id == 2
                     && u.desired.as_ref().unwrap().run_id == 3)
         );
-        let stopped = controller_assignment_updates(
-            &nodes,
-            ControllerAssignmentPlan::replacing(1, vec![2, 3], vec![]),
-        );
+        let stopped = controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![]));
         assert_eq!(stopped.len(), 2);
-        assert!(stopped.iter().all(|u| u.desired.is_none()));
+        assert!(
+            stopped
+                .iter()
+                .all(|u| u.desired.as_ref().unwrap().run_id == 1)
+        );
     }
 
     #[test]
@@ -516,10 +506,8 @@ mod tests {
             node("s2", WorkerRole::SamplerAggregator, 1),
             node("e2", WorkerRole::Evaluator, 1),
         ];
-        let updates = controller_assignment_updates(
-            &nodes,
-            ControllerAssignmentPlan::preserving(1, vec![2, 3]),
-        );
+        let updates =
+            controller_assignment_updates(&nodes, ControllerAssignmentPlan::new(1, vec![2, 3]));
         assert_eq!(updates.len(), 2);
         assert!(
             updates

@@ -189,11 +189,7 @@ where
             self.persist_output(&output).await?;
             apply_controller_assignment_plan(
                 &self.store,
-                ControllerAssignmentPlan::replacing(
-                    self.run_id,
-                    states.iter().map(|child| child.run_id).collect(),
-                    Vec::new(),
-                ),
+                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
             )
             .await?;
             self.store.fail_run_task(self.task.id, &reason).await?;
@@ -220,11 +216,7 @@ where
             }
             apply_controller_assignment_plan(
                 &self.store,
-                ControllerAssignmentPlan::replacing(
-                    self.run_id,
-                    states.iter().map(|child| child.run_id).collect(),
-                    Vec::new(),
-                ),
+                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
             )
             .await?;
             self.store.complete_run_task(self.task.id).await?;
@@ -279,11 +271,7 @@ where
 
         apply_controller_assignment_plan(
             &self.store,
-            ControllerAssignmentPlan::replacing(
-                self.run_id,
-                states.iter().map(|child| child.run_id).collect(),
-                selected.clone(),
-            ),
+            ControllerAssignmentPlan::new(self.run_id, selected.clone()),
         )
         .await?;
         let output = build_output(
