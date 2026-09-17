@@ -57,7 +57,33 @@
         "/run/opengl-driver"
       ];
 
-      # Common arguments can be set here to avoid repeating them later
+      # Apptainer probes user namespaces by executing /bin/true. NixOS only
+      # provides /bin/sh, so supply the conventional paths in a private mount
+      # namespace for both image builds and execution, without changing the host.
+      apptainerBin = pkgs.runCommand "apptainer-compat-bin" {} ''
+        mkdir -p "$out"
+        ln -s ${pkgs.coreutils}/bin/true "$out/true"
+        ln -s ${pkgs.bash}/bin/bash "$out/bash"
+        ln -s ${pkgs.bash}/bin/sh "$out/sh"
+      '';
+      apptainerCompat = pkgs.writeShellScriptBin "apptainer" ''
+        set -eu
+        # The packaged config binds /etc/localtime even on hosts without it.
+        # Keep the image's timezone when there is no host timezone file to bind.
+        if [ ! -e /etc/localtime ]; then
+          export APPTAINER_NO_MOUNT="''${APPTAINER_NO_MOUNT:+$APPTAINER_NO_MOUNT,}/etc/localtime"
+        fi
+        if [ -x /bin/true ]; then
+          exec ${pkgs.apptainer}/bin/apptainer "$@"
+        fi
+        exec ${pkgs.util-linux}/bin/unshare --user --map-root-user --mount \
+          ${pkgs.bash}/bin/bash -eu -c '
+            ${pkgs.util-linux}/bin/mount --make-rprivate /
+            ${pkgs.util-linux}/bin/mount --bind ${apptainerBin} /bin
+            exec ${pkgs.apptainer}/bin/apptainer "$@"
+          ' apptainer "$@"
+      '';
+
     in {
       devShells.default = craneLib.devShell {
 
@@ -114,7 +140,7 @@
           virtualenv
           postgresql
           nginx
-          apptainer
+          apptainerCompat
           sqlx-cli
           nodejs
           python313Packages.six

@@ -211,6 +211,17 @@ does not affect them. Set
 cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
 ```
 
+The Apptainer E2E test builds and runs a container image. In the Nix development
+shell, `apptainer` uses a compatibility wrapper when `/bin/true` is missing:
+it supplies `/bin/true`, `/bin/sh`, and `/bin/bash` inside a private user/mount
+namespace for both `build` and `exec`. The host filesystem is unchanged, and
+files created in the namespace remain owned by the invoking host user. This
+requires working unprivileged user namespaces; it does not bypass a host policy
+that disables them. Hosts with `/bin/true` skip the namespace wrapper. If the
+host has no `/etc/localtime`, the wrapper also disables that default bind using
+[`APPTAINER_NO_MOUNT`](https://apptainer.org/docs/user/main/appendix.html),
+preserving any existing exclusions and leaving the image's timezone in place.
+
 The GammaLoop/MadNIS E2E test requires a generated state compatible with the
 pinned GammaLoop revision and is separate:
 
