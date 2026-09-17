@@ -122,6 +122,13 @@ pub(super) struct RetryState {
     pub(super) consecutive_failures: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartErrorDisposition {
+    Propagate,
+    Retry,
+    Counted { blocked: bool },
+}
+
 impl RetryState {
     fn reset_for_desired_target_change(&mut self, desired_target: Option<RoleTarget>) {
         if desired_target != self.failure_target {
@@ -155,6 +162,23 @@ impl RetryState {
             return true;
         }
         false
+    }
+
+    fn note_start_error(
+        &mut self,
+        target: RoleTarget,
+        error: &StoreError,
+        max_consecutive_failures: u32,
+    ) -> StartErrorDisposition {
+        if error.is_database_error() {
+            StartErrorDisposition::Propagate
+        } else if error.is_retry_activation() {
+            StartErrorDisposition::Retry
+        } else {
+            StartErrorDisposition::Counted {
+                blocked: self.note_failure(target, max_consecutive_failures),
+            }
+        }
     }
 }
 
@@ -605,5 +629,40 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                 .instrument(span),
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retryable_activation_errors_do_not_consume_start_failure_budget() {
+        let target = RoleTarget {
+            role: WorkerRole::SamplerAggregator,
+            run_id: 7,
+        };
+        let mut state = RetryState::default();
+        let retry = StoreError::retry_activation("checkpoint changed");
+
+        for _ in 0..10 {
+            assert_eq!(
+                state.note_start_error(target, &retry, 3),
+                StartErrorDisposition::Retry
+            );
+        }
+        assert_eq!(state.consecutive_failures, 0);
+        assert_eq!(state.failure_target, None);
+        assert_eq!(state.blocked_target, None);
+
+        let permanent = StoreError::store("invalid sampler configuration");
+        assert_eq!(
+            state.note_start_error(target, &permanent, 2),
+            StartErrorDisposition::Counted { blocked: false }
+        );
+        assert_eq!(
+            state.note_start_error(target, &permanent, 2),
+            StartErrorDisposition::Counted { blocked: true }
+        );
     }
 }

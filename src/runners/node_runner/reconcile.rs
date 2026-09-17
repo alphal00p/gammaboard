@@ -1,5 +1,5 @@
 use super::{
-    ActiveRoleRunner, ActiveWorker, NodeRunner, NodeRunnerStore, RoleTarget,
+    ActiveRoleRunner, ActiveWorker, NodeRunner, NodeRunnerStore, RoleTarget, StartErrorDisposition,
     role_runner::RoleRunner,
 };
 use crate::core::StoreResultExt;
@@ -191,18 +191,39 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         {
             Ok(Some(runner)) => Ok(Some((target, runner))),
             Ok(None) => Ok(None),
-            Err(err) if err.is_database_error() => Err(err),
-            Err(err) if err.is_retry_activation() => {
-                warn!(
-                    role = %target.role,
-                    run_id = target.run_id,
-                    error = %err,
-                    "runtime state changed during role activation; retrying"
-                );
-                Ok(None)
-            }
             Err(err) => {
-                let now_blocked = self.note_start_failure(target);
+                let disposition = self.retry_state.note_start_error(
+                    target,
+                    &err,
+                    self.config.max_consecutive_start_failures,
+                );
+                if disposition == StartErrorDisposition::Propagate {
+                    return Err(err);
+                }
+                if disposition == StartErrorDisposition::Retry {
+                    warn!(
+                        role = %target.role,
+                        run_id = target.run_id,
+                        error = %err,
+                        "runtime state changed during role activation; retrying"
+                    );
+                    return Ok(None);
+                }
+                let StartErrorDisposition::Counted {
+                    blocked: now_blocked,
+                } = disposition
+                else {
+                    unreachable!("handled non-counted start errors above")
+                };
+                if now_blocked {
+                    warn!(
+                        role = %target.role,
+                        run_id = target.run_id,
+                        consecutive_failures = self.retry_state.consecutive_failures,
+                        max_consecutive_start_failures = self.config.max_consecutive_start_failures,
+                        "aborting role runner restarts after repeated failures; waiting for desired assignment change"
+                    );
+                }
                 error!(
                     role = %target.role,
                     run_id = target.run_id,

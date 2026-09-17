@@ -4725,6 +4725,229 @@ seed = 2
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_cli_campaign_recovers_from_sampler_and_evaluator_loss() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    harness.start_nodes(&["recovery-a", "recovery-b"]).await?;
+
+    let config = temp_config(
+        r#"
+kind = "integration_campaign"
+name = "campaign-worker-recovery-e2e"
+
+[measurement]
+
+[stop_condition]
+max_total_samples = 1024
+
+[allocation]
+algorithm = "largest_variance"
+max_active_runs = 1
+allocation_window_samples = 64
+min_samples_per_child = 64
+
+[[children]]
+name = "left"
+coefficient = 2.0
+
+[children.run]
+name = "campaign-recovery-left"
+
+[children.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+timing = { per_sample_seconds = 0.01 }
+
+[children.run.sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 20
+performance_snapshot_interval_ms = 20
+
+[children.run.sampler_aggregator_runner_params.queue]
+queue_buffer = 64.0
+max_queue_size = 64
+max_batch_size = 16
+target_batch_eval_ms = 50.0
+
+[[children.run.task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 512 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
+
+[[children]]
+name = "right"
+coefficient = -0.5
+
+[children.run]
+name = "campaign-recovery-right"
+
+[children.run.evaluator]
+kind = "unit"
+continuous_dims = 1
+timing = { per_sample_seconds = 0.01 }
+
+[children.run.sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 20
+performance_snapshot_interval_ms = 20
+
+[children.run.sampler_aggregator_runner_params.queue]
+queue_buffer = 64.0
+max_queue_size = 64
+max_batch_size = 16
+target_batch_eval_ms = 50.0
+
+[[children.run.task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 512 }
+measurement = { quantity = "central_value" }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+"#,
+    );
+
+    harness.add_run(&config);
+    let parent_id = harness.run_id("campaign-worker-recovery-e2e").await?;
+    harness
+        .cli()
+        .args(["node", "auto-assign", &parent_id.to_string()])
+        .assert()
+        .success();
+
+    harness
+        .wait_for(
+            "campaign has an in-flight evaluator batch before worker loss",
+            Duration::from_secs(30),
+            || async {
+                let ready: bool = sqlx::query_scalar(
+                    r#"
+                    SELECT
+                        (SELECT count(*) FROM nodes n
+                         JOIN runs r ON r.id = n.active_run_id
+                         WHERE r.parent_run_id = $1
+                           AND n.lease_expires_at > now()
+                           AND n.active_role IN ('sampler_aggregator', 'evaluator')) = 2
+                        AND EXISTS(
+                            SELECT 1 FROM batches b
+                            JOIN runs r ON r.id = b.run_id
+                            WHERE r.parent_run_id = $1 AND b.status = 'claimed'
+                        )
+                        AND (SELECT COALESCE(sum(r.nr_completed_samples), 0)
+                             FROM runs r WHERE r.parent_run_id = $1) >= 64
+                    "#,
+                )
+                .bind(parent_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(ready)
+            },
+        )
+        .await?;
+
+    let lost_nodes: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT n.name
+        FROM nodes n
+        JOIN runs r ON r.id = n.active_run_id
+        WHERE r.parent_run_id = $1
+          AND n.lease_expires_at > now()
+          AND n.active_role IN ('sampler_aggregator', 'evaluator')
+        ORDER BY n.name
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_all(&harness.pool)
+    .await?;
+    anyhow::ensure!(lost_nodes.len() == 2, "expected two active child workers");
+
+    for node in &lost_nodes {
+        harness.kill_child(node).await?;
+        sqlx::query(
+            "UPDATE nodes SET lease_expires_at = now() - interval '1 second' WHERE name=$1",
+        )
+        .bind(node)
+        .execute(&harness.pool)
+        .await?;
+    }
+    for node in &lost_nodes {
+        harness.start_node(node).await?;
+    }
+
+    wait_for_task_state(&harness, parent_id, "completed", Duration::from_secs(120)).await?;
+
+    let failed_tasks: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*)
+        FROM run_tasks t
+        JOIN runs r ON r.id = t.run_id
+        WHERE (r.id = $1 OR r.parent_run_id = $1) AND t.state = 'failed'
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(failed_tasks, 0);
+
+    let child_progress: (i64, i64, i64) = sqlx::query_as(
+        r#"
+        SELECT count(*), sum(nr_produced_samples)::bigint, sum(nr_completed_samples)::bigint
+        FROM runs
+        WHERE parent_run_id = $1
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(child_progress, (2, 1024, 1024));
+
+    let open_batches: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*)
+        FROM batches b
+        JOIN runs r ON r.id = b.run_id
+        WHERE r.parent_run_id = $1 AND b.status IN ('pending', 'claimed')
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(open_batches, 0);
+
+    let output: JsonValue = sqlx::query_scalar(
+        "SELECT controller_output FROM run_tasks WHERE run_id=$1 AND task->>'kind'='integration_campaign'",
+    )
+    .bind(parent_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(
+        output["combined_measurement"]["results"][0]["value"],
+        json!(1.5)
+    );
+    assert_eq!(output["children"].as_array().map(Vec::len), Some(2));
+    assert!(output["result_snapshot_id"].is_string());
+
+    let inconsistent_progress: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM runtime_logs l
+            JOIN runs r ON r.id = l.run_id
+            WHERE (r.id = $1 OR r.parent_run_id = $1)
+              AND l.fields::text LIKE '%run_tasks_progress_check%'
+        )
+        "#,
+    )
+    .bind(parent_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert!(!inconsistent_progress);
+
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_parameter_scan_creates_child_runs_and_collects_measurements()
 -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
