@@ -1,8 +1,8 @@
 use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
-    PlotSeries, TickBreakdownSegment, format_bytes_human, history_x, key_value, key_value_panel,
-    key_value_with_tone, merge_panel_state, multi_timeseries_panel, replace_panel,
+    PlotSeries, PlotXAxis, TickBreakdownSegment, format_bytes_human, history_x, key_value,
+    key_value_panel, key_value_with_tone, merge_panel_state, multi_timeseries_panel, replace_panel,
     sized_panel_spec, tick_breakdown_panel,
 };
 use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
@@ -624,8 +624,53 @@ fn sampler_current_panels(
                 ),
                 key_value(
                     "completed_fetch_utilization",
-                    "Result Prefetch Occupancy",
+                    "Result Fetch Slot Occupancy",
                     runtime.queue.completed_fetch_utilization,
+                ),
+                key_value(
+                    "completed_fetch_mean_ms",
+                    "Result Fetch Mean (ms)",
+                    runtime.queue.rolling.fetch_completed_ms.mean,
+                ),
+                key_value(
+                    "completed_fetch_mean_batches",
+                    "Results per Fetch",
+                    runtime.queue.rolling.fetch_completed_batches.mean,
+                ),
+                key_value(
+                    "blocking_batch",
+                    "First Unfinished Batch",
+                    runtime
+                        .queue
+                        .blocker
+                        .as_ref()
+                        .map(|b| b.batch_id.to_string()),
+                ),
+                key_value(
+                    "blocking_batch_status",
+                    "Unfinished Batch Status",
+                    runtime.queue.blocker.as_ref().map(|b| b.status.clone()),
+                ),
+                key_value(
+                    "blocking_worker",
+                    "Claimed By",
+                    runtime
+                        .queue
+                        .blocker
+                        .as_ref()
+                        .and_then(|b| b.node_name.clone()),
+                ),
+                key_value(
+                    "blocking_claim_age_seconds",
+                    "Claim Age (s)",
+                    runtime
+                        .queue
+                        .blocker
+                        .as_ref()
+                        .and_then(|b| b.claimed_at)
+                        .map(|at| {
+                            (chrono::Utc::now() - at).num_milliseconds().max(0) as f64 / 1000.0
+                        }),
                 ),
                 key_value(
                     "produced_samples_total",
@@ -922,16 +967,19 @@ fn sampler_completed_throughput_panel(
     let instant_points = instant_throughput_points_from_cumulative(&samples);
     let latest_instant = instant_points.last().map(|point| point.y).unwrap_or(0.0);
     (
-        Some(multi_timeseries_panel(
-            "sampler_completed_samples_per_second",
-            vec![PlotSeries {
-                id: "completed_samples_per_second".to_string(),
-                label: "Completed Samples / Sec".to_string(),
-                color: Some("#2563eb".to_string()),
-                smooth: Some(true),
-                points: instant_points,
-            }],
-        )),
+        Some(
+            multi_timeseries_panel(
+                "sampler_completed_samples_per_second",
+                vec![PlotSeries {
+                    id: "completed_samples_per_second".to_string(),
+                    label: "Completed Samples / Sec".to_string(),
+                    color: Some("#2563eb".to_string()),
+                    smooth: Some(true),
+                    points: instant_points,
+                }],
+            )
+            .with_x_axis(PlotXAxis::WallTime),
+        ),
         latest_instant,
     )
 }
@@ -966,39 +1014,42 @@ fn sampler_utilization_history_panel(
         }
     }
 
-    Some(multi_timeseries_panel(
-        "sampler_utilization_history",
-        vec![
-            PlotSeries {
-                id: "sampler_tick_busy_ratio".to_string(),
-                label: "Sampler Busy".to_string(),
-                color: Some("#2563eb".to_string()),
-                smooth: Some(true),
-                points: sampler_tick_points,
-            },
-            PlotSeries {
-                id: "insert_task_utilization".to_string(),
-                label: "Insert Utilization".to_string(),
-                color: Some("#ea580c".to_string()),
-                smooth: Some(true),
-                points: insert_task_points,
-            },
-            PlotSeries {
-                id: "completed_fetch_utilization".to_string(),
-                label: "Result Prefetch Occupancy".to_string(),
-                color: Some("#16a34a".to_string()),
-                smooth: Some(true),
-                points: completed_fetch_points,
-            },
-            PlotSeries {
-                id: "avg_evaluator_utilization".to_string(),
-                label: "Evaluator Busy".to_string(),
-                color: Some("#7c3aed".to_string()),
-                smooth: Some(true),
-                points: evaluator_utilization_points,
-            },
-        ],
-    ))
+    Some(
+        multi_timeseries_panel(
+            "sampler_utilization_history",
+            vec![
+                PlotSeries {
+                    id: "sampler_tick_busy_ratio".to_string(),
+                    label: "Sampler Busy".to_string(),
+                    color: Some("#2563eb".to_string()),
+                    smooth: Some(true),
+                    points: sampler_tick_points,
+                },
+                PlotSeries {
+                    id: "insert_task_utilization".to_string(),
+                    label: "Insert Utilization".to_string(),
+                    color: Some("#ea580c".to_string()),
+                    smooth: Some(true),
+                    points: insert_task_points,
+                },
+                PlotSeries {
+                    id: "completed_fetch_utilization".to_string(),
+                    label: "Result Fetch Slot Occupancy".to_string(),
+                    color: Some("#16a34a".to_string()),
+                    smooth: Some(true),
+                    points: completed_fetch_points,
+                },
+                PlotSeries {
+                    id: "avg_evaluator_utilization".to_string(),
+                    label: "Evaluator Busy".to_string(),
+                    color: Some("#7c3aed".to_string()),
+                    smooth: Some(true),
+                    points: evaluator_utilization_points,
+                },
+            ],
+        )
+        .with_x_axis(PlotXAxis::WallTime),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -21,6 +21,25 @@ BEGIN
     END IF;
 END $$;
 
+-- A deployment can contain both old claims and retained completed retry rows.
+INSERT INTO batches (run_id, task_id, batch_size, status, retry_count, claimed_by_node_uuid)
+SELECT run_id, id, 250, 'claimed', 0, 'upgrade-worker-uuid'
+FROM run_tasks WHERE name='active-task';
+INSERT INTO batches (run_id, task_id, batch_size, status, retry_count)
+SELECT run_id, id, 250, 'completed', 1
+FROM run_tasks WHERE name='active-task';
+INSERT INTO batch_results (batch_id, batch_observable, completed_at)
+SELECT id, '{"empty":{}}', now() FROM batches WHERE status='completed';
+
+\ir ../migrations/202609230001_batch_claim_tokens.sql
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM batches WHERE claim_token IS NULL) <> 2
+       OR (SELECT count(*) FROM batch_results) <> 1 THEN
+        RAISE EXCEPTION 'claim-token migration changed existing batches or results';
+    END IF;
+END $$;
+
 ALTER TABLE nodes DISABLE TRIGGER nodes_account_cpu_time;
 UPDATE nodes
 SET cpu_time_accounted_at = now() - interval '2 seconds'

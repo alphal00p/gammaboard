@@ -295,7 +295,7 @@ async fn claim_batch_requires_active_assignment() {
         .expect("insert batch");
 
     let claimed = store
-        .claim_batch(run_id, &node_uuid)
+        .claim_batch(run_id, &node_uuid, &unique_id("claim"))
         .await
         .expect("claim batch");
     assert!(
@@ -431,7 +431,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         .expect("insert batch");
 
     let unassigned_claim = store
-        .claim_batch(run_id, &node_uuid)
+        .claim_batch(run_id, &node_uuid, &unique_id("claim"))
         .await
         .expect("claim batch while unassigned");
     assert!(
@@ -449,7 +449,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         .expect("clear current assignment");
 
     let inactive_claim = store
-        .claim_batch(run_id, &node_uuid)
+        .claim_batch(run_id, &node_uuid, &unique_id("claim"))
         .await
         .expect("claim batch while inactive");
     assert!(
@@ -511,7 +511,7 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
         .expect("insert batches");
 
     let claimed = store
-        .claim_batch(run_id, &node_uuid)
+        .claim_batch(run_id, &node_uuid, &unique_id("claim"))
         .await
         .expect("claim batch");
     assert!(
@@ -647,8 +647,22 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
         .await
         .expect("insert batch");
 
+    let node = unique_id("failure-worker");
+    store
+        .announce_node(&node, &node, &Default::default())
+        .await
+        .unwrap();
+    store
+        .set_current_assignment(&node, WorkerRole::Evaluator, run_id)
+        .await
+        .unwrap();
+    let claim = store
+        .claim_batch(run_id, &node, &unique_id("claim"))
+        .await
+        .unwrap()
+        .unwrap();
     let outcome = store
-        .fail_batch(batch_ids[0], "forced failure", 1)
+        .fail_batch(batch_ids[0], &node, &claim.claim_token, "forced failure", 1)
         .await
         .expect("fail batch");
     assert!(
@@ -1231,22 +1245,58 @@ async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
         .execute(store.pool())
         .await
         .unwrap();
-    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
-    assert!(store.claim_batch(run_id, &a).await.unwrap().is_none());
-    assert!(store.claim_batch(run_id, &b).await.unwrap().is_some());
-    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    assert!(
+        store
+            .claim_batch(run_id, &a, &unique_id("claim"))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .claim_batch(run_id, &a, &unique_id("claim"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .claim_batch(run_id, &b, &unique_id("claim"))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .claim_batch(run_id, &a, &unique_id("claim"))
+            .await
+            .unwrap()
+            .is_some()
+    );
     store
         .release_claimed_batches_for_worker(run_id, &b)
         .await
         .unwrap();
-    assert!(store.claim_batch(run_id, &a).await.unwrap().is_none());
+    assert!(
+        store
+            .claim_batch(run_id, &a, &unique_id("claim"))
+            .await
+            .unwrap()
+            .is_none()
+    );
     // A live but unresponsive peer cannot indefinitely prevent prefetch.
     sqlx::query("UPDATE batches SET created_at=now()-interval '1 second' WHERE run_id=$1")
         .bind(run_id)
         .execute(store.pool())
         .await
         .unwrap();
-    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    assert!(
+        store
+            .claim_batch(run_id, &a, &unique_id("claim"))
+            .await
+            .unwrap()
+            .is_some()
+    );
     // Expired peers should not delay even newly inserted work.
     sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE uuid=$1")
         .bind(&b)
@@ -1258,8 +1308,189 @@ async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
         .execute(store.pool())
         .await
         .unwrap();
-    assert!(store.claim_batch(run_id, &a).await.unwrap().is_some());
+    assert!(
+        store
+            .claim_batch(run_id, &a, &unique_id("claim"))
+            .await
+            .unwrap()
+            .is_some()
+    );
     store.remove_run(run_id).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn expired_launch_history_does_not_reserve_connections_or_require_simultaneous_leases() {
+    let (_guard, store) = locked_test_store().await;
+    let capacity: i64 = sqlx::query_scalar(
+        "SELECT (current_setting('max_connections')::bigint -
+            current_setting('superuser_reserved_connections')::bigint -
+            COALESCE(current_setting('reserved_connections',true)::bigint,0) - 16) / 4",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    let prefix = unique_id("expired-launch");
+    let old = store
+        .reserve_worker_launch(
+            "local",
+            vec![serde_json::json!({
+                "count":capacity,"name_prefix":prefix,
+            })],
+        )
+        .await
+        .unwrap();
+    // Every worker connected and exited before the launch's final status was
+    // recorded. Together these used to consume the entire admission budget.
+    sqlx::query("UPDATE node_launch_requests SET state='starting',started_count=requested_count WHERE id=$1")
+        .bind(old).execute(store.pool()).await.unwrap();
+    sqlx::query("UPDATE nodes SET uuid=name,last_seen=now(),lease_expires_at=now()-interval '1 second' WHERE launch_request_id=$1")
+        .bind(old).execute(store.pool()).await.unwrap();
+    let new = store
+        .reserve_worker_launch(
+            "external",
+            vec![serde_json::json!({
+                "count":capacity,"name_prefix":prefix,
+            })],
+        )
+        .await
+        .expect(
+            "expired workers must not consume admission capacity before request reconciliation",
+        );
+    let next_name: String = sqlx::query_scalar(
+        "SELECT name FROM nodes WHERE launch_request_id=$1 ORDER BY name LIMIT 1",
+    )
+    .bind(new)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert!(
+        next_name
+            .strip_prefix(&format!("{prefix}-"))
+            .unwrap()
+            .parse::<i64>()
+            .unwrap()
+            > capacity,
+        "new launches preserve historical names rather than reusing them"
+    );
+    assert!(
+        store
+            .reserve_worker_launch(
+                "local",
+                vec![serde_json::json!({
+                    "count":1,"name_prefix":prefix,
+                })]
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("awaiting registration"),
+        "unannounced external workers must still reserve capacity"
+    );
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == old).unwrap().state,
+        "fulfilled"
+    );
+    assert_eq!(
+        requests.iter().find(|r| r.id == new).unwrap().state,
+        "pending"
+    );
+    // One worker in a partially started group connected and then stopped;
+    // release just its reservation while keeping the other workers reserved.
+    sqlx::query("UPDATE node_launch_requests SET state='starting',started_count=requested_count WHERE id=$1")
+        .bind(new).execute(store.pool()).await.unwrap();
+    sqlx::query("UPDATE nodes SET uuid=name,last_seen=now() WHERE name=$1")
+        .bind(&next_name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let partial = store
+        .reserve_worker_launch(
+            "local",
+            vec![serde_json::json!({
+                "count":1,"name_prefix":prefix,
+            })],
+        )
+        .await
+        .expect("an expired, already connected worker is no longer a reservation");
+    let ids = [old, new, partial];
+    sqlx::query("DELETE FROM nodes WHERE launch_request_id=ANY($1)")
+        .bind(ids.as_slice())
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM node_launch_requests WHERE id=ANY($1)")
+        .bind(ids.as_slice())
+        .execute(store.pool())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn resumed_worker_requires_a_new_registration_before_its_launch_is_fulfilled() {
+    let (_guard, store) = locked_test_store().await;
+    let prefix = unique_id("resume-registration");
+    let old = store
+        .reserve_worker_launch(
+            "local",
+            vec![serde_json::json!({"count":1,"name_prefix":prefix})],
+        )
+        .await
+        .unwrap();
+    let name = format!("{prefix}-1");
+    store
+        .announce_node(&name, &unique_id("old-process"), &Default::default())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE node_launch_requests SET state='fulfilled',started_count=1 WHERE id=$1")
+        .bind(old)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET resume_requested=true,lease_expires_at=now()-interval '1 second' WHERE name=$1")
+        .bind(&name).execute(store.pool()).await.unwrap();
+    assert_eq!(store.enqueue_resumed_workers().await.unwrap(), 1);
+    let new: i64 = sqlx::query_scalar("SELECT launch_request_id FROM nodes WHERE name=$1")
+        .bind(&name)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE node_launch_requests SET state='starting',started_count=1 WHERE id=$1")
+        .bind(new)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == new).unwrap().state,
+        "starting",
+        "the old process's heartbeat must not fulfill the replacement launch"
+    );
+    store
+        .announce_node(
+            &name,
+            &unique_id("replacement-process"),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+    let requests = store.list_node_launch_requests().await.unwrap();
+    assert_eq!(
+        requests.iter().find(|r| r.id == new).unwrap().state,
+        "fulfilled"
+    );
+    sqlx::query("DELETE FROM nodes WHERE name=$1")
+        .bind(&name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM node_launch_requests WHERE id=ANY($1)")
+        .bind([old, new].as_slice())
+        .execute(store.pool())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1593,4 +1824,469 @@ async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
         .bind(run).execute(store.pool()).await.unwrap();
     assert!(store.load_sampler_checkpoint(run).await.is_err());
     store.remove_run(run).await.unwrap();
+}
+
+// Regression fixtures for task isolation and evaluator persistence failures.
+async fn reliability_fixture(store: &PgStore, count: usize) -> (i32, i64, String, Vec<i64>) {
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('queue-reliability','{}','{\"rectangular\":{\"continuous_dims\":1,\"discrete_cardinalities\":[]}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let task: RunTaskSpec = serde_json::from_value(serde_json::json!({
+        "kind":"sample", "stop_condition":{"max_samples":100},
+        "evaluator":{"config":{"kind":"unit"}},
+        "sampler_aggregator":{"config":{"kind":"naive_monte_carlo"}}
+    }))
+    .unwrap();
+    let task_id = store
+        .append_run_tasks(
+            run,
+            &[RunTaskInput {
+                name: Some("sample".into()),
+                task,
+            }],
+        )
+        .await
+        .unwrap()[0]
+        .id;
+    store.activate_next_run_task(run).await.unwrap();
+    let node = unique_id("reliability-node");
+    store
+        .announce_node(&node, &node, &Default::default())
+        .await
+        .unwrap();
+    store
+        .set_current_assignment(&node, WorkerRole::Evaluator, run)
+        .await
+        .unwrap();
+    let batch = Batch::from_points([Point::new(vec![0.5], Vec::new(), 1.0)]).unwrap();
+    let ids = next_batch_ids(count);
+    store
+        .insert_batches(
+            run,
+            task_id,
+            false,
+            &ids,
+            &vec![LatentBatchSpec::from_batch(&batch).build(); count],
+        )
+        .await
+        .unwrap();
+    (run, task_id, node, ids)
+}
+
+fn empty_batch_result() -> gammaboard::evaluation::BatchResult {
+    gammaboard::evaluation::BatchResult::new(
+        None,
+        gammaboard::evaluation::AccumulatorState::Empty(Default::default()),
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn completed_fetch_and_counts_isolate_tasks_before_ordering_and_limit() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, current_task, node, ids) = reliability_fixture(&store, 10).await;
+    let old_task = insert_completed_pause_task(&store, run).await;
+    sqlx::query("UPDATE batches SET task_id=$2,retry_count=1 WHERE id=ANY($1)")
+        .bind(&ids[..6])
+        .bind(old_task)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE batches SET status='completed' WHERE run_id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO batch_results (batch_id,batch_observable,completed_at) SELECT id,$2,now() FROM batches WHERE run_id=$1")
+        .bind(run).bind(empty_batch_result().accumulator.to_json().unwrap()).execute(store.pool()).await.unwrap();
+    // An old task's unfinished row must not block the new task. Nor may its
+    // retained completed results consume the new task's fetch limit.
+    sqlx::query("UPDATE batches SET status='claimed' WHERE id=$1")
+        .bind(ids[0])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE batches SET status='pending' WHERE id=$1")
+        .bind(ids[8])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    for strict in [true, false] {
+        let first = store
+            .fetch_completed_batches(run, current_task, 1, strict, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            first.iter().map(|b| b.batch_id).collect::<Vec<_>>(),
+            vec![ids[6]]
+        );
+        let batches = store
+            .fetch_completed_batches(run, current_task, 100, strict, None)
+            .await
+            .unwrap();
+        assert_eq!(batches.len(), if strict { 2 } else { 3 });
+        assert!(batches.iter().all(|b| b.task_id == current_task));
+    }
+    let counts = store
+        .get_batch_queue_counts(run, Some(current_task), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            counts.pending,
+            counts.claimed,
+            counts.completed,
+            counts.failed
+        ),
+        (1, 0, 3, 0)
+    );
+    let counts = store
+        .get_batch_queue_counts(run, Some(current_task), Some(ids[7]))
+        .await
+        .unwrap();
+    assert_eq!(counts.completed, 1);
+    let blocker = store
+        .get_queue_blocker(run, current_task, None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(blocker.batch_id, ids[8]);
+    assert_eq!(blocker.status, "pending");
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn claim_and_submission_retries_are_idempotent_and_fence_old_generations() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, node, ids) = reliability_fixture(&store, 2).await;
+    let token = unique_id("claim");
+    let first = store
+        .claim_batch(run, &node, &token)
+        .await
+        .unwrap()
+        .unwrap();
+    let repeated = store
+        .claim_batch(run, &node, &token)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first.batch_id, repeated.batch_id,
+        "lost claim acknowledgement must not claim another batch"
+    );
+    assert_eq!(first.batch_id, ids[0]);
+    store
+        .release_claimed_batches_for_worker(run, &node)
+        .await
+        .unwrap();
+    let token2 = unique_id("replacement");
+    let replacement = store
+        .claim_batch(run, &node, &token2)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replacement.batch_id, first.batch_id);
+    let result = empty_batch_result();
+    assert!(
+        store
+            .submit_batch_results(first.batch_id, &node, &token, &result, 1.0)
+            .await
+            .unwrap_err()
+            .is_batch_ownership_lost()
+    );
+    assert!(
+        store
+            .fail_batch(first.batch_id, &node, &token, "stale failure", 1)
+            .await
+            .unwrap_err()
+            .is_batch_ownership_lost()
+    );
+    store
+        .submit_batch_results(first.batch_id, &node, &token2, &result, 2.0)
+        .await
+        .unwrap();
+    store
+        .submit_batch_results(first.batch_id, &node, &token2, &result, 99.0)
+        .await
+        .unwrap();
+    let (count, duration): (i64, f64) = sqlx::query_as(
+        "SELECT count(*),min(total_eval_time_ms) FROM batch_results WHERE batch_id=$1",
+    )
+    .bind(first.batch_id)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        (count, duration),
+        (1, 2.0),
+        "retry must preserve the first accepted result"
+    );
+    let token3 = unique_id("failure");
+    let failure = store
+        .claim_batch(run, &node, &token3)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..2 {
+        assert!(matches!(
+            store
+                .fail_batch(failure.batch_id, &node, &token3, "failure", 3)
+                .await
+                .unwrap(),
+            BatchFailOutcome::Requeued { retry_count: 1, .. }
+        ));
+    }
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn claim_reconciliation_preserves_slow_work_and_releases_only_untracked_claims() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, node, ids) = reliability_fixture(&store, 2).await;
+    let tracked = unique_id("tracked");
+    let lost = unique_id("lost");
+    store
+        .claim_batch(run, &node, &tracked)
+        .await
+        .unwrap()
+        .unwrap();
+    store.claim_batch(run, &node, &lost).await.unwrap().unwrap();
+    sqlx::query("UPDATE batches SET claimed_at=now()-interval '2 hours' WHERE run_id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .release_untracked_claims(run, &node, std::slice::from_ref(&tracked))
+            .await
+            .unwrap(),
+        1
+    );
+    let states: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id,status FROM batches WHERE run_id=$1 ORDER BY id")
+            .bind(run)
+            .fetch_all(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        states,
+        vec![(ids[0], "claimed".into()), (ids[1], "pending".into())]
+    );
+    assert_eq!(
+        store.reclaim_abandoned_batches(run).await.unwrap(),
+        0,
+        "live, slow tracked work must not be reclaimed"
+    );
+    assert!(
+        store
+            .submit_batch_results(ids[1], &node, &lost, &empty_batch_result(), 1.0)
+            .await
+            .unwrap_err()
+            .is_batch_ownership_lost()
+    );
+    store
+        .submit_batch_results(ids[0], &node, &tracked, &empty_batch_result(), 1.0)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+struct CountingEvaluator(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+impl gammaboard::evaluation::Evaluator for CountingEvaluator {
+    fn get_domain(&self) -> gammaboard::Domain {
+        gammaboard::Domain::rectangular(1, 0)
+    }
+    fn eval_batch(
+        &mut self,
+        _batch: &Batch,
+        _accumulator: &gammaboard::core::AccumulatorConfig,
+        _options: gammaboard::evaluation::EvalBatchOptions,
+    ) -> Result<gammaboard::evaluation::BatchResult, gammaboard::core::EvalError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(empty_batch_result())
+    }
+}
+
+async fn fault_test_runner(
+    run: i32,
+    node: &str,
+) -> (
+    gammaboard::runners::EvaluatorRunner<PgStore>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(|conn, _| {
+            Box::pin(async move {
+                sqlx::query("SET statement_timeout='100ms'")
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let config = gammaboard::core::EvaluatorConfig::Unit {
+        params: Default::default(),
+    };
+    let runner = gammaboard::runners::EvaluatorRunner::new(
+        PgStore::new(pool),
+        run,
+        node,
+        node,
+        config,
+        Box::new(CountingEvaluator(calls.clone())),
+        gammaboard::Domain::rectangular(1, 0),
+        gammaboard::runners::EvaluatorRunnerParams {
+            db_pool_size: 2,
+            min_tick_time_ms: 10,
+            performance_snapshot_interval_ms: 60000,
+        },
+        3,
+    );
+    (runner, calls)
+}
+
+async fn drain_reliability_runner(
+    store: &PgStore,
+    run: i32,
+    runner: &mut gammaboard::runners::EvaluatorRunner<PgStore>,
+    expected: i64,
+) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            // A submission that timed out before the lock was released can
+            // still deliver that error on the first post-recovery tick.
+            if let Err(error) = runner.tick().await {
+                assert!(error.to_string().contains("statement timeout"), "{error}");
+            }
+            let count: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM batches WHERE run_id=$1 AND status='completed'",
+            )
+            .bind(run)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+            if count == expected {
+                break;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+        runner.stop().await.unwrap();
+    })
+    .await
+    .expect("evaluator should recover without reassignment");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn evaluator_retains_claim_after_task_context_database_timeout() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, node, _) = reliability_fixture(&store, 3).await;
+    let (mut runner, calls) = fault_test_runner(run, &node).await;
+    let mut lock = store.pool().begin().await.unwrap();
+    sqlx::query("LOCK TABLE run_tasks IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let error = runner.tick().await.unwrap_err();
+    assert!(error.to_string().contains("statement timeout"), "{error}");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    lock.rollback().await.unwrap();
+    drain_reliability_runner(&store, run, &mut runner, 3).await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn evaluator_retains_both_results_when_submission_database_times_out() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, node, _) = reliability_fixture(&store, 3).await;
+    let (mut runner, calls) = fault_test_runner(run, &node).await;
+    let mut lock = store.pool().begin().await.unwrap();
+    sqlx::query("LOCK TABLE batch_results IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    runner.tick().await.unwrap(); // Computes first result and starts its asynchronous submit.
+    let mut errors = 0;
+    for _ in 0..6 {
+        if let Err(error) = runner.tick().await {
+            assert!(error.to_string().contains("statement timeout"), "{error}");
+            errors += 1;
+        }
+    }
+    assert!(errors > 0);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the next computed result stays buffered while the first submission retries"
+    );
+    lock.rollback().await.unwrap();
+    drain_reliability_runner(&store, run, &mut runner, 3).await;
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "database retries must not reevaluate samples"
+    );
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn launch_connection_budget_rejects_before_creating_workers() {
+    let (_guard, store) = locked_test_store().await;
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    let error = store
+        .reserve_worker_launch(
+            "local",
+            vec![serde_json::json!({"count":1000000,"name_prefix":"over-budget"})],
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("worker connection budget exceeded"),
+        "{error}"
+    );
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(before, after);
 }

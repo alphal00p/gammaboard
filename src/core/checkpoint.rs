@@ -13,6 +13,11 @@ pub(crate) enum AccumulatorCheckpointState {
 /// Durable sampler progress. Live timing windows and pending writes are runner state.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct SamplerProgress {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::sampling::generation::GenerationBuffer::is_empty"
+    )]
+    pub generation: crate::sampling::generation::GenerationBuffer,
     pub produced_batches_total: i64,
     pub produced_samples_total: i64,
     pub ingested_batches_total: i64,

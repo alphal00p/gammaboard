@@ -8,6 +8,10 @@
 //! - merge completed batch observables into the current accumulator state
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
+#[cfg(test)]
+#[path = "sampler_bulk_tests.rs"]
+mod bulk_tests;
+
 use crate::core::checkpoint::{AccumulatorCheckpointState, SamplerProgress};
 use crate::core::{
     AccumulatorMetricSelector, BatchTransformConfig, EngineError, EvaluatorConfig,
@@ -390,6 +394,13 @@ where
         let now = Instant::now();
         let task_id = task.id;
         let requires_training_values = sampler_config.requires_training();
+        if requires_training_values {
+            runtime_state.generation.restore_legacy_samples(
+                task.nr_produced_samples
+                    .saturating_sub(task.nr_completed_samples)
+                    .max(0) as usize,
+            );
+        }
         let queue = SamplerQueue::new(
             store.clone(),
             run_id,
@@ -526,6 +537,8 @@ where
             "local_inflight_insert_tasks": queue_runtime.local_inflight_insert_tasks,
             "local_inflight_insert_batches": queue_runtime.local_inflight_insert_batches,
             "local_ready_processed_batches": queue_runtime.local_ready_processed_batches,
+            "bulk_sample_generation": self.params.queue.bulk_sample_generation,
+            "buffered_generated_samples": self.runtime_state.generation.pending_samples(),
             "accumulator_checkpoint_state": match self.runtime_state.accumulator_checkpoint_state {
                 AccumulatorCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
                 AccumulatorCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
@@ -922,15 +935,17 @@ where
             .queue
             .diagnostics_snapshot()
             .and_then(|snapshot| snapshot.active_evaluator_count);
-        if no_progress_is_terminal(
-            stop_status.reached,
-            open_batch_count,
-            queue_before_produce.failed,
-            completed_batches,
-            produced_batches,
-            sampler_wants_to_produce,
-            active_evaluator_count,
-        ) {
+        if self.params.queue.queue_buffer != 0.0
+            && no_progress_is_terminal(
+                stop_status.reached,
+                open_batch_count,
+                queue_before_produce.failed,
+                completed_batches,
+                produced_batches,
+                sampler_wants_to_produce,
+                active_evaluator_count,
+            )
+        {
             return Err(RunnerError::Engine(EngineError::engine(format!(
                 "run {} task {} cannot make further progress: stop condition not reached (min_samples_reached={}, max_samples_reached={}, absolute_error_reached={}, relative_error_reached={}) and sampler produced no new batches",
                 self.run_id,
@@ -942,7 +957,11 @@ where
             ))));
         }
 
-        Ok(stop_status.reached && open_batch_count == 0)
+        Ok(
+            stop_status.reached
+                && open_batch_count == 0
+                && self.runtime_state.generation.is_empty(),
+        )
     }
 
     /// One save lifecycle for activation, pause and task completion. The initial
@@ -982,7 +1001,8 @@ where
                     name: self.task.name.clone(),
                     sequence_nr: Some(self.task.sequence_nr),
                     // Retained consumed results are recovery history, not open work.
-                    queue_empty: self.queue.queue_counts().await?.open() == 0,
+                    queue_empty: self.queue.queue_counts().await?.open() == 0
+                        && self.runtime_state.generation.is_empty(),
                     sampler_snapshot: Some(checkpoint.sampler_snapshot.clone()),
                     observable_state: Some(checkpoint.observable_state.clone()),
                     evaluator: Some(self.evaluator_config.clone()),
@@ -1183,6 +1203,14 @@ where
             });
         }
 
+        // Validate the entire group before mutating the sampler, accumulator, or cursor.
+        if let Some(batch) = completed.iter().find(|batch| batch.task_id != self.task.id) {
+            return Err(RunnerError::Store(StoreError::store(format!(
+                "completed batch {} belongs to task {}, expected task {}",
+                batch.batch_id, batch.task_id, self.task.id
+            ))));
+        }
+
         let mut completed_samples_delta = 0_i64;
         let mut completed_training_ingest_ms = 0.0_f64;
         let mut completed_merge_ms = 0.0_f64;
@@ -1222,19 +1250,23 @@ where
                         training_values.len()
                     ))));
                 }
-                let ingest_started = Instant::now();
-                self.sampler
-                    .ingest_training_values(training_values)
-                    .map_err(RunnerError::Engine)?;
-                let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
-                completed_training_ingest_ms += ingest_time_ms;
-                completed_training_ingest_batches += 1;
-                self.runtime_state.ingested_batches_total += 1;
-                self.runtime_state.ingested_samples_total += batch_samples as i64;
-                if batch_samples > 0 {
+                if let Some(values) = self
+                    .runtime_state
+                    .generation
+                    .accept_training_values(training_values)?
+                {
+                    let ingest_started = Instant::now();
+                    self.sampler
+                        .ingest_training_values(&values)
+                        .map_err(RunnerError::Engine)?;
+                    let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
+                    completed_training_ingest_ms += ingest_time_ms;
+                    completed_training_ingest_batches += 1;
+                    self.runtime_state.ingested_batches_total += 1;
+                    self.runtime_state.ingested_samples_total += values.len() as i64;
                     self.window_state
                         .training_ingest_ms_per_sample
-                        .observe(ingest_time_ms / batch_samples as f64);
+                        .observe(ingest_time_ms / values.len() as f64);
                 }
             }
 
@@ -1276,13 +1308,86 @@ where
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
     ) -> Result<(usize, bool), RunnerError> {
+        // A completed bulk draw must drain even when the sampler now reports
+        // zero remaining training samples, or the option was switched off live.
+        if self.runtime_state.generation.has_pending() {
+            if self.runtime_state.accumulator_checkpoint_state
+                == AccumulatorCheckpointState::WaitingForInitialRoundTrip
+            {
+                return Ok((0, true));
+            }
+            let slots = self
+                .queue
+                .available_batch_slots(queue_before_produce)
+                .await?;
+            let chunk_size = self
+                .queue
+                .production_batch_size(self.runtime_state.generation.training_remaining_at_draw());
+            return Ok((self.enqueue_generated(slots, chunk_size)?, true));
+        }
         let accumulator_config = self.observable_state.config();
         let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
         let sampler_wants_to_produce = matches!(sample_plan, SamplePlan::Produce { .. });
+        let bulk_generation = self.params.queue.bulk_sample_generation && sampler_wants_to_produce;
+        if bulk_generation
+            && self.runtime_state.accumulator_checkpoint_state
+                == AccumulatorCheckpointState::NeedsInitialRoundTrip
+            && self
+                .queue
+                .available_batch_slots(queue_before_produce)
+                .await?
+                == 0
+        {
+            return Ok((0, sampler_wants_to_produce));
+        }
+        let bulk_remaining = if bulk_generation {
+            self.sampler.training_samples_remaining()
+        } else {
+            None
+        };
+        let bulk_samples = if bulk_generation {
+            let SamplePlan::Produce { nr_samples } = sample_plan else {
+                unreachable!()
+            };
+            let limit = nr_samples
+                .min(bulk_remaining.unwrap_or(usize::MAX))
+                .min(self.params.queue.max_batch_size.max(1));
+            self.max_samples_to_produce_this_tick(Some(limit))?
+                .unwrap_or(limit)
+        } else {
+            0
+        };
         let open_before_produce = queue_before_produce.open().max(0) as usize;
         let batch_plan = self
             .resolve_batch_plan(sample_plan, queue_before_produce, open_before_produce)
             .await?;
+        if bulk_generation && !batch_plan.is_empty() && bulk_samples > 0 {
+            let chunk_size = self.queue.production_batch_size(bulk_remaining);
+            let first_chunk = (self.runtime_state.accumulator_checkpoint_state
+                == AccumulatorCheckpointState::WaitingForInitialRoundTrip)
+                .then_some(batch_plan[0]);
+            let started = Instant::now();
+            let batch = self.sampler.produce_bulk_batch(bulk_samples)?;
+            if batch.nr_samples == 0 || batch.nr_samples > bulk_samples {
+                return Err(
+                    EngineError::engine("bulk sampler returned an invalid sample count").into(),
+                );
+            }
+            let generated_samples = batch.nr_samples;
+            self.window_state
+                .produce_ms_per_sample
+                .observe(started.elapsed().as_secs_f64() * 1000.0 / generated_samples as f64);
+            self.runtime_state
+                .generation
+                .buffer_draw(batch.build(), bulk_remaining)?;
+            if self.sampler_config.requires_training() {
+                self.runtime_state.generation.record_draw(generated_samples);
+            }
+            return Ok((
+                self.enqueue_generated(batch_plan.len(), first_chunk.unwrap_or(chunk_size))?,
+                sampler_wants_to_produce,
+            ));
+        }
         let mut produced = Vec::with_capacity(batch_plan.len());
         let mut produced_samples_total = 0_i64;
         for nr_samples in batch_plan {
@@ -1295,6 +1400,9 @@ where
             let produced_samples = batch.nr_samples;
             produced_samples_total += produced_samples as i64;
             if produced_samples > 0 {
+                if self.sampler_config.requires_training() {
+                    self.runtime_state.generation.record_draw(produced_samples);
+                }
                 self.window_state
                     .produce_ms_per_sample
                     .observe(produce_time_ms / produced_samples as f64);
@@ -1316,6 +1424,29 @@ where
         self.task.nr_produced_samples += produced_samples_total;
         self.queue.ingest(produced);
         Ok((produced_batches, sampler_wants_to_produce))
+    }
+
+    fn enqueue_generated(&mut self, slots: usize, chunk_size: usize) -> Result<usize, RunnerError> {
+        let mut batches = self
+            .runtime_state
+            .generation
+            .take_batches(slots, chunk_size)?;
+        let count = batches.len();
+        let accumulator = self.observable_state.config();
+        for batch in &mut batches {
+            // The initial probe may have established the accumulator's shape.
+            batch.accumulator = accumulator.clone();
+        }
+        let samples = batches
+            .iter()
+            .map(|batch| batch.nr_samples as i64)
+            .sum::<i64>();
+        self.runtime_state.produced_batches_total += count as i64;
+        self.runtime_state.produced_samples_total += samples;
+        self.nr_produced_samples += samples;
+        self.task.nr_produced_samples += samples;
+        self.queue.ingest(batches);
+        Ok(count)
     }
 
     async fn resolve_batch_plan(

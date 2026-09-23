@@ -1,9 +1,10 @@
-import { Alert, Box, Button, Card, CardContent, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, CardContent, FormControlLabel, Stack, Switch, TextField, Typography } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 
 const FORM_REFRESH_HOLD_MS = 5000;
 
 const QUEUE_TUNING_FIELDS = [
+  { key: "bulk_sample_generation", label: "Bulk Sample Generation", kind: "bool" },
   { key: "queue_buffer", label: "Queue Buffer", kind: "float" },
   { key: "target_batch_eval_ms", label: "Target Batch Eval (ms)", kind: "float" },
   { key: "batch_size_deadband_ratio", label: "Batch Deadband Ratio", kind: "float" },
@@ -19,6 +20,7 @@ const QUEUE_TUNING_FIELDS = [
 const valueText = (value) => (value == null ? "" : String(value));
 
 const parseFieldValue = (value, kind) => {
+  if (kind === "bool") return { ok: typeof value === "boolean", value };
   const text = String(value ?? "").trim();
   if (!text) return { ok: false, value: null };
   const parsed = Number(text);
@@ -43,7 +45,8 @@ const QueueTuningPanel = ({
     const override = isSampleTask ? task?.queue_tuning ?? null : null;
     const next = {};
     for (const field of QUEUE_TUNING_FIELDS) {
-      next[field.key] = valueText(override?.[field.key] ?? defaults?.[field.key] ?? "");
+      const value = override?.[field.key] ?? defaults?.[field.key];
+      next[field.key] = field.kind === "bool" ? value ?? false : valueText(value);
     }
     return next;
   }, [isSampleTask, run, task]);
@@ -114,7 +117,19 @@ const QueueTuningPanel = ({
                     gap: 1.5,
                   }}
                 >
-                  {QUEUE_TUNING_FIELDS.map((field) => (
+                  {QUEUE_TUNING_FIELDS.map((field) => field.kind === "bool" ? (
+                    <FormControlLabel
+                      key={field.key}
+                      label={field.label}
+                      control={<Switch
+                        checked={form[field.key] === true}
+                        onChange={(_event, checked) => {
+                          setRefreshHoldUntilMs(Date.now() + FORM_REFRESH_HOLD_MS);
+                          setForm((previous) => ({ ...previous, [field.key]: checked }));
+                        }}
+                      />}
+                    />
+                  ) : (
                     <TextField
                       key={field.key}
                       size="small"

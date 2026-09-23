@@ -170,6 +170,55 @@ impl LatentBatchSpec {
 }
 
 impl LatentBatch {
+    /// Copy a contiguous evaluator work unit from a generated batch. Only the
+    /// selected coordinates and discrete signatures are copied.
+    pub(crate) fn slice(&self, start: usize, samples: usize) -> Result<Self, BatchError> {
+        let end = start
+            .checked_add(samples)
+            .filter(|end| *end <= self.nr_samples)
+            .ok_or_else(|| BatchError::layout("generated batch slice out of bounds"))?;
+        if samples == 0 {
+            return Err(BatchError::layout("generated batch slice is empty"));
+        }
+        let LatentBatchPayload::IndexedBatch {
+            discrete_signatures,
+            discrete_map,
+            continuous_layouts,
+            continuous_values,
+            weights,
+        } = &self.payload
+        else {
+            return Err(BatchError::layout(
+                "bulk generation requires a splittable indexed payload",
+            ));
+        };
+        let mut signatures = Vec::new();
+        let mut remap = HashMap::new();
+        let mut maps = Vec::with_capacity(samples);
+        for &index in &discrete_map[start..end] {
+            let signature = discrete_signatures.get(index).ok_or_else(|| {
+                BatchError::layout("generated batch references a missing discrete signature")
+            })?;
+            maps.push(*remap.entry(index).or_insert_with(|| {
+                signatures.push(signature.clone());
+                signatures.len() - 1
+            }));
+        }
+        let coordinate_start: usize = continuous_layouts[..start].iter().sum();
+        let layouts = continuous_layouts[start..end].to_vec();
+        let coordinate_end = coordinate_start + layouts.iter().sum::<usize>();
+        Ok(Self {
+            nr_samples: samples,
+            accumulator: self.accumulator.clone(),
+            payload: LatentBatchPayload::IndexedBatch {
+                discrete_signatures: signatures,
+                discrete_map: maps,
+                continuous_layouts: layouts,
+                continuous_values: continuous_values[coordinate_start..coordinate_end].to_vec(),
+                weights: weights[start..end].to_vec(),
+            },
+        })
+    }
     fn binary_config() -> Configuration {
         standard()
     }
@@ -352,6 +401,44 @@ fn decode_indexed_batch(
 mod tests {
     use super::*;
     use crate::evaluation::Point;
+
+    #[test]
+    fn bulk_chunks_preserve_ragged_points_weights_and_order() {
+        let batch = Batch::from_points((0..11).map(|i| {
+            Point::new(
+                vec![i as f64; i % 4],
+                vec![i as i64 % 3; i % 2],
+                1.0 + i as f64,
+            )
+        }))
+        .unwrap();
+        let latent = LatentBatchSpec::from_batch(&batch).build();
+        let chunks: Vec<_> = [(0, 1), (1, 4), (5, 4), (9, 2)]
+            .into_iter()
+            .map(|(start, size)| latent.slice(start, size).unwrap())
+            .collect();
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.nr_samples)
+                .collect::<Vec<_>>(),
+            [1, 4, 4, 2]
+        );
+        let mut points = Vec::new();
+        for chunk in chunks {
+            let restored = LatentBatch::from_bytes(&chunk.to_bytes().unwrap()).unwrap();
+            points.extend(
+                restored
+                    .payload
+                    .into_batch()
+                    .unwrap()
+                    .points()
+                    .iter()
+                    .cloned(),
+            );
+        }
+        assert_eq!(Batch::new(points).unwrap(), batch);
+    }
 
     #[test]
     fn latent_batch_roundtrips_batch_payload() {

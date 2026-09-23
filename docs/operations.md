@@ -48,6 +48,17 @@ Dashboard node-start requests go through a generic launch-request queue. Local
 deployments may resolve them by spawning child node processes. UBELIX resolves
 them by submitting Slurm worker jobs.
 
+New launch names use the first unused positive suffix for their prefix, checking
+all persistent node records, including expired workers. Redeploying does not
+reset names to `local-1`; this preserves identity and log history. Deploy with
+`--resume-workers` to restart saved workers with their existing names.
+
+The node list shows live leases only. A launch request is fulfilled once every
+requested worker has connected at least once, even if some have since exited.
+Only live workers and workers still awaiting their first connection for the
+current launch reserve connection capacity. An expired worker's historical
+launch must not consume capacity indefinitely.
+
 ## Run Lifecycle
 
 Runs are created from TOML templates or custom TOML. Run names are human-facing
@@ -135,6 +146,72 @@ the server and occasional CLI commands. The default local PostgreSQL limit is
 128; reserve at least 16 connections for the server, maintenance, and operator
 commands before choosing a worker count.
 
+Managed launch and resume requests enforce this budget before reserving workers:
+`floor((max_connections - PostgreSQL reserved connections - 16) / 4)`.
+With 128 connections and the usual three superuser reservations, this allows
+27 workers. Live idle workers and pending launches count toward that limit
+because assigning them later creates another connection pool. Stop unused
+workers to free capacity; increasing PostgreSQL's limit requires a database
+restart. Directly started `node run` processes and unrelated database clients
+still require operator budgeting. Pools release spare idle connections after
+30 seconds.
+
+For managed PostgreSQL, change `local_postgres.max_connections` in the runtime
+config, **not** the server config or the database's generated `postgresql.conf`.
+GammaBoard passes this setting to PostgreSQL on its command line. The default
+runtime config path is `ops/local/config/runtime.toml`; if it does not exist,
+embedded defaults apply. Create it with, for example:
+
+```toml
+[local_postgres]
+max_connections = 512
+
+[resources]
+roots = ["resources"]
+```
+
+Keep the resource root explicit when using older binaries: they treated an
+omitted `[resources]` section as an empty search path, changing relative state
+paths to resolve from the process working directory. Current binaries default
+omitted roots to `["resources"]`; an explicit `roots = []` opts out.
+Alternatively, put the TOML
+elsewhere and pass `./gammaboard --runtime-config /path/to/runtime.toml deploy`
+alongside your usual deployment options. Stop the deployment and restart its
+PostgreSQL instance before redeploying: starting against an already running
+database does not change this setting. `SHOW max_connections;` confirms the
+active value. With three PostgreSQL reserved connections, limits of 256, 512,
+and 1024 allow 59, 123, and 251 workers respectively.
+
+## Queue Recovery and Upgrades
+
+Evaluators retain claimed batches and computed results across database errors.
+Each claim has a unique token: retries acknowledge the same claim or result,
+and reassignment fences submissions from its previous owner. Once per second,
+an evaluator releases its own claims that it no longer tracks in memory. Claim
+age alone never revokes a long evaluation. Expired workers are still recovered
+through the existing lease mechanism.
+
+Sampling consumes results belonging to the current task only. Retained retry
+history from a completed training task cannot enter the next sampling task.
+The performance panel shows the first unfinished batch, its worker and claim
+age, result-fetch duration, and results per fetch. "Result Fetch Slot Occupancy"
+includes a finished fetch waiting for the next sampler tick; it does not measure
+database utilization or the number of buffered results.
+
+When installing the claim-token migration (`202609230001`), stop the old server
+and all old workers, apply migrations, and restart them with the new binary.
+Old evaluator binaries do not honor claim tokens, so a mixed-version rollout
+does not provide the ownership guarantees. The migration preserves existing
+batches and results; old claims become reclaimable when their workers expire.
+
+These changes prevent new cross-task contamination. They do not repair sampling
+accumulators or checkpoints already affected by replayed training results.
+Restart such sampling stages with a fresh accumulator and a verified training
+snapshot, including any external model files. Do not bypass consistency checks
+or edit only the sample counters.
+
+## Database History
+
 Performance snapshots default to every two seconds. One evaluator therefore
 creates 43,200 history rows per day. Monitor database size for multi-day
 campaigns and use normal PostgreSQL operations when history must be managed.
@@ -156,11 +233,11 @@ remains stable.
 
 ## Reading Fetch Metrics
 
-`Result Prefetch Occupancy` (previously `Fetch Utilization`) is the sampler's
+`Result Fetch Slot Occupancy` (previously `Result Prefetch Occupancy`) is the sampler's
 completed-result prefetch slot occupancy. A finished query still occupies that
 slot until the sampler consumes it. This percentage includes overlap with
 training, other sampler work, and tick sleeps; it is not evaluator utilization
-or database CPU utilization. Use `Avg Completed Batch Fetch Ms` for measured
+or database CPU utilization. Use `Result Fetch Mean (ms)` for measured
 fetch latency, and evaluator `Concurrent Fetch Wait Per Sample` for exposed
 latency on successful batches. `Queue Starvation Ratio` counts unsuccessful
 polls rather than elapsed idle time. Training barriers can make this ratio large

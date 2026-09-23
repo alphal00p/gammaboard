@@ -731,6 +731,19 @@ impl SamplerAggregator for HavanaInferenceSampler {
         })
     }
 
+    fn produce_bulk_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+        let mut points = Vec::with_capacity(nr_samples);
+        for _ in 0..nr_samples {
+            let mut sample = Sample::new();
+            self.grid.sample(&mut self.rng, &mut sample);
+            points.push(sample_to_point(&sample)?);
+        }
+        let batch = Batch::new(points).engine_err()?;
+        self.batches_produced += 1;
+        self.samples_produced = self.samples_produced.saturating_add(nr_samples);
+        Ok(LatentBatchSpec::from_batch(&batch))
+    }
+
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         if !training_values.is_empty() {
             return Err(EngineError::engine(
@@ -1200,6 +1213,30 @@ mod tests {
 
         let one_batch = collect_points(&[16]);
         let two_batches = collect_points(&[8, 8]);
+        let mut bulk = HavanaInferenceSampler::from_params_and_snapshot(
+            HavanaInferenceSamplerParams::default(),
+            training_snapshot,
+            &domain,
+        )
+        .unwrap();
+        let batch = bulk.produce_bulk_batch(16).unwrap().build();
+        let bulk_points: Vec<_> = (0..16)
+            .step_by(5)
+            .flat_map(|start| {
+                batch
+                    .slice(start, 5.min(16 - start))
+                    .unwrap()
+                    .payload
+                    .into_batch()
+                    .unwrap()
+                    .points()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(
+            bulk_points, one_batch,
+            "bulk splitting must preserve the RNG stream"
+        );
         assert_eq!(
             one_batch, two_batches,
             "havana inference should be independent of batch partitioning"

@@ -115,6 +115,23 @@ impl ScalarAccumulatorState {
         reduced_square_deviation(self.variance(), self.mean_abs())
     }
 
+    /// Normalized effective sample size, using absolute weighted contributions:
+    /// `(sum |w|)^2 / (N sum w^2)`. Empty or all-zero samples have ESS zero.
+    pub fn ess(&self) -> f64 {
+        if self.count <= 0
+            || self.sum_abs <= 0.0
+            || self.sum_sq <= 0.0
+            || !self.sum_abs.is_finite()
+            || !self.sum_sq.is_finite()
+        {
+            return 0.0;
+        }
+        // Avoid overflowing either (sum |w|)^2 or N * sum w^2. For valid
+        // moments this ratio is at most sqrt(N); clamp roundoff at the bounds.
+        let normalized = (self.sum_abs / self.sum_sq.sqrt()) / (self.count as f64).sqrt();
+        normalized.powi(2).clamp(0.0, 1.0)
+    }
+
     pub fn rsd_stderr(&self) -> Option<f64> {
         reduced_square_deviation_stderr(
             self.variance(),
@@ -346,6 +363,51 @@ fn merge_negative_extrema(
 mod tests {
     use super::ScalarAccumulatorState;
     use crate::evaluation::Point;
+
+    #[test]
+    fn ess_uses_absolute_weighted_contributions_and_includes_zero_samples() {
+        let point = Point::new(vec![], vec![], 2.0);
+        let cases: &[(&[f64], f64)] = &[
+            (&[], 0.0),
+            (&[0.0, 0.0], 0.0),
+            (&[2.0], 1.0),
+            (&[2.0, 2.0, 2.0, 2.0], 1.0),
+            (&[-2.0, 2.0, -2.0, 2.0], 1.0),
+            (&[4.0, 0.0, 0.0, 0.0], 0.25),
+            (&[1.0, -3.0], 0.8),
+        ];
+        for (values, expected) in cases {
+            let mut state = ScalarAccumulatorState::plain();
+            for &value in *values {
+                state.add_sample(value, &point);
+            }
+            let actual = state.ess();
+            assert!((actual - expected).abs() < 1e-14, "{values:?}: {actual}");
+            assert!((0.0..=1.0).contains(&actual));
+        }
+    }
+
+    #[test]
+    fn ess_survives_merging_serialization_and_extreme_weight_scales() {
+        for scale in [1e-150, 1.0, 1e150] {
+            let point = Point::new(vec![], vec![], scale);
+            let mut left = ScalarAccumulatorState::plain();
+            left.add_sample(1.0, &point);
+            let mut right = ScalarAccumulatorState::plain();
+            right.add_sample(-3.0, &point);
+            left.merge_plain(right);
+            let restored: ScalarAccumulatorState =
+                serde_json::from_value(serde_json::to_value(&left).unwrap()).unwrap();
+            assert!((restored.ess() - 0.8).abs() < 1e-14);
+        }
+        let large = ScalarAccumulatorState {
+            count: 1_000_000_000,
+            sum_abs: 1e158,
+            sum_sq: 1e307,
+            ..ScalarAccumulatorState::plain()
+        };
+        assert!((large.ess() - 1.0).abs() < 1e-14);
+    }
 
     #[test]
     fn add_sample_accepts_finite_weighted_contributions() {

@@ -558,6 +558,11 @@ pub(crate) async fn claim_external_node_launch_request(
 pub(crate) async fn reconcile_fulfilled_node_launch_requests(
     pool: &PgPool,
 ) -> Result<PgQueryResult, sqlx::Error> {
+    // Fulfillment records that every requested worker connected at least once.
+    // Requiring all leases to remain live simultaneously leaves a completed
+    // launch stuck in 'starting' after an early worker exits. last_seen is
+    // durable across expiration; its timestamp and launch_request_id keep a
+    // previous incarnation from fulfilling a resumed worker's new request.
     sqlx::query(
         r#"
         UPDATE node_launch_requests request
@@ -570,7 +575,7 @@ pub(crate) async fn reconcile_fulfilled_node_launch_requests(
               SELECT COUNT(*)
               FROM nodes node
               WHERE node.launch_request_id = request.id
-                AND node.lease_expires_at > now()
+                AND node.last_seen >= request.created_at
           ) >= request.requested_count
         "#,
     )

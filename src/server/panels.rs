@@ -30,6 +30,8 @@ pub enum ImageColorMode {
 pub enum ImageNormalizationMode {
     MinMax,
     Symmetric,
+    ZeroCentered,
+    Linear,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +158,17 @@ pub struct PlotSeries {
     pub points: Vec<PlotPoint>,
 }
 
+/// Units of the native `PlotPoint::x` coordinate, independent of panel names
+/// and of any alternate coordinates carried by each point.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlotXAxis {
+    #[default]
+    Numeric,
+    CompletedSamples,
+    WallTime,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyValueEntry {
     pub key: String,
@@ -194,6 +207,8 @@ pub struct TableStateOptions {
 pub enum PanelState {
     ScalarTimeseries {
         panel_id: String,
+        #[serde(default)]
+        x_axis: PlotXAxis,
         points: Vec<PlotPoint>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         smooth: Option<bool>,
@@ -202,6 +217,8 @@ pub enum PanelState {
     },
     MultiTimeseries {
         panel_id: String,
+        #[serde(default)]
+        x_axis: PlotXAxis,
         series: Vec<PlotSeries>,
     },
     TickBreakdown {
@@ -402,6 +419,7 @@ pub(crate) fn scalar_timeseries_panel_with_smoothing(
 ) -> PanelState {
     PanelState::ScalarTimeseries {
         panel_id: panel_id.to_string(),
+        x_axis: PlotXAxis::Numeric,
         points,
         smooth,
         target: None,
@@ -418,6 +436,7 @@ pub(crate) fn text_panel(panel_id: &str, text: impl Into<String>) -> PanelState 
 pub(crate) fn multi_timeseries_panel(panel_id: &str, series: Vec<PlotSeries>) -> PanelState {
     PanelState::MultiTimeseries {
         panel_id: panel_id.to_string(),
+        x_axis: PlotXAxis::Numeric,
         series,
     }
 }
@@ -539,6 +558,16 @@ pub(crate) fn append_panel(panel: PanelState) -> PanelUpdate {
 }
 
 impl PanelState {
+    pub(crate) fn with_x_axis(mut self, axis: PlotXAxis) -> Self {
+        match &mut self {
+            Self::ScalarTimeseries { x_axis, .. } | Self::MultiTimeseries { x_axis, .. } => {
+                *x_axis = axis;
+            }
+            _ => {}
+        }
+        self
+    }
+
     pub fn panel_id(&self) -> &str {
         match self {
             Self::ScalarTimeseries { panel_id, .. }

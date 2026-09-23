@@ -78,6 +78,11 @@ pub trait SamplerAggregator: Send {
         })
     }
     fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError>;
+    /// Generate a concrete payload that can be partitioned into evaluator batches.
+    /// Seed-only samplers override this to avoid duplicating random streams.
+    fn produce_bulk_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+        self.produce_latent_batch(nr_samples)
+    }
     fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError>;
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         Ok(vec![None; points.len()])

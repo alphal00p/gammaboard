@@ -5,8 +5,9 @@ import {
   Card,
   CardContent,
   Button,
+  MenuItem,
   Stack,
-  Slider,
+  TextField,
   Typography,
 } from "@mui/material";
 import { formatScientific } from "../../utils/formatters";
@@ -59,9 +60,18 @@ import {
   buildErrorBarSeries,
   formatAxisValue,
   gridColor,
-  inferXAxisLabel,
 } from "./chartPrimitives";
 import LazyChart from "./LazyChart";
+import HeatmapColorLimitControl from "./HeatmapColorLimitControl";
+import {
+  buildScalarHeatmapScale,
+  heatmapColorForValue,
+  heatmapLegendGradient,
+  isZeroCenteredScale,
+  readHeatmapColorLimits,
+  resetHeatmapColorLimits,
+  writeHeatmapColorLimit,
+} from "./heatmapColors";
 
 const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   const stateMap = new Map(asArray(panelStates).map((panel) => [panel.panel_id, panel]));
@@ -138,15 +148,11 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
   return renderablePanels;
 };
 
-const inferNumericXAxisLabel = (panelId, mode = HISTORY_X_AXIS_MODE_WALL_TIME) => {
+const timeseriesXAxisLabel = (mode) => {
   if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME) return "Sampler Runner Uptime";
   if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) return "Completed Samples";
-  return inferXAxisLabel(panelId) || "x";
-};
-const TIMESTAMP_X_THRESHOLD_MS = 1e11;
-const isTimestampDomain = (domain) => {
-  const [min, max] = asArray(domain);
-  return Number.isFinite(min) && Number.isFinite(max) && min >= 0 && max >= TIMESTAMP_X_THRESHOLD_MS;
+  if (mode === HISTORY_X_AXIS_MODE_WALL_TIME) return "Elapsed Time";
+  return "x";
 };
 const formatElapsedTime = (elapsedMs) => {
   const totalSeconds = Math.max(0, Math.round(Number(elapsedMs) / 1000));
@@ -200,31 +206,37 @@ const buildMultiSeriesData = (seriesList) => {
   return Array.from(rows.values()).sort((a, b) => a.x - b.x);
 };
 
-const historyXAxisValueForPoint = (point, mode) => {
-  if (mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME && point?.x_sampler_uptime_ms != null) {
-    const uptimeMs = Number(point.x_sampler_uptime_ms);
-    if (Number.isFinite(uptimeMs)) return uptimeMs;
-  }
-  if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES && point?.x_completed_samples_total != null) {
-    const completedSamples = Number(point.x_completed_samples_total);
-    if (Number.isFinite(completedSamples)) return completedSamples;
-  }
-  const fallback = Number(point?.x);
-  return Number.isFinite(fallback) ? fallback : 0;
+const historyXAxisValueForPoint = (point, mode, nativeAxis) => {
+  const raw = mode === nativeAxis
+    ? point?.x
+    : mode === HISTORY_X_AXIS_MODE_SAMPLER_UPTIME
+      ? point?.x_sampler_uptime_ms
+      : mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES
+        ? point?.x_completed_samples_total
+        : null;
+  return raw != null && Number.isFinite(Number(raw)) ? Number(raw) : null;
 };
 
-const remapTimeseriesPointXAxis = (point, mode) => ({
-  ...point,
-  x: historyXAxisValueForPoint(point, mode),
-});
+const resolveTimeseriesXAxisMode = (value, nativeAxis, points) => {
+  // Only performance histories offer alternate coordinates. Sample histories
+  // and ordinary numeric plots keep their declared units, even with stale UI state.
+  if (nativeAxis !== HISTORY_X_AXIS_MODE_WALL_TIME) return nativeAxis;
+  const supportsMode = (mode) => points.some((point) => historyXAxisValueForPoint(point, mode, nativeAxis) != null);
+  const defaultMode = supportsMode(HISTORY_X_AXIS_MODE_SAMPLER_UPTIME)
+    ? HISTORY_X_AXIS_MODE_SAMPLER_UPTIME
+    : nativeAxis;
+  const requestedMode = readHistoryXAxisModeFromPanelValue(value, defaultMode);
+  return supportsMode(requestedMode) ? requestedMode : nativeAxis;
+};
 
-const remapAndSortTimeseriesPoints = (points, mode) =>
+const remapAndSortTimeseriesPoints = (points, mode, nativeAxis) =>
   asArray(points)
-    .map((point) => remapTimeseriesPointXAxis(point, mode))
+    .map((point) => ({ ...point, x: historyXAxisValueForPoint(point, mode, nativeAxis) }))
+    // A missing alternate coordinate must never be replaced with a different unit.
+    .filter((point) => point.x != null)
     .sort((left, right) => Number(left?.x) - Number(right?.x));
 
 const lineColors = ["#005f73", "#bb3e03", "#0a9396", "#ae2012", "#ca6702"];
-const scalarHeatmapColors = ["#1d4ed8", "#16a34a", "#dc2626"];
 const HEATMAP_LEGEND_WIDTH = 116;
 const HEATMAP_LEGEND_GAP = 12;
 
@@ -256,22 +268,6 @@ const panelColumnSpan = (descriptor) => {
   }
 };
 
-const clampHeatmapSpread = (candidate, fallback = 1) => {
-  const numeric = Number(candidate);
-  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
-  return Math.max(0.05, Math.min(20, numeric));
-};
-const HEATMAP_SPREAD_MIN = 0.05;
-const HEATMAP_SPREAD_MAX = 20;
-const HEATMAP_SPREAD_LOG_MIN = Math.log10(HEATMAP_SPREAD_MIN);
-const HEATMAP_SPREAD_LOG_MAX = Math.log10(HEATMAP_SPREAD_MAX);
-const readHeatmapSpreadFromPanelValue = (value, fallback = 1) =>
-  clampHeatmapSpread(isObject(value) ? value.spread : null, fallback);
-const writeHeatmapSpreadPanelValue = (current, spread) => {
-  const next = isObject(current) ? { ...current } : {};
-  next.spread = clampHeatmapSpread(spread, 1);
-  return next;
-};
 const extractSharedPdfImageView = (value) => {
   if (!isObject(value)) return null;
   const shared = {};
@@ -292,6 +288,7 @@ const isPdfAdaptationImagePanelSpec = (spec) =>
 const buildErrorBarData = (points) =>
   asArray(points)
     .map((point) => {
+      if (point?.y_min == null || point?.y_max == null) return null;
       const x = Number(point?.x);
       const yMin = Number(point?.y_min);
       const yMax = Number(point?.y_max);
@@ -307,14 +304,12 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const echartsRef = useRef(null);
   const panelId = state?.panel_id || null;
   const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
-  const historyXAxisMode = readHistoryXAxisModeFromPanelValue(
-    value,
-    isHistoryPanel ? HISTORY_X_AXIS_MODE_SAMPLER_UPTIME : HISTORY_X_AXIS_MODE_WALL_TIME,
-  );
-  const points = remapAndSortTimeseriesPoints(state?.points, historyXAxisMode);
+  const nativeAxis = state?.x_axis || "numeric";
+  const historyXAxisMode = resolveTimeseriesXAxisMode(value, nativeAxis, asArray(state?.points));
+  const points = remapAndSortTimeseriesPoints(state?.points, historyXAxisMode, nativeAxis);
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
   const targetValue = Number(state?.target);
-  const hasTargetLine = Number.isFinite(targetValue);
+  const hasTargetLine = state?.target != null && Number.isFinite(targetValue);
   const errorBarData = buildErrorBarData(points);
   const domain = fitDomain([
     ...points.flatMap((point) => [point.y, point.y_min, point.y_max]),
@@ -322,10 +317,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   ]);
   const xDomain = fitXDomain(points.map((point) => point.x));
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
-  const usesTimestampXAxis = useMemo(
-    () => historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME && isTimestampDomain(xDomain),
-    [historyXAxisMode, xDomain],
-  );
+  const usesTimestampXAxis = historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME;
   const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
@@ -347,6 +339,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
     for (let index = 1; index < points.length; index += 1) {
       const left = points[index - 1];
       const right = points[index];
+      if (left?.y_min == null || left?.y_max == null || right?.y_min == null || right?.y_max == null) continue;
       const x1 = Number(left?.x);
       const x2 = Number(right?.x);
       const yMin1 = Number(left?.y_min);
@@ -369,6 +362,8 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
     }
     return segments;
   }, [points]);
+  const hasUncertaintyBand = isHistoryPanel && bandSegments.length > 0;
+  const showLegend = hasUncertaintyBand || errorBarData.length > 0 || hasTargetLine;
   useEffect(() => {
     if (!isHistoryPanel || !tailPinned || typeof onValueChange !== "function" || !panelId) return;
     const normalized = normalizeZoomRange(zoomRange) || FULL_ZOOM;
@@ -402,23 +397,26 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
     () => ({
       animation: false,
       legend: {
+        show: showLegend,
         top: 0,
         left: "center",
         textStyle: { color: "#475569", fontSize: 12 },
       },
-      grid: { ...baseCartesianGrid, top: 52 },
+      grid: { ...baseCartesianGrid, left: 88, right: 56, top: showLegend ? 52 : 12, bottom: 64 },
       xAxis: {
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId, historyXAxisMode),
+        name: timeseriesXAxisLabel(historyXAxisMode),
+        nameLocation: "middle",
+        nameGap: 30,
         axisLabel: {
           ...baseAxisLabel,
           formatter: (axisValue) =>
             formatTimeseriesXAxisValue(axisValue, historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
         },
         splitLine: { show: false },
-        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+        nameTextStyle: { color: "#64748b", fontSize: 12 },
       },
       yAxis: {
         type: "value",
@@ -433,7 +431,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       },
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
-        ...(isHistoryPanel
+        ...(hasUncertaintyBand
           ? [
               {
                 name: "uncertainty",
@@ -465,10 +463,12 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
                 },
               },
             ]
-          : [buildErrorBarSeries({ name: "error", data: errorBarData })]),
+          : errorBarData.length > 0
+            ? [buildErrorBarSeries({ name: "uncertainty", data: errorBarData })]
+            : []),
         {
           type: "line",
-          name: "y",
+          name: title || "Value",
           data: meanData,
           smooth: Boolean(state?.smooth),
           showSymbol: false,
@@ -497,12 +497,13 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       bandSegments,
       errorBarData,
       historyXAxisMode,
-      isHistoryPanel,
+      hasUncertaintyBand,
       meanData,
-      panelId,
       hasTargetLine,
+      showLegend,
       state?.smooth,
       targetValue,
+      title,
       usesTimestampXAxis,
       visibleDomain,
       xAxisOriginMs,
@@ -539,6 +540,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
             ref={echartsRef}
             option={option}
             notMerge={false}
+            replaceMerge={["series"]}
             onEvents={onDataZoom}
             lazyUpdate
             opts={{ renderer: "canvas" }}
@@ -555,13 +557,15 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   const echartsRef = useRef(null);
   const panelId = state?.panel_id || null;
   const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
-  const historyXAxisMode = readHistoryXAxisModeFromPanelValue(
+  const nativeAxis = state?.x_axis || "numeric";
+  const historyXAxisMode = resolveTimeseriesXAxisMode(
     value,
-    isHistoryPanel ? HISTORY_X_AXIS_MODE_SAMPLER_UPTIME : HISTORY_X_AXIS_MODE_WALL_TIME,
+    nativeAxis,
+    asArray(state?.series).flatMap((item) => asArray(item?.points)),
   );
   const series = asArray(state?.series).map((item) => ({
     ...item,
-    points: remapAndSortTimeseriesPoints(item?.points, historyXAxisMode),
+    points: remapAndSortTimeseriesPoints(item?.points, historyXAxisMode, nativeAxis),
   }));
   const data = buildMultiSeriesData(series);
   const domain = fitDomain(
@@ -571,10 +575,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const yZoomRange = useMemo(() => readYZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
-  const usesTimestampXAxis = useMemo(
-    () => historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME && isTimestampDomain(xDomain),
-    [historyXAxisMode, xDomain],
-  );
+  const usesTimestampXAxis = historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME;
   const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
   useEffect(() => {
     if (!isHistoryPanel || !tailPinned || typeof onValueChange !== "function" || !panelId) return;
@@ -617,7 +618,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
-        name: usesTimestampXAxis ? "Elapsed Time" : inferNumericXAxisLabel(panelId, historyXAxisMode),
+        name: timeseriesXAxisLabel(historyXAxisMode),
         axisLabel: {
           ...baseAxisLabel,
           formatter: (axisValue) =>
@@ -701,25 +702,6 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   );
 };
 
-const buildScalarHeatmapScale = (values, normalizationMode, spread = 1) => {
-  const finite = values.filter((value) => Number.isFinite(value));
-  if (finite.length === 0) {
-    return { zmin: 0, zmax: 1 };
-  }
-  if (normalizationMode === "symmetric") {
-    const spreadFactor = clampHeatmapSpread(spread, 1);
-    const maxAbs = Math.max(...finite.map((value) => Math.abs(value)), 1e-12) * spreadFactor;
-    return { zmin: -maxAbs, zmax: maxAbs };
-  }
-  const zmin = Math.min(...finite);
-  const zmax = Math.max(...finite);
-  if (zmin === zmax) {
-    const padding = Math.abs(zmin) > 0 ? Math.abs(zmin) * 0.1 : 1;
-    return { zmin: zmin - padding, zmax: zmax + padding };
-  }
-  return { zmin, zmax };
-};
-
 const estimateHeatmapChartHeight = (width, height, panelWidth, margins) => {
   if (width <= 0 || height <= 0) return 360;
   const availableWidth =
@@ -730,33 +712,6 @@ const estimateHeatmapChartHeight = (width, height, panelWidth, margins) => {
   const innerWidth = Math.max(1, availableWidth - legendWidth - margins.left - margins.right);
   const innerHeight = (innerWidth * height) / width;
   return Math.max(220, Math.round(innerHeight + margins.top + margins.bottom));
-};
-
-const parseHexColor = (value) => {
-  const text = String(value || "").replace(/^#/, "");
-  if (text.length !== 6) return [0, 0, 0];
-  return [0, 2, 4].map((offset) => Number.parseInt(text.slice(offset, offset + 2), 16) || 0);
-};
-
-const scalarHeatmapRgb = scalarHeatmapColors.map(parseHexColor);
-
-const mixRgb = (left, right, t) => {
-  const clamped = Math.max(0, Math.min(1, t));
-  return [
-    Math.round(left[0] + (right[0] - left[0]) * clamped),
-    Math.round(left[1] + (right[1] - left[1]) * clamped),
-    Math.round(left[2] + (right[2] - left[2]) * clamped),
-  ];
-};
-
-const heatmapColorForValue = (value, zmin, zmax) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return [255, 0, 255];
-  const min = Number(zmin);
-  const max = Number(zmax);
-  const ratio = max > min ? Math.max(0, Math.min(1, (numeric - min) / (max - min))) : 0.5;
-  if (ratio <= 0.5) return mixRgb(scalarHeatmapRgb[0], scalarHeatmapRgb[1], ratio * 2);
-  return mixRgb(scalarHeatmapRgb[1], scalarHeatmapRgb[2], (ratio - 0.5) * 2);
 };
 
 const hsvToRgb = (hue, saturation, value) => {
@@ -876,7 +831,7 @@ const complexTooltipValueLines = (re, im, metricLabel = null) => {
 const HeatmapScaleLegend = ({ zmin, zmax, normalizationMode, panelId, metricLabel = null }) => {
   const max = Number(zmax);
   const min = Number(zmin);
-  const showMidpoint = normalizationMode === "symmetric" && min < 0 && max > 0;
+  const showMidpoint = isZeroCenteredScale(normalizationMode) && min < 0 && max > 0;
   const label = heatmapMetricLabel(panelId, metricLabel);
   return (
     <Box sx={{ width: HEATMAP_LEGEND_WIDTH, flexShrink: 0, display: "grid", gap: 0.75 }}>
@@ -890,7 +845,7 @@ const HeatmapScaleLegend = ({ zmin, zmax, normalizationMode, panelId, metricLabe
             height: "100%",
             borderRadius: 0.75,
             border: "1px solid rgba(100,116,139,0.35)",
-            background: `linear-gradient(to top, ${scalarHeatmapColors[0]} 0%, ${scalarHeatmapColors[1]} 50%, ${scalarHeatmapColors[2]} 100%)`,
+            background: heatmapLegendGradient(min, max, normalizationMode),
           }}
         />
         <Box sx={{ position: "relative", minWidth: 0 }}>
@@ -953,13 +908,15 @@ const ScalarImageHeatmapPanel = ({
   const dragRef = useRef(null);
   const [panelWidth, setPanelWidth] = useState(0);
   const [tooltip, setTooltip] = useState(null);
+  const [colorResetVersion, setColorResetVersion] = useState(0);
   const totalCells = Math.max(0, width * height);
   const boundedValues = useMemo(() => values.slice(0, totalCells), [totalCells, values]);
   const boundedImagValues = useMemo(() => (imagValues ? imagValues.slice(0, totalCells) : null), [imagValues, totalCells]);
-  const isPdfPanel = typeof panelId === "string" && panelId.startsWith("pdf_adaptation_");
-  const supportsSpreadControl = normalizationMode === "symmetric" && isPdfPanel && panelId && typeof onValueChange === "function";
-  const spread = supportsSpreadControl ? readHeatmapSpreadFromPanelValue(value, 1) : 1;
-  const spreadSliderValue = Math.log10(clampHeatmapSpread(spread, 1));
+  const supportsColorScale = ["zero_centered", "linear"].includes(normalizationMode) && colorMode !== "complex_phase";
+  const supportsColorLimits = supportsColorScale && panelId && typeof onValueChange === "function";
+  const colorScale = supportsColorScale && ["zero_centered", "linear"].includes(value?.colorScale)
+    ? value.colorScale : normalizationMode;
+  const colorLimits = readHeatmapColorLimits(value, metricMode, colorScale);
   const complexMaxMagnitude = useMemo(() => {
     if (colorMode !== "complex_phase" || !boundedImagValues) return 0;
     return boundedValues.reduce((max, re, index) => {
@@ -968,9 +925,13 @@ const ScalarImageHeatmapPanel = ({
       return Math.max(max, Math.hypot(re, im));
     }, 0);
   }, [boundedImagValues, boundedValues, colorMode]);
+  const defaultScale = useMemo(
+    () => buildScalarHeatmapScale(boundedValues, colorScale, null, invalidIndices),
+    [boundedValues, invalidIndices, colorScale],
+  );
   const { zmin, zmax } = useMemo(
-    () => buildScalarHeatmapScale(boundedValues, normalizationMode, spread),
-    [boundedValues, normalizationMode, spread],
+    () => buildScalarHeatmapScale(boundedValues, colorScale, colorLimits, invalidIndices),
+    [boundedValues, colorLimits, invalidIndices, colorScale],
   );
   const heatmapMargins = useMemo(() => ({ left: 56, right: 24, top: 16, bottom: 44 }), []);
   const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
@@ -1026,7 +987,7 @@ const ScalarImageHeatmapPanel = ({
             ? [255, 0, 255]
             : colorMode === "complex_phase" && boundedImagValues
               ? complexPhaseColorForValue(boundedValues[sourceIndex], boundedImagValues[sourceIndex], complexMaxMagnitude)
-              : heatmapColorForValue(boundedValues[sourceIndex], zmin, zmax);
+              : heatmapColorForValue(boundedValues[sourceIndex], zmin, zmax, colorScale);
           image.data[targetIndex] = rgb[0];
           image.data[targetIndex + 1] = rgb[1];
           image.data[targetIndex + 2] = rgb[2];
@@ -1089,6 +1050,7 @@ const ScalarImageHeatmapPanel = ({
     heatmapMargins,
     height,
     invalidIndices,
+    colorScale,
     panelWidth,
     width,
     xRange,
@@ -1288,35 +1250,6 @@ const ScalarImageHeatmapPanel = ({
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
           <Stack direction="row" spacing={2} alignItems="center">
-            {supportsSpreadControl ? (
-              <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 240 }}>
-                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
-                  Spread
-                </Typography>
-                <Slider
-                  size="small"
-                  min={HEATMAP_SPREAD_LOG_MIN}
-                  max={HEATMAP_SPREAD_LOG_MAX}
-                  step={0.01}
-                  value={spreadSliderValue}
-                  onChange={(_event, next) => {
-                    const numeric = Array.isArray(next) ? next[0] : next;
-                    onValueChange(panelId, writeHeatmapSpreadPanelValue(value, 10 ** Number(numeric)), false);
-                  }}
-                  valueLabelDisplay="auto"
-                  valueLabelFormat={(next) => `${(10 ** Number(next)).toFixed(2)}x`}
-                  sx={{ width: 140 }}
-                />
-                <Button
-                  size="small"
-                  variant="text"
-                  onClick={() => onValueChange(panelId, writeHeatmapSpreadPanelValue(value, 1), false)}
-                  disabled={Math.abs(spread - 1) < 1e-9}
-                >
-                  Reset
-                </Button>
-              </Stack>
-            ) : null}
             <FigureExportActions
               baseName={panelId || title || "image2d"}
               payload={{
@@ -1330,6 +1263,10 @@ const ScalarImageHeatmapPanel = ({
                   values,
                   imag_values: imagValues,
                   invalid_indices: Array.from(invalidIndices || []),
+                  normalization_mode: colorScale,
+                  color_range: [zmin, zmax],
+                  metric_label: metricLabel,
+                  metric_mode: metricMode,
                 },
               }}
               elementRef={figureRef}
@@ -1341,6 +1278,51 @@ const ScalarImageHeatmapPanel = ({
             />
           </Stack>
         </Box>
+        {supportsColorLimits ? (
+          <Stack direction="row" alignItems="center" sx={{ flexWrap: "wrap", gap: 3, mb: 2 }}>
+            <TextField
+              select
+              label="Color scale"
+              size="small"
+              value={colorScale}
+              slotProps={{ select: { inputProps: { "aria-label": "Color scale" } } }}
+              onChange={(event) => onValueChange(panelId, {
+                ...resetHeatmapColorLimits(value), colorScale: event.target.value,
+              }, false)}
+              sx={{ minWidth: 145 }}
+            >
+              <MenuItem value="linear">linear</MenuItem>
+              <MenuItem value="zero_centered">zero-origin</MenuItem>
+            </TextField>
+            <HeatmapColorLimitControl
+              key={`min:${metricMode}:${colorScale}:${colorResetVersion}`}
+              side="min"
+              limit={zmin}
+              otherLimit={zmax}
+              defaultScale={defaultScale}
+              zeroOrigin={colorScale === "zero_centered"}
+              onChange={(next) => onValueChange(panelId, writeHeatmapColorLimit(value, metricMode, "min", next, colorScale), false)}
+            />
+            <HeatmapColorLimitControl
+              key={`max:${metricMode}:${colorScale}:${colorResetVersion}`}
+              side="max"
+              limit={zmax}
+              otherLimit={zmin}
+              defaultScale={defaultScale}
+              zeroOrigin={colorScale === "zero_centered"}
+              onChange={(next) => onValueChange(panelId, writeHeatmapColorLimit(value, metricMode, "max", next, colorScale), false)}
+            />
+            <Button
+              size="small"
+              onClick={() => {
+                setColorResetVersion((version) => version + 1);
+                onValueChange(panelId, resetHeatmapColorLimits(value), false);
+              }}
+            >
+              Auto limits
+            </Button>
+          </Stack>
+        ) : null}
         <Box
           ref={figureRef}
           sx={{
@@ -1398,7 +1380,7 @@ const ScalarImageHeatmapPanel = ({
             <HeatmapScaleLegend
               zmin={zmin}
               zmax={zmax}
-              normalizationMode={normalizationMode}
+              normalizationMode={colorScale}
               panelId={panelId}
               metricLabel={colorMode === "complex_phase" ? "phase hue, |z| saturation" : metricLabel}
             />
@@ -1439,7 +1421,11 @@ const Image2dPanel = memo(({ title, state, value = undefined, onValueChange = nu
   }, [state?.imag_values]);
   const invalidIndices = useMemo(() => new Set(asArray(state?.invalid_indices)), [state?.invalid_indices]);
   const colorMode = state?.color_mode || "scalar_heatmap";
-  const normalizationMode = state?.normalization_mode || "min_max";
+  // Older servers used symmetric/zero_centered for every PDF heatmap.
+  // Apply the new defaults to their payloads too, leaving other images alone.
+  const normalizationMode = ["symmetric", "zero_centered"].includes(state?.normalization_mode) && state?.panel_id?.startsWith("pdf_adaptation_")
+    ? (["pdf_adaptation_log_integrand", "pdf_adaptation_log_pdf"].includes(state.panel_id) ? "linear" : "zero_centered")
+    : state?.normalization_mode || "min_max";
   const metricLabel = typeof state?.metric_label === "string" ? state.metric_label : null;
   const metricMode = typeof state?.metric_mode === "string" ? state.metric_mode : null;
   const xLabel = typeof state?.x_label === "string" ? state.x_label : "t";

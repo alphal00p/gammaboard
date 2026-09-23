@@ -13,7 +13,7 @@ use crate::evaluation::{
 };
 use crate::runners::queue::MIN_BATCH_SIZE;
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, TableStateOptions,
+    PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, PlotXAxis, TableStateOptions,
     TickBreakdownSegment, key_value, key_value_panel, progress_panel,
     scalar_timeseries_panel_with_smoothing, sized_panel_spec, table_panel_with_payload,
     table_panel_with_payload_and_options, tick_breakdown_panel,
@@ -44,6 +44,14 @@ pub(super) fn projectors(
         projectors.push(max_weight_points_projector(&accumulator_config));
     }
     projectors.push(rsd_history_projector(&accumulator_config));
+    if matches!(
+        accumulator_config,
+        AccumulatorConfig::Scalar { .. }
+            | AccumulatorConfig::Vector { .. }
+            | AccumulatorConfig::Gammaloop
+    ) {
+        projectors.push(ess_history_projector(&accumulator_config));
+    }
     if matches!(accumulator_config, AccumulatorConfig::Gammaloop) {
         #[cfg(feature = "gammaloop")]
         projectors.push(gammaloop_histogram_bundle_projector());
@@ -196,6 +204,15 @@ fn rsd_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelPro
         "RSD",
         accumulator_config.clone(),
         rsd_history_panel,
+    )
+}
+
+fn ess_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+    persisted_first_history_projector(
+        "ess_history",
+        "ESS",
+        accumulator_config.clone(),
+        ess_history_panel,
     )
 }
 
@@ -455,11 +472,10 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
         )],
         _ => Vec::new(),
     };
-    Some(scalar_timeseries_panel_with_smoothing(
-        "real_estimate_history",
-        points,
-        Some(true),
-    ))
+    Some(
+        scalar_timeseries_panel_with_smoothing("real_estimate_history", points, Some(true))
+            .with_x_axis(PlotXAxis::CompletedSamples),
+    )
 }
 
 fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
@@ -467,15 +483,18 @@ fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
         return None;
     }
     match accumulator {
-        AccumulatorState::Gammaloop(state) => Some(scalar_timeseries_panel_with_smoothing(
-            "imag_estimate_history",
-            vec![PlotPoint::timeseries(
-                state.sample_count() as f64,
-                state.imag_mean(),
-                Some(state.imag_stderr()),
-            )],
-            Some(true),
-        )),
+        AccumulatorState::Gammaloop(state) => Some(
+            scalar_timeseries_panel_with_smoothing(
+                "imag_estimate_history",
+                vec![PlotPoint::timeseries(
+                    state.sample_count() as f64,
+                    state.imag_mean(),
+                    Some(state.imag_stderr()),
+                )],
+                Some(true),
+            )
+            .with_x_axis(PlotXAxis::CompletedSamples),
+        ),
         _ => None,
     }
 }
@@ -489,15 +508,42 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
         AccumulatorState::Gammaloop(state) => state.rsd(),
         _ => 0.0,
     };
-    Some(scalar_timeseries_panel_with_smoothing(
-        "abs_signal_to_noise_history",
-        vec![PlotPoint::timeseries(
-            accumulator.sample_count() as f64,
-            rsd,
-            None,
-        )],
-        Some(true),
-    ))
+    Some(
+        scalar_timeseries_panel_with_smoothing(
+            "abs_signal_to_noise_history",
+            vec![PlotPoint::timeseries(
+                accumulator.sample_count() as f64,
+                rsd,
+                None,
+            )],
+            Some(true),
+        )
+        .with_x_axis(PlotXAxis::CompletedSamples),
+    )
+}
+
+fn ess_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
+        return None;
+    }
+    let ess = match &accumulator {
+        AccumulatorState::Vector(state) => state.ess(),
+        AccumulatorState::Gammaloop(state) => state.ess(),
+        _ => return None,
+    };
+    Some(
+        scalar_timeseries_panel_with_smoothing(
+            "ess_history",
+            vec![PlotPoint::timeseries(
+                accumulator.sample_count() as f64,
+                ess,
+                None,
+            )],
+            // A spline can overshoot the physical [0, 1] bounds between samples.
+            Some(false),
+        )
+        .with_x_axis(PlotXAxis::CompletedSamples),
+    )
 }
 
 fn estimate_summary_panel(
@@ -692,6 +738,7 @@ fn base_estimate_summary_entries(
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
                 key_value("projection_rsd", "Projection RSD", state.rsd()),
+                key_value("projection_ess", "Projection ESS", state.ess()),
                 estimate_entry(
                     "projection_mean",
                     "Projection Mean",
@@ -718,6 +765,7 @@ fn base_estimate_summary_entries(
             let mut entries = vec![
                 key_value("count", "Count", state.sample_count()),
                 key_value("rsd", "RSD", state.rsd()),
+                key_value("ess", "ESS", state.ess()),
                 estimate_entry(
                     "real_mean",
                     "Real Mean",
@@ -828,11 +876,13 @@ fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
     match panel {
         PanelState::ScalarTimeseries {
             panel_id,
+            x_axis,
             points,
             smooth,
             ..
         } => PanelState::ScalarTimeseries {
             panel_id,
+            x_axis,
             points,
             smooth,
             target,
@@ -1667,6 +1717,105 @@ mod tests {
     use crate::{
         NamedScalarAccumulator, VectorAccumulatorState, evaluation::ScalarAccumulatorState,
     };
+
+    #[test]
+    fn ess_summary_metric_and_existing_history_use_dimensionless_values() {
+        let configs = [
+            AccumulatorConfig::Scalar {
+                discrete_projections: None,
+                moments: Default::default(),
+            },
+            AccumulatorConfig::Vector {
+                components: vec!["real".into(), "imag".into()],
+                training_projection: crate::core::TrainingProjection::Norm,
+                discrete_projections: None,
+                moments: Default::default(),
+            },
+            AccumulatorConfig::Gammaloop,
+        ];
+        for config in configs {
+            let mut accumulator = AccumulatorState::from_config(&config);
+            let vector = match &mut accumulator {
+                AccumulatorState::Vector(vector) => vector,
+                AccumulatorState::Gammaloop(state) => &mut state.estimate,
+                _ => unreachable!(),
+            };
+            let point = Point::new(vec![], vec![], 1.0);
+            for value in [1.0, -3.0].into_iter().cycle().take(16) {
+                let values = [value, 0.0];
+                vector
+                    .ingest_vector(&values[..vector.components.len()], &point)
+                    .unwrap();
+            }
+            let entries = base_estimate_summary_entries(&accumulator, None);
+            let ess = entries
+                .iter()
+                .find(|entry| entry.key.ends_with("ess"))
+                .unwrap();
+            assert!(
+                (ess.value
+                    .as_f64()
+                    .expect("numeric ESS, not percentage text")
+                    - 0.8)
+                    .abs()
+                    < 1e-14
+            );
+            let selector = serde_json::from_value(json!({"name":"ess"})).unwrap();
+            let metric = crate::evaluation::extract_accumulator_metric(&accumulator, &selector)
+                .unwrap()
+                .unwrap();
+            assert!((metric.value - 0.8).abs() < 1e-14);
+            assert_eq!(metric.sample_count, 16);
+
+            // Existing history contains moments, with no stored ESS field.
+            let snapshot = crate::stores::TaskOutputSnapshot {
+                id: "1".into(),
+                run_id: 1,
+                task_id: "1".into(),
+                persisted_output: accumulator.to_persistent_json().unwrap(),
+                created_at: None,
+            };
+            let projectors = projectors(config);
+            for projector in projectors
+                .iter()
+                .filter(|projector| projector.spec().history == PanelHistoryMode::Append)
+            {
+                let panel = projector
+                    .history(&TaskPanelHistoryContext {
+                        snapshot: &snapshot,
+                    })
+                    .unwrap()
+                    .unwrap();
+                // The mean's current view also adds a target; it must retain
+                // the axis metadata used by the persisted history.
+                let panel = with_scalar_target(panel, Some(0.5));
+                let json = serde_json::to_value(&panel).unwrap();
+                assert_eq!(json["x_axis"], "completed_samples");
+                assert_eq!(json["points"][0]["x"], 16.0);
+            }
+            let projector = projectors
+                .iter()
+                .find(|p| p.spec().panel_id == "ess_history")
+                .unwrap();
+            assert_eq!(projector.spec().label, "ESS");
+            assert_eq!(projector.spec().history, PanelHistoryMode::Append);
+            let panel = projector
+                .history(&TaskPanelHistoryContext {
+                    snapshot: &snapshot,
+                })
+                .unwrap()
+                .unwrap();
+            let PanelState::ScalarTimeseries { points, smooth, .. } = panel else {
+                panic!("expected ESS timeseries");
+            };
+            assert_eq!(points.len(), 1);
+            assert_eq!(points[0].x, 16.0);
+            assert!((points[0].y - 0.8).abs() < 1e-14);
+            assert_eq!(smooth, Some(false));
+            assert!(points[0].y_min.is_none() && points[0].y_max.is_none());
+        }
+        assert!(ess_history_panel(AccumulatorState::empty_scalar()).is_none());
+    }
 
     fn discrete_bin(
         discrete: Vec<i64>,

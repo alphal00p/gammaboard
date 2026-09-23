@@ -18,6 +18,7 @@ db_pool_size = 10
 
 
 [sampler_aggregator_runner_params.queue]
+bulk_sample_generation = false
 queue_buffer = 1
 # Amortize per-batch setup while keeping interactive training responsive.
 target_batch_eval_ms = 2000.0

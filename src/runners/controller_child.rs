@@ -22,6 +22,7 @@ impl ChildTaskResult {
             self.task_state,
             &self.source_task.name,
             self.source_task.failure_reason.as_deref(),
+            self.output.as_ref(),
         )
     }
 }
@@ -30,8 +31,14 @@ fn task_failure_reason(
     state: RunTaskState,
     task_name: &str,
     failure_reason: Option<&str>,
+    output: Option<&TaskMeasurementOutput>,
 ) -> Option<String> {
     (state == RunTaskState::Failed).then(|| {
+        // A campaign may still publish a completed training stage while a later
+        // sampling task has failed. Its output carries that actual failure.
+        if let Some(TaskMeasurementOutput::Failed { reason }) = output {
+            return reason.clone();
+        }
         failure_reason
             .map(str::to_string)
             .unwrap_or_else(|| format!("child task '{task_name}' failed"))
@@ -378,10 +385,10 @@ pub async fn load_published_child_result(
     if let Some(failed) = tasks.iter().find(|task| task.state == RunTaskState::Failed) {
         result.task_state = RunTaskState::Failed;
         result.output = Some(TaskMeasurementOutput::Failed {
-            reason: failed
-                .failure_reason
-                .clone()
-                .unwrap_or_else(|| format!("task '{}' failed", failed.name)),
+            reason: match &failed.failure_reason {
+                Some(reason) => format!("child task '{}' failed: {reason}", failed.name),
+                None => format!("child task '{}' failed", failed.name),
+            },
         });
     } else {
         result.task_state = if tasks
@@ -530,12 +537,28 @@ mod tests {
     #[test]
     fn failed_child_task_overrides_cached_measurement_state() {
         assert_eq!(
-            task_failure_reason(RunTaskState::Failed, "integrate", Some("engine stopped")),
+            task_failure_reason(
+                RunTaskState::Failed,
+                "integrate",
+                Some("engine stopped"),
+                None
+            ),
             Some("engine stopped".to_string())
         );
         assert_eq!(
-            task_failure_reason(RunTaskState::Active, "integrate", Some("stale")),
+            task_failure_reason(RunTaskState::Active, "integrate", Some("stale"), None),
             None
+        );
+    }
+
+    #[test]
+    fn campaign_failure_uses_failed_stage_even_when_training_result_is_retained() {
+        let output = TaskMeasurementOutput::Failed {
+            reason: "child task 'sample' failed: inconsistent checkpoint".into(),
+        };
+        assert_eq!(
+            task_failure_reason(RunTaskState::Failed, "madnis-train", None, Some(&output)),
+            Some("child task 'sample' failed: inconsistent checkpoint".into())
         );
     }
 }

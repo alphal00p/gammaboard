@@ -177,22 +177,37 @@ pub trait WorkQueueStore: Send + Sync {
     async fn get_batch_queue_counts(
         &self,
         run_id: i32,
+        task_id: Option<i64>,
         completed_after_batch_id: Option<i64>,
     ) -> Result<BatchQueueCounts, StoreError>;
+    async fn get_queue_blocker(
+        &self,
+        run_id: i32,
+        task_id: i64,
+        after_batch_id: Option<i64>,
+    ) -> Result<Option<crate::core::QueueBlocker>, StoreError>;
     async fn claim_batch(
         &self,
         run_id: i32,
         node_uuid: &str,
+        claim_token: &str,
     ) -> Result<Option<BatchClaim>, StoreError>;
     async fn release_claimed_batches_for_worker(
         &self,
         run_id: i32,
         node_uuid: &str,
     ) -> Result<u64, StoreError>;
+    async fn release_untracked_claims(
+        &self,
+        run_id: i32,
+        node_uuid: &str,
+        tracked_tokens: &[String],
+    ) -> Result<u64, StoreError>;
     async fn submit_batch_results(
         &self,
         batch_id: i64,
         node_uuid: &str,
+        claim_token: &str,
         result: &BatchResult,
         eval_time_ms: f64,
     ) -> Result<(), StoreError>;
@@ -207,12 +222,15 @@ pub trait WorkQueueStore: Send + Sync {
     async fn fail_batch(
         &self,
         batch_id: i64,
+        node_uuid: &str,
+        claim_token: &str,
         last_error: &str,
         max_batch_retries: i32,
     ) -> Result<BatchFailOutcome, StoreError>;
     async fn fetch_completed_batches(
         &self,
         run_id: i32,
+        task_id: i64,
         limit: usize,
         strict_ordering: bool,
         after_batch_id: Option<i64>,

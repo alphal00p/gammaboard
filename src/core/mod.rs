@@ -14,8 +14,8 @@ pub use models::{
     DerivedResultSnapshot, DesiredAssignment, EvaluatorIdleProfileMetrics,
     EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, InsertBatchesMetrics,
     InsertBatchesOutcome, MeasurementResult, NodeAssignmentUpdate, NodeCapabilities,
-    NodeLaunchRequest, RegisteredNode, ResultSourceRef, RollingMetricSnapshot, RunSampleProgress,
-    RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    NodeLaunchRequest, QueueBlocker, RegisteredNode, ResultSourceRef, RollingMetricSnapshot,
+    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
     SamplerPerformanceMetrics, SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics,
     SamplerRuntimeMetrics, SamplerWorkRollingAverages, WorkerRole,
 };

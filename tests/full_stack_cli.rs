@@ -3461,7 +3461,10 @@ completed_batch_fetch_limit = 64
                     let Some(diag) = diag else {
                         return Ok(false);
                     };
-                    Ok(diag["runner"]["queue_buffer"].as_f64() == Some(1.0))
+                    Ok(
+                        diag["runner"]["bulk_sample_generation"].as_bool() == Some(false)
+                            && diag["runner"]["queue_buffer"].as_f64() == Some(1.0),
+                    )
                 }
             },
         )
@@ -3472,6 +3475,7 @@ completed_batch_fetch_limit = 64
         &format!("/api/runs/{run_id}/tasks/{task_id}/queue-tuning"),
         json!({
             "queue_tuning": {
+                "bulk_sample_generation": true,
                 "queue_buffer": 0.0,
                 "max_batches_per_tick": 1,
                 "completed_batch_fetch_limit": 7
@@ -3496,9 +3500,13 @@ completed_batch_fetch_limit = 64
                     .bind(task_id)
                     .fetch_one(&pool)
                     .await?;
-                    Ok(task["queue_tuning"]["queue_buffer"].as_f64() == Some(0.0)
-                        && task["queue_tuning"]["max_batches_per_tick"].as_u64() == Some(1)
-                        && task["queue_tuning"]["completed_batch_fetch_limit"].as_u64() == Some(7))
+                    Ok(
+                        task["queue_tuning"]["bulk_sample_generation"].as_bool() == Some(true)
+                            && task["queue_tuning"]["queue_buffer"].as_f64() == Some(0.0)
+                            && task["queue_tuning"]["max_batches_per_tick"].as_u64() == Some(1)
+                            && task["queue_tuning"]["completed_batch_fetch_limit"].as_u64()
+                                == Some(7),
+                    )
                 }
             },
         )
@@ -3524,8 +3532,11 @@ completed_batch_fetch_limit = 64
                     let Some(diag) = diag else {
                         return Ok(false);
                     };
-                    Ok(diag["runner"]["queue_buffer"].as_f64() == Some(0.0)
-                        && diag["runner"]["target_pending_batches"].as_u64() == Some(0))
+                    Ok(
+                        diag["runner"]["bulk_sample_generation"].as_bool() == Some(true)
+                            && diag["runner"]["queue_buffer"].as_f64() == Some(0.0)
+                            && diag["runner"]["target_pending_batches"].as_u64() == Some(0),
+                    )
                 }
             },
         )
@@ -6212,9 +6223,9 @@ async fn full_stack_synthetic_training_windows_and_inference() -> anyhow::Result
     for node in ["synthetic-s", "synthetic-e1", "synthetic-e2"] {
         harness.start_node(node).await?;
     }
-    for training in [true, false] {
+    for (training, bulk) in [(true, false), (false, false), (true, true), (false, true)] {
         let name = format!(
-            "synthetic-{}",
+            "synthetic-{}-{bulk}",
             if training { "training" } else { "inference" }
         );
         let config = temp_config(&format!(
@@ -6236,7 +6247,12 @@ performance_snapshot_interval_ms = 20
 frontend_sync_interval_ms = 20
 min_tick_time_ms = 1
 [sampler_aggregator_runner_params.queue]
-max_batch_size = 64
+bulk_sample_generation = {bulk}
+max_batch_size = 128
+fixed_batch_size = 16
+max_queue_size = 3
+max_batches_per_tick = 2
+queue_buffer = 1.0
 target_batch_eval_ms = 1.0
 "#,
             window = if training { 128 } else { 0 }
@@ -6261,12 +6277,102 @@ target_batch_eval_ms = 1.0
             if training { 8 } else { 0 }
         );
         assert_eq!(diagnostics["pending_training_samples"], 0);
+        if bulk {
+            assert_eq!(diagnostics["generation_timing"]["calls"], 8);
+            if training {
+                assert_eq!(diagnostics["ingest_timing"]["calls"], 8);
+            }
+        } else {
+            assert_eq!(diagnostics["generation_timing"]["calls"], 64);
+        }
         harness.wait_for("synthetic evaluator diagnostics flush", Duration::from_secs(10), || async {
             let count: i64 = sqlx::query_scalar("SELECT count(*) FROM evaluator_performance_latest WHERE run_id=$1 AND metrics->'engine_diagnostics'->>'synthetic'='true'")
                 .bind(run_id).fetch_one(&harness.pool).await?;
             Ok(count>0)
         }).await?;
     }
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_training_retry_history_cannot_enter_sampling_task() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    // Keep training rows just as reclaiming a claim does in production. This
+    // deliberately leaves more retained training samples than the next task's
+    // entire budget, reproducing the GL30 progress-constraint failure.
+    sqlx::raw_sql(
+        "CREATE FUNCTION retain_training_retry_history() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF NEW.requires_training_values THEN NEW.retry_count := 1; END IF; RETURN NEW; END $$;
+         CREATE TRIGGER retain_training_retry_history BEFORE INSERT ON batches
+         FOR EACH ROW EXECUTE FUNCTION retain_training_retry_history();",
+    ).execute(&harness.pool).await?;
+    let name = "training-retry-history";
+    let config = temp_config(
+        r#"
+name = "training-retry-history"
+[evaluator]
+kind = "unit"
+[[task_queue]]
+name = "training"
+kind = "sample"
+stop_condition = { max_samples = 128 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 42, training_window_samples = 32 } }
+[[task_queue]]
+name = "sampling"
+kind = "sample"
+stop_condition = { max_samples = 64 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 43 } }
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 20
+min_tick_time_ms = 1
+[sampler_aggregator_runner_params.queue]
+max_batch_size = 16
+"#,
+    );
+    harness.add_run(&config);
+    let run_id = harness.run_id(name).await?;
+    harness.start_nodes(&["retry-s", "retry-e"]).await?;
+    harness.assign_node("retry-s", "sampler_aggregator", name);
+    harness.assign_node("retry-e", "evaluator", name);
+    harness
+        .wait_for(
+            "both tasks finish without replaying training results",
+            Duration::from_secs(30),
+            || async {
+                let states: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT state,failure_reason FROM run_tasks WHERE run_id=$1 ORDER BY sequence_nr"
+        ).bind(run_id).fetch_all(&harness.pool).await?;
+                anyhow::ensure!(
+                    !states.iter().any(|(state, _)| state == "failed"),
+                    "task failure: {states:?}"
+                );
+                Ok(states.iter().all(|(state, _)| state == "completed"))
+            },
+        )
+        .await?;
+    let counts: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT nr_produced_samples,nr_completed_samples FROM run_tasks WHERE run_id=$1 ORDER BY sequence_nr"
+    ).bind(run_id).fetch_all(&harness.pool).await?;
+    assert_eq!(counts, vec![(128, 128), (64, 64)]);
+    let retained: i64 = sqlx::query_scalar(
+        "SELECT sum(batch_size)::bigint FROM batches WHERE run_id=$1 AND requires_training_values AND retry_count>0"
+    ).bind(run_id).fetch_one(&harness.pool).await?;
+    assert_eq!(retained, 128);
+    let observable: JsonValue = sqlx::query_scalar(
+        "SELECT s.observable_state FROM run_stage_snapshots s JOIN run_tasks t ON t.id=s.task_id
+         WHERE t.run_id=$1 AND t.name='sampling' ORDER BY s.id DESC LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(
+        gammaboard::evaluation::AccumulatorState::from_json(&observable)?.sample_count(),
+        64
+    );
     harness.cleanup().await?;
     Ok(())
 }
@@ -7356,5 +7462,118 @@ async fn worker_pool_operations_resolve_children_and_preserve_operator_intent() 
         assert_eq!(store.resume_worker_pool(root).await?, 0);
         harness.cleanup().await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_bulk_generation_recovers_buffer_and_partial_training_results()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let name = "bulk-recovery";
+    let config = temp_config(
+        r#"
+name = "bulk-recovery"
+[evaluator]
+kind = "unit"
+timing = { per_sample_seconds = 0.002 }
+[[task_queue]]
+kind = "sample"
+stop_condition = { max_samples = 4096 }
+accumulator = { config = "scalar" }
+sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 42, training_window_samples = 1024 } }
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 20
+performance_snapshot_interval_ms = 20
+[sampler_aggregator_runner_params.queue]
+bulk_sample_generation = true
+max_batch_size = 1024
+fixed_batch_size = 16
+queue_buffer = 1.0
+max_queue_size = 3
+max_batches_per_tick = 2
+completed_batch_fetch_limit = 2
+"#,
+    );
+    harness.add_run(&config);
+    let run_id = harness.run_id(name).await?;
+    harness.start_nodes(&["bulk-s", "bulk-e"]).await?;
+    harness.assign_node("bulk-e", "evaluator", name);
+    harness.assign_node("bulk-s", "sampler_aggregator", name);
+    harness
+        .wait_for("partial bulk results", Duration::from_secs(20), || async {
+            let (_, completed) = harness.run_sample_progress(run_id).await?;
+            Ok(completed >= 128)
+        })
+        .await?;
+    let saved;
+    {
+        let mut program = SamplerCheckpointProgram::new(&mut harness, run_id, name);
+        program.pause_run().await?;
+        program
+            .wait_nodes_down(&["bulk-s", "bulk-e"], Duration::from_secs(15))
+            .await?;
+        program
+            .capture_paused_state(Duration::from_secs(15))
+            .await?;
+        saved = program.paused_checkpoint.clone().unwrap();
+    }
+    let generation = &saved["runtime_state"]["generation"];
+    assert!(
+        generation["pending"].is_object(),
+        "checkpoint must retain undispatched samples"
+    );
+    assert!(
+        !generation["training_groups"][0]["values"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "checkpoint must retain partial weights"
+    );
+    let saved_completed = saved["completed_samples"].as_i64().unwrap();
+    harness.assign_node("bulk-e", "evaluator", name);
+    harness.assign_node("bulk-s", "sampler_aggregator", name);
+    harness
+        .wait_for(
+            "bulk progress beyond checkpoint",
+            Duration::from_secs(30),
+            || async { Ok(harness.run_sample_progress(run_id).await?.1 >= saved_completed + 512) },
+        )
+        .await?;
+    harness.kill_child("bulk-s").await?;
+    assert_eq!(
+        harness.run_sampler_checkpoint(run_id).await?.unwrap(),
+        saved
+    );
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name='bulk-s'")
+        .execute(&harness.pool)
+        .await?;
+    harness.start_node("bulk-s").await?;
+    harness.assign_node("bulk-s", "sampler_aggregator", name);
+    harness
+        .wait_for(
+            "bulk recovery completes",
+            Duration::from_secs(60),
+            || async {
+                let complete: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM run_tasks WHERE run_id=$1 AND state='completed')",
+                )
+                .bind(run_id)
+                .fetch_one(&harness.pool)
+                .await?;
+                Ok(complete)
+            },
+        )
+        .await?;
+    assert_eq!(harness.run_sample_progress(run_id).await?, (4096, 4096));
+    let checkpoint = harness.run_sampler_checkpoint(run_id).await?.unwrap();
+    assert!(checkpoint["runtime_state"].get("generation").is_none());
+    let diag: JsonValue = sqlx::query_scalar("SELECT engine_diagnostics FROM sampler_aggregator_performance_latest WHERE run_id=$1 ORDER BY created_at DESC LIMIT 1")
+        .bind(run_id).fetch_one(&harness.pool).await?;
+    assert_eq!(diag["training_updates"], 4);
+    assert_eq!(diag["generation_timing"]["calls"], 4);
+    assert_eq!(diag["ingest_timing"]["calls"], 4);
+    assert_eq!(diag["pending_training_samples"], 0);
+    harness.cleanup().await?;
     Ok(())
 }
