@@ -11,6 +11,123 @@ use tokio::time::{Duration, sleep};
 
 static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn input_transaction_does_not_block_other_batches_and_counters_commit_atomically() {
+    let (_test_guard, store) = locked_test_store().await;
+    let run: i32 = sqlx::query_scalar(
+        "INSERT INTO runs (name, integration_params, point_spec) VALUES
+         ('deferred-counters', '{}', '{\"continuous\":{\"dims\":1}}') RETURNING id",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    let task = insert_completed_pause_task(&store, run).await;
+    let node = unique_id("counter-node");
+    store
+        .announce_node(&node, &node, &Default::default())
+        .await
+        .unwrap();
+    store
+        .set_current_assignment(&node, WorkerRole::Evaluator, run)
+        .await
+        .unwrap();
+    let batch = LatentBatchSpec::from_batch(
+        &Batch::from_points([Point::new(vec![0.5], Vec::new(), 1.0)]).unwrap(),
+    )
+    .build();
+    store
+        .insert_batches(
+            run,
+            task,
+            false,
+            &next_batch_ids(1),
+            std::slice::from_ref(&batch),
+        )
+        .await
+        .unwrap();
+
+    let mut writer = store.pool().begin().await.unwrap();
+    sqlx::query("INSERT INTO batches (run_id, task_id, batch_size) VALUES ($1,$2,1)")
+        .bind(run)
+        .bind(task)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    // Keep the input transaction open at the point where COPY would run. An
+    // unrelated committed batch must still be claimable and completable.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let token = unique_id("counter-claim");
+        let claim = store
+            .claim_batch(run, &node, &token)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .submit_batch_results(claim.batch_id, &node, &token, &empty_batch_result(), 1.0)
+            .await
+            .unwrap();
+    })
+    .await
+    .expect("payload writer must not hold the shared queue counter lock");
+    writer.rollback().await.unwrap();
+    let counters_sql = "SELECT total_batches,pending_batches,claimed_batches,completed_batches
+                        FROM run_batch_queue_counters WHERE run_id=$1";
+    let counters: (i64, i64, i64, i64) = sqlx::query_as(counters_sql)
+        .bind(run)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        counters,
+        (1, 0, 0, 1),
+        "rollback must discard the pending counter change"
+    );
+
+    let mut writer = store.pool().begin().await.unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO batches (run_id, task_id, batch_size) VALUES ($1,$2,1) RETURNING id",
+    )
+    .bind(run)
+    .bind(task)
+    .fetch_one(&mut *writer)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO batch_inputs (batch_id,latent_batch) VALUES ($1,$2)")
+        .bind(id)
+        .bind(batch.to_bytes().unwrap())
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let before: (i64, i64, i64, i64) = sqlx::query_as(counters_sql)
+        .bind(run)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        before, counters,
+        "uncommitted inputs must not affect visible counters"
+    );
+    writer.commit().await.unwrap();
+    let after: (i64, i64, i64, i64) = sqlx::query_as(counters_sql)
+        .bind(run)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(after, (2, 1, 0, 1));
+    store.remove_run(run).await.unwrap();
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM run_batch_queue_counters WHERE run_id=$1")
+            .bind(run)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "deferred cleanup must not recreate a deleted run's counters"
+    );
+}
+
 fn unique_id(prefix: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

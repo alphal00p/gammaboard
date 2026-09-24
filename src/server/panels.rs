@@ -123,6 +123,9 @@ pub struct PanelActionInvocation {
 pub struct PlotPoint {
     pub x: f64,
     pub y: f64,
+    /// Start a new segment without interpolating across missing observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_before: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_sampler_uptime_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,6 +223,10 @@ pub enum PanelState {
         #[serde(default)]
         x_axis: PlotXAxis,
         series: Vec<PlotSeries>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x_range: Option<[f64; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y_range: Option<[f64; 2]>,
     },
     TickBreakdown {
         panel_id: String,
@@ -394,20 +401,6 @@ pub(crate) fn key_value<T: Serialize>(key: &str, label: &str, value: T) -> KeyVa
     }
 }
 
-pub(crate) fn key_value_with_tone<T: Serialize>(
-    key: &str,
-    label: &str,
-    value: T,
-    tone: Option<&str>,
-) -> KeyValueEntry {
-    KeyValueEntry {
-        key: key.to_string(),
-        label: label.to_string(),
-        value: serde_json::to_value(value).unwrap_or(JsonValue::Null),
-        tone: tone.map(str::to_string),
-    }
-}
-
 pub(crate) fn scalar_timeseries_panel(panel_id: &str, points: Vec<PlotPoint>) -> PanelState {
     scalar_timeseries_panel_with_smoothing(panel_id, points, None)
 }
@@ -438,6 +431,8 @@ pub(crate) fn multi_timeseries_panel(panel_id: &str, series: Vec<PlotSeries>) ->
         panel_id: panel_id.to_string(),
         x_axis: PlotXAxis::Numeric,
         series,
+        x_range: None,
+        y_range: None,
     }
 }
 
@@ -621,10 +616,6 @@ fn merge_plot_points(points: &mut Vec<PlotPoint>, delta_points: Vec<PlotPoint>) 
         }
     }
     points.sort_by(|left, right| left.x.total_cmp(&right.x));
-}
-
-pub(crate) fn history_x(created_at: chrono::DateTime<chrono::Utc>) -> f64 {
-    created_at.timestamp_millis() as f64
 }
 
 pub(crate) fn format_bytes_human(bytes: i64) -> String {

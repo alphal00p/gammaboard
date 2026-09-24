@@ -204,8 +204,8 @@ through the existing lease mechanism.
 
 Sampling consumes results belonging to the current task only. Retained retry
 history from a completed training task cannot enter the next sampling task.
-The performance panel shows the first unfinished batch, its worker and claim
-age, result-fetch duration, and results per fetch. "Result Fetch Slot Occupancy"
+Performance Diagnostics shows the first unfinished batch, its worker and claim
+age, and result-fetch duration. "Result Fetch Slot Occupancy"
 includes a finished fetch waiting for the next sampler tick; it does not measure
 database utilization or the number of buffered results.
 
@@ -239,14 +239,16 @@ stable. For long-running deployments, separately inspect PostgreSQL database
 size and history retention. See [benchmarking.md](benchmarking.md) for isolated,
 bounded throughput comparisons using the same CLI measurement contract.
 
-## Reading Fetch Metrics
+## Reading Activity and Fetch Metrics
 
-`Result Fetch Slot Occupancy` (previously `Result Prefetch Occupancy`) is the sampler's
-completed-result prefetch slot occupancy. A finished query still occupies that
-slot until the sampler consumes it. This percentage includes overlap with
-training, other sampler work, and tick sleeps; it is not evaluator utilization
-or database CPU utilization. Use `Result Fetch Mean (ms)` for measured
-fetch latency, and evaluator `Concurrent Fetch Wait Per Sample` for exposed
-latency on successful batches. `Queue Starvation Ratio` counts unsuccessful
-polls rather than elapsed idle time. Training barriers can make this ratio large
-without expensive database queries.
+Overview and Graphs show evaluator compute/I/O and sampler compute/I/O over one
+selected window. I/O active is the fraction of time with at least one work-related
+operation running, including database waits. Completed operations awaiting
+collection no longer count; the retained-slot-occupancy percentages were removed.
+Compute and I/O may overlap. Neither is OS CPU or database utilization.
+
+In Diagnostics, `Result fetch` measures operation latency and evaluator
+`Exposed fetch wait (µs/sample)` measures unhidden latency on successful batches.
+Persistence durations also end at completion rather than collection. Operation
+timings overlap and are not an additive breakdown. See
+[frontend.md](frontend.md#measurement-semantics) for coverage and resource scope.

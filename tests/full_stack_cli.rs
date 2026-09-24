@@ -1066,7 +1066,7 @@ db_pool_size = 2
 performance_snapshot_interval_ms = 2000
 min_tick_time_ms = 50
 frontend_sync_interval_ms = 2000
-db_pool_size = 10
+db_pool_size = 2
 
 [sampler_aggregator_runner_params.queue]
 queue_buffer = 1.0
@@ -6995,6 +6995,101 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
             > 0.0
     );
     let snapshot = value["snapshots"].as_array().unwrap().last().unwrap();
+    for (collection, field) in [("evaluators", "metrics"), ("samplers", "runtime_metrics")] {
+        let first = &value["snapshots"][0][collection][0][field]["busy"];
+        let last = &snapshot[collection][0][field]["busy"];
+        let seconds =
+            last["elapsed_seconds"].as_f64().unwrap() - first["elapsed_seconds"].as_f64().unwrap();
+        assert!(seconds > 0.0);
+        for lane in ["compute_seconds", "io_seconds"] {
+            let occupied = last[lane].as_f64().unwrap() - first[lane].as_f64().unwrap();
+            assert!(
+                occupied > 0.0 && occupied <= seconds,
+                "{collection} {lane}: {occupied}/{seconds}"
+            );
+        }
+    }
+    let url = harness.start_server().await?;
+    let cookie = login_cookie(&url).await?;
+    let run_id = snapshot["run_id"].as_i64().unwrap();
+    let panels: JsonValue = serde_json::from_str(
+        &http_get_with_cookie(
+            &url,
+            &format!("/api/runs/{run_id}/performance?window_seconds=15"),
+            &cookie,
+        )
+        .await?,
+    )?;
+    let updates = panels["updates"].as_array().unwrap();
+    let activity = &updates
+        .iter()
+        .find(|v| v["panel"]["panel_id"] == "busy_rates")
+        .unwrap()["panel"];
+    assert_eq!(activity["rows"].as_array().unwrap().len(), 2);
+    for row in activity["rows"].as_array().unwrap() {
+        for index in [1, 2] {
+            assert!((0.0..=100.0).contains(&row[index].as_f64().unwrap()));
+        }
+    }
+    // More than one page of older records: the graph must not silently retain
+    // only the latest five minutes or stop at the internal fetch-page boundary.
+    sqlx::query(r#"
+        INSERT INTO evaluator_performance_history(run_id, worker_id, created_at, metrics)
+        SELECT $1, 'metrics-e', now() - interval '10000 seconds' + i * interval '1 second',
+            jsonb_build_object('epoch','older-history','node_uuid','old-node','task_id','old-task',
+                'samples_evaluated', i * 100,
+                'busy',jsonb_build_object('elapsed_seconds',i,'compute_seconds',i * 0.5,'io_seconds',i * 0.1))
+        FROM generate_series(0,5000) i
+    "#).bind(run_id as i32).execute(&harness.pool).await?;
+    let history_graphs: JsonValue = serde_json::from_str(
+        &http_get_with_cookie(
+            &url,
+            &format!("/api/runs/{run_id}/performance/graphs"),
+            &cookie,
+        )
+        .await?,
+    )?;
+    let graph = &history_graphs["states"][0];
+    assert_eq!(graph["series"].as_array().unwrap().len(), 4);
+    assert!(graph["series"][0]["points"].as_array().unwrap().len() <= 1200);
+    let start = history_graphs["bounds"][0].as_i64().unwrap();
+    let recorded_end = history_graphs["bounds"][1].as_i64().unwrap();
+    assert!(recorded_end - start > 9_000_000);
+    let points = graph["series"][0]["points"].as_array().unwrap();
+    assert!(
+        points
+            .iter()
+            .any(|p| p["x"].as_f64().unwrap() < start as f64 + 60_000.)
+    );
+    assert!(
+        points
+            .iter()
+            .any(|p| (p["x"].as_f64().unwrap() - (start as f64 + 4_900_000.)).abs() < 60_000.)
+    );
+    let end = start + 4_900_500;
+    let zoomed: JsonValue = serde_json::from_str(
+        &http_get_with_cookie(
+            &url,
+            &format!(
+                "/api/runs/{run_id}/performance/graphs?start_ms={}&end_ms={}",
+                end - 50,
+                end - 10
+            ),
+            &cookie,
+        )
+        .await?,
+    )?;
+    // A viewport narrower than the publication interval still uses its two
+    // boundary snapshots, rather than disappearing or showing false zeroes.
+    assert!(
+        !zoomed["states"][0]["series"][0]["points"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        zoomed["bin_seconds"].as_f64().unwrap() < history_graphs["bin_seconds"].as_f64().unwrap()
+    );
     assert_eq!(
         snapshot["samplers"][0]["runtime_metrics"]["batch_size_current"],
         64

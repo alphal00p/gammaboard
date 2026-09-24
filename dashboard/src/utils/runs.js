@@ -14,7 +14,7 @@ export const formatRunSecondaryLabel = (run) =>
     run?.parent_run_id != null ? `child of #${run.parent_run_id}` : null,
     deriveRunLifecycle(run),
     `completed samples ${Number(run?.nr_completed_samples_including_children ?? 0).toLocaleString()}`,
-    `CPU hours ${formatCompactNumber(run?.cpu_hours_including_children ?? 0)}`,
+    `Allocated core-hours ${formatCompactNumber(run?.cpu_hours_including_children ?? 0)}`,
   ]
     .filter(Boolean)
     .join(" | ");

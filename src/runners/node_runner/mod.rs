@@ -12,7 +12,7 @@ use crate::core::{
     AggregationStore, ControlPlaneStore, NodeCapabilities, RunReadStore, RunSpecStore,
     RunTaskStore, StoreError, WorkQueueStore, WorkerRole,
 };
-use crate::runners::{TaskControlLoop, TaskControlLoopConfig};
+use crate::runners::{MAX_ROLE_DB_CONNECTIONS_PER_NODE, TaskControlLoop, TaskControlLoopConfig};
 use crate::stores::init_pg_store;
 use rand::Rng;
 use std::time::{Duration, Instant};
@@ -26,10 +26,6 @@ use uuid::Uuid;
 
 use self::active_worker::ActiveWorker;
 use self::role_runner::RoleRunner;
-
-/// Each node has up to two control-plane connections and two role connections.
-/// Launch admission budgets for both pools, including idle workers and server headroom.
-const MAX_ROLE_DB_CONNECTIONS_PER_NODE: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct NodeRunnerConfig {
@@ -231,12 +227,16 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     }
 
     async fn init_role_store(&self, max_connections: u32) -> Result<crate::PgStore, StoreError> {
-        init_pg_store(
-            &self.database_url,
-            max_connections.clamp(1, MAX_ROLE_DB_CONNECTIONS_PER_NODE),
-        )
-        .await
-        .map_err(StoreError::from)
+        let effective = max_connections.clamp(1, MAX_ROLE_DB_CONNECTIONS_PER_NODE);
+        if effective != max_connections {
+            warn!(
+                requested = max_connections,
+                effective, "worker DB pool size capped; configure 1 or 2 connections"
+            );
+        }
+        init_pg_store(&self.database_url, effective)
+            .await
+            .map_err(StoreError::from)
     }
 
     fn spawn_lease_renewal_task(&self) -> LeaseRenewalHandle {

@@ -36,6 +36,7 @@ fn runner(
         RecordingStore::default(),
         1,
         "sampler",
+        "sampler-uuid",
         task,
         sampler,
         AccumulatorState::empty_scalar(),
@@ -57,6 +58,23 @@ fn draw_count(runner: &mut SamplerAggregatorRunner<RecordingStore>) -> usize {
         panic!()
     };
     raw["produced_batches_total"].as_u64().unwrap() as usize
+}
+
+#[tokio::test]
+async fn persistence_reports_execution_time_returned_by_the_operation() {
+    let mut runner = runner(100, 100, 100);
+    runner
+        .consume_aggregation_flush_task(PendingAggregationFlushTask {
+            flushed_completed_batches: 0,
+            cleared_initial_round_trip: false,
+            handle: tokio::spawn(async { Ok(Duration::from_millis(7)) }),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        runner.window_state.persist_accumulator_ms.snapshot().total,
+        Some(7.0)
+    );
 }
 
 use crate::sampling::SamplerAggregatorSnapshot;

@@ -216,12 +216,17 @@ pub struct DerivedResultSnapshot {
     pub observables: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvaluatorIdleProfileMetrics {
-    pub idle_ratio: f64,
+/// Occupied wall seconds since runner initialization, using one monotonic clock.
+/// Compute and I/O overlap; concurrent I/O counts once. Missing on old reports.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkerBusyMetrics {
+    pub elapsed_seconds: f64,
+    pub compute_seconds: f64,
+    pub io_seconds: f64,
 }
 
-/// Cumulative seconds for successfully submitted batches in one runner epoch.
+/// Cumulative wall seconds in one runner epoch. Operation costs cover
+/// successfully submitted batches; busy time also includes failed attempts.
 /// Asynchronous phases overlap; these are not an additive wall-time breakdown.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -241,6 +246,7 @@ pub struct EvaluatorPerformanceMetrics {
     pub node_uuid: Option<String>,
     pub task_id: Option<String>,
     pub cumulative: Option<EvaluatorCumulativeMetrics>,
+    pub busy: Option<WorkerBusyMetrics>,
     pub engine_diagnostics: serde_json::Value,
     pub batches_completed: i64,
     pub samples_evaluated: i64,
@@ -265,7 +271,6 @@ pub struct EvaluatorPerformanceMetrics {
     pub submit_stall_ratio: f64,
     #[serde(default)]
     pub completed_samples_total: i64,
-    pub idle_profile: Option<EvaluatorIdleProfileMetrics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -365,13 +370,15 @@ pub struct SamplerQueueRuntimeMetrics {
     pub local_inflight_insert_tasks: usize,
     pub local_inflight_insert_batches: usize,
     pub local_ready_processed_batches: usize,
-    pub insert_task_utilization: Option<f64>,
-    pub completed_fetch_utilization: Option<f64>,
     pub rolling: SamplerQueueRollingAverages,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerRuntimeMetrics {
+    #[serde(default)]
+    pub node_uuid: Option<String>,
+    #[serde(default)]
+    pub busy: Option<WorkerBusyMetrics>,
     #[serde(default)]
     pub runner_epoch: Option<String>,
     #[serde(default)]
@@ -387,8 +394,6 @@ pub struct SamplerRuntimeMetrics {
     pub completed_samples_per_second: f64,
     pub eta_seconds: Option<f64>,
     pub batch_size_current: usize,
-    pub sampler_tick_busy_ratio: Option<f64>,
-    pub avg_evaluator_utilization: Option<f64>,
     pub active_evaluator_count: Option<usize>,
     pub avg_evaluator_rss_bytes: Option<i64>,
     pub total_evaluator_rss_bytes: Option<i64>,

@@ -267,10 +267,19 @@ export const fetchRuntimeLogPage = async (
   );
 };
 
-export const fetchRunPerformance = (runId, limit = 500, evaluatorNodeName = null, signal) =>
+export const fetchRunPerformanceGraphs = (runId, range = null, signal) =>
+  apiGet(
+    `/runs/${runId}/performance/graphs${buildQueryString([
+      ["start_ms", range?.[0]], ["end_ms", range?.[1]],
+    ])}`,
+    "Failed to fetch performance history",
+    signal,
+  );
+
+export const fetchRunPerformance = (runId, windowSeconds = 60, evaluatorNodeName = null, signal) =>
   apiGet(
     `/runs/${runId}/performance${buildQueryString([
-      ["limit", limit],
+      ["window_seconds", windowSeconds],
       ["node_name", evaluatorNodeName],
     ])}`,
     "Failed to fetch run performance",

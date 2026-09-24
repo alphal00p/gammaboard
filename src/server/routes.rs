@@ -28,6 +28,10 @@ pub(super) fn build_app(state: AppState) -> Router {
             post(update_run_task_queue_tuning),
         )
         .route("/runs/:id/performance", get(get_run_performance))
+        .route(
+            "/runs/:id/performance/graphs",
+            get(get_run_performance_graphs),
+        )
         .route("/runs/:id/metrics", get(get_run_metrics))
         .route("/runs/:id/auto-assign", post(auto_assign_run))
         .route("/nodes", get(get_nodes))

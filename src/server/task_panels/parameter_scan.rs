@@ -280,10 +280,10 @@ fn scan_result_to_plot_point(x: f64, result: &MeasurementResult) -> PlotPoint {
     PlotPoint {
         x,
         y,
-        x_sampler_uptime_ms: None,
         x_completed_samples_total: Some(result.sample_count as f64),
         y_min: uncertainty.map(|error| y - error),
         y_max: uncertainty.map(|error| y + error),
+        ..Default::default()
     }
 }
 

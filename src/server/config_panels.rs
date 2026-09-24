@@ -65,8 +65,10 @@ impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
             ),
             key_value(
                 "db_pool_size",
-                "DB Pool Size",
-                ctx.runner_params.db_pool_size,
+                "Effective DB Pool Size",
+                ctx.runner_params
+                    .db_pool_size
+                    .clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
             ),
         ];
         let config_payload = json!({
@@ -74,7 +76,7 @@ impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
             "runner": {
                 "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
                 "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
-                "db_pool_size": ctx.runner_params.db_pool_size,
+                "db_pool_size": ctx.runner_params.db_pool_size.clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
             },
         });
         let mut panels = vec![key_value_panel("evaluator_summary", summary)];
@@ -132,8 +134,10 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 ),
                 key_value(
                     "db_pool_size",
-                    "DB Pool Size",
-                    ctx.runner_params.db_pool_size,
+                    "Effective DB Pool Size",
+                    ctx.runner_params
+                        .db_pool_size
+                        .clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
                 ),
             ],
         )];
@@ -143,7 +147,7 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                 "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
                 "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
                 "frontend_sync_interval_ms": ctx.runner_params.frontend_sync_interval_ms,
-                "db_pool_size": ctx.runner_params.db_pool_size,
+                "db_pool_size": ctx.runner_params.db_pool_size.clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
                 "queue": ctx.runner_params.queue,
             },
         });

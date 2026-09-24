@@ -3,14 +3,13 @@
 
 use crate::core::{
     BatchClaim, BatchFailOutcome, BatchTransformConfig, EngineError, EvalError, EvaluatorConfig,
-    EvaluatorIdleProfileMetrics, EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot,
-    EvaluatorWorkerStore, StoreError,
+    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, StoreError,
 };
 use crate::evaluation::{BatchResult, EvalBatchOptions, Evaluator, Materializer};
+use crate::runners::busy_time::BusyTime;
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::stage_context::resolve_stage_context;
-use crate::runners::wall_time_rate::WallTimeRate;
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -66,7 +65,7 @@ pub struct EvaluatorRunner<S> {
     batches_completed_total: i64,
     samples_evaluated_total: i64,
     rolling: EvaluatorRollingAverages,
-    compute_rate: WallTimeRate,
+    busy: BusyTime,
     counters: EvaluatorPipelineCounters,
     store: S,
     current_batch_transforms: Vec<Box<dyn crate::evaluation::BatchTransform>>,
@@ -109,6 +108,7 @@ struct PopOutcome {
 }
 
 struct LatentPrefetchBuffer<S> {
+    busy: BusyTime,
     run_id: i32,
     node_uuid: String,
     ready_batch: Option<BatchClaim>,
@@ -130,10 +130,11 @@ impl<S> LatentPrefetchBuffer<S>
 where
     S: EvaluatorWorkerStore + Clone + Send + Sync + 'static,
 {
-    fn new(run_id: i32, node_uuid: String) -> Self {
+    fn new(run_id: i32, node_uuid: String, busy: BusyTime) -> Self {
         Self {
             run_id,
             node_uuid,
+            busy,
             ready_batch: None,
             claim_token: None,
             pending_prefetch: None,
@@ -191,7 +192,9 @@ where
         let store = store.clone();
         let run_id = self.run_id;
         let node_uuid = self.node_uuid.clone();
+        let busy = self.busy.clone();
         self.pending_prefetch = Some(tokio::spawn(async move {
+            let _io = busy.io();
             store.claim_batch(run_id, &node_uuid, &token).await
         }));
     }
@@ -264,6 +267,7 @@ struct SubmitOutcome {
 }
 
 struct ResultSubmitBuffer<S> {
+    busy: BusyTime,
     node_uuid: String,
     store: S,
     submission: Option<Arc<Submission>>,
@@ -282,10 +286,11 @@ impl<S> ResultSubmitBuffer<S>
 where
     S: EvaluatorWorkerStore + Clone + Send + Sync + 'static,
 {
-    fn new(store: S, node_uuid: String) -> Self {
+    fn new(store: S, node_uuid: String, busy: BusyTime) -> Self {
         Self {
             node_uuid,
             store,
+            busy,
             submission: None,
             pending_submit: None,
         }
@@ -310,7 +315,9 @@ where
         };
         let store = self.store.clone();
         let node_uuid = self.node_uuid.clone();
+        let busy = self.busy.clone();
         self.pending_submit = Some(tokio::spawn(async move {
+            let _io = busy.io();
             let started = Instant::now();
             store
                 .submit_batch_results(
@@ -424,6 +431,7 @@ where
     ) -> Self {
         let node_name = node_name.into();
         let node_uuid = node_uuid.into();
+        let busy = BusyTime::default();
         let performance_snapshot_interval =
             Duration::from_millis(params.performance_snapshot_interval_ms);
         Self {
@@ -435,8 +443,8 @@ where
             params,
             current_task_id: None,
             materializer: None,
-            prefetch_buffer: LatentPrefetchBuffer::new(run_id, node_uuid.clone()),
-            submit_buffer: ResultSubmitBuffer::new(store.clone(), node_uuid),
+            prefetch_buffer: LatentPrefetchBuffer::new(run_id, node_uuid.clone(), busy.clone()),
+            submit_buffer: ResultSubmitBuffer::new(store.clone(), node_uuid, busy.clone()),
             active_batch: None,
             last_claim_reconciliation: Instant::now() - Duration::from_secs(1),
             draining: false,
@@ -447,7 +455,7 @@ where
             batches_completed_total: 0,
             samples_evaluated_total: 0,
             rolling: EvaluatorRollingAverages::default(),
-            compute_rate: WallTimeRate::new(Instant::now()),
+            busy,
             counters: EvaluatorPipelineCounters::default(),
             store,
             current_batch_transforms: Vec::new(),
@@ -513,6 +521,7 @@ where
         &self,
         task_id: i64,
     ) -> Result<TaskRuntimeContext, EvaluatorRunnerError> {
+        let io = self.busy.io();
         let task = self
             .store
             .load_run_task(task_id)
@@ -528,6 +537,7 @@ where
             resolve_stage_context(&self.store, self.run_id, &task, task.sequence_nr, None)
                 .await
                 .map_err(EvaluatorRunnerError::Store)?;
+        drop(io);
         let batch_transforms =
             Self::build_batch_transforms(&resolved.batch_transforms, &self.domain)?;
         let evaluator_domain = resolved.evaluator_config.resolve_domain().map_err(|err| {
@@ -584,6 +594,7 @@ where
         if let Some(submission) = &self.submit_buffer.submission {
             tokens.push(submission.claim_token.clone());
         }
+        let _io = self.busy.io();
         let reclaimed = self
             .store
             .release_untracked_claims(self.run_id, &self.prefetch_buffer.node_uuid, &tokens)
@@ -598,6 +609,7 @@ where
     }
 
     async fn persist_batch_failure(&mut self) -> Result<(), EvaluatorRunnerError> {
+        let io = self.busy.io();
         let batch = self.active_batch.as_ref().expect("active failed batch");
         let Some(Err(failure)) = &batch.evaluation else {
             unreachable!()
@@ -657,6 +669,7 @@ where
         warn!(run_id=self.run_id, node_name=%self.node_name, batch_id, task_id,
             compute_time_ms, error=%message, ?outcome, "evaluator batch failed");
         self.active_batch = None;
+        drop(io);
         self.flush_performance_snapshot_if_due(false).await
     }
 
@@ -671,7 +684,6 @@ where
             let pop = self.prefetch_buffer.pop(&self.store, self.draining).await?;
             let Some(claim) = pop.claimed else {
                 self.counters.queue_starved_attempts += 1;
-                self.observe_idle_ratio(0.0);
                 self.flush_performance_snapshot_if_due(false).await?;
                 return Ok(());
             };
@@ -704,13 +716,8 @@ where
             // back into runner state before any fallible persistence awaits.
             let mut active = self.active_batch.take().unwrap();
             let outcome = self.evaluate_claim(&active.claim);
-            let compute_ms = match &outcome {
-                Ok(result) => result.total_time_ms,
-                Err(failure) => failure.compute_time_ms,
-            };
             active.evaluation = Some(outcome);
             self.active_batch = Some(active);
-            self.observe_idle_ratio(compute_ms);
         }
         if self
             .active_batch
@@ -764,6 +771,7 @@ where
     }
 
     fn evaluate_claim(&mut self, claimed: &BatchClaim) -> Result<EvaluatedBatch, FailedEvaluation> {
+        let _compute = self.busy.compute();
         let compute_started = Instant::now();
         let result = (|| -> Result<EvaluatedBatch, EvaluatorRunnerError> {
             crate::runners::activity::set("materializing");
@@ -907,17 +915,11 @@ where
             .observe_batch(submit_stall_time_ms, samples);
     }
 
-    fn observe_idle_ratio(&mut self, compute_time_ms: f64) {
-        // Consecutive observations include the worker's sleep outside tick().
-        self.compute_rate
-            .observe(Instant::now(), compute_time_ms.max(0.0) / 1000.0);
-    }
-
     async fn flush_performance_snapshot_if_due(
         &mut self,
         force: bool,
     ) -> Result<(), EvaluatorRunnerError> {
-        if self.samples_evaluated_total <= 0 {
+        if self.current_task_id.is_none() {
             return Ok(());
         }
 
@@ -946,6 +948,7 @@ where
                 node_uuid: Some(self.prefetch_buffer.node_uuid.clone()),
                 task_id: self.current_task_id.map(|id| id.to_string()),
                 cumulative: Some(self.cumulative.clone()),
+                busy: Some(self.busy.snapshot()),
                 engine_diagnostics: self.evaluator.diagnostics(),
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,
@@ -1011,9 +1014,6 @@ where
                     self.counters.submit_attempts,
                 ),
                 completed_samples_total,
-                idle_profile: Some(EvaluatorIdleProfileMetrics {
-                    idle_ratio: 1.0 - self.compute_rate.rate().clamp(0.0, 1.0),
-                }),
             },
             rss_bytes: current_rss_bytes(),
         };

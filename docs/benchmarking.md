@@ -28,7 +28,9 @@ its tasks to finish and fails if any failed. These commands concern the selected
 run, not recursively its children.
 
 The authenticated `GET /api/runs/:id/metrics` endpoint returns the same snapshot
-as the CLI. The existing `/performance` dashboard endpoint remains unchanged.
+as the CLI. The `/performance` dashboard endpoint accepts a shared
+`window_seconds` parameter (15–300, default 60); it returns the usage overview
+and diagnostics with explicit reporting coverage and observed intervals.
 
 JSON has `schema_version = 1`. Names ending in `_seconds` are seconds; rates are
 samples per second. `completed_samples` is accepted progress, not attempted work.
@@ -186,3 +188,54 @@ physics uncertainty target. Those should be additional experiment types using
 the same measurement contract. Sample-level synthetic costs alone do not predict
 memory-bound or vectorized physics behavior. Keep batch size, calibrated work,
 resource budget, and telemetry frequency visible when comparing results.
+
+## Insert concurrency and fast-integrand stress
+
+```bash
+python scripts/benchmark.py io --binary target/dev-optim/gammaboard \
+  --output /tmp/gammaboard-io --port-offset 130
+```
+
+The default matrix compares 1/2/8 insert tasks at 1/8/32/64 evaluators, batches of
+16/256, and three repetitions of a unit integrand with no artificial work.
+Trials use a 1 ms tick to stress polling, rotate in seeded random order, discard
+warmup, and measure accepted progress. `--min-tick-ms 10` tests the normal pacing. Worker CPU affinity stays within eight physical cores; therefore the
+large-fleet cases measure coordination pressure, not strong scaling. PostgreSQL
+connection admission grows with the planned fleet. The existing private Session
+owns startup, shutdown, and cleanup. Raw cards, warmups, measurements, four
+activity rates, binary hash, CPU list, and per-setting median/ranges are retained.
+Results also include accepted batches/s for these fixed-batch runs and the
+serialized input bytes per batch reported by the actual insert operation.
+Accepted input MiB/s multiplies those two values. It is logical input volume;
+it excludes protocol overhead, retries, result traffic, WAL and physical disk I/O.
+Missing or changing payload sizes invalidate that conversion instead of becoming
+zero bandwidth.
+Use `--iterations`, `--workers`, `--batch-sizes`, and `--repetitions` for focused
+follow-ups. Missing or invalid activity counters invalidate a trial; they do not
+become zeros. `manifest.json` records planned/completed cases and failures.
+
+Use `--inserts 2` to hold concurrency fixed while comparing code changes and
+`--insert-bundle-size 1` to test smaller transactions. The optional
+`--input-storage pglz|lz4|external` comparison requires `psql` and changes only
+the input column in the new private benchmark database. `default` uses the
+schema's current setting. Measurements still use the CLI contract. A build
+without PostgreSQL LZ4 support rejects that experiment instead of substituting
+another method. Manifests record these settings and migration-file hashes.
+Set `GAMMABOARD_MIGRATIONS_DIR` to a saved migration directory when comparing
+revisions: preserving only the executable does not preserve the schema.
+
+To stress large database payloads rather than small-batch scheduling:
+
+```bash
+python scripts/benchmark.py io --binary target/dev-optim/gammaboard \
+  --output /tmp/gammaboard-payload --workers 8 --batch-sizes 65536 262144 \
+  --min-tick-ms 10 --port-offset 130
+```
+
+This runs 18 trials with full six-dimensional indexed sample arrays, about
+3.6/14.5 MiB per input batch, a zero-cost unit integrand, and compact scalar
+results. Inputs are persisted and fetched through PostgreSQL; they are not
+regenerated from a compact RNG-state payload. There are no training barriers.
+It exercises large input transfers, not large result vectors or multi-host
+networking. The deployment uses the local PostgreSQL defaults, including
+`synchronous_commit = false`; do not interpret it as a durability benchmark.

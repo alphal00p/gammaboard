@@ -240,4 +240,3 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
         }
     }
 }
-

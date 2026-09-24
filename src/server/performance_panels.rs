@@ -1,1284 +1,667 @@
-use crate::core::{EvaluatorPerformanceMetrics, SamplerRuntimeMetrics};
+//! Counter differences in one requested wall-time window. Worker publications
+//! are asynchronous; observed spans and coverage are explicit.
+use crate::api::performance::PerformanceSnapshot;
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth, PlotPoint,
-    PlotSeries, PlotXAxis, TickBreakdownSegment, format_bytes_human, history_x, key_value,
-    key_value_panel, key_value_with_tone, merge_panel_state, multi_timeseries_panel, replace_panel,
-    sized_panel_spec, tick_breakdown_panel,
+    PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth,
+    format_bytes_human, key_value, key_value_panel, replace_panel, sized_panel_spec,
+    table_panel_with_payload, text_panel,
 };
-use crate::stores::{EvaluatorPerformanceHistoryEntry, SamplerPerformanceHistoryEntry};
-use serde_json::Value as JsonValue;
-use std::collections::BTreeMap;
+use chrono::{DateTime, Utc};
+use serde_json::{Value, json};
 
-pub fn build_evaluator_performance_response(
-    scope_id: Option<String>,
-    entries: Vec<EvaluatorPerformanceHistoryEntry>,
-    include_summary: bool,
-) -> PanelResponse {
-    let source_id = scope_id.unwrap_or_else(|| "evaluator".to_string());
-    let panels = evaluator_panel_specs(include_summary);
-    let mut updates = Vec::new();
+mod graphs;
+pub(super) mod history;
 
-    if include_summary && !entries.is_empty() {
-        updates.push(replace_panel(evaluator_summary_panel(&entries)));
-    }
-    if !include_summary && let Some(entry) = entries.first() {
-        for panel in evaluator_current_panels(entry) {
-            updates.push(replace_panel(panel));
+const MAX_AGE_SECONDS: f64 = 10.0;
+
+fn timestamp(row: &Value) -> Option<DateTime<Utc>> {
+    row["created_at"].as_str()?.parse().ok()
+}
+
+fn age(row: &Value, now: DateTime<Utc>) -> Option<f64> {
+    let age = (now - timestamp(row)?).num_milliseconds() as f64 / 1000.0;
+    (age >= 0.0).then_some(age)
+}
+
+fn finite(value: &Value) -> Option<f64> {
+    value.as_f64().filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+fn data(row: &Value, evaluator: bool) -> &Value {
+    &row[if evaluator {
+        "metrics"
+    } else {
+        "runtime_metrics"
+    }]
+}
+
+fn epoch(row: &Value, evaluator: bool) -> Option<&str> {
+    data(row, evaluator)[if evaluator { "epoch" } else { "runner_epoch" }].as_str()
+}
+
+fn matches_worker(row: &Value, node: &Value, snapshot: &PerformanceSnapshot) -> bool {
+    let evaluator = node["active_role"] == "evaluator";
+    let metrics = data(row, evaluator);
+    row["worker_id"] == node["name"]
+        && epoch(row, evaluator).is_some()
+        && metrics["node_uuid"].is_string()
+        && metrics["node_uuid"] == node["uuid"]
+        && snapshot.task_id.is_some()
+        && metrics["task_id"].as_str() == snapshot.task_id.as_deref()
+}
+
+struct Interval<'a> {
+    first: &'a Value,
+    last: &'a Value,
+    seconds: f64,
+    evaluator: bool,
+}
+
+impl Interval<'_> {
+    fn delta(&self, pointer: &str) -> Option<f64> {
+        let first = data(self.first, self.evaluator).pointer(pointer)?;
+        let last = data(self.last, self.evaluator).pointer(pointer)?;
+        if let (Some(a), Some(b)) = (first.as_i64(), last.as_i64()) {
+            return b.checked_sub(a).filter(|v| *v >= 0).map(|v| v as f64);
         }
+        let a = finite(first)?;
+        let b = finite(last)?;
+        (b >= a).then_some(b - a)
     }
 
-    PanelResponse::new(
-        source_id,
-        entries.first().map(|entry| entry.id.to_string()),
-        panels,
-        updates,
-        Some(5000),
-    )
-}
+    fn busy_seconds(&self) -> Option<f64> {
+        self.delta("/busy/elapsed_seconds")
+            .filter(|seconds| *seconds > 0.0)
+    }
 
-pub fn build_sampler_performance_response(
-    scope_id: Option<String>,
-    entries: Vec<SamplerPerformanceHistoryEntry>,
-) -> PanelResponse {
-    let mut response = build_performance_response(
-        scope_id.unwrap_or_else(|| "sampler".to_string()),
-        entries.clone(),
-        sampler_panel_specs(),
-        |entry| entry.id.to_string(),
-        |_entry| Vec::new(),
-    );
-    let (throughput_panel, latest_completed_samples_per_second) =
-        sampler_completed_throughput_panel(&entries);
-    if let Some(panel) = throughput_panel {
-        response.updates.push(replace_panel(panel));
+    fn busy_percent(&self, lane: &str) -> Option<f64> {
+        let seconds = self.busy_seconds()?;
+        let busy = self.delta(&format!("/busy/{lane}_seconds"))?;
+        // Both counters use the same monotonic clock; tolerate only floating-point error.
+        (busy <= seconds + 1e-9).then_some(100.0 * (busy / seconds).min(1.0))
     }
-    if let Some(panel) = sampler_utilization_history_panel(&entries) {
-        response.updates.push(replace_panel(panel));
-    }
-    if let Some(latest) = entries.first() {
-        for panel in sampler_current_panels(latest, latest_completed_samples_per_second) {
-            response.updates.push(replace_panel(panel));
+
+    fn cost_us(&self, pointer: &str) -> Option<f64> {
+        let samples = self.delta("/samples_evaluated")?;
+        if samples <= 0.0 {
+            return None;
         }
-    }
-    response
-}
-
-fn build_performance_response<T>(
-    source_id: String,
-    entries: Vec<T>,
-    panels: Vec<PanelSpec>,
-    cursor_for: impl Fn(&T) -> String,
-    build_panels: impl Fn(&T) -> Vec<PanelState>,
-) -> PanelResponse {
-    let cursor = entries.first().map(cursor_for);
-    let mut state_by_id = BTreeMap::new();
-    for entry in entries.iter().rev() {
-        for panel in build_panels(entry) {
-            let panel_id = panel.panel_id().to_string();
-            if let Some(existing) = state_by_id.get_mut(&panel_id) {
-                merge_panel_state(existing, panel);
-            } else {
-                state_by_id.insert(panel_id, panel);
-            }
-        }
-    }
-
-    PanelResponse::new(
-        source_id,
-        cursor,
-        panels,
-        state_by_id.into_values().map(replace_panel).collect(),
-        Some(5000),
-    )
-}
-
-fn evaluator_panel_specs(include_summary: bool) -> Vec<PanelSpec> {
-    if include_summary {
-        return vec![sized_panel_spec(
-            "evaluator_summary",
-            "Run Evaluator Summary",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Full,
-        )];
-    }
-
-    vec![
-        sized_panel_spec(
-            "evaluator_tick_breakdown",
-            "Evaluator Tick (Synchronous)",
-            PanelKind::TickBreakdown,
-            PanelHistoryMode::Replace,
-            PanelWidth::Full,
-        ),
-        sized_panel_spec(
-            "evaluator_overview",
-            "Evaluator Overview",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Half,
-        ),
-        sized_panel_spec(
-            "evaluator_pipeline_metrics",
-            "Evaluator Pipeline Metrics",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Half,
-        ),
-    ]
-}
-
-fn sampler_panel_specs() -> Vec<PanelSpec> {
-    vec![
-        sized_panel_spec(
-            "sampler_priority_overview",
-            "Sampler Overview",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Full,
-        ),
-        sized_panel_spec(
-            "sampler_completed_samples_per_second",
-            "Throughput",
-            PanelKind::MultiTimeseries,
-            PanelHistoryMode::Replace,
-            PanelWidth::Full,
-        ),
-        sized_panel_spec(
-            "sampler_utilization_history",
-            "Utilization",
-            PanelKind::MultiTimeseries,
-            PanelHistoryMode::Replace,
-            PanelWidth::Full,
-        ),
-        sized_panel_spec(
-            "sampler_tick_breakdown",
-            "Tick Breakdown",
-            PanelKind::TickBreakdown,
-            PanelHistoryMode::Replace,
-            PanelWidth::Full,
-        ),
-        sized_panel_spec(
-            "sampler_queue_state",
-            "Queue State",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Half,
-        ),
-        sized_panel_spec(
-            "sampler_runtime_details",
-            "Runner State",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Half,
-        ),
-        sized_panel_spec(
-            "sampler_queue_efficiency",
-            "Queue I/O",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Half,
-        ),
-        sized_panel_spec(
-            "sampler_runtime_efficiency",
-            "Sampler Work",
-            PanelKind::KeyValue,
-            PanelHistoryMode::Replace,
-            PanelWidth::Half,
-        ),
-    ]
-}
-
-fn evaluator_current_panels(entry: &EvaluatorPerformanceHistoryEntry) -> Vec<PanelState> {
-    let fetch_sync_ms = evaluator_fetch_sync_ms(&entry.metrics);
-    let runner_sync_overhead_ms = evaluator_runner_sync_overhead_ms(&entry.metrics);
-    let runner_wait_overhead_ms = evaluator_runner_wait_overhead_ms(&entry.metrics);
-    let runner_total_overhead_ms = runner_sync_overhead_ms + runner_wait_overhead_ms;
-    let pipeline_total_ms = evaluator_pipeline_total_ms(&entry.metrics);
-
-    vec![
-        tick_breakdown_panel(
-            "evaluator_tick_breakdown",
-            evaluator_tick_total_ms(&entry.metrics),
-            evaluator_tick_segments(&entry.metrics),
-        ),
-        key_value_panel(
-            "evaluator_overview",
-            vec![
-                key_value("worker_id", "Worker", entry.worker_id.as_str()),
-                key_value(
-                    "memory_usage",
-                    "Memory Usage",
-                    entry.rss_bytes.map(format_bytes_human),
-                ),
-                key_value(
-                    "samples_evaluated",
-                    "Samples Evaluated",
-                    entry.metrics.samples_evaluated,
-                ),
-                key_value(
-                    "avg_total_time_us",
-                    "Avg Eval+Materialize Per Sample (µs)",
-                    ms_to_us(entry.metrics.avg_time_per_sample_ms),
-                ),
-                key_value(
-                    "avg_pipeline_total_time_us",
-                    "Avg Pipeline End-To-End Per Sample (µs)",
-                    ms_to_us(pipeline_total_ms),
-                ),
-                key_value(
-                    "prefetch_hit_ratio",
-                    "Prefetch Hit Ratio",
-                    entry.metrics.prefetch_hit_ratio,
-                ),
-                key_value(
-                    "fetch_stall_ratio",
-                    "Fetch Stall Ratio",
-                    entry.metrics.fetch_stall_ratio,
-                ),
-                key_value(
-                    "submit_stall_ratio",
-                    "Submit Stall Ratio",
-                    entry.metrics.submit_stall_ratio,
-                ),
-                key_value(
-                    "queue_starvation_ratio",
-                    "Queue Starvation Ratio",
-                    entry.metrics.queue_starvation_ratio,
-                ),
-                key_value(
-                    "idle_ratio",
-                    "Idle Ratio",
-                    entry
-                        .metrics
-                        .idle_profile
-                        .as_ref()
-                        .map(|profile| profile.idle_ratio),
-                ),
-            ],
-        ),
-        key_value_panel(
-            "evaluator_pipeline_metrics",
-            vec![
-                key_value(
-                    "avg_fetch_decode_time_us",
-                    "Fetch+Decode Total Per Sample (µs)",
-                    ms_to_us(entry.metrics.avg_fetch_time_per_sample_ms),
-                ),
-                key_value(
-                    "avg_fetch_decode_sync_time_us",
-                    "Fetch+Decode (sync) Per Sample (µs)",
-                    ms_to_us(fetch_sync_ms),
-                ),
-                key_value(
-                    "avg_fetch_stall_time_us",
-                    "Concurrent Fetch Wait Per Sample (µs)",
-                    ms_to_us(entry.metrics.avg_fetch_stall_time_per_sample_ms),
-                ),
-                key_value(
-                    "avg_materialization_time_us",
-                    "Materialization Per Sample (µs)",
-                    ms_to_us(entry.metrics.avg_materialization_time_per_sample_ms),
-                ),
-                key_value(
-                    "avg_evaluate_time_us",
-                    "Evaluate Engine Per Sample (µs)",
-                    ms_to_us(entry.metrics.avg_evaluate_time_per_sample_ms),
-                ),
-                key_value(
-                    "std_evaluate_time_us",
-                    "Evaluate Engine StdDev Per Sample (µs)",
-                    ms_to_us(entry.metrics.std_evaluate_time_per_sample_ms),
-                ),
-                key_value(
-                    "avg_submit_time_us",
-                    "Submit Per Sample (µs)",
-                    ms_to_us(entry.metrics.avg_submit_time_per_sample_ms),
-                ),
-                key_value(
-                    "std_fetch_decode_time_us",
-                    "Fetch+Decode StdDev Per Sample (µs)",
-                    ms_to_us(entry.metrics.std_fetch_time_per_sample_ms),
-                ),
-                key_value(
-                    "std_materialization_time_us",
-                    "Materialization StdDev Per Sample (µs)",
-                    ms_to_us(entry.metrics.std_materialization_time_per_sample_ms),
-                ),
-                key_value(
-                    "std_submit_time_us",
-                    "Submit StdDev Per Sample (µs)",
-                    ms_to_us(entry.metrics.std_submit_time_per_sample_ms),
-                ),
-                key_value(
-                    "avg_submit_stall_time_us",
-                    "Concurrent Submit Wait Per Sample (µs)",
-                    ms_to_us(entry.metrics.avg_submit_stall_time_per_sample_ms),
-                ),
-                key_value(
-                    "submit_slot_hit_ratio",
-                    "Submit Slot Hit Ratio",
-                    entry.metrics.submit_slot_hit_ratio,
-                ),
-                key_value(
-                    "avg_runner_sync_overhead_time_us",
-                    "Runner Sync Overhead Per Sample (µs)",
-                    ms_to_us(runner_sync_overhead_ms),
-                ),
-                key_value(
-                    "avg_runner_wait_overhead_time_us",
-                    "Runner Wait Overhead Per Sample (µs)",
-                    ms_to_us(runner_wait_overhead_ms),
-                ),
-                key_value(
-                    "avg_runner_total_overhead_time_us",
-                    "Runner Total Overhead Per Sample (µs)",
-                    ms_to_us(runner_total_overhead_ms),
-                ),
-            ],
-        ),
-    ]
-}
-
-fn evaluator_summary_panel(entries: &[EvaluatorPerformanceHistoryEntry]) -> PanelState {
-    let summary = summarize_evaluator_metrics(entries);
-    key_value_panel(
-        "evaluator_summary",
-        vec![
-            key_value(
-                "active_evaluators_with_metrics",
-                "Active Evaluators With Metrics",
-                summary.evaluator_count,
-            ),
-            key_value(
-                "avg_total_time_us",
-                "Avg Eval+Materialize Per Sample (µs)",
-                summary.avg_total_time_per_sample_ms.map(ms_to_us),
-            ),
-            key_value(
-                "avg_pipeline_total_time_us",
-                "Avg Pipeline End-To-End Per Sample (µs)",
-                summary.avg_pipeline_total_time_per_sample_ms.map(ms_to_us),
-            ),
-            key_value(
-                "avg_fetch_stall_time_us",
-                "Avg Fetch Stall Per Sample (µs)",
-                summary.avg_fetch_stall_time_per_sample_ms.map(ms_to_us),
-            ),
-            key_value(
-                "avg_materialization_time_us",
-                "Avg Materialization Per Sample (µs)",
-                summary.avg_materialization_time_per_sample_ms.map(ms_to_us),
-            ),
-            key_value(
-                "avg_evaluate_time_us",
-                "Avg Evaluate Per Sample (µs)",
-                summary.avg_evaluate_time_per_sample_ms.map(ms_to_us),
-            ),
-            key_value(
-                "avg_submit_time_us",
-                "Avg Submit Per Sample (µs)",
-                summary.avg_submit_time_per_sample_ms.map(ms_to_us),
-            ),
-            key_value(
-                "avg_runner_overhead_time_us",
-                "Avg Runner Total Overhead Per Sample (µs)",
-                summary
-                    .avg_runner_total_overhead_per_sample_ms
-                    .map(ms_to_us),
-            ),
-            key_value(
-                "avg_prefetch_hit_ratio",
-                "Avg Prefetch Hit Ratio",
-                summary.avg_prefetch_hit_ratio,
-            ),
-            key_value(
-                "avg_queue_starvation_ratio",
-                "Avg Queue Starvation Ratio",
-                summary.avg_queue_starvation_ratio,
-            ),
-            key_value(
-                "avg_evaluator_utilization",
-                "Avg Evaluator Utilization",
-                summary.avg_evaluator_utilization,
-            ),
-        ],
-    )
-}
-
-struct EvaluatorSummary {
-    evaluator_count: usize,
-    avg_total_time_per_sample_ms: Option<f64>,
-    avg_pipeline_total_time_per_sample_ms: Option<f64>,
-    avg_fetch_stall_time_per_sample_ms: Option<f64>,
-    avg_prefetch_hit_ratio: Option<f64>,
-    avg_queue_starvation_ratio: Option<f64>,
-    avg_materialization_time_per_sample_ms: Option<f64>,
-    avg_evaluate_time_per_sample_ms: Option<f64>,
-    avg_submit_time_per_sample_ms: Option<f64>,
-    avg_runner_total_overhead_per_sample_ms: Option<f64>,
-    avg_evaluator_utilization: Option<f64>,
-}
-
-fn summarize_evaluator_metrics(entries: &[EvaluatorPerformanceHistoryEntry]) -> EvaluatorSummary {
-    let mut latest_by_worker = BTreeMap::<&str, &EvaluatorPerformanceMetrics>::new();
-    for entry in entries {
-        latest_by_worker
-            .entry(entry.worker_id.as_str())
-            .or_insert(&entry.metrics);
-    }
-
-    let count = latest_by_worker.len();
-    if count == 0 {
-        return EvaluatorSummary {
-            evaluator_count: 0,
-            avg_total_time_per_sample_ms: None,
-            avg_pipeline_total_time_per_sample_ms: None,
-            avg_fetch_stall_time_per_sample_ms: None,
-            avg_prefetch_hit_ratio: None,
-            avg_queue_starvation_ratio: None,
-            avg_materialization_time_per_sample_ms: None,
-            avg_evaluate_time_per_sample_ms: None,
-            avg_submit_time_per_sample_ms: None,
-            avg_runner_total_overhead_per_sample_ms: None,
-            avg_evaluator_utilization: None,
-        };
-    }
-
-    let mut total_sum = 0.0;
-    let mut pipeline_total_sum = 0.0;
-    let mut fetch_stall_sum = 0.0;
-    let mut prefetch_hit_sum = 0.0;
-    let mut queue_starvation_ratio_sum = 0.0;
-    let mut materialization_sum = 0.0;
-    let mut evaluate_sum = 0.0;
-    let mut submit_sum = 0.0;
-    let mut runner_overhead_sum = 0.0;
-    let mut utilization_sum = 0.0;
-    let mut utilization_count = 0usize;
-    for metrics in latest_by_worker.values() {
-        total_sum += metrics.avg_time_per_sample_ms;
-        pipeline_total_sum += evaluator_pipeline_total_ms(metrics);
-        fetch_stall_sum += metrics.avg_fetch_stall_time_per_sample_ms;
-        prefetch_hit_sum += metrics.prefetch_hit_ratio;
-        queue_starvation_ratio_sum += metrics.queue_starvation_ratio;
-        materialization_sum += metrics.avg_materialization_time_per_sample_ms;
-        evaluate_sum += metrics.avg_evaluate_time_per_sample_ms;
-        submit_sum += metrics.avg_submit_time_per_sample_ms;
-        runner_overhead_sum += evaluator_runner_total_overhead_ms(metrics);
-        if let Some(idle_ratio) = metrics
-            .idle_profile
-            .as_ref()
-            .map(|profile| profile.idle_ratio)
-        {
-            utilization_sum += (1.0 - idle_ratio).clamp(0.0, 1.0);
-            utilization_count += 1;
-        }
-    }
-
-    let count_f64 = count as f64;
-    EvaluatorSummary {
-        evaluator_count: count,
-        avg_total_time_per_sample_ms: Some(total_sum / count_f64),
-        avg_pipeline_total_time_per_sample_ms: Some(pipeline_total_sum / count_f64),
-        avg_fetch_stall_time_per_sample_ms: Some(fetch_stall_sum / count_f64),
-        avg_prefetch_hit_ratio: Some(prefetch_hit_sum / count_f64),
-        avg_queue_starvation_ratio: Some(queue_starvation_ratio_sum / count_f64),
-        avg_materialization_time_per_sample_ms: Some(materialization_sum / count_f64),
-        avg_evaluate_time_per_sample_ms: Some(evaluate_sum / count_f64),
-        avg_submit_time_per_sample_ms: Some(submit_sum / count_f64),
-        avg_runner_total_overhead_per_sample_ms: Some(runner_overhead_sum / count_f64),
-        avg_evaluator_utilization: (utilization_count > 0)
-            .then_some(utilization_sum / utilization_count as f64),
+        self.delta(pointer).map(|v| v * 1e6 / samples)
     }
 }
 
-fn sampler_current_panels(
-    entry: &SamplerPerformanceHistoryEntry,
-    completed_samples_per_second: f64,
-) -> Vec<PanelState> {
-    let Some(runtime) = decode_sampler_runtime_metrics(entry) else {
-        return Vec::new();
-    };
-
-    let target_pending_batches =
-        queue_buffer_value(&entry.engine_diagnostics, "target_pending_batches");
-    let target_batch_eval_ms =
-        queue_buffer_value(&entry.engine_diagnostics, "target_batch_eval_ms");
-    let pending_shortfall = match (
-        target_pending_batches.as_ref(),
-        runtime.queue.db_pending_batches,
-    ) {
-        (Some(target), Some(pending)) => {
-            target.as_i64().map(|target| target.saturating_sub(pending))
-        }
-        _ => None,
-    };
-    let total_memory_bytes = match (entry.rss_bytes, runtime.total_evaluator_rss_bytes) {
-        (Some(sampler), Some(evaluator)) => Some(sampler.saturating_add(evaluator)),
-        (Some(sampler), None) => Some(sampler),
-        (None, Some(evaluator)) => Some(evaluator),
-        (None, None) => None,
-    };
-    let evaluator_busy_ratio = runtime
-        .avg_evaluator_utilization
-        .map(|value| value.clamp(0.0, 1.0));
-    let evaluator_busy_tone = evaluator_busy_ratio.and_then(evaluator_busy_ratio_tone);
-    let eval_ms_per_batch_mean = runtime.sampler.eval_ms_per_batch.mean;
-    let eval_ms_per_batch_std = finite_positive_std(
-        eval_ms_per_batch_mean,
-        runtime.sampler.eval_ms_per_batch.std_dev,
-    );
-    let eval_ms_per_batch_cv =
-        coefficient_of_variation(eval_ms_per_batch_mean, eval_ms_per_batch_std);
-
-    vec![
-        key_value_panel(
-            "sampler_priority_overview",
-            vec![
-                key_value(
-                    "completed_samples_per_second",
-                    "Completed Samples / Sec",
-                    completed_samples_per_second,
-                ),
-                key_value(
-                    "total_memory_usage",
-                    "Total Memory",
-                    total_memory_bytes.map(format_bytes_human),
-                ),
-                key_value(
-                    "sampler_memory_usage",
-                    "Sampler Memory",
-                    entry.rss_bytes.map(format_bytes_human),
-                ),
-                key_value(
-                    "avg_evaluator_memory",
-                    "Avg Evaluator Memory",
-                    runtime.avg_evaluator_rss_bytes.map(format_bytes_human),
-                ),
-                key_value(
-                    "active_evaluators",
-                    "Active Evaluators",
-                    runtime.active_evaluator_count,
-                ),
-                key_value_with_tone(
-                    "evaluator_busy_ratio",
-                    "Evaluator Busy",
-                    evaluator_busy_ratio.map(|value| format!("{:.1}%", value * 100.0)),
-                    evaluator_busy_tone,
-                ),
-                key_value(
-                    "eval_ms_per_batch_mean",
-                    "Eval / Batch Mean (ms)",
-                    eval_ms_per_batch_mean,
-                ),
-                key_value(
-                    "eval_ms_per_batch_std",
-                    "Eval / Batch Std (ms)",
-                    eval_ms_per_batch_std,
-                ),
-                key_value(
-                    "eval_ms_per_batch_cv",
-                    "Eval / Batch CV",
-                    eval_ms_per_batch_cv.map(|value| format!("{:.1}%", value * 100.0)),
-                ),
-                key_value(
-                    "target_batch_eval_ms",
-                    "Target Eval / Batch (ms)",
-                    target_batch_eval_ms,
-                ),
-                key_value(
-                    "eval_us_per_sample",
-                    "Eval / Sample (us)",
-                    runtime.sampler.eval_ms_per_sample.mean.map(ms_to_us),
-                ),
-                key_value(
-                    "batch_size_current",
-                    "Batch Size",
-                    runtime.batch_size_current,
-                ),
-            ],
-        ),
-        tick_breakdown_panel(
-            "sampler_tick_breakdown",
-            sampler_tick_total_ms(&runtime),
-            sampler_tick_segments(&runtime),
-        ),
-        key_value_panel(
-            "sampler_runtime_details",
-            vec![
-                key_value(
-                    "sampler_tick_busy_ratio",
-                    "Tick Busy",
-                    runtime.sampler_tick_busy_ratio,
-                ),
-                key_value(
-                    "sampler_uptime_seconds",
-                    "Sampler Runner Uptime (s)",
-                    (runtime.sampler_uptime_ms / 1000.0).max(0.0),
-                ),
-                key_value(
-                    "insert_task_utilization",
-                    "Insert Utilization",
-                    runtime.queue.insert_task_utilization,
-                ),
-                key_value(
-                    "completed_fetch_utilization",
-                    "Result Fetch Slot Occupancy",
-                    runtime.queue.completed_fetch_utilization,
-                ),
-                key_value(
-                    "completed_fetch_mean_ms",
-                    "Result Fetch Mean (ms)",
-                    runtime.queue.rolling.fetch_completed_ms.mean,
-                ),
-                key_value(
-                    "completed_fetch_mean_batches",
-                    "Results per Fetch",
-                    runtime.queue.rolling.fetch_completed_batches.mean,
-                ),
-                key_value(
-                    "blocking_batch",
-                    "First Unfinished Batch",
-                    runtime
-                        .queue
-                        .blocker
-                        .as_ref()
-                        .map(|b| b.batch_id.to_string()),
-                ),
-                key_value(
-                    "blocking_batch_status",
-                    "Unfinished Batch Status",
-                    runtime.queue.blocker.as_ref().map(|b| b.status.clone()),
-                ),
-                key_value(
-                    "blocking_worker",
-                    "Claimed By",
-                    runtime
-                        .queue
-                        .blocker
-                        .as_ref()
-                        .and_then(|b| b.node_name.clone()),
-                ),
-                key_value(
-                    "blocking_claim_age_seconds",
-                    "Claim Age (s)",
-                    runtime
-                        .queue
-                        .blocker
-                        .as_ref()
-                        .and_then(|b| b.claimed_at)
-                        .map(|at| {
-                            (chrono::Utc::now() - at).num_milliseconds().max(0) as f64 / 1000.0
-                        }),
-                ),
-                key_value(
-                    "produced_samples_total",
-                    "Produced Samples",
-                    runtime.produced_samples_total,
-                ),
-                key_value(
-                    "ingested_samples_total",
-                    "Ingested Samples",
-                    runtime.ingested_samples_total,
-                ),
-                key_value(
-                    "completed_samples_total",
-                    "Completed Samples",
-                    runtime.completed_samples_total,
-                ),
-                key_value(
-                    "batch_size_current",
-                    "Batch Size",
-                    runtime.batch_size_current,
-                ),
-            ],
-        ),
-        key_value_panel(
-            "sampler_runtime_efficiency",
-            vec![
-                key_value(
-                    "produce_events",
-                    "Produce Events",
-                    runtime.sampler.produce_ms_per_sample.count,
-                ),
-                key_value(
-                    "training_ingest_batches",
-                    "Training Ingest Batches",
-                    runtime.sampler.training_ingest_ms_per_sample.count,
-                ),
-                key_value(
-                    "training_ingest_passes",
-                    "Training Ingest Passes",
-                    runtime.sampler.completed_training_ingest_ms.count,
-                ),
-                key_value(
-                    "merge_passes",
-                    "Merge Passes",
-                    runtime.sampler.completed_merge_ingest_ms.count,
-                ),
-                key_value(
-                    "frontend_sync_flushes",
-                    "Frontend Sync Flushes",
-                    runtime.sampler.persist_accumulator_ms.count,
-                ),
-                key_value(
-                    "cleanup_passes",
-                    "Queue Cleanup Passes",
-                    runtime.sampler.completed_delete_ms.count,
-                ),
-                key_value(
-                    "reclaim_passes",
-                    "Reclaim Passes",
-                    runtime.sampler.reclaim_ms.count,
-                ),
-                key_value(
-                    "training_ingest_ms_per_sample",
-                    "Avg Training Ingest Ms / Sample",
-                    window_mean_value(
-                        &runtime.sampler.training_ingest_ms_per_sample,
-                        "no training ingest",
-                    ),
-                ),
-                key_value(
-                    "produce_ms_per_sample",
-                    "Avg Produce Ms / Sample",
-                    window_mean_value(&runtime.sampler.produce_ms_per_sample, "no batches"),
-                ),
-                key_value(
-                    "completed_training_ingest_ms",
-                    "Avg Ingest Training Weights Ms",
-                    window_mean_value(
-                        &runtime.sampler.completed_training_ingest_ms,
-                        "no training ingest",
-                    ),
-                ),
-                key_value(
-                    "merge_completed_batches_ms",
-                    "Avg Merge Completed Accumulators Ms",
-                    window_mean_value(
-                        &runtime.sampler.completed_merge_ingest_ms,
-                        "no completed merges",
-                    ),
-                ),
-                key_value(
-                    "persist_accumulator_ms",
-                    "Avg Persist Accumulator Ms",
-                    window_mean_value(&runtime.sampler.persist_accumulator_ms, "no frontend sync"),
-                ),
-                key_value(
-                    "completed_delete_ms",
-                    "Avg Queue Cleanup Ms",
-                    window_mean_value(&runtime.sampler.completed_delete_ms, "no cleanup"),
-                ),
-                key_value(
-                    "reclaim_ms",
-                    "Avg Reclaim Abandoned Batches Ms",
-                    window_mean_value(&runtime.sampler.reclaim_ms, "no reclaim"),
-                ),
-            ],
-        ),
-        key_value_panel(
-            "sampler_queue_state",
-            vec![
-                key_value(
-                    "db_pending_batches",
-                    "DB Pending Batches",
-                    runtime.queue.db_pending_batches,
-                ),
-                key_value(
-                    "local_pending_batches",
-                    "Local Pending Batches",
-                    runtime.queue.local_pending_batches,
-                ),
-                key_value(
-                    "local_inflight_insert_batches",
-                    "Local In-Flight Insert Batches",
-                    runtime.queue.local_inflight_insert_batches,
-                ),
-                key_value(
-                    "local_inflight_insert_tasks",
-                    "Local In-Flight Insert Tasks",
-                    runtime.queue.local_inflight_insert_tasks,
-                ),
-                key_value(
-                    "completed_prefetch_buffer",
-                    "Completed Prefetch Buffer",
-                    runtime.queue.local_ready_processed_batches,
-                ),
-                key_value(
-                    "target_pending_batches",
-                    "Target DB Pending Batches",
-                    target_pending_batches,
-                ),
-                key_value(
-                    "pending_shortfall",
-                    "DB Pending Shortfall",
-                    pending_shortfall,
-                ),
-                key_value(
-                    "queue_buffer",
-                    "Target Pending Batches / Evaluator",
-                    queue_buffer_value(&entry.engine_diagnostics, "queue_buffer"),
-                ),
-            ],
-        ),
-        key_value_panel(
-            "sampler_queue_efficiency",
-            vec![
-                key_value(
-                    "completed_fetches",
-                    "Completed Fetches",
-                    runtime.queue.rolling.fetch_completed_ms.count,
-                ),
-                key_value(
-                    "completed_batches_fetched",
-                    "Completed Batches Fetched",
-                    window_total_value(&runtime.queue.rolling.fetch_completed_batches),
-                ),
-                key_value(
-                    "completed_batch_fetch_ms",
-                    "Avg Completed Batch Fetch Ms",
-                    window_mean_value(&runtime.queue.rolling.fetch_completed_ms, "no fetches"),
-                ),
-                key_value(
-                    "fetch_completed_batches",
-                    "Avg Completed Batches / Fetch",
-                    window_mean_value(&runtime.queue.rolling.fetch_completed_batches, "no fetches"),
-                ),
-                key_value(
-                    "fetch_completed_prefetch_fill_ratio",
-                    "Avg Completed Prefetch Fill Ratio",
-                    window_mean_value(
-                        &runtime.queue.rolling.fetch_completed_prefetch_fill_ratio,
-                        "no fetches",
-                    ),
-                ),
-                key_value(
-                    "inserted_bundles",
-                    "Inserted Bundles",
-                    runtime.queue.rolling.insert_bundle_ms.count,
-                ),
-                key_value(
-                    "inserted_batches",
-                    "Inserted Batches",
-                    window_total_value(&runtime.queue.rolling.insert_bundle_batches),
-                ),
-                key_value(
-                    "inserted_payload_bytes",
-                    "Inserted Payload Bytes",
-                    window_total_value(&runtime.queue.rolling.insert_bundle_payload_bytes),
-                ),
-                key_value(
-                    "insert_bundle_ms",
-                    "Avg Insert Bundle Ms",
-                    window_mean_value(&runtime.queue.rolling.insert_bundle_ms, "no inserts"),
-                ),
-                key_value(
-                    "insert_bundle_ms_per_batch",
-                    "Avg Insert Ms / Batch",
-                    window_mean_value(
-                        &runtime.queue.rolling.insert_bundle_ms_per_batch,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_local_pending_at_start",
-                    "Avg Local Pending At Insert Start",
-                    window_mean_value(
-                        &runtime.queue.rolling.insert_bundle_local_pending_at_start,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_db_pending_at_start",
-                    "Avg DB Pending At Insert Start",
-                    window_mean_value(
-                        &runtime.queue.rolling.insert_bundle_db_pending_at_start,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_serialize_ms",
-                    "Avg Insert Serialize Ms",
-                    window_mean_value(
-                        &runtime.queue.rolling.insert_bundle_serialize_ms,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_payload_bytes_per_batch",
-                    "Avg Insert Payload Bytes / Batch",
-                    window_mean_value(
-                        &runtime.queue.rolling.insert_bundle_payload_bytes_per_batch,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_db_batches_ms",
-                    "Avg Insert Batches SQL Ms",
-                    window_mean_value(
-                        &runtime.queue.rolling.insert_bundle_db_batches_ms,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_db_inputs_ms",
-                    "Avg Insert Inputs SQL Ms",
-                    window_mean_value(
-                        &runtime.queue.rolling.insert_bundle_db_inputs_ms,
-                        "no inserts",
-                    ),
-                ),
-                key_value(
-                    "insert_bundle_commit_ms",
-                    "Avg Insert Commit Ms",
-                    window_mean_value(&runtime.queue.rolling.insert_bundle_commit_ms, "no inserts"),
-                ),
-            ],
-        ),
-    ]
-}
-
-fn sampler_completed_throughput_panel(
-    entries: &[SamplerPerformanceHistoryEntry],
-) -> (Option<PanelState>, f64) {
-    let mut samples = entries
-        .iter()
-        .filter_map(|entry| {
-            let runtime = decode_sampler_runtime_metrics(entry)?;
-            let cumulative_samples = if runtime.completed_samples_total > 0 {
-                runtime.completed_samples_total
-            } else {
-                runtime.ingested_samples_total
-            };
-            Some(SamplerProgressPoint {
-                x_wall_time_ms: history_x(entry.created_at),
-                x_sampler_uptime_ms: sampler_uptime_ms(&runtime),
-                x_completed_samples_total: cumulative_samples as f64,
-                cumulative_samples,
-            })
-        })
-        .collect::<Vec<_>>();
-    if samples.is_empty() {
-        return (None, 0.0);
-    }
-    samples.sort_by(|left, right| left.x_wall_time_ms.total_cmp(&right.x_wall_time_ms));
-    let instant_points = instant_throughput_points_from_cumulative(&samples);
-    let latest_instant = instant_points.last().map(|point| point.y).unwrap_or(0.0);
-    (
-        Some(
-            multi_timeseries_panel(
-                "sampler_completed_samples_per_second",
-                vec![PlotSeries {
-                    id: "completed_samples_per_second".to_string(),
-                    label: "Completed Samples / Sec".to_string(),
-                    color: Some("#2563eb".to_string()),
-                    smooth: Some(true),
-                    points: instant_points,
-                }],
-            )
-            .with_x_axis(PlotXAxis::WallTime),
-        ),
-        latest_instant,
-    )
-}
-
-fn sampler_utilization_history_panel(
-    entries: &[SamplerPerformanceHistoryEntry],
-) -> Option<PanelState> {
-    let mut sampler_tick_points = Vec::new();
-    let mut insert_task_points = Vec::new();
-    let mut completed_fetch_points = Vec::new();
-    let mut evaluator_utilization_points = Vec::new();
-
-    for entry in entries.iter().rev() {
-        let runtime = decode_sampler_runtime_metrics(entry)?;
-        let x_wall_time_ms = history_x(entry.created_at);
-        let x_sampler_uptime_ms = sampler_uptime_ms(&runtime);
-        let x_completed_samples_total = Some(runtime.completed_samples_total as f64);
-        let point = |y: f64| PlotPoint {
-            x: x_wall_time_ms,
-            y,
-            x_sampler_uptime_ms,
-            x_completed_samples_total,
-            ..Default::default()
-        };
-        sampler_tick_points.push(point(runtime.sampler_tick_busy_ratio.unwrap_or(0.0)));
-        insert_task_points.push(point(runtime.queue.insert_task_utilization.unwrap_or(0.0)));
-        completed_fetch_points.push(point(
-            runtime.queue.completed_fetch_utilization.unwrap_or(0.0),
-        ));
-        if let Some(utilization) = runtime.avg_evaluator_utilization {
-            evaluator_utilization_points.push(point(utilization.clamp(0.0, 1.0)));
-        }
-    }
-
-    Some(
-        multi_timeseries_panel(
-            "sampler_utilization_history",
-            vec![
-                PlotSeries {
-                    id: "sampler_tick_busy_ratio".to_string(),
-                    label: "Sampler Busy".to_string(),
-                    color: Some("#2563eb".to_string()),
-                    smooth: Some(true),
-                    points: sampler_tick_points,
-                },
-                PlotSeries {
-                    id: "insert_task_utilization".to_string(),
-                    label: "Insert Utilization".to_string(),
-                    color: Some("#ea580c".to_string()),
-                    smooth: Some(true),
-                    points: insert_task_points,
-                },
-                PlotSeries {
-                    id: "completed_fetch_utilization".to_string(),
-                    label: "Result Fetch Slot Occupancy".to_string(),
-                    color: Some("#16a34a".to_string()),
-                    smooth: Some(true),
-                    points: completed_fetch_points,
-                },
-                PlotSeries {
-                    id: "avg_evaluator_utilization".to_string(),
-                    label: "Evaluator Busy".to_string(),
-                    color: Some("#7c3aed".to_string()),
-                    smooth: Some(true),
-                    points: evaluator_utilization_points,
-                },
-            ],
-        )
-        .with_x_axis(PlotXAxis::WallTime),
-    )
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SamplerProgressPoint {
-    x_wall_time_ms: f64,
-    x_sampler_uptime_ms: Option<f64>,
-    x_completed_samples_total: f64,
-    cumulative_samples: i64,
-}
-
-fn instant_throughput_points_from_cumulative(samples: &[SamplerProgressPoint]) -> Vec<PlotPoint> {
-    if samples.is_empty() {
-        return Vec::new();
-    }
-    let mut points = Vec::with_capacity(samples.len());
-    for (index, point) in samples.iter().enumerate() {
-        let y = if index == 0 {
-            0.0
-        } else {
-            let previous = samples[index - 1];
-            let elapsed_ms = match (point.x_sampler_uptime_ms, previous.x_sampler_uptime_ms) {
-                (Some(current), Some(prev)) if current > prev => current - prev,
-                _ => point.x_wall_time_ms - previous.x_wall_time_ms,
-            };
-            let elapsed_secs = elapsed_ms / 1000.0;
-            let delta_samples = point
-                .cumulative_samples
-                .saturating_sub(previous.cumulative_samples);
-            if elapsed_secs > 0.0 {
-                (delta_samples as f64 / elapsed_secs).max(0.0)
-            } else {
-                0.0
-            }
-        };
-        points.push(PlotPoint {
-            x: point.x_wall_time_ms,
-            y,
-            x_sampler_uptime_ms: point.x_sampler_uptime_ms,
-            x_completed_samples_total: Some(point.x_completed_samples_total),
-            ..Default::default()
-        });
-    }
-    points
-}
-
-fn sampler_uptime_ms(runtime: &SamplerRuntimeMetrics) -> Option<f64> {
-    (runtime.sampler_uptime_ms.is_finite() && runtime.sampler_uptime_ms >= 0.0)
-        .then_some(runtime.sampler_uptime_ms)
-}
-
-fn queue_buffer_value(value: &JsonValue, key: &str) -> Option<JsonValue> {
-    value.get("runner")?.get(key).cloned()
-}
-
-fn evaluator_busy_ratio_tone(utilization: f64) -> Option<&'static str> {
-    if !utilization.is_finite() {
+fn interval<'a>(
+    rows: &'a [Value],
+    latest: &Value,
+    node: &Value,
+    snapshot: &PerformanceSnapshot,
+    since: DateTime<Utc>,
+) -> Option<Interval<'a>> {
+    if !matches_worker(latest, node, snapshot)
+        || age(latest, snapshot.observed_at).is_none_or(|age| age > MAX_AGE_SECONDS)
+    {
         return None;
     }
-    if utilization < 0.5 {
-        Some("critical")
-    } else if utilization < 0.75 {
-        Some("warning")
+    let evaluator = node["active_role"] == "evaluator";
+    let mut matching = rows.iter().filter(|r| {
+        matches_worker(r, node, snapshot)
+            && epoch(r, evaluator) == epoch(latest, evaluator)
+            && timestamp(r).is_some_and(|t| t >= since && t <= snapshot.observed_at)
+    });
+    let first = matching.next()?;
+    let last = matching.next_back()?;
+    let seconds = (timestamp(last)? - timestamp(first)?).num_milliseconds() as f64 / 1000.0;
+    if seconds <= 0.0 || age(last, snapshot.observed_at)? > MAX_AGE_SECONDS {
+        return None;
+    }
+    let result = Interval {
+        first,
+        last,
+        seconds,
+        evaluator,
+    };
+    // A reset is not a zero-throughput interval.
+    result.delta(if evaluator {
+        "/samples_evaluated"
     } else {
-        Some("good")
-    }
+        "/completed_samples_total"
+    })?;
+    Some(result)
 }
 
-fn decode_sampler_runtime_metrics(
-    entry: &SamplerPerformanceHistoryEntry,
-) -> Option<SamplerRuntimeMetrics> {
-    serde_json::from_value(entry.runtime_metrics.clone()).ok()
+fn add_panel(
+    panels: &mut Vec<PanelSpec>,
+    states: &mut Vec<PanelState>,
+    id: &str,
+    label: &str,
+    kind: PanelKind,
+    state: PanelState,
+) {
+    panels.push(sized_panel_spec(
+        id,
+        label,
+        kind,
+        PanelHistoryMode::Replace,
+        PanelWidth::Full,
+    ));
+    states.push(state);
 }
 
-fn window_mean_value(
-    snapshot: &crate::core::RollingMetricSnapshot,
-    empty_label: &str,
-) -> JsonValue {
-    if snapshot.count == 0 {
-        JsonValue::String(empty_label.to_string())
-    } else {
-        serde_json::to_value(snapshot.mean).unwrap_or(JsonValue::Null)
-    }
-}
-
-fn window_total_value(snapshot: &crate::core::RollingMetricSnapshot) -> JsonValue {
-    JsonValue::from(snapshot.total.unwrap_or(0.0))
-}
-
-fn finite_positive_std(mean: Option<f64>, std_dev: f64) -> Option<f64> {
-    if mean.is_some_and(|value| value.is_finite()) && std_dev.is_finite() && std_dev >= 0.0 {
-        Some(std_dev)
-    } else {
-        None
-    }
-}
-
-fn coefficient_of_variation(mean: Option<f64>, std_dev: Option<f64>) -> Option<f64> {
-    let mean = mean?;
-    let std_dev = std_dev?;
-    (mean.is_finite() && mean.abs() > f64::EPSILON && std_dev.is_finite())
-        .then_some(std_dev / mean.abs())
-}
-
-fn ms_to_us(value_ms: f64) -> f64 {
-    value_ms * 1000.0
-}
-
-fn evaluator_fetch_sync_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
-    (metrics.avg_fetch_time_per_sample_ms - metrics.avg_fetch_stall_time_per_sample_ms).max(0.0)
-}
-
-fn evaluator_runner_sync_overhead_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
-    evaluator_fetch_sync_ms(metrics)
-        + metrics.avg_materialization_time_per_sample_ms.max(0.0)
-        + metrics.avg_submit_time_per_sample_ms.max(0.0)
-}
-
-fn evaluator_runner_wait_overhead_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
-    metrics.avg_fetch_stall_time_per_sample_ms.max(0.0)
-        + metrics.avg_submit_stall_time_per_sample_ms.max(0.0)
-}
-
-fn evaluator_runner_total_overhead_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
-    evaluator_runner_sync_overhead_ms(metrics) + evaluator_runner_wait_overhead_ms(metrics)
-}
-
-fn evaluator_pipeline_total_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
-    metrics.avg_evaluate_time_per_sample_ms.max(0.0) + evaluator_runner_total_overhead_ms(metrics)
-}
-
-fn segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBreakdownSegment {
-    TickBreakdownSegment {
-        key: key.to_string(),
-        label: label.to_string(),
-        value_ms,
-        color: color.to_string(),
-    }
-}
-
-fn evaluator_tick_segments(metrics: &EvaluatorPerformanceMetrics) -> Vec<TickBreakdownSegment> {
-    let fetch_sync_ms = evaluator_fetch_sync_ms(metrics);
-    [
-        segment(
-            "fetch_decode",
-            "Fetch+Decode (sync)",
-            fetch_sync_ms,
-            "#0a9396",
-        ),
-        segment(
-            "materialize",
-            "Materialize",
-            metrics.avg_materialization_time_per_sample_ms,
-            "#ee9b00",
-        ),
-        segment(
-            "evaluate",
-            "Evaluate",
-            metrics.avg_evaluate_time_per_sample_ms,
-            "#ca6702",
-        ),
-        segment(
-            "submit",
-            "Submit (sync)",
-            metrics.avg_submit_time_per_sample_ms,
-            "#bb3e03",
-        ),
-    ]
-    .into_iter()
-    .filter(|segment| segment.value_ms.is_finite() && segment.value_ms > 0.0)
-    .collect()
-}
-
-fn evaluator_tick_total_ms(metrics: &EvaluatorPerformanceMetrics) -> f64 {
-    evaluator_tick_segments(metrics)
+pub(super) fn build_performance_response(
+    snapshot: &PerformanceSnapshot,
+    evaluator_rows: &[Value],
+    sampler_rows: &[Value],
+    window_seconds: i64,
+    selected_node: Option<&str>,
+) -> PanelResponse {
+    let since = snapshot.observed_at - chrono::Duration::seconds(window_seconds);
+    let nodes = snapshot
+        .nodes
         .iter()
-        .map(|segment| segment.value_ms)
-        .sum()
-}
-
-fn sampler_tick_segments(runtime: &SamplerRuntimeMetrics) -> Vec<TickBreakdownSegment> {
-    [
-        (
-            "completed_training_ingest",
-            "Ingest Training Weights (sync)",
-            runtime
-                .sampler
-                .completed_training_ingest_ms
-                .mean
-                .unwrap_or(0.0),
-            "#6d597a",
-        ),
-        (
-            "completed_merge",
-            "Merge Completed Accumulators (sync)",
-            runtime
-                .sampler
-                .completed_merge_ingest_ms
-                .mean
-                .unwrap_or(0.0),
-            "#ca6702",
-        ),
-        (
-            "produce",
-            "Produce Batches (sync)",
-            runtime.sampler.produce_ms.mean.unwrap_or(0.0),
-            "#ae2012",
-        ),
-        (
-            "progress_sync",
-            "Write Progress (sync)",
-            runtime.sampler.progress_sync_ms.mean.unwrap_or(0.0),
-            "#9b2226",
-        ),
-        (
-            "performance_sync",
-            "Write Performance Snapshot (sync)",
-            runtime.sampler.performance_sync_ms.mean.unwrap_or(0.0),
-            "#6a040f",
-        ),
-    ]
-    .into_iter()
-    .map(|(key, label, value_ms, color)| segment(key, label, value_ms, color))
-    .filter(|segment| segment.value_ms.is_finite() && segment.value_ms > 0.0)
-    .collect()
-}
-
-fn sampler_tick_total_ms(runtime: &SamplerRuntimeMetrics) -> f64 {
-    sampler_tick_segments(runtime)
+        .filter(|n| {
+            n["live"] == true
+                && n["active_run_id"] == snapshot.run_id
+                && matches!(
+                    n["active_role"].as_str(),
+                    Some("evaluator" | "sampler_aggregator")
+                )
+        })
+        .collect::<Vec<_>>();
+    let mut fresh_count = 0;
+    let mut interval_count = 0;
+    let mut memory_count = 0;
+    let mut rss = 0i64;
+    let mut ages = Vec::new();
+    let mut spans = Vec::new();
+    let mut evaluator_busy = Vec::new();
+    let mut sampler_interval = None;
+    let mut sampler_latest = None;
+    let mut worker_rows = Vec::new();
+    let mut evaluator_details = Vec::new();
+    for node in &nodes {
+        let evaluator = node["active_role"] == "evaluator";
+        let latest = if evaluator {
+            &snapshot.evaluators
+        } else {
+            &snapshot.samplers
+        }
         .iter()
-        .map(|segment| segment.value_ms)
-        .sum()
+        .find(|r| r["worker_id"] == node["name"]);
+        let matched = latest.filter(|r| matches_worker(r, node, snapshot));
+        let age_seconds = matched.and_then(|r| age(r, snapshot.observed_at));
+        ages.extend(age_seconds);
+        let fresh = matched.filter(|_| age_seconds.is_some_and(|v| v <= MAX_AGE_SECONDS));
+        fresh_count += usize::from(fresh.is_some());
+        let memory = fresh
+            .and_then(|r| r["rss_bytes"].as_i64())
+            .filter(|v| *v >= 0);
+        if let Some(bytes) = memory {
+            rss = rss.saturating_add(bytes);
+            memory_count += 1;
+        }
+        let measured = fresh.and_then(|r| {
+            interval(
+                if evaluator {
+                    evaluator_rows
+                } else {
+                    sampler_rows
+                },
+                r,
+                node,
+                snapshot,
+                since,
+            )
+        });
+        if let Some(value) = &measured {
+            interval_count += 1;
+            spans.push(value.seconds);
+            if evaluator {
+                evaluator_busy.push((
+                    value.busy_percent("compute"),
+                    value.busy_percent("io"),
+                    value.busy_seconds(),
+                ));
+            }
+        }
+        let status = if matched.is_none() {
+            "Missing/current identity not reported"
+        } else if fresh.is_none() {
+            "Stale"
+        } else if measured.is_none() {
+            "Waiting for two snapshots"
+        } else {
+            "Current"
+        };
+        worker_rows.push(vec![
+            node["name"].clone(),
+            node["active_role"].clone(),
+            json!(status),
+            json!(age_seconds),
+            json!(measured.as_ref().map(|v| v.seconds)),
+            json!(memory.map(format_bytes_human)),
+        ]);
+        if evaluator && selected_node.is_none_or(|name| node["name"] == name) {
+            let value = measured.as_ref();
+            evaluator_details.push(vec![
+                node["name"].clone(),
+                json!(value.and_then(|v| v.busy_percent("compute"))),
+                json!(value.and_then(|v| v.busy_percent("io"))),
+                json!(value.and_then(|v| v.delta("/samples_evaluated"))),
+                json!(value.and_then(|v| v.cost_us("/cumulative/evaluate_seconds"))),
+                json!(value.and_then(|v| v.cost_us("/cumulative/materialize_seconds"))),
+                json!(value.and_then(|v| v.cost_us("/cumulative/fetch_wait_seconds"))),
+                json!(value.and_then(|v| v.cost_us("/cumulative/submit_seconds"))),
+                json!(value.and_then(|v| v.cost_us("/cumulative/submit_wait_seconds"))),
+            ]);
+        }
+        if !evaluator {
+            sampler_interval = measured;
+            sampler_latest = fresh;
+        }
+    }
+    let evaluator_count = nodes
+        .iter()
+        .filter(|n| n["active_role"] == "evaluator")
+        .count();
+    let sampler_count = nodes.len() - evaluator_count;
+    if sampler_count != 1 {
+        sampler_interval = None;
+        sampler_latest = None;
+    }
+    let sampler_windows = sampler_interval
+        .as_ref()
+        .map(|interval| graphs::sampler_rows_in_interval(sampler_rows, interval))
+        .unwrap_or_default();
+    let rate = sampler_interval
+        .as_ref()
+        .and_then(|v| v.delta("/completed_samples_total").map(|n| n / v.seconds));
+    let eval_busy = |io: bool| -> Option<f64> {
+        if evaluator_count == 0 || evaluator_busy.len() != evaluator_count {
+            return None;
+        }
+        let (mut total, mut elapsed) = (0.0, 0.0);
+        for &(compute, input_output, seconds) in &evaluator_busy {
+            let seconds = seconds?;
+            total += if io { input_output? } else { compute? } * seconds;
+            elapsed += seconds;
+        }
+        Some(total / elapsed)
+    };
+    let mut panels = Vec::new();
+    let mut states = Vec::new();
+    add_panel(
+        &mut panels,
+        &mut states,
+        "performance_overview",
+        "Usage overview",
+        PanelKind::KeyValue,
+        key_value_panel(
+            "performance_overview",
+            vec![
+                key_value(
+                    "accepted_samples",
+                    "Accepted Samples",
+                    snapshot.completed_samples,
+                ),
+                key_value("accepted_rate", "Accepted Samples / s", rate),
+                key_value(
+                    "live_workers",
+                    "Live Workers (evaluators / samplers)",
+                    format!("{evaluator_count} / {sampler_count}"),
+                ),
+                key_value(
+                    "coverage",
+                    "Fresh Reports / Live Workers",
+                    format!("{fresh_count} / {}", nodes.len()),
+                ),
+                key_value(
+                    "interval_coverage",
+                    "Workers With Measured Intervals",
+                    format!("{interval_count} / {}", nodes.len()),
+                ),
+                key_value(
+                    "allocated_core_hours",
+                    "Allocated Core-hours (run total)",
+                    snapshot.allocated_core_seconds / 3600.0,
+                ),
+                key_value(
+                    "process_rss",
+                    "Reported GammaBoard Process RSS",
+                    (memory_count > 0).then(|| format_bytes_human(rss)),
+                ),
+                key_value(
+                    "memory_coverage",
+                    "Memory Reports / Live Workers",
+                    format!("{memory_count} / {}", nodes.len()),
+                ),
+                key_value(
+                    "age",
+                    "Oldest Matching Report Age (s)",
+                    ages.into_iter().reduce(f64::max),
+                ),
+            ],
+        ),
+    );
+    add_panel(
+        &mut panels,
+        &mut states,
+        "busy_rates",
+        "Activity",
+        PanelKind::Table,
+        table_panel_with_payload(
+            "busy_rates",
+            ["Role", "Compute busy (%)", "I/O active (%)"]
+                .map(String::from)
+                .to_vec(),
+            vec![
+                vec![
+                    json!("Evaluators"),
+                    json!(eval_busy(false)),
+                    json!(eval_busy(true)),
+                ],
+                vec![
+                    json!("Sampler"),
+                    json!(
+                        sampler_interval
+                            .as_ref()
+                            .and_then(|v| v.busy_percent("compute"))
+                    ),
+                    json!(sampler_interval.as_ref().and_then(|v| v.busy_percent("io"))),
+                ],
+            ],
+            None,
+        ),
+    );
+    add_panel(
+        &mut panels,
+        &mut states,
+        "measurement_window",
+        "Measurement window",
+        PanelKind::KeyValue,
+        key_value_panel(
+            "measurement_window",
+            vec![
+                key_value("since", "From", since),
+                key_value("until", "To", snapshot.observed_at),
+                key_value("window_seconds", "Requested Window (s)", window_seconds),
+                key_value(
+                    "observed_seconds",
+                    "Shortest Observed Worker Interval (s)",
+                    spans.into_iter().reduce(f64::min),
+                ),
+                key_value(
+                    "scope",
+                    "Scope",
+                    "Activity uses measured worker-time within this window, with full live-worker coverage. Compute and I/O can overlap; I/O stops at completion. These are operation wall times. RSS excludes subprocesses, GPUs and services.",
+                ),
+            ],
+        ),
+    );
+    add_panel(
+        &mut panels,
+        &mut states,
+        "worker_coverage",
+        "Worker reporting coverage",
+        PanelKind::Table,
+        table_panel_with_payload(
+            "worker_coverage",
+            [
+                "Worker",
+                "Role",
+                "Telemetry",
+                "Age (s)",
+                "Observed interval (s)",
+                "Process RSS",
+            ]
+            .map(String::from)
+            .to_vec(),
+            worker_rows,
+            None,
+        ),
+    );
+    add_panel(
+        &mut panels,
+        &mut states,
+        "evaluator_diagnostics",
+        "Evaluator operations — separate wall durations",
+        PanelKind::Table,
+        table_panel_with_payload(
+            "evaluator_diagnostics",
+            [
+                "Worker",
+                "Compute busy (%)",
+                "I/O active (%)",
+                "Submitted samples",
+                "Evaluate (µs/sample)",
+                "Materialize (µs/sample)",
+                "Exposed fetch wait (µs/sample)",
+                "Async submit latency (µs/sample)",
+                "Exposed submit wait (µs/sample)",
+            ]
+            .map(String::from)
+            .to_vec(),
+            evaluator_details,
+            None,
+        ),
+    );
+
+    if let Some(latest) = sampler_latest {
+        sampler_queue_panels(&mut panels, &mut states, latest, snapshot.observed_at);
+    }
+    if sampler_interval.is_some() {
+        add_sampler_timings(&mut panels, &mut states, &sampler_windows);
+    } else {
+        add_panel(
+            &mut panels,
+            &mut states,
+            "sampler_diagnostics_status",
+            "Sampler diagnostics",
+            PanelKind::Text,
+            text_panel(
+                "sampler_diagnostics_status",
+                "No current sampler measurement interval is available.",
+            ),
+        );
+    }
+    PanelResponse::new(
+        format!("run:{}:performance", snapshot.run_id),
+        None,
+        panels,
+        states.into_iter().map(replace_panel).collect(),
+        Some(5000),
+    )
 }
+
+fn sampler_queue_panels(
+    panels: &mut Vec<PanelSpec>,
+    states: &mut Vec<PanelState>,
+    latest: &Value,
+    now: DateTime<Utc>,
+) {
+    let runtime = data(latest, false);
+    let q = &runtime["queue"];
+    let claim_age = q["blocker"]["claimed_at"]
+        .as_str()
+        .and_then(|v| v.parse::<DateTime<Utc>>().ok())
+        .map(|v| (now - v).num_milliseconds().max(0) as f64 / 1000.0);
+    add_panel(
+        panels,
+        states,
+        "queue_diagnostics",
+        "Current queue and batch state",
+        PanelKind::KeyValue,
+        key_value_panel(
+            "queue_diagnostics",
+            vec![
+                key_value(
+                    "batch_size",
+                    "Current Batch Size",
+                    &runtime["batch_size_current"],
+                ),
+                key_value("pending", "Pending Batches", &q["db_pending_batches"]),
+                key_value("claimed", "Claimed Batches", &q["db_claimed_batches"]),
+                key_value(
+                    "completed",
+                    "Completed Batches Awaiting Ingestion",
+                    &q["db_completed_batches"],
+                ),
+                key_value(
+                    "local_pending",
+                    "Local Pending Batches",
+                    &q["local_pending_batches"],
+                ),
+                key_value(
+                    "insert_tasks",
+                    "Occupied Insert Slots",
+                    &q["local_inflight_insert_tasks"],
+                ),
+                key_value(
+                    "insert_batches",
+                    "Batches in Insert Slots",
+                    &q["local_inflight_insert_batches"],
+                ),
+                key_value(
+                    "ready",
+                    "Buffered Completed Batches",
+                    &q["local_ready_processed_batches"],
+                ),
+                key_value(
+                    "blocker",
+                    "First Unfinished Batch",
+                    &q["blocker"]["batch_id"],
+                ),
+                key_value("worker", "Claimed By", &q["blocker"]["node_name"]),
+                key_value("claim_age", "Claim Age (s)", claim_age),
+            ],
+        ),
+    );
+}
+
+fn add_sampler_timings(panels: &mut Vec<PanelSpec>, states: &mut Vec<PanelState>, rows: &[&Value]) {
+    let mut timing_rows = Vec::new();
+    for (path, label, unit) in [
+        (
+            "/sampler/eval_ms_per_batch",
+            "Evaluate + materialize",
+            "batch",
+        ),
+        (
+            "/sampler/eval_ms_per_sample",
+            "Evaluate + materialize",
+            "sample",
+        ),
+        (
+            "/sampler/produce_ms_per_sample",
+            "Sample generation",
+            "sample",
+        ),
+        (
+            "/sampler/training_ingest_ms_per_sample",
+            "Training ingestion",
+            "sample",
+        ),
+        (
+            "/sampler/completed_training_ingest_ms",
+            "Training ingestion",
+            "pass",
+        ),
+        (
+            "/sampler/completed_merge_ingest_ms",
+            "Accumulator merge",
+            "pass",
+        ),
+        (
+            "/sampler/persist_accumulator_ms",
+            "Accumulator persistence",
+            "operation",
+        ),
+        (
+            "/sampler/completed_delete_ms",
+            "Completed batch cleanup",
+            "operation",
+        ),
+        (
+            "/sampler/reclaim_ms",
+            "Abandoned batch reclaim",
+            "operation",
+        ),
+        (
+            "/queue/rolling/fetch_completed_ms",
+            "Result fetch",
+            "operation",
+        ),
+        (
+            "/queue/rolling/insert_bundle_ms",
+            "Insert bundle",
+            "operation",
+        ),
+        (
+            "/queue/rolling/insert_bundle_ms_per_batch",
+            "Insert bundle",
+            "batch",
+        ),
+        (
+            "/queue/rolling/insert_bundle_serialize_ms",
+            "Insert serialization",
+            "operation",
+        ),
+        (
+            "/queue/rolling/insert_bundle_db_batches_ms",
+            "Batch SQL",
+            "operation",
+        ),
+        (
+            "/queue/rolling/insert_bundle_db_inputs_ms",
+            "Input SQL",
+            "operation",
+        ),
+        (
+            "/queue/rolling/insert_bundle_commit_ms",
+            "Insert commit",
+            "operation",
+        ),
+    ] {
+        let mut count = 0u64;
+        let mut total = 0.0;
+        for row in rows {
+            let metric = data(row, false).pointer(path).unwrap_or(&Value::Null);
+            if let (Some(n), Some(sum)) = (metric["count"].as_u64(), finite(&metric["total"])) {
+                count += n;
+                total += sum;
+            }
+        }
+        if count > 0 {
+            timing_rows.push(vec![
+                json!(label),
+                json!(unit),
+                json!(count),
+                json!(total),
+                json!(total / count as f64),
+            ]);
+        }
+    }
+    add_panel(
+        panels,
+        states,
+        "sampler_operation_timings",
+        "Sampler and I/O observations in the measured interval",
+        PanelKind::Table,
+        table_panel_with_payload(
+            "sampler_operation_timings",
+            [
+                "Operation",
+                "Unit",
+                "Count",
+                "Total duration (ms)",
+                "Mean (ms/unit)",
+            ]
+            .map(String::from)
+            .to_vec(),
+            timing_rows,
+            None,
+        ),
+    );
+}
+
+#[cfg(test)]
+mod tests;

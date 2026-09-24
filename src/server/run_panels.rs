@@ -166,10 +166,9 @@ fn panel_states(
                 ),
                 key_value(
                     "cpu_hours",
-                    "CPU Hours",
+                    "Allocated Core-hours",
                     run.cpu_seconds_including_children / 3600.0,
                 ),
-                key_value("completion_rate", "Completion Rate", run.completion_rate),
             ],
         ),
         key_value_panel(

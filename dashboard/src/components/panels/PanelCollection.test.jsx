@@ -183,14 +183,14 @@ describe("PDF adaptation heatmap controls", () => {
   });
 });
 
-const renderTimeseries = ({ kind = "scalar_timeseries", panelId = "test_history", xAxis, points, value, target }) => {
+const renderTimeseries = ({ kind = "scalar_timeseries", panelId = "test_history", xAxis, points, value, target, xRange, yRange }) => {
   const state = kind === "scalar_timeseries"
     ? { points, target }
     : { series: [{ id: "test", label: "Test", points }] };
   render(
     <PanelCollection
       panelSpecs={[{ panel_id: panelId, label: "Test", kind, history: "append" }]}
-      panelStates={[{ ...state, panel_id: panelId, x_axis: xAxis }]}
+      panelStates={[{ ...state, panel_id: panelId, x_axis: xAxis, x_range: xRange, y_range: yRange }]}
       panelValues={{ [panelId]: value }}
     />,
   );
@@ -200,6 +200,38 @@ const renderTimeseries = ({ kind = "scalar_timeseries", panelId = "test_history"
 const tooltipHeader = (option, x) => option.tooltip.formatter([
   { axisValue: x, seriesName: "Test", value: [x, 0.8] },
 ]).split("<br/>")[0];
+
+test("busy graphs preserve gaps, measured zero, and shared fixed axes", () => {
+  const option = renderTimeseries({
+    kind: "multi_timeseries", xAxis: "wall_time", xRange: [1000, 61000], yRange: [0, 100],
+    points: [{ x: 2000, y: 50 }, { x: 3000, y: 50 }, { x: 8000, y: 0, break_before: true }, { x: 9000, y: 0 }],
+  });
+  expect([option.xAxis.min, option.xAxis.max]).toEqual([1000, 61000]);
+  expect([option.yAxis.min, option.yAxis.max]).toEqual([0, 100]);
+  const line = option.series.find((series) => series.type === "line");
+  expect(line.connectNulls).toBe(false);
+  expect(line.smooth).toBe(false);
+  expect(line.data).toEqual([[2000, 50], [3000, 50], [8000, null], [8000, 0], [9000, 0]]);
+  expect(option.tooltip.formatter([{ axisValue: 8000, seriesName: "Test", value: [8000, null] }])).toContain("n/a");
+});
+
+test("subsecond graph timestamps remain distinguishable when zoomed", () => {
+  const origin = 1700000000000;
+  const option = renderTimeseries({ kind: "multi_timeseries", xAxis: "wall_time", xRange: [origin, origin + 1000], points: [{ x: origin, y: 0 }, { x: origin + 500, y: 80 }] });
+  expect(option.xAxis.axisLabel.formatter(origin + 500)).toBe("00:00.500");
+  expect(tooltipHeader(option, origin + 500)).toBe("00:00.500");
+});
+
+test("axis tooltips omit helper series and replace old traces on refresh", () => {
+  const option = renderTimeseries({ kind: "multi_timeseries", xAxis: "wall_time", points: [{ x: 1000, y: 40, y_min: 0, y_max: 80 }] });
+  const tooltip = option.tooltip.formatter([
+    { seriesType: "custom", seriesName: "Test", seriesId: "range", axisValue: 1000, value: [1000, 0, 80] },
+    { seriesType: "line", seriesName: "Test", seriesId: "test", axisValue: 1000, value: [1000, 40] },
+    { seriesType: "line", seriesName: "Test", seriesId: "test", axisValue: 1000, value: [1000, 40] },
+  ]);
+  expect(tooltip.match(/Test:/g)).toHaveLength(1);
+  expect(renderChart.mock.lastCall[0].replaceMerge).toEqual(["series"]);
+});
 
 describe("PanelCollection scalar legends", () => {
   test.each(["ess_history", "abs_signal_to_noise_history"])("omits empty uncertainty and the single-series legend for %s", (panelId) => {

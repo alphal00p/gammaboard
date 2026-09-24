@@ -76,3 +76,19 @@ BEGIN
           AND c.name='upgrade-child' AND n.pool_role='evaluator'
     ) THEN RAISE EXCEPTION 'worker pool migration lost ownership or placement'; END IF;
 END $$;
+
+CREATE TEMP TABLE upgrade_counter_before AS TABLE run_batch_queue_counters;
+\ir ../migrations/202609240001_defer_queue_counters.sql
+DO $$
+BEGIN
+    IF EXISTS (TABLE run_batch_queue_counters EXCEPT TABLE upgrade_counter_before)
+       OR EXISTS (TABLE upgrade_counter_before EXCEPT TABLE run_batch_queue_counters) THEN
+        RAISE EXCEPTION 'deferred-counter migration changed existing counters';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='batches_queue_counter_trigger'
+                   AND tgdeferrable AND tginitdeferred) THEN
+        RAISE EXCEPTION 'queue counter trigger is not deferred until commit';
+    END IF;
+END $$;
+
+\ir ../migrations/202609240002_input_compression.sql

@@ -76,6 +76,27 @@ pub(crate) async fn insert_batches(
     }
 
     let started = Instant::now();
+    // Prepare bytes before acquiring a connection or any database locks.
+    let serialize_started = Instant::now();
+    let serialized_inputs = batch_ids
+        .iter()
+        .zip(batches.iter())
+        .map(|(batch_id, batch)| {
+            batch
+                .to_bytes()
+                .map(|payload| (*batch_id, payload))
+                .map_err(|err| sqlx::Error::Protocol(format!("invalid latent batch: {err}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let serialize_ms = serialize_started.elapsed().as_secs_f64() * 1000.0;
+    let payload_bytes = serialized_inputs
+        .iter()
+        .map(|(_, payload)| payload.len())
+        .sum::<usize>();
+
+    let copy_payload = encode_batch_inputs_copy_binary(&serialized_inputs);
+    drop(serialized_inputs);
+
     let mut tx = pool.begin().await?;
     let mut builder = QueryBuilder::<Postgres>::new(
         r#"
@@ -104,24 +125,6 @@ pub(crate) async fn insert_batches(
     builder.build().execute(&mut *tx).await?;
     let insert_batches_exec_ms = insert_batches_started.elapsed().as_secs_f64() * 1000.0;
 
-    let serialize_started = Instant::now();
-    let serialized_inputs = batch_ids
-        .iter()
-        .zip(batches.iter())
-        .map(|(batch_id, batch)| {
-            batch
-                .to_bytes()
-                .map(|payload| (*batch_id, payload))
-                .expect("latent batch serialization should never fail")
-        })
-        .collect::<Vec<_>>();
-    let serialize_ms = serialize_started.elapsed().as_secs_f64() * 1000.0;
-    let payload_bytes = serialized_inputs
-        .iter()
-        .map(|(_, payload)| payload.len())
-        .sum::<usize>();
-
-    let copy_payload = encode_batch_inputs_copy_binary(&serialized_inputs);
     let insert_inputs_started = Instant::now();
     let mut copy_in = tx
         .copy_in_raw(
@@ -135,10 +138,10 @@ pub(crate) async fn insert_batches(
         .await?;
     copy_in.send(copy_payload).await?;
     let copied_rows = copy_in.finish().await?;
-    if copied_rows != serialized_inputs.len() as u64 {
+    if copied_rows != batches.len() as u64 {
         return Err(sqlx::Error::Protocol(format!(
             "COPY batch_inputs inserted {copied_rows} rows, expected {}",
-            serialized_inputs.len()
+            batches.len()
         )));
     }
     let insert_inputs_exec_ms = insert_inputs_started.elapsed().as_secs_f64() * 1000.0;

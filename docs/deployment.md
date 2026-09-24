@@ -25,6 +25,9 @@ start a runtime.
 The MADNIS sampler defaults to one OpenMP thread; see its
 [runtime options](../integrations/madnis/README.md#runtime-options).
 
+See [concurrency.md](concurrency.md) for what runs serially, which I/O overlaps,
+and how training barriers appear in the busy graphs.
+
 ## Runtime Layout
 
 Paths are resolved from the configured resources root unless explicitly

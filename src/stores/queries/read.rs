@@ -932,9 +932,13 @@ pub(crate) async fn get_registered_workers(
                 LEFT JOIN sampler_aggregator_performance_latest p
                     ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
                    AND p.worker_id = n.name
+                   AND p.runtime_metrics->>'node_uuid' = n.uuid
+                   AND p.created_at >= now() - interval '10 seconds'
                 LEFT JOIN evaluator_performance_latest e
                     ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
                    AND e.worker_id = n.name
+                   AND e.metrics->>'node_uuid' = n.uuid
+                   AND e.created_at >= now() - interval '10 seconds'
                 LEFT JOIN runs pr ON pr.id = n.pool_run_id
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
                 LEFT JOIN runs cr ON cr.id = n.active_run_id
@@ -984,9 +988,13 @@ pub(crate) async fn get_registered_worker(
         LEFT JOIN sampler_aggregator_performance_latest p
             ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
            AND p.worker_id = n.name
+           AND p.runtime_metrics->>'node_uuid' = n.uuid
+           AND p.created_at >= now() - interval '10 seconds'
         LEFT JOIN evaluator_performance_latest e
             ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
            AND e.worker_id = n.name
+           AND e.metrics->>'node_uuid' = n.uuid
+           AND e.created_at >= now() - interval '10 seconds'
         LEFT JOIN runs pr ON pr.id = n.pool_run_id
                 LEFT JOIN runs dr ON dr.id = n.desired_run_id
         LEFT JOIN runs cr ON cr.id = n.active_run_id

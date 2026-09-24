@@ -40,9 +40,7 @@ use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelRequest, PanelResponse, PanelWidth, replace_panel,
     sized_panel_spec, text_panel,
 };
-use crate::server::performance_panels::{
-    build_evaluator_performance_response, build_sampler_performance_response,
-};
+use crate::server::performance_panels::build_performance_response;
 use crate::server::run_panels::build_run_panel_response;
 use crate::server::task_panels::{TaskPanelSource, parse_cursor as parse_task_panel_cursor};
 use crate::server::worker_panels::build_worker_panel_response;
@@ -434,13 +432,13 @@ fn default_log_limit() -> i64 {
 
 #[derive(Deserialize)]
 struct PerformanceHistoryQuery {
-    #[serde(default = "default_perf_history_limit")]
-    limit: i64,
+    #[serde(default = "default_performance_window")]
+    window_seconds: i64,
     node_name: Option<String>,
 }
 
-fn default_perf_history_limit() -> i64 {
-    500
+fn default_performance_window() -> i64 {
+    60
 }
 
 fn clamp_limit(limit: i64) -> i64 {
@@ -1104,6 +1102,24 @@ async fn get_run_task_output(
     } else {
         None
     };
+    let live_sampler = if let Some(entry) = &latest_sampler_performance {
+        state.store.get_registered_worker(&entry.worker_id).await?
+    } else {
+        None
+    };
+    let latest_sampler_performance = latest_sampler_performance.filter(|entry| {
+        let age = chrono::Utc::now()
+            .signed_duration_since(entry.created_at)
+            .num_seconds();
+        (0..=10).contains(&age)
+            && live_sampler.as_ref().is_some_and(|worker| {
+                worker.current_run_id == Some(run_id)
+                    && worker.current_role == Some(crate::core::WorkerRole::SamplerAggregator)
+                    && entry.runtime_metrics["node_uuid"] == worker.node_uuid
+                    && entry.runtime_metrics["task_id"].as_str()
+                        == Some(task.id.to_string().as_str())
+            })
+    });
     let sampler_engine_diagnostics = latest_sampler_performance
         .as_ref()
         .map(|entry| entry.engine_diagnostics.clone());
@@ -1664,40 +1680,59 @@ async fn shutdown_control_process(
     json_response(serde_json::json!({ "shutdown_requested": true }))
 }
 
+#[derive(Deserialize)]
+struct PerformanceGraphQuery {
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+}
+
+async fn get_run_performance_graphs(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i32>,
+    Query(params): Query<PerformanceGraphQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if state.store.get_run_progress(id).await?.is_none() {
+        return Err(ApiError::NotFound(format!("run {id}")));
+    }
+    if params.start_ms.is_some() != params.end_ms.is_some()
+        || params
+            .start_ms
+            .zip(params.end_ms)
+            .is_some_and(|(a, b)| a >= b)
+    {
+        return Err(ApiError::BadRequest(
+            "supply start_ms < end_ms together".into(),
+        ));
+    }
+    json_response(
+        performance_panels::history::response(&state.store, id, params.start_ms, params.end_ms)
+            .await?,
+    )
+}
+
 async fn get_run_performance(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
     Query(params): Query<PerformanceHistoryQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let limit = clamp_limit(params.limit);
-    let (sampler_rows, run_evaluator_rows, evaluator_rows) = tokio::try_join!(
-        state.store.get_sampler_performance_history(id, limit, None),
-        state
-            .store
-            .get_evaluator_performance_history(id, limit, None),
-        async {
-            match params.node_name.as_deref() {
-                Some(node_name) => state
-                    .store
-                    .get_evaluator_performance_history(id, limit, Some(node_name))
-                    .await
-                    .map(Some),
-                None => Ok(None),
-            }
-        },
-    )?;
-    let mut response =
-        build_sampler_performance_response(Some(format!("run:{id}:performance")), sampler_rows);
-    let run_evaluator = build_evaluator_performance_response(None, run_evaluator_rows, true);
-    response.panels.extend(run_evaluator.panels);
-    response.updates.extend(run_evaluator.updates);
-    if let Some(rows) = evaluator_rows {
-        let evaluator = build_evaluator_performance_response(None, rows, false);
-        response.panels.extend(evaluator.panels);
-        response.updates.extend(evaluator.updates);
+    if state.store.get_run_progress(id).await?.is_none() {
+        return Err(ApiError::NotFound(format!("run {id}")));
     }
-    response.cursor = None;
-    json_response(response)
+    let seconds = params.window_seconds.clamp(15, 300);
+    let snapshot = crate::api::performance::snapshot(&state.store, id)
+        .await
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let (evaluators, samplers) =
+        crate::api::performance::history_window(&state.store, &snapshot, seconds)
+            .await
+            .map_err(|err| ApiError::Internal(err.to_string()))?;
+    json_response(build_performance_response(
+        &snapshot,
+        &evaluators,
+        &samplers,
+        seconds,
+        params.node_name.as_deref(),
+    ))
 }
 
 async fn export_histogram_bundle(

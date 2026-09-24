@@ -155,15 +155,17 @@ const timeseriesXAxisLabel = (mode) => {
   return "x";
 };
 const formatElapsedTime = (elapsedMs) => {
-  const totalSeconds = Math.max(0, Math.round(Number(elapsedMs) / 1000));
-  if (!Number.isFinite(totalSeconds)) return "n/a";
+  const totalMs = Math.max(0, Math.round(Number(elapsedMs)));
+  if (!Number.isFinite(totalMs)) return "n/a";
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const fraction = totalMs % 1000 ? `.${String(totalMs % 1000).padStart(3, "0")}` : "";
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   if (hours > 0) {
-    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}${fraction}`;
   }
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}${fraction}`;
 };
 const formatAbsoluteLocalTime = (timestampMs) => {
   const date = new Date(Number(timestampMs));
@@ -177,7 +179,15 @@ const formatTimeseriesXAxisValue = (value, mode, isTimestamp, originMs) => {
   return isTimestamp ? formatElapsedTime(numeric - originMs) : formatAxisValue(numeric);
 };
 const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs) => (params) => {
-  const entries = asArray(params);
+  const seen = new Set();
+  const entries = asArray(params).filter((entry) => {
+    // ECharts axis tooltips can include silent custom series (range/error bars).
+    if (entry.seriesType === "custom") return false;
+    const key = entry.seriesId ?? entry.seriesName;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   if (entries.length === 0) return "";
   const axisValue = Number(entries[0]?.axisValue);
   const header =
@@ -190,7 +200,7 @@ const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs) => (params
           : escapeXml(formatAxisValue(axisValue));
   const lines = entries.map((entry) => {
     const rawValue = Array.isArray(entry?.value) ? entry.value[1] : entry?.value;
-    return `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
+    return `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${rawValue != null && Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
   });
   return [header, ...lines].join("<br/>");
 };
@@ -568,10 +578,10 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
     points: remapAndSortTimeseriesPoints(item?.points, historyXAxisMode, nativeAxis),
   }));
   const data = buildMultiSeriesData(series);
-  const domain = fitDomain(
+  const domain = state?.y_range ?? fitDomain(
     series.flatMap((item) => asArray(item.points).flatMap((point) => [point.y, point.y_min, point.y_max])),
   );
-  const xDomain = fitXDomain(data.map((row) => row.x));
+  const xDomain = state?.x_range ?? fitXDomain(data.map((row) => row.x));
   const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const yZoomRange = useMemo(() => readYZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
@@ -642,9 +652,13 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
       series: series.flatMap((item, index) => {
         const color = item.color || lineColors[index % lineColors.length];
         const lineSeries = {
+          id: item.id,
           type: "line",
           name: item.label,
-          data: asArray(item.points).map((point) => [Number(point?.x), Number(point?.y)]),
+          data: asArray(item.points).flatMap((point) => {
+            const sample = [Number(point?.x), Number(point?.y)];
+            return point?.break_before ? [[sample[0], null], sample] : [sample];
+          }),
           smooth: Boolean(item?.smooth),
           showSymbol: false,
           connectNulls: false,
@@ -691,6 +705,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
             ref={echartsRef}
             option={option}
             notMerge={false}
+            replaceMerge={["series"]}
             onEvents={onDataZoom}
             lazyUpdate
             opts={{ renderer: "canvas" }}

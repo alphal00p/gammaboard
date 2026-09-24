@@ -242,10 +242,9 @@ fn trial_to_plot_point(trial: &HyperparameterTrialOutput) -> Option<PlotPoint> {
     Some(PlotPoint {
         x,
         y,
-        x_sampler_uptime_ms: None,
-        x_completed_samples_total: None,
         y_min: uncertainty.map(|error| y - error),
         y_max: uncertainty.map(|error| y + error),
+        ..Default::default()
     })
 }
 
@@ -268,10 +267,7 @@ fn best_so_far_points(points: &[PlotPoint], mode: crate::core::MeasurementMode) 
         best_points.push(PlotPoint {
             x: point.x,
             y,
-            x_sampler_uptime_ms: None,
-            x_completed_samples_total: None,
-            y_min: None,
-            y_max: None,
+            ..Default::default()
         });
     }
     best_points

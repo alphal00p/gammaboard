@@ -31,7 +31,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                   <TableCell>Failure</TableCell>
                   <TableCell align="right">Goal</TableCell>
                   <TableCell align="right">Completed</TableCell>
-                  <TableCell align="right">CPU Hours</TableCell>
+                  <TableCell align="right">Allocated Core-hours</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>

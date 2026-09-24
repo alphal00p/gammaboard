@@ -652,10 +652,9 @@ fn line_points(geometry: &LineRasterGeometry, values: &[Option<f64>]) -> Vec<Plo
             Some(PlotPoint {
                 x: geometry.parameter_at(index),
                 y,
-                x_sampler_uptime_ms: None,
-                x_completed_samples_total: None,
                 y_min: None,
                 y_max: None,
+                ..Default::default()
             })
         })
         .collect()

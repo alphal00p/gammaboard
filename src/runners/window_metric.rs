@@ -18,15 +18,20 @@ impl WindowMetric {
     }
 
     pub(crate) fn observe(&mut self, observation: f64) {
-        if !observation.is_finite() || observation < 0.0 {
+        self.observe_weighted(observation, 1);
+    }
+
+    /// Record a batch-normalized cost with its sample/batch count as weight.
+    pub(crate) fn observe_weighted(&mut self, observation: f64, weight: usize) {
+        if !observation.is_finite() || observation < 0.0 || weight == 0 {
             return;
         }
-        self.count += 1;
-        self.sum += observation;
+        self.count += weight as u64;
+        self.sum += observation * weight as f64;
         let delta = observation - self.mean;
-        self.mean += delta / self.count as f64;
+        self.mean += delta * weight as f64 / self.count as f64;
         let delta2 = observation - self.mean;
-        self.m2 += delta * delta2;
+        self.m2 += delta * delta2 * weight as f64;
         self.max = Some(
             self.max
                 .map_or(observation, |current| current.max(observation)),
@@ -55,5 +60,22 @@ impl WindowMetric {
         let snapshot = self.snapshot();
         *self = Self::default();
         snapshot
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unequal_batches_preserve_total_time_and_sample_weight() {
+        let mut metric = WindowMetric::default();
+        metric.observe_weighted(10.0, 1);
+        metric.observe_weighted(0.1, 1000);
+        let snapshot = metric.snapshot_and_reset();
+        assert_eq!(snapshot.count, 1001);
+        assert_eq!(snapshot.total, Some(110.0));
+        assert!((snapshot.mean.unwrap() - 110.0 / 1001.0).abs() < 1e-12);
+        assert_eq!(metric.snapshot().count, 0);
     }
 }

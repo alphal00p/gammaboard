@@ -54,6 +54,49 @@ pub async fn snapshot(store: &PgStore, run_id: i32) -> Result<PerformanceSnapsho
         .context("invalid performance snapshot")
 }
 
+/// Time-bounded dashboard history. Retain previous tasks and worker incarnations
+/// for graphs; current-usage panels apply their own live-identity checks.
+pub(crate) async fn history_window(
+    store: &PgStore,
+    snapshot: &PerformanceSnapshot,
+    seconds: i64,
+) -> Result<(Vec<Value>, Vec<Value>)> {
+    let since = snapshot.observed_at - chrono::Duration::seconds(seconds);
+    let evaluators = sqlx::query_scalar::<_, Value>(
+        r#"
+        SELECT jsonb_build_object(
+            'worker_id', e.worker_id, 'created_at', e.created_at,
+            'metrics', jsonb_build_object(
+                'epoch', e.metrics->'epoch', 'node_uuid', e.metrics->'node_uuid',
+                'task_id', e.metrics->'task_id', 'cumulative', e.metrics->'cumulative',
+                'busy', e.metrics->'busy',
+                'samples_evaluated', e.metrics->'samples_evaluated'))
+        FROM evaluator_performance_history e
+        WHERE e.run_id=$1 AND e.created_at BETWEEN $2 AND $3
+        ORDER BY e.created_at, e.id
+    "#,
+    )
+    .bind(snapshot.run_id)
+    .bind(since)
+    .bind(snapshot.observed_at)
+    .fetch_all(store.pool());
+    let samplers = sqlx::query_scalar::<_, Value>(
+        r#"
+        SELECT jsonb_build_object('worker_id', s.worker_id, 'created_at', s.created_at,
+            'runtime_metrics', s.runtime_metrics)
+        FROM sampler_aggregator_performance_history s
+        WHERE s.run_id=$1 AND s.created_at BETWEEN $2 AND $3
+        ORDER BY s.created_at, s.id
+    "#,
+    )
+    .bind(snapshot.run_id)
+    .bind(since)
+    .bind(snapshot.observed_at)
+    .fetch_all(store.pool());
+    let (evaluators, samplers) = tokio::try_join!(evaluators, samplers)?;
+    Ok((evaluators, samplers))
+}
+
 impl PerformanceSnapshot {
     pub fn active_evaluators(&self) -> usize {
         self.nodes

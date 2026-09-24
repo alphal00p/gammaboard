@@ -567,6 +567,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             role_store,
             worker.run_id,
             self.node_name.clone(),
+            self.node_uuid.clone(),
             task,
             sampler,
             observable_state,

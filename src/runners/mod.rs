@@ -1,4 +1,5 @@
 pub mod activity;
+pub(crate) mod busy_time;
 pub mod controller_child;
 pub mod evaluator;
 pub mod hyperparameter_tuning;
@@ -20,3 +21,6 @@ pub use node_runner::{NodeRunner, NodeRunnerConfig, NodeRunnerStore};
 pub use queue::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
 pub use sampler_aggregator::{RunnerError, SamplerAggregatorRunner, SamplerAggregatorRunnerParams};
 pub use task_control::{TaskControlLoop, TaskControlLoopConfig};
+
+/// Maximum role connections per worker; launch admission reserves two more for control.
+pub const MAX_ROLE_DB_CONNECTIONS_PER_NODE: u32 = 2;

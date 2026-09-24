@@ -103,7 +103,7 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
             key_value("last_seen", "Last Seen", worker.last_seen),
             key_value(
                 "memory_usage",
-                "Memory Usage",
+                "GammaBoard Process RSS (last report)",
                 memory_usage.map(format_bytes_human),
             ),
         ],

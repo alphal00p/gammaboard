@@ -49,9 +49,83 @@ small and independent; do not change several scheduling mechanisms at once.
 | --- | --- | --- | --- |
 | 1 | `src/evaluation/evaluator/gammaloop.rs`, `eval_batch` | The remaining entry reset clones the full pristine integrand. | Inspect whether GammaLoop can reset only observable state without changing evaluation caches or failure recovery. |
 | 2 | `src/runners/queue.rs`, `tune_batch_size` | Smoothing, a deadband, and a cooldown all regulate batch sizing. Despite its `batch_size_cooldown_ticks` name, the cooldown advances when completed batches are observed, so its wall duration depends on batch completion rate. | Compare cooldown zero with the default on repeated training windows; retain it only if it reduces oscillation or improves throughput without delaying adaptation. Fixed-batch CPU presets intentionally bypass this code and cannot answer this question. |
-| 3 | `src/runners/queue.rs`, insert/fetch pumps | Several limits bound pending work and concurrent inserts. More concurrency can increase database work when batches are cheap. | First vary batch size with `tuning.toml`; then compare one versus the default concurrent insert tasks using a focused run card. Measure accepted progress and database latency, not just evaluator rate. |
+| 3 | `src/runners/queue.rs`, insert/fetch pumps | The insert pump now has one enqueue/refill path. Comparing 1, 2, and 8 inserts did not establish a consistently better lower limit; the default remains 8. | Investigate claim/query contention at large evaluator counts, holding batch size and polling cadence fixed. Use the four activity rates and operation timings alongside accepted progress. |
 | 4 | `src/evaluation/evaluator/gammaloop.rs`, `ingest_vector_batch` | Scalar/complex projection creates a small `Vec` per sample. | Profile allocation cost on a real integrand before replacing these with stack arrays or borrowed slices. Physics evaluation may dominate. |
 | 5 | `src/sampling/generation.rs` and `src/runners/sampler_aggregator.rs` | Bulk generation trades fewer sampler calls for buffering, slicing, and retained training values. It is opt-in. | Compare bulk off/on at unchanged evaluator batch size; include a real process sampler before claiming a training benefit. Bound generation size to keep memory reasonable. |
+
+## Insert scheduling experiments (2026-09-24)
+
+The focused I/O preset completed 99 valid trials, three repetitions per case,
+with one, two, or eight concurrent inserts. All processes shared eight physical
+cores. The stress matrix used 1/8/32/64 evaluators, batches of 16/256 samples,
+and 1 ms polling. Controls used normal 10 ms polling and deterministic CPU work.
+See [benchmarking.md](benchmarking.md) for the reproducible command.
+
+For the fast integrand with eight evaluators and batches of 256, normal-pacing
+median accepted rates were 91k/140k/147k samples/s for 1/2/8 inserts. The CPU-work
+control reached about 45k samples/s for all three limits, with evaluator compute
+activity around 96%. Two inserts are a useful tuning option; one can restrict
+cheap-batch throughput. Keep the default at eight until a lower bound has a
+clearer benefit across workloads.
+
+Batch size and polling mattered more than insert count in the stress cases.
+The 64-evaluator normal-pacing repetitions varied widely (27k–135k samples/s),
+with high sampler I/O activity in slower cases. These shared-host, fixed-core
+tests expose a contention problem to investigate; they do not establish its
+cause or measure CPU strong scaling. Check claim/query latency, database table
+churn, and polling before adding threads or enlarging connection pools.
+
+A follow-up with full six-dimensional inputs, batches of 65,536/262,144, and
+eight evaluators completed 18 valid trials and accepted 6.21 GiB of serialized
+input across the measurement windows. Configuration medians were 0.66–0.90
+million samples/s (36–50 MiB/s of logical input). One insert was competitive;
+larger batches did not improve throughput. Sampler I/O activity was 95–98%.
+Live PostgreSQL observations caught evaluator completion updates and inserts
+blocked by a large input COPY. Batch metadata updated a shared per-run queue
+counter before that COPY, holding its lock until commit. The subsequent changes
+below shorten that lock duration while preserving atomic batch/payload visibility.
+This observation does not isolate the cause of the earlier small-batch slowdown.
+The I/O preset now records batches/s and logical input volume alongside samples/s;
+see the large-payload command in [benchmarking.md](benchmarking.md).
+
+The new counters measure occupied wall time, including in-flight DB waits.
+They exclude completed handles awaiting collection, and overlapping operations
+count once. They are not CPU utilization or a requirement that every role stay
+at 100%. See [concurrency.md](concurrency.md) for the exact scope.
+
+## Queue throughput improvements
+
+Three changes were retained after separate comparisons:
+
+- Queue-counter triggers defer updates until commit, freeing the shared counter
+  while payloads are written. Counters and batch changes still become visible
+  atomically; rollback and cascading deletion are covered by database tests.
+- Input serialization and COPY-buffer preparation precede connection acquisition
+  and the transaction. Binary serialization borrows the input arrays instead of
+  cloning them; golden fixtures preserve existing stored encodings.
+- New input writes use LZ4 where PostgreSQL supports it. Unsupported builds keep
+  their existing compression with a migration warning. WAL compression and
+  durability settings are unchanged.
+
+With eight evaluators, two inserts, normal polling, and three repetitions,
+median accepted rates changed as follows (million samples/s):
+
+| Stage | Batch 256 | Batch 65,536 | Batch 262,144 |
+| --- | ---: | ---: | ---: |
+| Fresh baseline | 0.141 | 0.868 | 0.753 |
+| Deferred counters | 0.142 | 1.327 | 1.179 |
+| Payload preparation | 0.153 | 1.351 | 1.048 |
+| LZ4 | 0.151 | 2.293 | 1.834 |
+| Uncompressed comparison | 0.152 | 2.103 | 1.605 |
+
+These shared-host trials establish a useful development result, not a universal
+speedup. Preparation reduced observed serialization cost but did not establish
+an independent throughput gain. Small-batch throughput ranges overlapped.
+One-batch insert bundles did not improve large-batch medians and substantially
+reduced small-batch throughput. No byte-based bundling policy was added; bundle
+size 5 and insert concurrency 8 remain the defaults. Further tuning was stopped
+at the user's request. See [benchmarking.md](benchmarking.md) for reproduction
+options and migration provenance.
 
 ## Mechanisms to preserve
 

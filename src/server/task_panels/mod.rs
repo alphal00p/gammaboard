@@ -308,7 +308,7 @@ fn build_task_summary_entries(
         key_value("kind", "Kind", task.task.kind_str()),
         key_value(
             "cpu_hours",
-            "CPU Hours",
+            "Allocated Core-hours",
             task.cpu_seconds_including_children / 3600.0,
         ),
     ];
@@ -355,7 +355,11 @@ fn build_task_summary_entries(
                 sample_accumulator_label(accumulator.as_ref(), effective_accumulator_config),
             ));
             if let Some(rate) = ctx.completed_samples_per_second {
-                entries.push(key_value("rate", "Rate", format!("{rate:.2} samples/s")));
+                entries.push(key_value(
+                    "rate",
+                    "Accepted Rate (last 60 s)",
+                    format!("{rate:.2} samples/s"),
+                ));
             }
             if let Some(eta_seconds) = ctx.eta_seconds {
                 entries.push(key_value(
@@ -1384,10 +1388,7 @@ mod tests {
                     vec![PlotPoint {
                         x: index as f64,
                         y: index as f64,
-                        x_sampler_uptime_ms: None,
-                        x_completed_samples_total: None,
-                        y_min: None,
-                        y_max: None,
+                        ..Default::default()
                     }],
                 )]
             })

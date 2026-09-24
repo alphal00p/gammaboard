@@ -1,16 +1,11 @@
-import { Alert, FormControl, InputLabel, MenuItem, Select, Stack } from "@mui/material";
+import { Alert, FormControl, InputLabel, MenuItem, Select, Stack, Tab, Tabs } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
+import PerformanceGraphs from "./PerformanceGraphs";
 import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
 import QueueTuningPanel from "./runs/QueueTuningPanel";
 import RunScopedWorkspace from "./common/RunScopedWorkspace";
-import {
-  HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES,
-  HISTORY_X_AXIS_MODE_SAMPLER_UPTIME,
-  HISTORY_X_AXIS_MODE_WALL_TIME,
-  isSharedHistoryTimeseriesPanelSpec,
-} from "./panels/panelView";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
 import { useRunTasks } from "../hooks/useRunTasks";
 import { updateRunTaskQueueTuning } from "../services/api";
@@ -18,284 +13,98 @@ import { asArray } from "../utils/collections";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { getCurrentTask } from "../utils/tasks";
 
-const PerformanceWorkspace = ({
-  runs,
-  workers,
-  selectedRun,
-  setSelectedRun,
-  showChildRuns,
-  setShowChildRuns,
-  isConnected,
-  serverName,
-  hasMoreRuns,
-  loadMoreRuns,
-  isLoadingMoreRuns,
-}) => {
+const OVERVIEW_PANELS = new Set(["performance_overview", "busy_rates", "measurement_window"]);
+
+const PerformanceWorkspace = (props) => {
+  const { runs, workers, selectedRun, isConnected } = props;
   const { authenticated } = useAuth();
-  const [nodeRunFilter, setNodeRunFilter] = useState("selected_run");
-  const [nodeActivityFilter, setNodeActivityFilter] = useState("active");
-  const [nodeRoleFilter, setNodeRoleFilter] = useState("evaluator");
-  const runFilterOptions = useMemo(() => {
-    const options = [{ value: "selected_run", label: "Selected Run" }, { value: "all_runs", label: "All Runs" }];
-    asArray(runs).forEach((run) => {
-      if (!Number.isFinite(Number(run?.run_id))) return;
-      options.push({
-        value: `run:${Number(run.run_id)}`,
-        label: typeof run?.run_name === "string" && run.run_name.trim() ? run.run_name : `Run ${run.run_id}`,
-      });
-    });
-    options.push({ value: "unassigned", label: "Unassigned" });
-    return options;
-  }, [runs]);
-  const filteredWorkers = useMemo(() => {
-    return asArray(workers)
-      .filter((worker) => nodeNameOf(worker) != null)
-      .filter((worker) => {
-        const runId = Number(worker?.current_run_id);
-        if (nodeRunFilter === "all_runs") return true;
-        if (nodeRunFilter === "selected_run") return Number.isFinite(runId) && runId === selectedRun;
-        if (nodeRunFilter === "unassigned") return !Number.isFinite(runId);
-        if (nodeRunFilter.startsWith("run:")) {
-          const explicitRunId = Number(nodeRunFilter.slice(4));
-          return Number.isFinite(runId) && Number.isFinite(explicitRunId) && runId === explicitRunId;
-        }
-        return true;
-      })
-      .filter((worker) => {
-        if (nodeActivityFilter === "all") return true;
-        const isActive = String(worker?.status || "").toLowerCase() === "active";
-        return nodeActivityFilter === "active" ? isActive : !isActive;
-      })
-      .filter((worker) => {
-        if (nodeRoleFilter === "all") return true;
-        const role = String(worker?.current_role || "none");
-        return role === nodeRoleFilter;
-      })
-      .sort(compareNodesByName);
-  }, [nodeActivityFilter, nodeRoleFilter, nodeRunFilter, selectedRun, workers]);
-  const [selectedEvaluatorNodeName, setSelectedEvaluatorNodeName] = useState(null);
-  const [historyXAxisMode, setHistoryXAxisMode] = useState(HISTORY_X_AXIS_MODE_SAMPLER_UPTIME);
+  const [view, setView] = useState("overview");
+  const [selectedNode, setSelectedNode] = useState("");
   const [queueTuningBusy, setQueueTuningBusy] = useState(false);
   const [queueTuningMessage, setQueueTuningMessage] = useState(null);
-  const currentRun = useMemo(
-    () => asArray(runs).find((entry) => entry?.run_id === selectedRun) ?? null,
-    [runs, selectedRun],
-  );
+  const [expired, setExpired] = useState(false);
+  const currentRun = asArray(runs).find((entry) => entry?.run_id === selectedRun) ?? null;
   const { tasks } = useRunTasks(selectedRun, 2000);
   const sampleTask = useMemo(() => {
-    const taskList = asArray(tasks);
-    const currentTask = getCurrentTask(taskList);
-    if (currentTask?.is_sample) return currentTask;
-    return (
-      taskList.find((task) => task?.state === "active" && task?.is_sample) ??
-      taskList.find((task) => task?.is_sample) ??
-      null
-    );
+    const list = asArray(tasks);
+    const current = getCurrentTask(list);
+    return current?.is_sample ? current : list.find((task) => task?.state === "active" && task?.is_sample)
+      ?? list.find((task) => task?.is_sample) ?? null;
   }, [tasks]);
+  const evaluators = useMemo(() => asArray(workers)
+    .filter((worker) => worker?.current_run_id === selectedRun && worker?.current_role === "evaluator")
+    .sort(compareNodesByName), [workers, selectedRun]);
+  const evaluatorNodeName = evaluators.some((worker) => nodeNameOf(worker) === selectedNode) ? selectedNode : null;
+  const performance = useRunPerformancePanels({ runId: view === "graphs" ? null : selectedRun, evaluatorNodeName, windowSeconds: 60, pollMs: 5000 });
+  const { panelSpecs, panelStates, panelValues, setPanelValue, error } = performance;
 
   useEffect(() => {
-    if (filteredWorkers.length === 0) {
-      setSelectedEvaluatorNodeName(null);
-      return;
-    }
-    if (
-      selectedEvaluatorNodeName &&
-      filteredWorkers.some((worker) => nodeNameOf(worker) === selectedEvaluatorNodeName)
-    ) {
-      return;
-    }
-    setSelectedEvaluatorNodeName(nodeNameOf(filteredWorkers[0]));
-  }, [filteredWorkers, selectedEvaluatorNodeName]);
+    setExpired(false);
+    if (!panelStates.length) return undefined;
+    const timeout = setTimeout(() => setExpired(true), 10000);
+    return () => clearTimeout(timeout);
+  }, [panelStates]);
 
-  const performance = useRunPerformancePanels({
-    runId: selectedRun,
-    evaluatorNodeName: selectedEvaluatorNodeName,
-    limit: 500,
-    pollMs: 5000,
-  });
-  const { panelSpecs, panelStates, panelValues, setPanelValue } = performance;
-
-  useEffect(() => {
-    setQueueTuningMessage(null);
-  }, [selectedRun, selectedEvaluatorNodeName]);
-
-  const saveQueueTuning = useCallback(
-    async (payload) => {
-      if (!selectedRun || !sampleTask?.id) return;
-      setQueueTuningBusy(true);
-      setQueueTuningMessage(null);
-      try {
-        await updateRunTaskQueueTuning(selectedRun, sampleTask.id, payload);
-        setQueueTuningMessage({ severity: "success", text: "Queue tuning updated." });
-      } catch (err) {
-        setQueueTuningMessage({ severity: "error", text: err?.message || "Failed to update queue tuning." });
-      } finally {
-        setQueueTuningBusy(false);
-      }
-    },
-    [sampleTask?.id, selectedRun],
-  );
-
-  const clearQueueTuning = useCallback(async () => {
+  const saveQueueTuning = useCallback(async (payload) => {
     if (!selectedRun || !sampleTask?.id) return;
     setQueueTuningBusy(true);
     setQueueTuningMessage(null);
     try {
-      await updateRunTaskQueueTuning(selectedRun, sampleTask.id, null);
-      setQueueTuningMessage({ severity: "success", text: "Queue tuning override cleared." });
+      await updateRunTaskQueueTuning(selectedRun, sampleTask.id, payload);
+      setQueueTuningMessage({ severity: "success", text: payload == null ? "Queue tuning override cleared." : "Queue tuning updated." });
     } catch (err) {
-      setQueueTuningMessage({ severity: "error", text: err?.message || "Failed to clear queue tuning override." });
+      setQueueTuningMessage({ severity: "error", text: err?.message || "Failed to update queue tuning." });
     } finally {
       setQueueTuningBusy(false);
     }
   }, [sampleTask?.id, selectedRun]);
 
-  const sharedHistoryPanelIds = useMemo(
-    () =>
-      asArray(panelSpecs)
-        .filter((spec) => isSharedHistoryTimeseriesPanelSpec(spec))
-        .map((spec) => spec?.panel_id)
-        .filter((id) => typeof id === "string"),
-    [panelSpecs],
-  );
-
-  useEffect(() => {
-    sharedHistoryPanelIds.forEach((panelId) => {
-      setPanelValue(
-        panelId,
-        {
-          ...(panelValues?.[panelId] ?? {}),
-          xAxisMode: historyXAxisMode,
-        },
-        false,
-      );
-    });
-  }, [historyXAxisMode, panelValues, setPanelValue, sharedHistoryPanelIds]);
+  const visible = (id) => id === "measurement_window" || (view === "overview"
+    ? OVERVIEW_PANELS.has(id) : !OVERVIEW_PANELS.has(id));
+  const visibleSpecs = asArray(panelSpecs).filter((spec) => visible(spec.panel_id));
+  const ids = new Set(visibleSpecs.map((spec) => spec.panel_id));
+  const visibleStates = asArray(panelStates).filter((state) => ids.has(state.panel_id));
+  const unavailable = error || expired || !isConnected;
+  // Missing values are rendered as unavailable, without changing generic panels'
+  // meaning of null in configuration and result views.
+  const displayStates = visibleStates.map((state) => state.kind === "key_value"
+    ? { ...state, entries: asArray(state.entries).map((entry) => ({ ...entry, value: entry.value ?? "Unavailable" })) }
+    : state.kind === "table"
+      ? { ...state, rows: asArray(state.rows).map((row) => row.map((value) => value ?? "Unavailable")) }
+      : state);
 
   return (
-    <RunScopedWorkspace
-      runs={runs}
-      selectedRun={selectedRun}
-      setSelectedRun={setSelectedRun}
-      showChildRuns={showChildRuns}
-      setShowChildRuns={setShowChildRuns}
-      hasMoreRuns={hasMoreRuns}
-      loadMoreRuns={loadMoreRuns}
-      isLoadingMoreRuns={isLoadingMoreRuns}
-      isConnected={isConnected}
-      serverName={serverName}
-      noRunsMessage="Create a run to inspect persisted performance history."
-      noSelectionMessage="Pick a run to inspect performance panels."
-    >
+    <RunScopedWorkspace {...props}
+      noRunsMessage="Create a run to inspect its measurements."
+      noSelectionMessage="Pick a run to inspect its measurements.">
       <Stack spacing={2}>
         <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-          <FormControl size="small" sx={{ maxWidth: 320 }}>
-            <InputLabel id="performance-x-axis-label">X-Axis</InputLabel>
-            <Select
-              labelId="performance-x-axis-label"
-              value={historyXAxisMode}
-              label="X-Axis"
-              onChange={(event) => setHistoryXAxisMode(event.target.value)}
-            >
-              <MenuItem value={HISTORY_X_AXIS_MODE_SAMPLER_UPTIME}>Sampler Runner Uptime (Default)</MenuItem>
-              <MenuItem value={HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES}>Completed Samples</MenuItem>
-              <MenuItem value={HISTORY_X_AXIS_MODE_WALL_TIME}>Wall Time</MenuItem>
-            </Select>
-          </FormControl>
+          <Tabs value={view} onChange={(_, value) => setView(value)} aria-label="Performance view">
+            <Tab value="overview" label="Overview" />
+            <Tab value="diagnostics" label="Diagnostics" />
+            <Tab value="graphs" label="Graphs" />
+          </Tabs>
+
         </Stack>
-        <Stack spacing={1}>
-          {queueTuningMessage ? (
-            <Alert severity={queueTuningMessage.severity}>{queueTuningMessage.text}</Alert>
-          ) : null}
-          <QueueTuningPanel
-            run={currentRun}
-            runId={selectedRun}
-            task={sampleTask}
-            authenticated={authenticated}
-            busy={queueTuningBusy}
-            onSave={saveQueueTuning}
-            onClear={clearQueueTuning}
-          />
-        </Stack>
-        <Stack spacing={2}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-            <FormControl size="small" sx={{ maxWidth: 260 }}>
-              <InputLabel id="performance-node-run-filter-label">Run</InputLabel>
-              <Select
-                labelId="performance-node-run-filter-label"
-                value={nodeRunFilter}
-                label="Run"
-                onChange={(event) => setNodeRunFilter(String(event.target.value))}
-              >
-                {runFilterOptions.map((option) => (
-                  <MenuItem key={option.value} value={option.value}>
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl size="small" sx={{ maxWidth: 220 }}>
-              <InputLabel id="performance-node-status-filter-label">Status</InputLabel>
-              <Select
-                labelId="performance-node-status-filter-label"
-                value={nodeActivityFilter}
-                label="Status"
-                onChange={(event) => setNodeActivityFilter(String(event.target.value))}
-              >
-                <MenuItem value="active">Active</MenuItem>
-                <MenuItem value="inactive">Inactive</MenuItem>
-                <MenuItem value="all">All</MenuItem>
-              </Select>
-            </FormControl>
-            <FormControl size="small" sx={{ maxWidth: 240 }}>
-              <InputLabel id="performance-node-role-filter-label">Role</InputLabel>
-              <Select
-                labelId="performance-node-role-filter-label"
-                value={nodeRoleFilter}
-                label="Role"
-                onChange={(event) => setNodeRoleFilter(String(event.target.value))}
-              >
-                <MenuItem value="evaluator">Evaluator</MenuItem>
-                <MenuItem value="sampler_aggregator">Sampler</MenuItem>
-                <MenuItem value="none">None</MenuItem>
-                <MenuItem value="all">All</MenuItem>
-              </Select>
-            </FormControl>
-          </Stack>
+        {view === "graphs" ? <PerformanceGraphs key={selectedRun} runId={selectedRun} /> : unavailable ? <Alert severity="warning">{error || "Measurements are unavailable until the next successful refresh."}</Alert>
+          : displayStates.length ? <PanelCollection title={{ overview: "Usage", diagnostics: "Diagnostics", graphs: "Graphs" }[view]}
+              panelSpecs={visibleSpecs} panelStates={displayStates}
+              panelValues={panelValues} onPanelValueChange={setPanelValue} />
+            : <EmptyStateCard title="Waiting for measurements" message="Current coverage and measurements will appear after the next refresh." />}
+        {view === "diagnostics" && <>
           <FormControl size="small" sx={{ maxWidth: 420 }}>
-            <InputLabel id="performance-evaluator-label">Node</InputLabel>
-            <Select
-              labelId="performance-evaluator-label"
-              value={selectedEvaluatorNodeName ?? ""}
-              label="Node"
-              onChange={(event) => setSelectedEvaluatorNodeName(event.target.value || null)}
-            >
-              {filteredWorkers.map((worker) => {
-                const nodeName = nodeNameOf(worker);
-                return (
-                  <MenuItem key={nodeName} value={nodeName}>
-                    {nodeName}
-                  </MenuItem>
-                );
-              })}
+            <InputLabel id="performance-evaluator-label">Evaluator detail</InputLabel>
+            <Select labelId="performance-evaluator-label" label="Evaluator detail" value={evaluatorNodeName ?? ""}
+              onChange={(event) => setSelectedNode(event.target.value)}>
+              <MenuItem value="">All live evaluators</MenuItem>
+              {evaluators.map((worker) => <MenuItem key={nodeNameOf(worker)} value={nodeNameOf(worker)}>{nodeNameOf(worker)}</MenuItem>)}
             </Select>
           </FormControl>
-          {selectedEvaluatorNodeName == null ? <Alert severity="info">No node matches the current filters.</Alert> : null}
-        </Stack>
-        {panelStates.length > 0 ? (
-          <PanelCollection
-            title="Performance"
-            panelSpecs={panelSpecs}
-            panelStates={panelStates}
-            panelValues={panelValues}
-            onPanelValueChange={setPanelValue}
-          />
-        ) : (
-          <EmptyStateCard
-            title="No performance snapshots"
-            message="Performance panels will appear once the run records sampler or evaluator snapshots."
-          />
-        )}
+          {queueTuningMessage && <Alert severity={queueTuningMessage.severity}>{queueTuningMessage.text}</Alert>}
+          <QueueTuningPanel key={selectedRun} run={currentRun} runId={selectedRun} task={sampleTask}
+            authenticated={authenticated} busy={queueTuningBusy} onSave={saveQueueTuning}
+            onClear={() => saveQueueTuning(null)} />
+        </>}
       </Stack>
     </RunScopedWorkspace>
   );

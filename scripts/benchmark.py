@@ -116,13 +116,13 @@ def idle_cpus(candidates, count):
 
 
 class Session:
-    def __init__(self, binary, output, budget, offset):
+    def __init__(self, binary, output, budget, offset, max_connections=128):
         self.binary, self.output, self.offset = binary, output, offset
         self.deadline = time.monotonic()+budget-30  # Reserve cleanup time.
         self.directory = Path(tempfile.mkdtemp(prefix='gmb-scale-', dir='/tmp'))
         self.runtime = self.directory/'runtime.toml'
         self.runtime.write_text(f'[resources]\nroots = [{json.dumps(str(self.directory/"resources"))}]\n'
-                                f'[local_postgres]\nsocket_dir = {json.dumps(str(self.directory/"socket"))}\nmax_connections = 128\n')
+                                f'[local_postgres]\nsocket_dir = {json.dumps(str(self.directory/"socket"))}\nmax_connections = {max_connections}\n')
         self.process = None
 
     def argv(self, *args):
@@ -490,6 +490,22 @@ def main():
     run.add_argument('--output',type=Path,required=True)
     run.add_argument('--port-offset',type=int,default=50)
     run.add_argument('--calibration',type=Path,help='reuse fixed work from a previous calibration.json for revision comparisons')
+    io = commands.add_parser('io', help='compare 1/2/8 inserts with fast integrands and large fleets')
+    io.add_argument('--binary',type=Path,default=ROOT/'target/release/gammaboard')
+    io.add_argument('--output',type=Path,required=True)
+    io.add_argument('--workers',type=int,nargs='+',default=[1,8,32,64])
+    io.add_argument('--batch-sizes',type=int,nargs='+',default=[16,256])
+    io.add_argument('--inserts',type=int,nargs='+',default=[1,2,8])
+    io.add_argument('--insert-bundle-size',type=int,default=5)
+    io.add_argument('--input-storage',choices=['default','pglz','lz4','external'],default='default',
+                    help='optional PostgreSQL input-column experiment; requires psql')
+    io.add_argument('--repetitions',type=int,default=3)
+    io.add_argument('--duration',type=float,default=8)
+    io.add_argument('--warmup',type=float,default=2)
+    io.add_argument('--iterations',type=int,default=0)
+    io.add_argument('--min-tick-ms',type=int,default=1)
+    io.add_argument('--cpu-limit',type=int,default=8)
+    io.add_argument('--port-offset',type=int,default=70)
     graph = commands.add_parser('plot'); graph.add_argument('directory',type=Path)
     report = commands.add_parser('summary'); report.add_argument('directory', type=Path)
     diff = commands.add_parser('compare'); diff.add_argument('before',type=Path); diff.add_argument('after',type=Path)
@@ -503,6 +519,9 @@ def main():
         elif args.command=='run':
             if not 1 <= args.port_offset <= 57000: raise ValueError('invalid port offset')
             print(execute(args))
+        elif args.command=='io':
+            import benchmark_io
+            print(benchmark_io.execute(args))
         elif args.command=='plot': print(plot(args.directory))
         elif args.command=='summary': summary(args.directory)
         else: compare(args.before,args.after)

@@ -3,6 +3,7 @@ use crate::core::{
     BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, SamplerQueueRollingAverages,
     SamplerQueueRuntimeMetrics, SamplerQueueTuning, SamplerWorkerStore, StoreError, next_batch_ids,
 };
+use crate::runners::busy_time::BusyTime;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::window_metric::WindowMetric;
 use crate::sampling::LatentBatch;
@@ -104,7 +105,7 @@ pub struct SamplerQueue<S> {
     eval_ms_per_sample: RollingMetric,
     training_batch_sizing: TrainingBatchSizing,
     metrics: QueueMetricsState,
-    utilization: QueueUtilizationState,
+    pub(crate) busy: BusyTime,
 }
 
 /// Keep a finite training window divisible across workers, without recursively
@@ -165,12 +166,6 @@ type PendingProcessedFetchTask = JoinHandle<Result<(Vec<CompletedBatch>, Duratio
 
 type PendingCompletedCleanupTask = JoinHandle<Result<Duration, StoreError>>;
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct QueueUtilizationSnapshot {
-    pub insert_task_utilization: Option<f64>,
-    pub completed_fetch_utilization: Option<f64>,
-}
-
 pub struct QueueTickResult {
     pub completed: Vec<CompletedBatch>,
     pub queue_counts: BatchQueueCounts,
@@ -201,25 +196,6 @@ struct QueueMetricsState {
     insert_bundle_commit_ms: WindowMetric,
     insert_bundle_local_pending_at_start: WindowMetric,
     insert_bundle_db_pending_at_start: WindowMetric,
-}
-
-#[derive(Debug, Clone)]
-struct QueueUtilizationState {
-    window_started_at: Instant,
-    last_accounted_at: Instant,
-    insert_busy_slot_secs: f64,
-    completed_fetch_busy_secs: f64,
-}
-
-impl QueueUtilizationState {
-    fn new(now: Instant) -> Self {
-        Self {
-            window_started_at: now,
-            last_accounted_at: now,
-            insert_busy_slot_secs: 0.0,
-            completed_fetch_busy_secs: 0.0,
-        }
-    }
 }
 
 impl<S> SamplerQueue<S>
@@ -262,7 +238,7 @@ where
             eval_ms_per_sample: RollingMetric::default(),
             training_batch_sizing: TrainingBatchSizing::default(),
             metrics: QueueMetricsState::default(),
-            utilization: QueueUtilizationState::new(now),
+            busy: BusyTime::default(),
         }
     }
 
@@ -311,8 +287,6 @@ where
                 .map(|task| task.batch_count)
                 .sum(),
             local_ready_processed_batches: self.ready_processed.len(),
-            insert_task_utilization: None,
-            completed_fetch_utilization: None,
             rolling: SamplerQueueRollingAverages::default(),
         }
     }
@@ -363,33 +337,6 @@ where
         }
     }
 
-    pub fn take_utilization_snapshot(&mut self) -> QueueUtilizationSnapshot {
-        let now = Instant::now();
-        self.account_utilization(now);
-        let elapsed_secs = now
-            .saturating_duration_since(self.utilization.window_started_at)
-            .as_secs_f64();
-        let insert_capacity = self.config.max_concurrent_insert_tasks.max(1) as f64;
-        let snapshot = if elapsed_secs <= 0.0 {
-            QueueUtilizationSnapshot::default()
-        } else {
-            QueueUtilizationSnapshot {
-                insert_task_utilization: Some(
-                    (self.utilization.insert_busy_slot_secs / (elapsed_secs * insert_capacity))
-                        .clamp(0.0, 1.0),
-                ),
-                completed_fetch_utilization: Some(
-                    (self.utilization.completed_fetch_busy_secs / elapsed_secs).clamp(0.0, 1.0),
-                ),
-            }
-        };
-        self.utilization.window_started_at = now;
-        self.utilization.last_accounted_at = now;
-        self.utilization.insert_busy_slot_secs = 0.0;
-        self.utilization.completed_fetch_busy_secs = 0.0;
-        snapshot
-    }
-
     pub fn last_completed_batch_id(&self) -> Option<i64> {
         self.checkpoint.last_completed_batch_id
     }
@@ -400,6 +347,7 @@ where
     }
 
     async fn db_queue_counts(&mut self) -> Result<BatchQueueCounts, StoreError> {
+        let _io = self.busy.io();
         let counts = self
             .store
             .get_batch_queue_counts(
@@ -413,10 +361,12 @@ where
     }
 
     async fn reclaim_abandoned_batches(&self) -> Result<u64, StoreError> {
+        let _io = self.busy.io();
         self.store.reclaim_abandoned_batches(self.run_id).await
     }
 
     async fn cleanup_consumed_completed_batches(&self) -> Result<u64, StoreError> {
+        let _io = self.busy.io();
         let Some(up_to_batch_id) = self.last_completed_batch_id() else {
             return Ok(0);
         };
@@ -489,6 +439,7 @@ where
         &mut self,
         counts: BatchQueueCounts,
     ) -> Result<usize, StoreError> {
+        let _io = self.busy.io();
         let evaluators = self
             .store
             .count_active_evaluator_nodes(self.run_id)
@@ -552,7 +503,7 @@ where
         }
 
         self.pending_insert.extend(batches);
-        self.start_insert_pump_if_idle();
+        self.ensure_insert_pump();
     }
 
     fn local_unpersisted_batches(&self) -> usize {
@@ -589,6 +540,7 @@ where
 
     pub async fn get_processed(&mut self) -> Result<Vec<CompletedBatch>, StoreError> {
         self.drain_finished_insert().await?;
+        self.ensure_insert_pump();
         self.drain_finished_processed_fetch().await?;
         self.ensure_processed_prefetch();
 
@@ -597,6 +549,7 @@ where
 
     pub(crate) async fn get_processed_ready(&mut self) -> Result<Vec<CompletedBatch>, StoreError> {
         self.drain_finished_insert().await?;
+        self.ensure_insert_pump();
         self.drain_finished_processed_fetch().await?;
         Ok(self.take_ready_processed())
     }
@@ -693,6 +646,7 @@ where
         }
         let reclaim_started = Instant::now();
         self.reclaim_abandoned_batches().await?;
+        let _io = self.busy.io();
         self.blocker = self
             .store
             .get_queue_blocker(self.run_id, self.task_id, self.last_completed_batch_id())
@@ -711,9 +665,11 @@ where
         if self.last_completed_cleanup_at.elapsed() < COMPLETED_CLEANUP_INTERVAL {
             return;
         }
+        let busy = self.busy.clone();
         let store = self.store.clone();
         let run_id = self.run_id;
         self.pending_completed_cleanup = Some(tokio::spawn(async move {
+            let _io = busy.io();
             let started = Instant::now();
             store
                 .cleanup_consumed_completed_batches(
@@ -761,7 +717,7 @@ where
             return;
         }
 
-        self.account_utilization(Instant::now());
+        let busy = self.busy.clone();
         let store = self.store.clone();
         let run_id = self.run_id;
         let task_id = self.task_id;
@@ -777,6 +733,7 @@ where
             .min()
             .unwrap_or_else(|| next_batch_ids(1)[0]);
         self.pending_processed_fetch = Some(tokio::spawn(async move {
+            let _io = busy.io();
             let started = Instant::now();
             let batches = store
                 .fetch_completed_batches(run_id, task_id, fetch_limit, true, after_batch_id)
@@ -789,20 +746,11 @@ where
         }));
     }
 
-    fn start_insert_pump_if_idle(&mut self) {
-        if !self.pending_insert_tasks.is_empty() || self.pending_insert.is_empty() {
-            return;
-        }
-
-        self.ensure_insert_pump();
-    }
-
     fn ensure_insert_pump(&mut self) {
         let max_concurrent_insert_tasks = self.config.max_concurrent_insert_tasks.max(1);
         while self.pending_insert_tasks.len() < max_concurrent_insert_tasks
             && !self.pending_insert.is_empty()
         {
-            self.account_utilization(Instant::now());
             let (local_pending_at_start, db_pending_at_start) =
                 self.snapshot_insert_bundle_start_state();
 
@@ -811,6 +759,7 @@ where
             let batches = self.pending_insert.drain(..batch_count).collect::<Vec<_>>();
             let batch_ids = next_batch_ids(batch_count);
             self.checkpoint.last_produced_batch_id = batch_ids.last().copied();
+            let busy = self.busy.clone();
             let store = self.store.clone();
             let run_id = self.run_id;
             let task_id = self.task_id;
@@ -821,6 +770,7 @@ where
                 local_pending_at_start,
                 db_pending_at_start,
                 handle: tokio::spawn(async move {
+                    let _io = busy.io();
                     let outcome = store
                         .insert_batches(
                             run_id,
@@ -844,7 +794,6 @@ where
                 continue;
             }
 
-            self.account_utilization(Instant::now());
             let task = self.pending_insert_tasks.swap_remove(index);
             self.consume_insert_task(task).await?;
         }
@@ -865,15 +814,18 @@ where
             .insert_bundle_batches
             .observe(task.batch_count as f64);
         if task.batch_count > 0 {
-            self.metrics
-                .insert_bundle_ms_per_batch
-                .observe(metrics.end_to_end_ms / task.batch_count as f64);
+            self.metrics.insert_bundle_ms_per_batch.observe_weighted(
+                metrics.end_to_end_ms / task.batch_count as f64,
+                task.batch_count,
+            );
             self.metrics
                 .insert_bundle_payload_bytes_per_batch
-                .observe(metrics.payload_bytes as f64 / task.batch_count as f64);
+                .observe_weighted(
+                    metrics.payload_bytes as f64 / task.batch_count as f64,
+                    task.batch_count,
+                );
         }
         self.observe_insert_bundle_store_metrics(&metrics);
-        self.ensure_insert_pump();
         Ok(())
     }
 
@@ -903,9 +855,6 @@ where
             return Ok(());
         }
 
-        // Account the occupied slot before removing its handle. This includes
-        // time a completed result waits for the sampler to consume it.
-        self.account_utilization(Instant::now());
         let task = self
             .pending_processed_fetch
             .take()
@@ -936,20 +885,6 @@ where
             .observe((completed.len() as f64 / fetch_limit).clamp(0.0, 1.0));
         self.ready_processed.extend(completed);
         Ok(())
-    }
-
-    fn account_utilization(&mut self, now: Instant) {
-        let elapsed_secs = now
-            .saturating_duration_since(self.utilization.last_accounted_at)
-            .as_secs_f64();
-        if elapsed_secs > 0.0 {
-            self.utilization.insert_busy_slot_secs +=
-                elapsed_secs * self.pending_insert_tasks.len() as f64;
-            if self.pending_processed_fetch.is_some() {
-                self.utilization.completed_fetch_busy_secs += elapsed_secs;
-            }
-        }
-        self.utilization.last_accounted_at = now;
     }
 
     fn tune_batch_size(&mut self) {
@@ -1708,6 +1643,39 @@ pub(crate) mod tests {
         assert_eq!(metrics.insert_bundle_ms_per_batch.mean, Some(12.0));
         assert_eq!(metrics.fetch_completed_ms.mean, Some(7.0));
         assert_eq!(queue.take_metrics_snapshot().insert_bundle_ms.count, 0);
+    }
+
+    #[tokio::test]
+    async fn enqueue_fills_free_slots_without_exceeding_the_bound() {
+        let store = RecordingStore::default();
+        let mut queue = recording_queue(store.clone());
+        queue.ingest(vec![latent_batch_with_weight(1.0)]);
+        queue.ingest(vec![latent_batch_with_weight(2.0)]);
+        assert_eq!(queue.pending_insert_tasks.len(), 2);
+        queue.ingest(vec![latent_batch_with_weight(3.0)]);
+        assert_eq!(queue.pending_insert_tasks.len(), 2);
+        assert_eq!(queue.pending_insert.len(), 1);
+        queue.flush().await.unwrap();
+        assert_eq!(store.recorded_inserts().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn completed_fetch_handle_does_not_keep_io_busy() {
+        let mut queue = recording_queue(RecordingStore::default());
+        queue.ensure_processed_prefetch();
+        while !queue
+            .pending_processed_fetch
+            .as_ref()
+            .unwrap()
+            .is_finished()
+        {
+            tokio::task::yield_now().await;
+        }
+        let occupied = queue.busy.snapshot().io_seconds;
+        tokio::task::yield_now().await;
+        assert_eq!(queue.busy.snapshot().io_seconds, occupied);
+        queue.drain_finished_processed_fetch().await.unwrap();
+        assert_eq!(queue.busy.snapshot().io_seconds, occupied);
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@
 use bincode::config::{Configuration, standard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use crate::core::AccumulatorConfig;
 use crate::evaluation::{Batch, BatchError, Point};
@@ -46,23 +46,23 @@ pub enum SamplePlan {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct LatentBatchBinary {
+struct LatentBatchBinary<'a> {
     nr_samples: usize,
-    accumulator: AccumulatorConfig,
-    payload: LatentBatchPayloadBinary,
+    accumulator: Cow<'a, AccumulatorConfig>,
+    payload: LatentBatchPayloadBinary<'a>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum LatentBatchPayloadBinary {
+enum LatentBatchPayloadBinary<'a> {
     IndexedBatch {
-        discrete_signatures: Vec<Vec<i64>>,
-        discrete_map: Vec<usize>,
-        continuous_layouts: Vec<usize>,
-        continuous_values: Vec<f64>,
-        weights: Vec<f64>,
+        discrete_signatures: Cow<'a, [Vec<i64>]>,
+        discrete_map: Cow<'a, [usize]>,
+        continuous_layouts: Cow<'a, [usize]>,
+        continuous_values: Cow<'a, [f64]>,
+        weights: Cow<'a, [f64]>,
     },
     HavanaInference {
-        rng_state: SerializableMonteCarloRng,
+        rng_state: Cow<'a, SerializableMonteCarloRng>,
     },
 }
 
@@ -287,22 +287,22 @@ impl LatentBatch {
                 continuous_values,
                 weights,
             } => LatentBatchPayloadBinary::IndexedBatch {
-                discrete_signatures: discrete_signatures.clone(),
-                discrete_map: discrete_map.clone(),
-                continuous_layouts: continuous_layouts.clone(),
-                continuous_values: continuous_values.clone(),
-                weights: weights.clone(),
+                discrete_signatures: Cow::Borrowed(discrete_signatures),
+                discrete_map: Cow::Borrowed(discrete_map),
+                continuous_layouts: Cow::Borrowed(continuous_layouts),
+                continuous_values: Cow::Borrowed(continuous_values),
+                weights: Cow::Borrowed(weights),
             },
             LatentBatchPayload::HavanaInference { rng_state } => {
                 LatentBatchPayloadBinary::HavanaInference {
-                    rng_state: rng_state.clone(),
+                    rng_state: Cow::Borrowed(rng_state),
                 }
             }
         };
         bincode::serde::encode_to_vec(
             LatentBatchBinary {
                 nr_samples: self.nr_samples,
-                accumulator: self.accumulator.clone(),
+                accumulator: Cow::Borrowed(&self.accumulator),
                 payload,
             },
             Self::binary_config(),
@@ -323,19 +323,21 @@ impl LatentBatch {
                 continuous_values,
                 weights,
             } => LatentBatchPayload::IndexedBatch {
-                discrete_signatures,
-                discrete_map,
-                continuous_layouts,
-                continuous_values,
-                weights,
+                discrete_signatures: discrete_signatures.into_owned(),
+                discrete_map: discrete_map.into_owned(),
+                continuous_layouts: continuous_layouts.into_owned(),
+                continuous_values: continuous_values.into_owned(),
+                weights: weights.into_owned(),
             },
             LatentBatchPayloadBinary::HavanaInference { rng_state } => {
-                LatentBatchPayload::HavanaInference { rng_state }
+                LatentBatchPayload::HavanaInference {
+                    rng_state: rng_state.into_owned(),
+                }
             }
         };
         let restored = Self {
             nr_samples: latent.nr_samples,
-            accumulator: latent.accumulator,
+            accumulator: latent.accumulator.into_owned(),
             payload,
         };
         restored.validate_nr_samples()?;
@@ -453,6 +455,37 @@ mod tests {
         assert_eq!(restored.nr_samples, 2);
         let restored_batch = restored.payload.as_batch().expect("batch payload");
         assert_eq!(restored_batch, batch);
+    }
+
+    #[test]
+    fn binary_encoding_preserves_existing_indexed_and_inference_payloads() {
+        let batch = Batch::from_points([
+            Point::new(vec![0.5], Vec::new(), 1.0),
+            Point::new(vec![1.5], Vec::new(), 2.0),
+        ])
+        .unwrap();
+        let indexed = LatentBatchSpec::from_batch(&batch).build();
+        let inference = LatentBatch {
+            nr_samples: 4096,
+            accumulator: AccumulatorConfig::scalar(),
+            payload: LatentBatchPayload::HavanaInference {
+                rng_state: SerializableMonteCarloRng::new(42, 0),
+            },
+        };
+        // Captured from the owned encoder before borrowing its arrays.
+        let indexed_bytes: &[u8] = &[
+            2, 1, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 2, 1, 1, 2, 0, 0, 0, 0, 0, 0, 224, 63, 0, 0, 0, 0,
+            0, 0, 248, 63, 2, 0, 0, 0, 0, 0, 0, 240, 63, 0, 0, 0, 0, 0, 0, 0, 64,
+        ];
+        let inference_bytes: &[u8] = &[
+            251, 0, 16, 1, 0, 0, 0, 0, 1, 253, 149, 110, 235, 47, 38, 50, 215, 189, 253, 3, 241,
+            102, 178, 51, 227, 239, 40, 253, 82, 159, 15, 19, 87, 103, 82, 71, 253, 148, 227, 74,
+            14, 255, 225, 28, 88,
+        ];
+        for (batch, bytes) in [(indexed, indexed_bytes), (inference, inference_bytes)] {
+            assert_eq!(batch.to_bytes().unwrap(), bytes);
+            assert_eq!(LatentBatch::from_bytes(bytes).unwrap(), batch);
+        }
     }
 
     #[test]

@@ -367,10 +367,7 @@ fn point((x, y): (f64, f64)) -> PlotPoint {
     PlotPoint {
         x,
         y,
-        x_sampler_uptime_ms: None,
-        x_completed_samples_total: None,
-        y_min: None,
-        y_max: None,
+        ..Default::default()
     }
 }
 
