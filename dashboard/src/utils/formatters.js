@@ -67,7 +67,7 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
       : null;
   const appendRelativeToLatex = (latex) =>
     relativePercentText != null ? `${latex}\\;\\left(${relativePercentText}\\%\\right)` : latex;
-  if (!Number.isFinite(central) || !Number.isFinite(uncertainty) || uncertainty < 0) {
+  if (value == null || error == null || !Number.isFinite(central) || !Number.isFinite(uncertainty) || uncertainty < 0) {
     return {
       text: fallback,
       latex: fallback,
@@ -77,42 +77,30 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
     };
   }
 
-  if (uncertainty === 0) {
-    const text = formatScientific(central, 6, fallback);
-    return {
-      text,
-      latex: text,
-      relative_percent: relativePercentValue,
-      relative_percent_text: relativePercentText,
-      latex_with_relative: appendRelativeToLatex(text),
-    };
-  }
-
   const scaleSource = Math.max(Math.abs(central), Math.abs(uncertainty));
-  if (!Number.isFinite(scaleSource) || scaleSource === 0) {
-    return {
-      text: "(0 ± 0) × 10^0",
-      latex: "\\left(0 \\pm 0\\right)\\times 10^{0}",
-      relative_percent: relativePercentValue,
-      relative_percent_text: relativePercentText,
-      latex_with_relative: appendRelativeToLatex("\\left(0 \\pm 0\\right)\\times 10^{0}"),
-    };
-  }
-
-  const exponent = Math.floor(Math.log10(scaleSource));
+  const exponent = scaleSource === 0 ? 0 : Math.max(-323, Math.floor(Math.log10(scaleSource)));
   const scale = 10 ** exponent;
   const scaledValue = central / scale;
-  const scaledError = Math.abs(uncertainty) / scale;
-  const scaledErrorOrder = Math.floor(Math.log10(scaledError));
-  const decimals = Math.max(0, Math.min(12, 1 - scaledErrorOrder));
+  // Two significant uncertainty digits, referring to the last displayed digits
+  // of the mean. Round before choosing precision to handle carries (9.99 -> 10).
+  const [errorMantissa, errorExponent] = uncertainty.toExponential(1).split("e");
+  const decimals = uncertainty === 0 ? 6 : Math.max(0, exponent - Number(errorExponent) + 1);
+  const errorText = uncertainty === 0 ? "0" : String(Math.round(Number(errorMantissa) * 10));
+  // toFixed accepts up to 100 fractional digits. Preserve exceptionally small
+  // uncertainties without incorrectly rounding them to zero in the UI.
+  if (decimals > 100) {
+    const text = `${central.toExponential(16)} (${uncertainty.toExponential(1)})`;
+    const latex = `${central.toExponential(16)}\\;\\left(\\sigma=${uncertainty.toExponential(1)}\\right)`;
+    return { text, latex, relative_percent: relativePercentValue, relative_percent_text: relativePercentText, latex_with_relative: appendRelativeToLatex(latex) };
+  }
   const valueText = scaledValue.toFixed(decimals);
-  const errorText = scaledError.toFixed(decimals);
+  const latex = `${valueText}(${errorText})\\times 10^{${exponent}}`;
   return {
-    text: `(${valueText} ± ${errorText}) × 10^${exponent}`,
-    latex: `\\left(${valueText} \\pm ${errorText}\\right)\\times 10^{${exponent}}`,
+    text: `${valueText}(${errorText}) × 10^${exponent}`,
+    latex,
     relative_percent: relativePercentValue,
     relative_percent_text: relativePercentText,
-    latex_with_relative: appendRelativeToLatex(`\\left(${valueText} \\pm ${errorText}\\right)\\times 10^{${exponent}}`),
+    latex_with_relative: appendRelativeToLatex(latex),
   };
 };
 

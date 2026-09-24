@@ -149,7 +149,7 @@ fn summary_projector() -> TaskPanelProjector {
                     crate::core::TaskMeasurementOutput::Completed { results } => Some(results),
                     crate::core::TaskMeasurementOutput::Failed { .. } => None,
                 });
-            let entries = results
+            let mut entries = results
                 .into_iter()
                 .flatten()
                 .enumerate()
@@ -179,6 +179,36 @@ fn summary_projector() -> TaskPanelProjector {
                     )
                 })
                 .collect::<Vec<_>>();
+            if let Some(target) = super::sample::run_target_from_json(ctx.run_target) {
+                for (index, result) in results.into_iter().flatten().enumerate() {
+                    let component = result.component.as_deref();
+                    let names = match component {
+                        Some("real") => vec!["real", "value"],
+                        Some(name) => vec![name],
+                        None => vec!["value", "real"],
+                    };
+                    if let (Some(value), Some(error)) =
+                        (target.component(&names), result.uncertainty)
+                    {
+                        let key = component
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| index.to_string());
+                        let label = match component {
+                            Some("real") => "Real vs Target".to_string(),
+                            Some("imag") => "Imag vs Target".to_string(),
+                            Some(name) => format!("{name} vs Target"),
+                            None => "vs Target".to_string(),
+                        };
+                        entries.push(super::sample::target_comparison_entry(
+                            &format!("target_comparison_{key}"),
+                            &label,
+                            result.value,
+                            error,
+                            value,
+                        ));
+                    }
+                }
+            }
             Ok(Some(key_value_panel(SUMMARY_ID, entries)))
         },
         |_ctx| Ok(None),

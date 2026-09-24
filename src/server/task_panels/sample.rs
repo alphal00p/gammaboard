@@ -897,11 +897,11 @@ fn base_estimate_summary_entries(
 }
 
 #[derive(Debug, Clone)]
-struct VectorTarget {
+pub(super) struct VectorTarget {
     components: BTreeMap<String, f64>,
 }
 
-fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<VectorTarget> {
+pub(super) fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<VectorTarget> {
     let value = run_target?;
     if let Some(scalar) = value.as_f64() {
         return Some(VectorTarget::single("value", scalar));
@@ -934,7 +934,7 @@ impl VectorTarget {
         }
     }
 
-    fn component(&self, names: &[&str]) -> Option<f64> {
+    pub(super) fn component(&self, names: &[&str]) -> Option<f64> {
         names
             .iter()
             .find_map(|name| self.components.get(*name).copied())
@@ -973,7 +973,7 @@ fn estimate_entry(
     )
 }
 
-fn target_comparison_entry(
+pub(super) fn target_comparison_entry(
     key: &str,
     label: &str,
     value: f64,

@@ -22,6 +22,7 @@ mod panels;
 mod performance_panels;
 mod routes;
 mod run_panels;
+mod run_removals;
 mod settings;
 mod task_panels;
 mod worker_panels;
@@ -362,6 +363,7 @@ pub async fn serve(
         task_templates_dir: PathBuf::from(&config.task_templates_dir),
         node_templates_dir: PathBuf::from(&config.node_templates_dir),
         runtime: runtime.clone(),
+        run_removals: run_removals::RunRemovals::default(),
     };
 
     let app = routes::build_app(state);
@@ -396,6 +398,7 @@ pub(crate) struct AppState {
     task_templates_dir: PathBuf,
     node_templates_dir: PathBuf,
     runtime: RuntimeContext,
+    run_removals: run_removals::RunRemovals,
 }
 
 #[derive(Deserialize)]
@@ -1294,22 +1297,45 @@ async fn pause_run(
 async fn delete_run(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = run_api::remove_run(&state.store, run_id)
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let run = state
+        .store
+        .get_run_progress(run_id)
         .await
+        .map_err(ApiError::from)
         .inspect_err(|err| log_control_api_error("run_remove", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_remove",
-        run_id = result.run_id,
-        run_name = %result.run_name,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "run_id": result.run_id,
-        "run_name": result.run_name,
-    }))
+    let run = run.ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
+    let operation = state
+        .run_removals
+        .start(run_id, run.run_name, async move {
+            let result = run_api::remove_run(&state.store, run_id)
+                .await
+                .inspect_err(|err| log_control_api_error("run_remove", err))
+                .map_err(|err| err.to_string())?;
+            tracing::info!(
+                source = "control",
+                control_surface = "dashboard",
+                action = "run_remove",
+                run_id = result.run_id,
+                run_name = %result.run_name,
+                "dashboard action completed"
+            );
+            Ok(())
+        })
+        .await;
+    Ok((StatusCode::ACCEPTED, json_response(operation)?))
+}
+
+async fn get_run_removal(
+    State(state): State<AppState>,
+    AxumPath(operation_id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let operation = state.run_removals.get(&operation_id).await.ok_or_else(|| {
+        ApiError::NotFound(
+            "Deletion status is unavailable after a server restart or expired operation. Refresh the run list before retrying.".into(),
+        )
+    })?;
+    json_response(operation)
 }
 
 async fn delete_run_task(

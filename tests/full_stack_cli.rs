@@ -3823,6 +3823,134 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    for name in ["delete-parent", "delete-child", "keep-run"] {
+        harness.add_run(&temp_config(&format!("name = \"{name}\"\n")));
+    }
+    let parent_id = harness.run_id("delete-parent").await?;
+    let child_id = harness.run_id("delete-child").await?;
+    let keep_id = harness.run_id("keep-run").await?;
+    sqlx::query("UPDATE runs SET parent_run_id = $1 WHERE id = $2")
+        .bind(parent_id)
+        .bind(child_id)
+        .execute(&harness.pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO nodes (name, uuid, lease_expires_at) VALUES ('history-worker', 'history-worker', now() - interval '1 second')",
+    )
+    .execute(&harness.pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO evaluator_performance_history (run_id, worker_id) VALUES ($1, 'history-worker')",
+    )
+    .bind(child_id)
+    .execute(&harness.pool)
+    .await?;
+
+    let server_url = harness.start_server().await?;
+    let cookie = login_cookie(&server_url).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()?;
+    let delete_url = format!("{server_url}/api/runs/{parent_id}");
+    assert_eq!(
+        client.delete(&delete_url).send().await?.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+
+    // Hold the history cascade indefinitely: submission and status requests must
+    // still finish before the HTTP client's short timeout.
+    let mut blocker = harness.pool.begin().await?;
+    sqlx::query("LOCK TABLE evaluator_performance_history IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await?;
+    let response = client
+        .delete(&delete_url)
+        .header("Cookie", &cookie)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    let operation: JsonValue = serde_json::from_str(&response.text().await?)?;
+    assert_eq!(operation["status"], "running");
+    let operation_id = operation["operation_id"].as_str().unwrap();
+    let status_url = format!("{server_url}/api/run-removals/{operation_id}");
+
+    let duplicate = client
+        .delete(&delete_url)
+        .header("Cookie", &cookie)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let duplicate: JsonValue = serde_json::from_str(&duplicate)?;
+    assert_eq!(duplicate["operation_id"], operation["operation_id"]);
+    assert_eq!(
+        client.get(&status_url).send().await?.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let pending = client
+        .get(&status_url)
+        .header("Cookie", &cookie)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let pending: JsonValue = serde_json::from_str(&pending)?;
+    assert_eq!(pending["status"], "running");
+    assert_eq!(harness.run_id("delete-parent").await?, parent_id);
+    blocker.rollback().await?;
+
+    harness
+        .wait_for("background deletion", Duration::from_secs(10), || async {
+            let status = client
+                .get(&status_url)
+                .header("Cookie", &cookie)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            let status: JsonValue = serde_json::from_str(&status)?;
+            anyhow::ensure!(status["status"] != "failed", "deletion failed: {status}");
+            Ok(status["status"] == "completed")
+        })
+        .await?;
+    let remaining: Vec<i32> = sqlx::query_scalar("SELECT id FROM runs ORDER BY id")
+        .fetch_all(&harness.pool)
+        .await?;
+    assert_eq!(remaining, vec![keep_id]);
+    let history_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM evaluator_performance_history")
+            .fetch_one(&harness.pool)
+            .await?;
+    assert_eq!(history_count, 0);
+
+    // Operations are local to the server; after a restart, instruct the client
+    // to refresh rather than falsely reporting success or waiting forever.
+    harness
+        .kill_child(&format!(
+            "server:{}",
+            server_url.trim_start_matches("http://")
+        ))
+        .await?;
+    let restarted_url = harness.start_server().await?;
+    let restarted_cookie = login_cookie(&restarted_url).await?;
+    let response = client
+        .get(format!("{restarted_url}/api/run-removals/{operation_id}"))
+        .header("Cookie", restarted_cookie)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert!(response.text().await?.contains("Refresh the run list"));
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
 
@@ -4613,6 +4741,7 @@ async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> 
         r#"
 kind = "integration_campaign"
 name = "integration-campaign-result-e2e"
+target = { kind = "scalar", value = 1.5 }
 
 [measurement]
 
@@ -4733,6 +4862,63 @@ seed = 2
     .await?;
     assert_eq!(result["sources"].as_array().map(Vec::len), Some(2));
     assert_eq!(result["metrics"][0]["value"], json!(1.5));
+
+    let target: JsonValue = sqlx::query_scalar("SELECT target FROM runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(target, json!({"kind": "scalar", "value": 1.5}));
+    let child_targets: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id = $1 AND target IS NOT NULL",
+    )
+    .bind(run_id)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(
+        child_targets, 0,
+        "combined target must not be inherited by children"
+    );
+
+    let server_url = harness.start_server().await?;
+    let cookie = login_cookie(&server_url).await?;
+    let exported = http_get_with_cookie(
+        &server_url,
+        &format!("/api/runs/{run_id}/repro-toml"),
+        &cookie,
+    )
+    .await?;
+    let exported: JsonValue = serde_json::from_str(&exported)?;
+    let config =
+        gammaboard::api::runs::parse_run_add_config_toml(exported["toml"].as_str().unwrap())?;
+    assert_eq!(config.target, Some(target));
+
+    let child_id = harness.run_id("campaign-result-left").await?;
+    sqlx::query("UPDATE runs SET provenance = provenance || $2 WHERE id = $1")
+        .bind(child_id)
+        .bind(json!({"evaluator_metadata": {"graph_groups": null, "label": "retained"}}))
+        .execute(&harness.pool)
+        .await?;
+    let exported = http_get_with_cookie(
+        &server_url,
+        &format!("/api/runs/{child_id}/repro-toml"),
+        &cookie,
+    )
+    .await?;
+    let exported: JsonValue = serde_json::from_str(&exported)?;
+    let raw = exported["toml"].as_str().unwrap();
+    let child_config = gammaboard::api::runs::parse_run_add_config_toml(raw)?;
+    assert_eq!(child_config.name, "campaign-result-left");
+    assert_eq!(child_config.task_queue.unwrap().len(), 1);
+    let document: toml::Value = toml::from_str(raw)?;
+    assert_eq!(
+        document["gammaboard"]["evaluator_metadata"]["label"].as_str(),
+        Some("retained")
+    );
+    assert!(
+        document["gammaboard"]["evaluator_metadata"]
+            .get("graph_groups")
+            .is_none()
+    );
 
     harness.cleanup().await?;
     Ok(())

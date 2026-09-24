@@ -2097,7 +2097,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "toml 0.8.23",
+ "toml 1.1.6+spec-1.1.0",
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
@@ -6194,7 +6194,7 @@ dependencies = [
  "serde",
  "serde_json",
  "spec_math",
- "toml 1.1.4+spec-1.1.0",
+ "toml 1.1.6+spec-1.1.0",
  "wasmtime-jit-icache-coherence",
  "wide 1.6.1",
  "windows-sys 0.61.2",
@@ -6670,9 +6670,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.4+spec-1.1.0"
+version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
 dependencies = [
  "indexmap",
  "serde_core",

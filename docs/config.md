@@ -2,6 +2,32 @@
 
 This document covers the operator-facing config shapes. Checked-in templates live under `resources/templates` and profile-specific ops configs live under `ops/*/config`.
 
+## TOML Syntax
+
+GammaBoard accepts [TOML 1.1](https://toml.io/en/v1.1.0#inline-table) in run,
+task, node, and runtime/server configuration files. Inline tables can span
+multiple lines, include comments, and end with a trailing comma:
+
+```toml
+[[task_queue]]
+kind = "sample"
+stop_condition = {
+    max_samples = 20_000, # Commas still separate entries inside braces.
+}
+sampler_aggregator = {
+    config = {
+        kind = "naive_monte_carlo",
+        seed = 42,
+    },
+}
+```
+
+The CLI and dashboard use the same parser, including for replacements and child
+run sources. Existing TOML 1.0 runcards remain valid. Rebuild/redeploy GammaBoard
+before submitting runcards that use the new syntax; an older binary cannot parse
+multiline inline tables. External TOML validators must also support version 1.1
+(for Python, use Tomli 2.4 or later rather than Python 3.13's `tomllib`).
+
 ## Layout
 
 - `src/config_defaults/*.toml`: built-in fallback defaults embedded into the Rust binary.
@@ -125,8 +151,9 @@ Defaults are parsed as TOML when possible, otherwise they are treated as raw str
 
 Run configs are TOML. Omitted `kind` means `integration`, preserving existing
 integration configurations. Only integrations merge the runner defaults from
-`src/config_defaults/run.toml` and accept `evaluator`, `target`, capability
+`src/config_defaults/run.toml` and accept `evaluator`, capability
 requirements, runner parameters, and `task_queue`.
+Both integrations and integration campaigns accept an optional `target`.
 
 `integration_campaign`, `parameter_scan`, and `hyperparameter_tuning` are root
 run kinds with separate field sets. Integration-only fields and unknown fields
@@ -260,6 +287,11 @@ sample's `sqrt(re² + im²)`, including Monte Carlo weights; it is not the norm 
 the final complex mean. The absolute-component estimates include uncertainties
 computed from their own absolute moments.
 
+Sample and campaign Result widgets display estimates with two significant digits
+in the uncertainty, in parentheses referring to the last digits of the mean.
+For example, `(-1.318 ± 0.0039) × 10^-4` is displayed as
+`-1.3180(39) × 10^-4`. The full-precision values remain available in the details.
+
 RSD and normalized ESS use the evaluator's training projection, including sampling
 weights, independently of `Norm Mean`. RSD is the standard deviation divided by
 the mean absolute contribution; ESS is `(Σ|w|)² / (N Σw²)`, displayed as a
@@ -354,6 +386,7 @@ one), its own `replacements`, and a `run` containing TOML text or a file referen
 kind = "integration_campaign"
 name = "ttH"
 stop_condition = { relative_error = 0.01 }
+target = { kind = "vector", components = { real = 1.23, imag = 0.0 } } # optional
 
 [[children]]
 name = "GL0"
@@ -365,6 +398,11 @@ name = "GL2"
 replacements = { graph_group = 1 }
 run = { file = "tt_h.toml" }
 ```
+
+The campaign target describes the combined, coefficient-weighted result. It uses
+the same scalar or vector syntax as an integration target and appears in the
+Result widget with relative and standard-error deviations. It is a reference for
+comparison, independent of `stop_condition`, and is not inherited by children.
 
 All three controller kinds accept exactly two child source forms:
 

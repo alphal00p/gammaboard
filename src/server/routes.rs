@@ -17,6 +17,7 @@ pub(super) fn build_app(state: AppState) -> Router {
         .route("/runs", get(get_runs).post(create_run))
         .route("/runs/clone", post(clone_run))
         .route("/runs/:id", delete(delete_run))
+        .route("/run-removals/:id", get(get_run_removal))
         .route("/runs/:id/pause", post(pause_run))
         .route("/runs/:id/repro-toml", get(get_run_repro_toml))
         .route("/runs/:id/panels", get(get_run_panels))

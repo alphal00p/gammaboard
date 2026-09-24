@@ -61,6 +61,7 @@ pub fn instantiate(
     if kind != "integration" {
         table.remove("name");
         table.remove("gammaboard");
+        let target = table.remove("target");
         table.insert("kind".into(), toml::Value::String(kind.clone()));
         let controller: RunTaskSpec = toml::Value::Table(table)
             .try_into()
@@ -105,6 +106,10 @@ pub fn instantiate(
             task: controller,
         }]);
         config.kind = kind;
+        config.target = target
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| bad(format!("invalid target: {e}")))?;
         config.original_toml = Some(frozen);
         config.effective_document = Some(effective);
         Ok(config)
@@ -137,7 +142,13 @@ pub(crate) fn validate_document(value: &toml::Value) -> Result<(), ApiError> {
             "sampler_aggregator_runner_params",
             "task_queue",
         ],
-        "integration_campaign" => &["children", "measurement", "stop_condition", "allocation"],
+        "integration_campaign" => &[
+            "target",
+            "children",
+            "measurement",
+            "stop_condition",
+            "allocation",
+        ],
         "parameter_scan" => &["child", "parameters", "measurement", "max_concurrent_runs"],
         "hyperparameter_tuning" => &[
             "child",
@@ -389,6 +400,9 @@ mod tests {
                 "evaluator_runner_params",
                 "sampler_aggregator_runner_params",
             ] {
+                if kind == "integration_campaign" && field == "target" {
+                    continue;
+                }
                 let doc = format!("name = 'bad'\nkind = '{kind}'\n{field} = []");
                 let error = parse(&doc, BTreeMap::new(), None).unwrap_err().to_string();
                 assert!(error.contains(field) && error.contains(kind), "{error}");
@@ -566,7 +580,11 @@ run = 'name = "child"'
     }
     const CHILD_DOCUMENT: &str = r#"
 name = "child-$(dims:1)-$(label:fallback)"
-replacements = { dims = 1, samples = 6, label = "local" }
+replacements = {
+    dims = 1,
+    samples = 6,
+    label = "local", # TOML 1.1 syntax survives child freezing and bindings.
+}
 [evaluator]
 kind = "unit"
 continuous_dims = "$(dims:1)"
@@ -578,7 +596,11 @@ publish_result = "$(publish:true)"
 stop_condition = { max_samples = "$(samples:4)" }
 measurement = { quantity = "central_value" }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler_aggregator = {
+    config = {
+        kind = "naive_monte_carlo",
+    },
+}
 "#;
 
     const CONTROLLERS: [&str; 3] = [
