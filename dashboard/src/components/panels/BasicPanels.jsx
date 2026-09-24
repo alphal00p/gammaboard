@@ -162,7 +162,7 @@ export const KeyValuePanel = ({ title, state }) => (
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1fr) minmax(0, 1fr)" },
+          gridTemplateColumns: { xs: "minmax(0, 1fr)", [state?.panel_id === "estimate_summary" ? "md" : "lg"]: "minmax(0, 1fr) minmax(0, 1fr)" },
           gap: 1.5,
         }}
       >
@@ -173,7 +173,9 @@ export const KeyValuePanel = ({ title, state }) => (
               key={displayEntry.key}
               sx={{
                 display: "grid",
-                gridTemplateColumns: "minmax(120px, 0.9fr) minmax(0, 1.1fr)",
+                gridTemplateColumns: state?.panel_id === "campaign_combined_result"
+                  ? "max-content minmax(0, 1fr)"
+                  : "minmax(120px, 0.9fr) minmax(0, 1.1fr)",
                 gap: 1,
                 py: 0.5,
                 borderBottom: "1px solid",

@@ -37,6 +37,11 @@ Nodes are identified by persistent `name` plus live-process `uuid`. Desired and
 current assignments are stored in Postgres. A stale UUID lease is replaced when
 the same node name starts again.
 
+Run lifecycle status counts only workers with live leases. Expired worker rows
+remain available for history but do not keep a child or its campaign marked
+running. In Campaign Sub-runs, a selected child shows `starting` until its sampler
+is active, and `waiting` if it has no live sampler assignment.
+
 Common commands:
 
 ```bash
@@ -183,6 +188,12 @@ active value. With three PostgreSQL reserved connections, limits of 256, 512,
 and 1024 allow 59, 123, and 251 workers respectively.
 
 ## Queue Recovery and Upgrades
+
+Sampler recovery compares the saved and loaded checkpoint through the same Rust
+checkpoint type. PostgreSQL JSONB can represent a large floating-point Jacobian
+as an integer; this alone must not trigger a checkpoint-change retry. The row
+lock, exact comparison of decoded state, and queued-sample consistency checks
+still reject genuinely stale or inconsistent recovery attempts.
 
 Evaluators retain claimed batches and computed results across database errors.
 Each claim has a unique token: retries acknowledge the same claim or result,

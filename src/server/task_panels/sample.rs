@@ -7,6 +7,7 @@ use crate::core::{
     NamedDiscreteProjection, SampleErrorProjection, SampleStopCondition,
 };
 use crate::evaluation::accumulator::DiscreteProjectionBinState;
+use crate::evaluation::evaluator::gammaloop::TrainingProjection;
 use crate::evaluation::{
     Accumulator, AccumulatorState, GammaLoopDiagnostics, Point, SemanticAccumulatorKind,
     extract_accumulator_metric_with_runtime,
@@ -24,33 +25,33 @@ use std::collections::BTreeMap;
 
 pub(super) fn projectors(
     effective_accumulator_config: AccumulatorConfig,
+    training_projection: Option<TrainingProjection>,
 ) -> Vec<TaskPanelProjector> {
     let accumulator_config = effective_accumulator_config;
     let mut projectors = vec![
         sample_progress_projector(&accumulator_config),
-        estimate_summary_projector(&accumulator_config),
+        estimate_summary_projector(&accumulator_config, training_projection),
         real_estimate_history_projector(&accumulator_config),
     ];
     if matches!(accumulator_config, AccumulatorConfig::Gammaloop) {
         projectors.push(imag_estimate_history_projector(&accumulator_config));
     }
+    projectors.push(rsd_history_projector(
+        &accumulator_config,
+        training_projection,
+    ));
     if matches!(
         accumulator_config,
         AccumulatorConfig::Scalar { .. }
             | AccumulatorConfig::Vector { .. }
             | AccumulatorConfig::Gammaloop
     ) {
+        projectors.push(ess_history_projector(
+            &accumulator_config,
+            training_projection,
+        ));
         projectors.push(max_weight_summary_projector(&accumulator_config));
         projectors.push(max_weight_points_projector(&accumulator_config));
-    }
-    projectors.push(rsd_history_projector(&accumulator_config));
-    if matches!(
-        accumulator_config,
-        AccumulatorConfig::Scalar { .. }
-            | AccumulatorConfig::Vector { .. }
-            | AccumulatorConfig::Gammaloop
-    ) {
-        projectors.push(ess_history_projector(&accumulator_config));
     }
     if matches!(accumulator_config, AccumulatorConfig::Gammaloop) {
         #[cfg(feature = "gammaloop")]
@@ -198,20 +199,28 @@ fn imag_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
     )
 }
 
-fn rsd_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+fn rsd_history_projector(
+    accumulator_config: &AccumulatorConfig,
+    training_projection: Option<TrainingProjection>,
+) -> TaskPanelProjector {
     persisted_first_history_projector(
         "abs_signal_to_noise_history",
         "RSD",
         accumulator_config.clone(),
+        training_projection,
         rsd_history_panel,
     )
 }
 
-fn ess_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+fn ess_history_projector(
+    accumulator_config: &AccumulatorConfig,
+    training_projection: Option<TrainingProjection>,
+) -> TaskPanelProjector {
     persisted_first_history_projector(
         "ess_history",
         "ESS",
         accumulator_config.clone(),
+        training_projection,
         ess_history_panel,
     )
 }
@@ -220,6 +229,7 @@ fn persisted_first_history_projector<F>(
     panel_id: &'static str,
     label: &'static str,
     accumulator_config: AccumulatorConfig,
+    training_projection: Option<TrainingProjection>,
     map_panel: F,
 ) -> TaskPanelProjector
 where
@@ -233,15 +243,24 @@ where
             label,
             PanelKind::ScalarTimeseries,
             PanelHistoryMode::Append,
-            PanelWidth::Full,
+            PanelWidth::Half,
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
-        move |ctx| Ok(sample_accumulator(ctx, &current_config)?.and_then(map_panel)),
-        move |ctx| Ok(decode_history_observable(ctx, &history_config)?.and_then(map_panel)),
+        move |ctx| {
+            Ok(sample_accumulator(ctx, &current_config)?
+                .and_then(|acc| map_panel(with_training_projection(acc, training_projection))))
+        },
+        move |ctx| {
+            Ok(decode_history_observable(ctx, &history_config)?
+                .and_then(|acc| map_panel(with_training_projection(acc, training_projection))))
+        },
     )
 }
 
-fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
+fn estimate_summary_projector(
+    accumulator_config: &AccumulatorConfig,
+    training_projection: Option<TrainingProjection>,
+) -> TaskPanelProjector {
     let accumulator_config = accumulator_config.clone();
     panel_projector_with_source(
         sized_panel_spec(
@@ -254,8 +273,14 @@ fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPan
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
             let run_target = run_target_from_json(ctx.run_target);
-            Ok(sample_accumulator(ctx, &accumulator_config)?
-                .map(|accumulator| estimate_summary_panel(accumulator, run_target)))
+            Ok(
+                sample_accumulator(ctx, &accumulator_config)?.map(|accumulator| {
+                    estimate_summary_panel(
+                        with_training_projection(accumulator, training_projection),
+                        run_target,
+                    )
+                }),
+            )
         },
         |_ctx| Ok(None),
     )
@@ -505,7 +530,7 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     }
     let rsd = match &accumulator {
         AccumulatorState::Vector(state) => state.rsd(),
-        AccumulatorState::Gammaloop(state) => state.rsd(),
+        AccumulatorState::Gammaloop(state) => state.rsd()?,
         _ => 0.0,
     };
     Some(
@@ -528,7 +553,7 @@ fn ess_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     }
     let ess = match &accumulator {
         AccumulatorState::Vector(state) => state.ess(),
-        AccumulatorState::Gammaloop(state) => state.ess(),
+        AccumulatorState::Gammaloop(state) => state.ess()?,
         _ => return None,
     };
     Some(
@@ -663,7 +688,12 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
         "max_weight_points",
         columns,
         rows,
-        None,
+        Some(json!({ "column_formats": {
+            "Integrand": "scientific",
+            "Jacobian": "scientific",
+            "Max Weighted Value": "scientific",
+            "Impact": "scientific",
+        }})),
     ))
 }
 
@@ -686,7 +716,7 @@ fn push_max_weight_row(
         json_number_or_na(jacobian),
         JsonValue::from(max_weighted_value),
         JsonValue::from(impact),
-        JsonValue::String(format_point(point)),
+        point_value(point),
     ]);
 }
 
@@ -698,14 +728,14 @@ fn integrand_and_jacobian_for_component(
         return (None, None);
     };
     let integrand = match component {
-        "re" => point.integrand_value_re,
-        "im" => point.integrand_value_im,
+        "real" | "re" => point.integrand_value_re,
+        "imag" | "im" => point.integrand_value_im,
         "scalar" => point.integrand_value_re,
         _ => None,
     };
     let jacobian = point
-        .factor_product_matching(|label| label.contains("jacobian"))
-        .or(point.parameterization_jacobian);
+        .parameterization_jacobian
+        .or_else(|| point.factor_value("gammaloop_parameterization_jacobian"));
     (integrand, jacobian)
 }
 
@@ -716,16 +746,30 @@ fn json_number_or_na(value: Option<f64>) -> JsonValue {
     }
 }
 
-fn format_point(point: Option<&Point>) -> String {
+fn point_value(point: Option<&Point>) -> JsonValue {
     match point {
-        Some(point) => format!(
-            "d={:?}, c={:?}, w={:+.6e}",
-            point.discrete,
-            point.continuous,
-            point.total_weight()
-        ),
-        None => "N/A".to_string(),
+        Some(point) => json!({
+            "kind": "sample_point",
+            "discrete": point.discrete,
+            "continuous": point.continuous,
+            "sampling_weight": point.factor_value("sampler_weight"),
+        }),
+        None => json!("n/a"),
     }
+}
+
+// Legacy native gammaloop snapshots always stored the norm in `estimate.projection`.
+// Resolve the task's actual training phase without rewriting historical samples.
+fn with_training_projection(
+    mut accumulator: AccumulatorState,
+    projection: Option<TrainingProjection>,
+) -> AccumulatorState {
+    if let AccumulatorState::Gammaloop(state) = &mut accumulator
+        && state.training_projection.is_none()
+    {
+        state.training_projection = projection;
+    }
+    accumulator
 }
 
 fn base_estimate_summary_entries(
@@ -762,10 +806,23 @@ fn base_estimate_summary_entries(
             entries
         }
         AccumulatorState::Gammaloop(state) => {
-            let mut entries = vec![
-                key_value("count", "Count", state.sample_count()),
-                key_value("rsd", "RSD", state.rsd()),
-                key_value("ess", "ESS", state.ess()),
+            let comparison = |key, label, value, error, names: &[&str]| match run_target
+                .as_ref()
+                .and_then(|target| target.component(names))
+            {
+                Some(target) => target_comparison_entry(key, label, value, error, target),
+                None => key_value(key, label, "n/a"),
+            };
+            let abs_component = |key, label, name| match state.estimate.component(name) {
+                Some(component) => estimate_entry(
+                    key,
+                    label,
+                    component.state.mean_abs(),
+                    component.state.mean_abs_stderr(),
+                ),
+                None => key_value(key, label, "n/a"),
+            };
+            vec![
                 estimate_entry(
                     "real_mean",
                     "Real Mean",
@@ -778,34 +835,46 @@ fn base_estimate_summary_entries(
                     state.imag_mean(),
                     state.imag_stderr(),
                 ),
-            ];
-            if let Some(target) = run_target {
-                if let Some(real_target) = target.component(&["real", "value"]) {
-                    entries.push(target_comparison_entry(
-                        "target_comparison_real",
-                        "Real vs Target",
-                        state.real_mean(),
-                        state.real_stderr(),
-                        real_target,
-                    ));
-                }
-                if let Some(imag_target) = target.component(&["imag"]) {
-                    entries.push(target_comparison_entry(
-                        "target_comparison_imag",
-                        "Imag vs Target",
-                        state.imag_mean(),
-                        state.imag_stderr(),
-                        imag_target,
-                    ));
-                }
-            }
-            entries.push(estimate_entry(
-                "abs_mean",
-                "Abs Mean",
-                state.abs_mean(),
-                state.abs_stderr(),
-            ));
-            entries
+                comparison(
+                    "target_comparison_real",
+                    "Real vs Target",
+                    state.real_mean(),
+                    state.real_stderr(),
+                    &["real", "value"],
+                ),
+                comparison(
+                    "target_comparison_imag",
+                    "Imag vs Target",
+                    state.imag_mean(),
+                    state.imag_stderr(),
+                    &["imag"],
+                ),
+                abs_component("abs_real_mean", "Abs Real Mean", "real"),
+                abs_component("abs_imag_mean", "Abs Imag Mean", "imag"),
+                estimate_entry(
+                    "norm_mean",
+                    "Norm Mean",
+                    state.norm_statistics().mean(),
+                    state.norm_statistics().stderr(),
+                ),
+                key_value(
+                    "rsd",
+                    "RSD",
+                    state
+                        .rsd()
+                        .map(JsonValue::from)
+                        .unwrap_or_else(|| json!("n/a")),
+                ),
+                key_value(
+                    "ess",
+                    "ESS",
+                    state
+                        .ess()
+                        .map(JsonValue::from)
+                        .unwrap_or_else(|| json!("n/a")),
+                ),
+                key_value("count", "Count", state.sample_count()),
+            ]
         }
         AccumulatorState::FullVector(state) => {
             let mut entries = vec![key_value("count", "Count", state.sample_count())];
@@ -1718,6 +1787,203 @@ mod tests {
         NamedScalarAccumulator, VectorAccumulatorState, evaluation::ScalarAccumulatorState,
     };
 
+    fn complex_samples() -> AccumulatorState {
+        let mut state = crate::evaluation::GammaLoopAccumulatorState::default();
+        for values in [[3.0, 4.0], [-12.0, 5.0]].into_iter().cycle().take(16) {
+            state
+                .estimate
+                .ingest_vector(&values, &Point::new(vec![], vec![], 1.0))
+                .unwrap();
+        }
+        AccumulatorState::Gammaloop(state)
+    }
+
+    #[test]
+    fn max_weight_points_separate_raw_integrand_returned_jacobian_and_sampling_weight() {
+        let mut point = Point::new(
+            vec![0.9981234567890123, 1.2345678901234567e-8],
+            vec![2],
+            7.0,
+        );
+        point.integrand_value_re = Some(3.0);
+        point.integrand_value_im = Some(-4.0);
+        point.parameterization_jacobian = Some(5.0);
+        point.add_weight_factor("transform_jacobian", 11.0);
+        point.add_weight_factor("gammaloop_parameterization_jacobian", 5.0);
+        let mut state = crate::evaluation::GammaLoopAccumulatorState::default();
+        state.estimate.ingest_vector(&[3.0, -4.0], &point).unwrap();
+        // Read a persisted accumulator, as the panel does for existing runs.
+        let accumulator =
+            AccumulatorState::from_gammaloop_persistent_json(&state.to_persistent_json().unwrap())
+                .unwrap();
+        let PanelState::Table { rows, payload, .. } = max_weight_points_panel(accumulator).unwrap()
+        else {
+            panic!("expected table")
+        };
+        assert_eq!(rows.len(), 2);
+        for (row, component, sign, integrand) in
+            [(&rows[0], "real", "+", 3.0), (&rows[1], "imag", "-", -4.0)]
+        {
+            assert_eq!(row[0], component);
+            assert_eq!(row[1], sign);
+            assert_eq!(row[2], integrand);
+            assert_eq!(row[3], 5.0);
+            assert_eq!(row[4], integrand * 7.0 * 11.0 * 5.0);
+            assert_eq!(row[5], 1.0);
+            assert_eq!(row[6]["continuous"], json!(point.continuous));
+            assert_eq!(row[6]["discrete"], json!([2]));
+            assert_eq!(row[6]["sampling_weight"], 7.0);
+        }
+        for column in ["Integrand", "Jacobian", "Max Weighted Value", "Impact"] {
+            assert_eq!(
+                payload.as_ref().unwrap()["column_formats"][column],
+                "scientific"
+            );
+        }
+        assert_eq!(
+            integrand_and_jacobian_for_component(Some(&point), "re").0,
+            Some(3.0)
+        );
+        assert_eq!(
+            integrand_and_jacobian_for_component(Some(&point), "im").0,
+            Some(-4.0)
+        );
+        // Do not replace missing evaluator metadata with an unrelated Jacobian
+        // or present total weight as sampling weight in incomplete old points.
+        point.parameterization_jacobian = None;
+        point
+            .weight_factors
+            .retain(|factor| factor.label == "transform_jacobian");
+        assert!(
+            integrand_and_jacobian_for_component(Some(&point), "real")
+                .1
+                .is_none()
+        );
+        assert!(point_value(Some(&point))["sampling_weight"].is_null());
+    }
+
+    #[test]
+    fn complex_result_orders_phases_and_distinguishes_absolute_means_from_signed_means() {
+        let accumulator =
+            with_training_projection(complex_samples(), Some(TrainingProjection::Real));
+        for target in [
+            None,
+            Some(VectorTarget::single("real", -4.0)),
+            run_target_from_json(Some(&json!({"components": {"real": -4.0, "imag": 4.0}}))),
+        ] {
+            let entries = base_estimate_summary_entries(&accumulator, target.clone());
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|entry| entry.label.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "Real Mean",
+                    "Imag Mean",
+                    "Real vs Target",
+                    "Imag vs Target",
+                    "Abs Real Mean",
+                    "Abs Imag Mean",
+                    "Norm Mean",
+                    "RSD",
+                    "ESS",
+                    "Count",
+                ]
+            );
+            for (index, mean, error) in [
+                (0, -4.5, 1.875),
+                (1, 4.5, 0.125),
+                (4, 7.5, 1.125),
+                (5, 4.5, 0.125),
+                (6, 9.0, 1.0),
+            ] {
+                assert_eq!(entries[index].value["value"], mean);
+                assert_eq!(entries[index].value["error"], error);
+            }
+            assert_eq!(entries[7].value, 1.0);
+            assert!((entries[8].value.as_f64().unwrap() - 56.25 / 76.5).abs() < 1e-14);
+            assert_eq!(entries[9].value, 16);
+            for (index, name) in [(2, "real"), (3, "imag")] {
+                match target.as_ref().and_then(|target| target.component(&[name])) {
+                    Some(value) => assert_eq!(entries[index].value["target"], value),
+                    None => assert_eq!(entries[index].value, "n/a"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn historical_efficiency_plots_use_the_tasks_training_phase_and_follow_mean_plots() {
+        let accumulator = complex_samples();
+        let snapshot = crate::stores::TaskOutputSnapshot {
+            id: "1".into(),
+            run_id: 1,
+            task_id: "1".into(),
+            persisted_output: accumulator.to_persistent_json().unwrap(),
+            created_at: None,
+        };
+        // This also verifies legacy snapshots remain unchanged when reserialized.
+        assert!(
+            snapshot
+                .persisted_output
+                .get("training_projection")
+                .is_none()
+        );
+        assert_eq!(
+            decode_aggregate_persisted_accumulator(
+                &AccumulatorConfig::Gammaloop,
+                &snapshot.persisted_output
+            )
+            .unwrap()
+            .to_persistent_json()
+            .unwrap(),
+            snapshot.persisted_output
+        );
+        for (projection, rsd, ess) in [
+            (TrainingProjection::Real, 1.0, 56.25 / 76.5),
+            (TrainingProjection::Imag, 0.5 / 4.5, 20.25 / 20.5),
+            (TrainingProjection::Abs, 4.0 / 9.0, 81.0 / 97.0),
+        ] {
+            let projectors = projectors(AccumulatorConfig::Gammaloop, Some(projection));
+            assert_eq!(
+                projectors
+                    .iter()
+                    .take(6)
+                    .map(|p| p.spec().panel_id.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "sample_progress",
+                    "estimate_summary",
+                    "real_estimate_history",
+                    "imag_estimate_history",
+                    "abs_signal_to_noise_history",
+                    "ess_history",
+                ]
+            );
+            for (index, expected) in [(4, rsd), (5, ess)] {
+                assert_eq!(projectors[index].spec().width, PanelWidth::Half);
+                let panel = projectors[index]
+                    .history(&TaskPanelHistoryContext {
+                        snapshot: &snapshot,
+                    })
+                    .unwrap()
+                    .unwrap();
+                let PanelState::ScalarTimeseries { points, .. } = panel else {
+                    panic!("expected plot")
+                };
+                assert!((points[0].y - expected).abs() < 1e-14);
+                assert!(points[0].y_min.is_none() && points[0].y_max.is_none());
+            }
+        }
+        // Squared-norm moments cannot be reconstructed from old weighted norm moments.
+        let unknown = with_training_projection(accumulator, Some(TrainingProjection::AbsSq));
+        assert!(rsd_history_panel(unknown.clone()).is_none());
+        assert!(ess_history_panel(unknown.clone()).is_none());
+        let entries = base_estimate_summary_entries(&unknown, None);
+        assert_eq!(entries[7].value, "n/a");
+        assert_eq!(entries[8].value, "n/a");
+    }
+
     #[test]
     fn ess_summary_metric_and_existing_history_use_dimensionless_values() {
         let configs = [
@@ -1775,7 +2041,7 @@ mod tests {
                 persisted_output: accumulator.to_persistent_json().unwrap(),
                 created_at: None,
             };
-            let projectors = projectors(config);
+            let projectors = projectors(config, None);
             for projector in projectors
                 .iter()
                 .filter(|projector| projector.spec().history == PanelHistoryMode::Append)

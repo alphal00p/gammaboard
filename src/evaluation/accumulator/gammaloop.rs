@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 pub struct GammaLoopAccumulatorState {
     pub bundle: ObservableSnapshotBundle,
     pub estimate: VectorAccumulatorState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_projection: Option<crate::evaluation::evaluator::gammaloop::TrainingProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_norm_sqr: Option<Box<super::ScalarAccumulatorState>>,
     #[serde(default)]
     pub diagnostics: GammaLoopDiagnostics,
 }
@@ -27,6 +31,8 @@ impl Default for GammaLoopAccumulatorState {
                 AccumulatorMomentConfig::MaxOrder4,
             ),
             diagnostics: GammaLoopDiagnostics::default(),
+            training_projection: None,
+            training_norm_sqr: None,
         }
     }
 }
@@ -131,6 +137,7 @@ impl GammaLoopAccumulatorState {
     }
 
     pub fn merge_in_place(&mut self, other: Self) -> Result<(), EngineError> {
+        self.merge_training_statistics(&other);
         if self.bundle.histograms.is_empty() {
             self.bundle = other.bundle;
         } else if !other.bundle.histograms.is_empty() {
@@ -234,14 +241,6 @@ impl GammaLoopAccumulatorState {
 
     pub fn signal_to_noise(&self) -> f64 {
         self.estimate.signal_to_noise()
-    }
-
-    pub fn rsd(&self) -> f64 {
-        self.estimate.rsd()
-    }
-
-    pub fn ess(&self) -> f64 {
-        self.estimate.ess()
     }
 }
 
@@ -462,6 +461,8 @@ mod tests {
             },
             estimate: test_estimate(estimate_real_sum, estimate_real_sq_sum, estimate_count),
             diagnostics: GammaLoopDiagnostics::default(),
+            training_projection: None,
+            training_norm_sqr: None,
         }
     }
 

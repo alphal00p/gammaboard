@@ -27,6 +27,24 @@ afterEach(() => {
 const imageSpec = { panel_id: "pdf_adaptation_pdf", label: "Sampler PDF", kind: "image2d" };
 const histogramSpec = { panel_id: "pdf_histogram", label: "PDF Histogram", kind: "histogram" };
 
+test("keeps expanded campaign observables before Task Summary", () => {
+  const specs = [
+    { panel_id: "campaign_histograms", label: "Combined Observables", kind: "table", width: "full" },
+    { panel_id: "task_summary", label: "Task Summary", kind: "key_value", width: "full" },
+  ];
+  render(<PanelCollection panelSpecs={specs} panelStates={[
+    { panel_id: "campaign_histograms", kind: "table", columns: ["Observable"], rows: [["energy"]], payload: {
+      expands_to: { kind: "histogram", source: "selected_row" },
+      expanded_label: "Combined Observable",
+      histograms: { energy: { bins: [{ start: 0, stop: 1, x: 0.5, value: 2, error: 0.2 }] } },
+    } },
+    { panel_id: "task_summary", kind: "key_value", entries: [{ key: "state", label: "State", value: "active" }] },
+  ]} />);
+  const observable = screen.getByText(/^Combined Observable\s+\(energy\)$/);
+  expect(screen.getByText("Combined Observables").compareDocumentPosition(observable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(observable.compareDocumentPosition(screen.getByText("Task Summary")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 const pdfImageSpecs = ["log_integrand", "log_pdf", "oversampling"].map((name) => ({
   panel_id: `pdf_adaptation_${name}`,
   label: name,

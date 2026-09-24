@@ -9,6 +9,7 @@ use crate::server::panels::{
     sized_panel_spec, table_panel_with_payload_and_options,
 };
 use serde_json::{Value as JsonValue, json};
+use std::collections::BTreeSet;
 
 const PROGRESS_ID: &str = "campaign_progress";
 const SUMMARY_ID: &str = "campaign_combined_result";
@@ -16,6 +17,53 @@ const HISTOGRAMS_ID: &str = "campaign_histograms";
 const CHILDREN_ID: &str = "campaign_children";
 
 pub(super) fn projectors() -> Vec<TaskPanelProjector> {
+    projectors_with_workers(None)
+}
+
+pub(super) fn projectors_for_workers(
+    workers: &[crate::core::RegisteredNode],
+) -> Vec<TaskPanelProjector> {
+    projectors_with_workers(Some(CampaignWorkers::from_live_nodes(workers)))
+}
+
+#[derive(Default)]
+struct CampaignWorkers {
+    desired_samplers: BTreeSet<i32>,
+    active_samplers: BTreeSet<i32>,
+}
+
+impl CampaignWorkers {
+    // ControlPlaneStore::list_nodes excludes expired leases.
+    fn from_live_nodes(workers: &[crate::core::RegisteredNode]) -> Self {
+        let sampler_run = |assignment: Option<&crate::core::DesiredAssignment>| {
+            assignment
+                .filter(|assignment| assignment.role == crate::core::WorkerRole::SamplerAggregator)
+                .map(|assignment| assignment.run_id)
+        };
+        Self {
+            desired_samplers: workers
+                .iter()
+                .filter_map(|node| sampler_run(node.desired_assignment.as_ref()))
+                .collect(),
+            active_samplers: workers
+                .iter()
+                .filter_map(|node| sampler_run(node.current_assignment.as_ref()))
+                .collect(),
+        }
+    }
+
+    fn child_status(&self, run_id: Option<i32>) -> &'static str {
+        if run_id.is_some_and(|id| self.active_samplers.contains(&id)) {
+            "running"
+        } else if run_id.is_some_and(|id| self.desired_samplers.contains(&id)) {
+            "starting"
+        } else {
+            "waiting"
+        }
+    }
+}
+
+fn projectors_with_workers(workers: Option<CampaignWorkers>) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(
             PROGRESS_ID,
@@ -30,8 +78,8 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
             campaign_max_samples,
         ),
         summary_projector(),
+        children_projector(workers),
         histograms_projector(),
-        children_projector(),
     ]
 }
 
@@ -101,7 +149,7 @@ fn summary_projector() -> TaskPanelProjector {
                     crate::core::TaskMeasurementOutput::Completed { results } => Some(results),
                     crate::core::TaskMeasurementOutput::Failed { .. } => None,
                 });
-            let mut entries = results
+            let entries = results
                 .into_iter()
                 .flatten()
                 .enumerate()
@@ -114,7 +162,7 @@ fn summary_projector() -> TaskPanelProjector {
                         &format!("estimate_{key}"),
                         match component {
                             Some("real") => "Real",
-                            Some("imag") => "Imaginary",
+                            Some("imag") => "Imag",
                             Some(component) => component,
                             None => "Estimate",
                         },
@@ -131,20 +179,13 @@ fn summary_projector() -> TaskPanelProjector {
                     )
                 })
                 .collect::<Vec<_>>();
-            entries.push(key_value(
-                "samples",
-                "Total Samples",
-                output
-                    .map(|output| json!(output.total_samples))
-                    .unwrap_or(JsonValue::Null),
-            ));
             Ok(Some(key_value_panel(SUMMARY_ID, entries)))
         },
         |_ctx| Ok(None),
     )
 }
 
-fn children_projector() -> TaskPanelProjector {
+fn children_projector(workers: Option<CampaignWorkers>) -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
             CHILDREN_ID,
@@ -153,7 +194,7 @@ fn children_projector() -> TaskPanelProjector {
             PanelHistoryMode::None,
             PanelWidth::Full,
         ),
-        |ctx| {
+        move |ctx| {
             let campaign_stopped = matches!(
                 ctx.task.state,
                 crate::core::RunTaskState::Completed | crate::core::RunTaskState::Failed
@@ -170,24 +211,52 @@ fn children_projector() -> TaskPanelProjector {
                 .try_fold(0.0, |sum, child| Some(sum + child_variance(child)?));
             let rows = children
                 .iter()
-                .map(|child| child_row(child, campaign_stopped, &result_keys, total_variance))
+                .map(|child| {
+                    child_row(
+                        child,
+                        campaign_stopped,
+                        &result_keys,
+                        total_variance,
+                        false,
+                        workers.as_ref(),
+                    )
+                })
                 .collect::<Vec<_>>();
-            let mut columns = vec![
-                "name".to_string(),
-                "status".to_string(),
-                "run".to_string(),
-                "coefficient".to_string(),
-            ];
-            for key in &result_keys {
-                let label = result_key_label(key, result_keys.len());
-                columns.push(label.clone());
-                columns.push(format!("{label} uncertainty"));
+            let columns = child_columns(&result_keys, false);
+            let absolute_columns = child_columns(&result_keys, true);
+            let absolute_rows = children
+                .iter()
+                .map(|child| {
+                    child_row(
+                        child,
+                        campaign_stopped,
+                        &result_keys,
+                        total_variance,
+                        true,
+                        workers.as_ref(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut payload = select_run_payload();
+            payload["sortable"] = json!(true);
+            payload["row_numbers"] = json!(true);
+            let mut formats = serde_json::Map::new();
+            for columns in [&columns, &absolute_columns] {
+                for index in 0..result_keys.len() {
+                    formats.insert(columns[4 + 3 * index].clone(), json!("scientific"));
+                    formats.insert(columns[5 + 3 * index].clone(), json!("scientific"));
+                }
             }
-            columns.extend([
-                "variance contribution (%)".to_string(),
-                "samples".to_string(),
-            ]);
-            let payload = select_run_payload();
+            payload["column_formats"] = json!(formats);
+            if result_keys
+                .iter()
+                .any(|key| key.0 == crate::core::AccumulatorMetricName::Mean)
+            {
+                payload["absolute_components"] = json!({
+                    "columns": absolute_columns,
+                    "rows": absolute_rows,
+                });
+            }
             let visible_column_indices = (0..columns.len()).filter(|index| *index != 2).collect();
             Ok(Some(table_panel_with_payload_and_options(
                 CHILDREN_ID,
@@ -205,6 +274,30 @@ fn children_projector() -> TaskPanelProjector {
 }
 
 type ResultKey = (crate::core::AccumulatorMetricName, Option<String>);
+
+fn child_columns(result_keys: &[ResultKey], absolute: bool) -> Vec<String> {
+    let mut columns = ["name", "status", "run", "coeff"]
+        .map(str::to_string)
+        .to_vec();
+    for key in result_keys {
+        let label = result_key_label(key, result_keys.len());
+        let label = if absolute && key.0 == crate::core::AccumulatorMetricName::Mean {
+            format!("abs {label}")
+        } else {
+            label
+        };
+        columns.push(label.clone());
+        columns.push(format!("{label} err"));
+        columns.push(match key.1.as_deref() {
+            Some("imag") => "imag err (%)".to_string(),
+            Some("real") => "real err (%)".to_string(),
+            None => "rel err (%)".to_string(),
+            _ => format!("{label} err (%)"),
+        });
+    }
+    columns.extend(["var ctrb (%)".to_string(), "samples".to_string()]);
+    columns
+}
 
 fn campaign_result_keys(
     children: &[crate::core::IntegrationCampaignChildOutput],
@@ -248,6 +341,8 @@ fn child_row(
     campaign_stopped: bool,
     result_keys: &[ResultKey],
     total_variance: Option<f64>,
+    absolute: bool,
+    workers: Option<&CampaignWorkers>,
 ) -> Vec<JsonValue> {
     let status = if campaign_stopped
         && matches!(
@@ -259,7 +354,11 @@ fn child_row(
         json!("stopped")
     } else {
         match (child.child.status, child.selected) {
-            (crate::core::ControllerChildState::Active, true) => json!("running"),
+            (crate::core::ControllerChildState::Active, true) => {
+                json!(workers.map_or("running", |workers| {
+                    workers.child_status(child.child.child_run_id)
+                }))
+            }
             (crate::core::ControllerChildState::Active, false) => json!("waiting"),
             (
                 crate::core::ControllerChildState::Planned
@@ -277,14 +376,37 @@ fn child_row(
     ];
     let results = measurement_results(&child.child).unwrap_or_default();
     for key in result_keys {
+        let (results, metric) = if absolute && key.0 == crate::core::AccumulatorMetricName::Mean {
+            (
+                child.absolute_results.as_deref().unwrap_or_default(),
+                crate::core::AccumulatorMetricName::AbsMean,
+            )
+        } else {
+            (results, key.0)
+        };
         let result = results
             .iter()
-            .find(|result| result.name == key.0 && result.component == key.1);
+            .find(|result| result.name == metric && result.component == key.1);
         row.push(result.map_or(JsonValue::Null, |result| json!(result.value)));
         row.push(
             result
                 .and_then(|result| result.uncertainty)
                 .map_or(JsonValue::Null, |uncertainty| json!(uncertainty)),
+        );
+        row.push(
+            result
+                .and_then(|result| {
+                    result.uncertainty.map(|error| {
+                        let relative =
+                            100.0 * crate::evaluation::relative_error(result.value, error);
+                        if relative.is_infinite() {
+                            json!("∞")
+                        } else {
+                            json!(relative)
+                        }
+                    })
+                })
+                .unwrap_or(JsonValue::Null),
         );
     }
     row.push(
@@ -326,6 +448,7 @@ mod tests {
             },
             selected: false,
             score: None,
+            absolute_results: None,
         }
     }
 
@@ -355,16 +478,58 @@ mod tests {
     }
 
     #[test]
+    fn selected_child_is_starting_until_a_live_sampler_is_active() {
+        use crate::core::{DesiredAssignment, RegisteredNode, WorkerRole};
+        let mut child = child(None);
+        child.selected = true;
+        let sampler = DesiredAssignment {
+            node_name: "sampler".into(),
+            role: WorkerRole::SamplerAggregator,
+            run_id: 2,
+            run_name: None,
+        };
+        let mut node = RegisteredNode {
+            name: "sampler".into(),
+            uuid: "sampler".into(),
+            capabilities: Default::default(),
+            pool_assignment: None,
+            desired_assignment: Some(sampler.clone()),
+            current_assignment: None,
+            last_seen: None,
+        };
+        let status = |child: &IntegrationCampaignChildOutput, stopped, nodes: &[RegisteredNode]| {
+            let workers = CampaignWorkers::from_live_nodes(nodes);
+            child_row(child, stopped, &[], None, false, Some(&workers))[1].clone()
+        };
+        assert_eq!(status(&child, false, &[]), json!("waiting"));
+        assert_eq!(status(&child, false, &[node.clone()]), json!("starting"));
+        node.current_assignment = Some(DesiredAssignment {
+            role: WorkerRole::Evaluator,
+            ..sampler.clone()
+        });
+        assert_eq!(
+            status(&child, false, &[node.clone()]),
+            json!("starting"),
+            "an evaluator is not evidence that the sampler started"
+        );
+        node.current_assignment = Some(sampler);
+        assert_eq!(status(&child, false, &[node.clone()]), json!("running"));
+        assert_eq!(status(&child, true, &[node.clone()]), json!("stopped"));
+        child.selected = false;
+        assert_eq!(status(&child, false, &[node]), json!("waiting"));
+    }
+
+    #[test]
     fn stopped_campaign_does_not_show_active_child() {
         let child = child(None);
         let children = [child];
 
         assert_eq!(
-            child_row(&children[0], false, &[], None)[1],
+            child_row(&children[0], false, &[], None, false, None)[1],
             json!("waiting")
         );
         assert_eq!(
-            child_row(&children[0], true, &[], None)[1],
+            child_row(&children[0], true, &[], None, false, None)[1],
             json!("stopped")
         );
     }
@@ -376,16 +541,18 @@ mod tests {
         let children = [campaign_child];
         let keys = campaign_result_keys(&children);
         let variance = child_variance(&children[0]).unwrap();
-        let row = child_row(&children[0], false, &keys, Some(variance));
+        let row = child_row(&children[0], false, &keys, Some(variance), false, None);
 
-        assert_eq!(row.len(), 10);
+        assert_eq!(row.len(), 12);
         assert_eq!(row[1], json!("running"));
         assert_eq!(row[4], json!(3.0));
         assert_eq!(row[5], json!(0.4));
-        assert_eq!(row[6], json!(-2.0));
-        assert_eq!(row[7], json!(0.2));
-        assert_eq!(row[8], json!(100.0));
-        assert_eq!(row[9], json!(10));
+        assert!((row[6].as_f64().unwrap() - 100.0 * 0.4 / 3.0).abs() < 1e-12);
+        assert_eq!(row[7], json!(-2.0));
+        assert_eq!(row[8], json!(0.2));
+        assert_eq!(row[9], json!(10.0));
+        assert_eq!(row[10], json!(100.0));
+        assert_eq!(row[11], json!(10));
     }
 
     #[test]
@@ -398,9 +565,85 @@ mod tests {
         let keys = campaign_result_keys(&children);
         let total_variance = children.iter().filter_map(child_variance).sum();
 
-        let first_row = child_row(&children[0], false, &keys, Some(total_variance));
-        let second_row = child_row(&children[1], false, &keys, Some(total_variance));
-        assert!((first_row[8].as_f64().unwrap() - 88.888_888_888_888_89).abs() < 1e-12);
-        assert!((second_row[8].as_f64().unwrap() - 11.111_111_111_111_11).abs() < 1e-12);
+        let first_row = child_row(
+            &children[0],
+            false,
+            &keys,
+            Some(total_variance),
+            false,
+            None,
+        );
+        let second_row = child_row(
+            &children[1],
+            false,
+            &keys,
+            Some(total_variance),
+            false,
+            None,
+        );
+        assert!((first_row[10].as_f64().unwrap() - 88.888_888_888_888_89).abs() < 1e-12);
+        assert!((second_row[10].as_f64().unwrap() - 11.111_111_111_111_11).abs() < 1e-12);
+    }
+
+    #[test]
+    fn absolute_mode_uses_its_own_errors_and_preserves_signed_variance_contributions() {
+        let mut child = child(Some(complex_measurement((-2.0, 1.0), (0.0, 0.5), 10)));
+        let TaskMeasurementOutput::Completed { mut results } =
+            complex_measurement((4.0, 0.5), (1.0, 0.2), 10)
+        else {
+            unreachable!()
+        };
+        for result in &mut results {
+            result.name = AccumulatorMetricName::AbsMean;
+        }
+        child.absolute_results = Some(results);
+        let keys = campaign_result_keys(std::slice::from_ref(&child));
+        let variance = child_variance(&child);
+        let signed = child_row(&child, false, &keys, variance, false, None);
+        let absolute = child_row(&child, false, &keys, variance, true, None);
+        assert_eq!(signed[6], json!(50.0));
+        assert_eq!(signed[9], json!("∞"));
+        assert_eq!(
+            absolute[4..10],
+            [
+                json!(4.0),
+                json!(0.5),
+                json!(12.5),
+                json!(1.0),
+                json!(0.2),
+                json!(20.0)
+            ]
+        );
+        assert_eq!(absolute[10..], signed[10..]);
+        assert_eq!(
+            child_columns(&keys, false),
+            [
+                "name",
+                "status",
+                "run",
+                "coeff",
+                "real",
+                "real err",
+                "real err (%)",
+                "imag",
+                "imag err",
+                "imag err (%)",
+                "var ctrb (%)",
+                "samples"
+            ]
+        );
+        assert_eq!(child_columns(&keys, true)[4], "abs real");
+        assert_eq!(child_columns(&keys, true)[8], "abs imag err");
+    }
+
+    #[test]
+    fn missing_absolute_results_are_unavailable_and_zero_relative_error_is_zero() {
+        let child = child(Some(complex_measurement((0.0, 0.0), (0.0, 0.0), 10)));
+        let keys = campaign_result_keys(std::slice::from_ref(&child));
+        let signed = child_row(&child, false, &keys, None, false, None);
+        assert_eq!(signed[6], json!(0.0));
+        assert_eq!(signed[9], json!(0.0));
+        let absolute = child_row(&child, false, &keys, None, true, None);
+        assert!(absolute[4..10].iter().all(JsonValue::is_null));
     }
 }

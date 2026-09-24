@@ -103,6 +103,91 @@ pub(crate) fn project_measurement_results(
     .collect())
 }
 
+/// Keep absolute diagnostics separate from signed campaign measurements and allocation.
+pub(crate) fn absolute_component_results(
+    accumulator: &AccumulatorState,
+    results: &[MeasurementResult],
+) -> Vec<MeasurementResult> {
+    results
+        .iter()
+        .filter(|result| result.name == AccumulatorMetricName::Mean)
+        .filter_map(|result| {
+            crate::evaluation::extract_accumulator_metric(
+                accumulator,
+                &AccumulatorMetricSelector {
+                    name: AccumulatorMetricName::AbsMean,
+                    component: result.component.clone(),
+                },
+            )
+            .ok()
+            .flatten()
+            .map(measurement_result_from_metric)
+        })
+        .collect()
+}
+
+/// Older controller outputs did not persist absolute means. Recover them only
+/// from the same child task and sample revision as the signed measurement.
+pub(crate) async fn hydrate_campaign_absolute_results(
+    store: &(impl RunTaskStore + RunReadStore + AggregationStore),
+    task: &mut RunTask,
+) -> Result<(), ApiError> {
+    let Some(crate::core::ControllerTaskOutput::IntegrationCampaign(output)) =
+        task.controller_output.as_mut()
+    else {
+        return Ok(());
+    };
+    for child in &mut output.children {
+        if child.absolute_results.is_some() {
+            continue;
+        }
+        let Some(TaskMeasurementOutput::Completed { results }) = &child.child.measurement else {
+            continue;
+        };
+        let Some(source) = &child.child.result_source else {
+            continue;
+        };
+        let mut accumulator = if let Some(snapshot_id) = &source.snapshot_id {
+            match snapshot_id.parse::<i64>() {
+                Ok(id) => store
+                    .load_stage_snapshot(id)
+                    .await?
+                    .filter(|snapshot| {
+                        snapshot.run_id == source.run_id && snapshot.task_id == Some(source.task_id)
+                    })
+                    .and_then(|snapshot| snapshot.observable_state),
+                Err(_) => None,
+            }
+        } else {
+            store
+                .get_latest_task_stage_snapshot(source.run_id, source.task_id)
+                .await?
+                .map(|snapshot| snapshot.observable_state)
+                .filter(|state| state.sample_count() == source.sample_count)
+        };
+        if accumulator.is_none() && source.snapshot_id.is_none() {
+            let tasks = store.list_run_tasks(source.run_id).await?;
+            if tasks
+                .iter()
+                .any(|task| task.id == source.task_id && task.state == RunTaskState::Active)
+            {
+                accumulator = store
+                    .load_current_accumulator(source.run_id)
+                    .await?
+                    .map(|json| AccumulatorState::from_json(&json))
+                    .transpose()
+                    .map_err(|error| ApiError::Internal(error.to_string()))?;
+            }
+        }
+        if let Some(accumulator) =
+            accumulator.filter(|state| state.sample_count() == source.sample_count)
+        {
+            child.absolute_results = Some(absolute_component_results(&accumulator, results));
+        }
+    }
+    Ok(())
+}
+
 fn resolve_measurement_source_task<'a>(
     tasks: &'a [RunTask],
     source_task_name: &str,
@@ -333,6 +418,7 @@ mod tests {
         current_accumulator: Option<JsonValue>,
         latest_stage_snapshot: Option<TaskStageSnapshot>,
         sampler_history: Arc<Vec<SamplerPerformanceHistoryEntry>>,
+        stage_snapshot: Option<crate::core::RunStageSnapshot>,
     }
 
     #[async_trait]
@@ -360,9 +446,12 @@ mod tests {
         }
         async fn load_stage_snapshot(
             &self,
-            _snapshot_id: i64,
+            snapshot_id: i64,
         ) -> Result<Option<crate::core::RunStageSnapshot>, crate::core::StoreError> {
-            unreachable!("unused")
+            Ok(self
+                .stage_snapshot
+                .clone()
+                .filter(|snapshot| snapshot.id == Some(snapshot_id)))
         }
         async fn load_latest_stage_snapshot_before_sequence(
             &self,
@@ -828,6 +917,136 @@ mod tests {
             metric: None,
             mode: MeasurementMode::Minimize,
         }
+    }
+
+    #[test]
+    fn absolute_component_measurements_use_absolute_moments_for_the_error() {
+        let mut state = crate::evaluation::VectorAccumulatorState::from_config(
+            vec!["real".into(), "imag".into()],
+            TrainingProjection::Norm,
+            None,
+            crate::core::AccumulatorMomentConfig::MaxOrder4,
+        );
+        let point = Point::new(vec![], vec![], 1.0);
+        for values in [[3.0, -2.0], [-12.0, 2.0]] {
+            state.ingest_vector(&values, &point).unwrap();
+        }
+        let accumulator = AccumulatorState::Vector(state);
+        let signed = project_measurement_results(
+            &accumulator,
+            &TaskMeasurementSpec::default(),
+            None,
+            &sample_task(1, "sample", 1),
+        )
+        .unwrap();
+        let absolute = absolute_component_results(&accumulator, &signed);
+        assert_eq!(signed[0].value, -4.5);
+        assert_eq!(absolute[0].value, 7.5);
+        assert!((absolute[0].uncertainty.unwrap() - 4.5 / 2.0_f64.sqrt()).abs() < 1e-12);
+        assert_ne!(absolute[0].uncertainty, signed[0].uncertainty);
+        assert_eq!(signed[1].value, 0.0);
+        assert_eq!(absolute[1].value, 2.0);
+        assert_eq!(absolute[1].uncertainty, Some(0.0));
+        assert!(absolute.iter().all(
+            |result| result.name == AccumulatorMetricName::AbsMean && result.sample_count == 2
+        ));
+    }
+
+    fn legacy_campaign_task(snapshot_id: Option<&str>, sample_count: i64) -> RunTask {
+        let mut task = sample_task(10, "campaign", 1);
+        // Decode a pre-change payload to exercise backwards compatibility too.
+        task.controller_output = Some(crate::core::ControllerTaskOutput::IntegrationCampaign(
+            serde_json::from_value(serde_json::json!({
+                "completed_children": 0, "running_children": 1, "total_children": 1,
+                "total_samples": sample_count, "selected_child_run_ids": [1],
+                "allocation_started_total_samples": 0, "combined_measurement": null,
+                "children": [{
+                    "name": "graph", "coefficient": 1.0, "selected": true, "score": null,
+                    "child_run_id": 1, "status": "active",
+                    "result_source": {"run_id": 1, "task_id": "1", "snapshot_id": snapshot_id, "sample_count": sample_count},
+                    "measurement": {"status": "completed", "results": [{"name": "mean", "component": "real", "value": 3.75, "uncertainty": 1.34, "sample_count": sample_count}]}
+                }]
+            })).unwrap()
+        ));
+        task
+    }
+
+    fn recovered_absolute_results(task: &RunTask) -> Option<&Vec<MeasurementResult>> {
+        task.controller_output
+            .as_ref()
+            .unwrap()
+            .integration_campaign()
+            .unwrap()
+            .children[0]
+            .absolute_results
+            .as_ref()
+    }
+
+    #[tokio::test]
+    async fn legacy_campaign_recovers_exact_snapshot_and_rejects_other_revisions() {
+        let store = TestStore {
+            stage_snapshot: Some(crate::core::RunStageSnapshot {
+                id: Some(7),
+                run_id: 1,
+                task_id: Some(1),
+                name: "sample".into(),
+                sequence_nr: Some(1),
+                queue_empty: true,
+                sampler_snapshot: None,
+                observable_state: Some(vector_state()),
+                evaluator: None,
+                sampler_aggregator: None,
+                batch_transforms: vec![],
+            }),
+            ..Default::default()
+        };
+        let mut task = legacy_campaign_task(Some("7"), 4);
+        hydrate_campaign_absolute_results(&store, &mut task)
+            .await
+            .unwrap();
+        assert_eq!(recovered_absolute_results(&task).unwrap()[0].value, 3.75);
+        let mut other_revision = legacy_campaign_task(Some("7"), 3);
+        hydrate_campaign_absolute_results(&store, &mut other_revision)
+            .await
+            .unwrap();
+        assert!(recovered_absolute_results(&other_revision).is_none());
+        let mut other_task = legacy_campaign_task(Some("7"), 4);
+        let mut wrong_task_store = store.clone();
+        wrong_task_store.stage_snapshot.as_mut().unwrap().task_id = Some(2);
+        hydrate_campaign_absolute_results(&wrong_task_store, &mut other_task)
+            .await
+            .unwrap();
+        assert!(recovered_absolute_results(&other_task).is_none());
+    }
+
+    #[tokio::test]
+    async fn legacy_live_campaign_requires_matching_active_task_and_sample_count() {
+        let mut child = sample_task(1, "sample", 1);
+        child.state = RunTaskState::Active;
+        let store = TestStore {
+            tasks: Arc::new(vec![child]),
+            current_accumulator: Some(vector_state().to_json().unwrap()),
+            ..Default::default()
+        };
+        let mut task = legacy_campaign_task(None, 4);
+        hydrate_campaign_absolute_results(&store, &mut task)
+            .await
+            .unwrap();
+        assert!(recovered_absolute_results(&task).is_some());
+        let mut stale = legacy_campaign_task(None, 3);
+        hydrate_campaign_absolute_results(&store, &mut stale)
+            .await
+            .unwrap();
+        assert!(recovered_absolute_results(&stale).is_none());
+        let other_task_store = TestStore {
+            tasks: Arc::new(vec![]),
+            ..store
+        };
+        let mut other_task = legacy_campaign_task(None, 4);
+        hydrate_campaign_absolute_results(&other_task_store, &mut other_task)
+            .await
+            .unwrap();
+        assert!(recovered_absolute_results(&other_task).is_none());
     }
 
     fn measurement_spec(metric: MeasurementMetricSpec) -> MeasurementSpec {

@@ -113,7 +113,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
       const normalizedBins = asArray(selectedHistogram?.bins).some((bin) => bin?.value != null)
         ? buildHistogramData(selectedHistogram.bins)
         : normalizeGammaLoopHistogramBins(selectedHistogram);
-      renderablePanels.push({
+      renderablePanels.splice(renderablePanels.indexOf(bundlePanel) + 1, 0, {
         descriptor: {
           panel_id: `${sourcePanelId}_selected`,
           label: typeof payload?.expanded_label === "string" ? payload.expanded_label : "Selected Histogram",
