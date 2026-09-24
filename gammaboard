@@ -84,7 +84,7 @@ frontend_needs_build() {
 if [[ "${uses_deploy}" == true ]]; then
     require_command npm
     cd "${repo_root}/dashboard"
-    if [[ ! -x node_modules/.bin/vite ]]; then
+    if [[ ! -x node_modules/.bin/vite || package-lock.json -nt node_modules/.package-lock.json || package.json -nt node_modules/.package-lock.json ]]; then
         npm ci
         frontend_dependencies_installed=true
     else

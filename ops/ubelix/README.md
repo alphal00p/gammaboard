@@ -16,14 +16,16 @@ Shared docs live in repo-root `docs/`: `docs/deployment.md`, `docs/config.md`, a
 ## Sync From Local
 
 ```bash
-just --justfile ops/ubelix/justfile sync-ops
+just sync-ubelix
 ```
 
-`sync-ops` uploads `ops/`, `docs/`, `ubelix.py`, and this README. The justfile stays local.
-Pass `remote_folder` to sync into a different relative path under `/storage/research/itp_localunitaritydata`:
+The sync uploads `ops/`, shared `resources/templates/`, `docs/`, `ubelix.py`, and
+this README. Only worker-allocation templates are specific to UBELIX. State,
+checkpoints, databases, and runtime environments are not uploaded.
+Pass a host and folder to sync into another relative path under `/storage/research/itp_localunitaritydata`:
 
 ```bash
-just --justfile ops/ubelix/justfile remote_folder=$USER/gammaboard sync-ops
+just sync-ubelix ubelix "$USER/gammaboard"
 ```
 
 ## Build Images
@@ -102,13 +104,16 @@ config = { gpu = "rtx4090:1" }
 submits worker jobs with `--gres=gpu:rtx4090:1 --partition=gpu` and registers
 `gpu=1` as a worker capability. Select another free-tier GPU type with
 `config = { gpu = "h100:1" }` when available. Synced templates live under
-`resources/templates`; their source is `ops/ubelix/resources/templates` in the
-local checkout. Supported `config` keys are `account`, `partition`, `qos`,
+`resources/templates/nodes`; cluster-specific node cards come from
+`ops/ubelix/resources/templates/nodes` in the checkout. Run and task cards come
+from the shared `resources/templates` tree. Supported `config` keys are `account`, `partition`, `qos`,
 `wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`,
 `mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
 Use `cores`, `nr_cores`, or `cpus` as dashboard-friendly aliases for `cpus_per_task`; they submit `--cpus-per-task=<value>` and register `cpus=<value>` as the worker capability.
 Omitted group `config` defaults to `{}` and omitted `max_start_failures` defaults to `3`.
-Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`, so nested Python Apptainer runtimes can request NVIDIA passthrough with `nv = true`.
+Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`.
+Nested process runtimes also include `--nv` in their explicit Apptainer command,
+as shown in the shared MADNIS example.
 
 `up --watch` also resolves dashboard requests while it watches the control job.
 
@@ -120,6 +125,19 @@ python ubelix.py down
 ```
 
 `down` requests node shutdown through the API, waits briefly for workers, cancels remaining worker jobs, then cancels the control or single-node job.
+
+Use GammaBoard's `db backup` and `db restore` commands for database maintenance;
+see [operations](docs/operations.md). The cluster helper manages Slurm jobs and
+images; it does not delete database directories.
+
+## Examples
+
+Start with `resources/templates/runs/installation-smoke.toml`. After generating
+the required state, use `resources/templates/runs/gammaloop.toml` for ttH
+training/inference or `integration-campaign-qft-like.toml` for a campaign.
+`resources/templates/runs/ghost_bump_madnis_apptainer.toml` uses the shared
+MADNIS runtime image under `resources/runtimes/madnis/`. The same cards work on
+local deployments with the corresponding dependencies. See [examples](docs/examples.md).
 
 When the selected server config enables authentication, protected commands
 require `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`. The checked-in

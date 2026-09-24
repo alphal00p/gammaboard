@@ -227,20 +227,17 @@ Performance snapshots default to every two seconds. One evaluator therefore
 creates 43,200 history rows per day. Monitor database size for multi-day
 campaigns and use normal PostgreSQL operations when history must be managed.
 
-Before increasing a deployment, measure its intended configuration rather than
-extrapolating from a smoke test. This self-cleaning local benchmark starts an
-isolated stack, runs one sampler plus the requested evaluators, and reports the
-relevant rates and maxima. Its dependency-free workload deliberately throttles
-worker ticks to keep the default ten-minute run small enough for a local
-PostgreSQL instance:
+Before increasing a deployment, measure its intended configuration with the
+CLI. Do not extrapolate storage growth from the short CPU benchmark presets:
 
 ```bash
-nix develop --command scripts/benchmark_campaign.sh --workers 4 --duration-seconds 600
+gammaboard --json run performance RUN --duration 60s --interval 1s
 ```
 
-Set `GAMMABOARD_BENCHMARK_DATABASE_URL` for a non-default local database URL.
-Increase workers only while the queue stays bounded and database latency
-remains stable.
+Increase workers only while the queue stays bounded and database latency remains
+stable. For long-running deployments, separately inspect PostgreSQL database
+size and history retention. See [benchmarking.md](benchmarking.md) for isolated,
+bounded throughput comparisons using the same CLI measurement contract.
 
 ## Reading Fetch Metrics
 

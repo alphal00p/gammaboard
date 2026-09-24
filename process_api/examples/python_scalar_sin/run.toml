@@ -1,6 +1,6 @@
 # Python process evaluator over a small discrete/continuous sine integrand.
 # Requires: the example virtualenv described by this directory's README.
-# Scale: 1024 samples; normally seconds.
+# Scale: 100,000 samples with adaptive training.
 # Run: ./gammaboard run create process_api/examples/python_scalar_sin/run.toml
 
 name = "python-scalar-sin-demo"

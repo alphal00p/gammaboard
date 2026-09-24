@@ -19,12 +19,8 @@ continuous_dims = 1
 discrete_dims = 0
 
 [[task_queue]]
-name = "accumulator"
-kind = "set_accumulator"
-accumulator = "scalar"
-
-[[task_queue]]
 name = "integrate-one"
 kind = "sample"
+accumulator = { config = "scalar" }
 stop_condition = { max_samples = 10_000 }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }

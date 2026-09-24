@@ -371,10 +371,12 @@ credentials and shared resource paths available as for an ordinary launch.
 Use `gammaboard --json run performance RUN --duration 30s` to measure an active
 run, and `gammaboard benchmark evaluator` for a direct execution baseline. The
 CLI-only Python suite compares fixed CPU workloads across evaluator counts within
-a small CPU affinity set and a 30-minute budget. See [docs/benchmarking.md](docs/benchmarking.md)
+a small CPU affinity set and an explicit time budget. Start with
+`just benchmark plan resources/templates/benchmarks/smoke.toml`, then run it with
+a prebuilt binary. See [docs/benchmarking.md](docs/benchmarking.md)
 for commands, presets, raw results, plots, and measurement semantics.
 
-### Synthetic workloads and queue benchmarks
+### Synthetic workloads
 
 The built-in `unit` evaluator and `naive_monte_carlo` sampler support optional,
 seeded Gaussian timing models for evaluation, generation, result ingestion and
@@ -383,20 +385,8 @@ repeating training updates. Defaults introduce no delay. Set
 selects inference. Synthetic worker panels show requested/actual delay and update
 counts. These engines are available in ordinary builds.
 
-Run the 16-case queue benchmark with a prebuilt binary:
-
-```sh
-cargo build --release --no-default-features
-just benchmark-queue --binary target/release/gammaboard
-```
-
-The script requires Python 3.11+ and `psql` (`nix develop` supplies both). It prints
-throughput, evaluator utilization and training stall measurements to the console,
-using an isolated temporary deployment. Defaults cover 1/4/16/64 evaluators,
-nominal capacities of 1,000/2,000,000 samples/s, and fast sampling with repeated
-0.5-second training stalls versus inference. The whole suite is limited to five
-minutes; compilation is separate. Use `--evaluators`, `--rates`, `--regimes` or
-`--duration` to focus a run, and `--port-offset` if its default ports are occupied.
-Successful runs remove their temporary database; failures retain diagnostics.
-Short runs measure coarse differences, and nominal capacity excludes overhead
-and training stalls.
+Timing models are useful for lifecycle and training-barrier regression tests.
+Throughput experiments use the single `just benchmark` runner with fixed CPU
+work, so increasing evaluator count does not change the work per sample.
+The focused `tuning.toml` preset compares batch sizes under the normal polling
+policy; the larger `scaling.toml` preset measures pipeline overhead across costs.

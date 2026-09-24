@@ -14,12 +14,9 @@ process-rust-breit-wigner-sif:
 symbolica-variable-theta:
     scripts/build_symbolica_variable_theta.sh
 
-benchmark-campaign *args:
-    scripts/benchmark_campaign.sh {{args}}
+sync-ubelix host="ubelix" remote_folder="gammaboard":
+    ops/ubelix/sync_ops.sh "{{host}}" "{{remote_folder}}"
 
-benchmark-queue *args:
-    python3 scripts/benchmark_queue.py {{args}}
-
-# CPU-bounded scaling sweep; use resources/templates/benchmarks/smoke.toml for a quick check.
+# One runner for planning, measuring, summarizing, plotting, and comparing experiments.
 benchmark *args:
     python3 scripts/benchmark.py {{args}}

@@ -31,15 +31,11 @@ commands = [
 ]
 
 [[task_queue]]
-name = "accumulator"
-kind = "set_accumulator"
-accumulator = "gammaloop"
-
-[[task_queue]]
 name = "havana-train"
 kind = "sample"
+publish_result = false
 stop_condition = { max_samples = "$(train_samples:100000)" }
-accumulator = "latest"
+accumulator = { config = "gammaloop" }
 
 [task_queue.sampler_aggregator.config]
 kind = "havana_training"
@@ -59,7 +55,8 @@ kind = "sample"
 stop_condition = { max_samples = "$(sample_samples:1000000)" }
 measurement = { quantity = "central_value" }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
-accumulator = "latest"
+# Report inference independently of the adaptive training samples.
+accumulator = { config = "gammaloop" }
 
 [task_queue.queue_tuning]
 target_batch_eval_ms = 1000.0

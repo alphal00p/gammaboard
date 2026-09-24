@@ -1,4 +1,6 @@
 import sys
+import os
+import subprocess
 from pathlib import Path
 
 
@@ -56,3 +58,31 @@ def test_resumed_request_preserves_reserved_name_and_scheduler_config():
     assert worker["config"]["gres"] == "gpu:a100:1"
     assert worker["max_start_failures"] == 7
     assert ubelix.parser().parse_args(["up", "--resume-workers"]).resume_workers
+
+
+def test_sync_uses_shared_templates_without_copying_runtime_data(tmp_path):
+    commands = tmp_path / "commands"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("ssh", "scp"):
+        executable = bin_dir / name
+        executable.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$0" "$@" >> "$SYNC_LOG"\n')
+        executable.chmod(0o755)
+    env = dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}', SYNC_LOG=str(commands))
+    script = Path(__file__).resolve().parents[1] / "sync_ops.sh"
+    # Invocation outside the checkout must still locate exactly the tracked inputs.
+    subprocess.run(["bash", str(script), "test-host", "user/workspace"], cwd=tmp_path, env=env, check=True)
+    calls = commands.read_text()
+    assert "resources/templates/runs" in calls
+    assert "resources/templates/tasks" in calls
+    assert "ops/ubelix/resources/templates/nodes" in calls
+    assert "resources/db" not in calls
+    assert "resources/states" not in calls
+    assert "resources/runtimes" not in calls
+
+
+def test_sync_rejects_unsafe_destination_before_connecting(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "sync_ops.sh"
+    result = subprocess.run(["bash", str(script), "test-host", "../outside"],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 2

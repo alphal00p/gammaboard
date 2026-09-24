@@ -2,12 +2,12 @@ eval_us = [10, 1000]
 workers = [1, 2]
 batch_sizes = [64]
 repetitions = 1
-duration_seconds = 2
+duration_seconds = 4
 warmup_seconds = 1
 budget_seconds = 300
 cpu_limit = 4
 seed = 1234
 
-# Explicit tuning; use 10ms to measure the normal runner tick floor.
-min_tick_time_ms = 0
+# Exercise the ordinary polling policy; scaling.toml isolates pipeline overhead.
+min_tick_time_ms = 10
 telemetry_interval_ms = 250

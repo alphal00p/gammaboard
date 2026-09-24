@@ -2,8 +2,14 @@
 
 Use the CLI for runtime data and execution. The Python driver defines experiments,
 invokes the CLI, saves raw JSON, and plots it; it does not query PostgreSQL or parse
-dashboard panels. The older `benchmark-queue` remains a short sleep-based queue
-stress test, and `benchmark-campaign` remains a storage-growth soak test.
+dashboard panels. `just benchmark` is the only experiment runner. Sleep-based
+synthetic workloads remain useful in functional tests, but are not CPU scaling
+baselines. Database retention is an operations concern, measured on the intended
+deployment rather than through a second benchmark framework.
+
+These are development experiments. Run the smallest relevant comparison while
+changing code; release freezing and publication packaging come later. Each run
+still keeps its inputs and raw measurements so a comparison remains interpretable.
 
 ## Inspection
 
@@ -93,7 +99,10 @@ Use an optimized, prebuilt binary inside the development shell:
 
 ```sh
 just benchmark run resources/templates/benchmarks/smoke.toml --binary target/dev-optim/gammaboard --output results/smoke
+just benchmark plan resources/templates/benchmarks/tuning.toml
+just benchmark run resources/templates/benchmarks/tuning.toml --binary target/dev-optim/gammaboard --output results/tuning
 just benchmark run resources/templates/benchmarks/scaling.toml --binary target/release/gammaboard --output results/scaling
+just benchmark summary results/scaling
 just benchmark plot results/scaling
 just benchmark compare results/before results/after
 ```
@@ -102,14 +111,35 @@ Python 3.11+ is needed for running. Plotting additionally needs matplotlib; it i
 separate so results can be plotted on another machine. No Python database driver
 or `psql` is required by this suite.
 
-The default scaling suite has 48 cases: four evaluation costs, four worker
-counts, one batch size, and three repetitions, with randomized order. Each case
-has direct serial, direct parallel, and GammaBoard measurements. All use the same
-fixed work and batch size. The presets explicitly use `min_tick_time_ms = 0`
-and `telemetry_interval_ms = 250`: this measures the pipeline without the normal
-10ms runner tick floor. Set `min_tick_time_ms = 10` for the default polling policy;
-vary the telemetry interval to investigate publication overhead. These settings
-are saved in run cards and the plots identify the tick floor and core budget.
+Choose a preset before expanding the experiment:
+
+| Preset | Trials | Measurement window | Estimated runtime / hard budget | Scope |
+| --- | ---: | ---: | --- | --- |
+| `smoke.toml` | 4 | 4 seconds | 2.2 / 5 minutes | Runner, cleanup, and artifact check; one repetition |
+| `tuning.toml` | 24 | 6 seconds | 10 / 15 minutes | Two costs, two worker counts, two batch sizes, three repetitions |
+| `scaling.toml` | 48 | 6 seconds | 20.4 / 25 minutes | Four costs, four worker counts, batch 256, three repetitions |
+
+`plan` validates the matrix and prints the runtime estimate without starting
+services. The estimate includes readiness/cleanup headroom and counts a single
+direct baseline when the evaluator count is one. Compilation and plotting are
+outside these budgets. Every preset uses a one-second discarded warmup.
+
+Each repetition visits every configuration in seeded random order before the
+next repetition starts. The pipeline's position relative to the direct baselines
+rotates across repetitions, reducing systematic ordering bias. All backends use
+the same fixed work and evaluator batch size; direct work runs only after the
+pipeline is idle. Readiness is checked before warmup. Both warmup and measurement
+intervals are saved, sampled at the telemetry interval with a freshness limit.
+
+Smoke and tuning use the ordinary `min_tick_time_ms = 10`. Scaling uses `0` to
+measure pipeline overhead without the polling floor. All use
+`telemetry_interval_ms = 250`. Copy a preset and change one setting at a time;
+reuse `--calibration` for comparisons. To study bulk generation, set
+`bulk_sample_generation = true` and `generation_batch_size = 4096`; evaluator
+batch sizes stay fixed while sampler draws grow. This CPU inference comparison
+does not establish benefits for adaptive/GPU training.
+
+Settings are saved in run cards and plots identify the tick floor and core budget.
 Calibration targets are labels, not claims of exact
 service time; raw measured calibration and direct throughput are saved.
 
@@ -134,7 +164,12 @@ therefore compete with sampler/database work within the same eight cores.
 Results contain the suite, calibration, exact cards, binary hash, CPU affinity,
 host metadata, raw direct measurements, and complete GammaBoard intervals.
 `results.jsonl` is appended after every case so interruption retains completed
-work. Plot commands operate entirely offline and write PNG and SVG files.
+work. `summary.json` counts valid, invalid, and missing repetitions for every
+planned configuration, including configurations with no measurements. An
+interrupted suite records the exception type even when it has no error message.
+`summary` can also inspect older artifacts. Plot commands operate entirely offline
+and write PNG and SVG files; incomplete coverage is labelled and heatmaps show
+trial counts. Sparse points are not converted into automatic crossover claims.
 
 ## Interpretation and scope
 

@@ -14,13 +14,9 @@ args = ["x", "y"]
 constants = { a = "1/4", b = "3/4", w = "1/20" }
 
 [[task_queue]]
-name = "accumulator"
-kind = "set_accumulator"
-accumulator = "scalar"
-
-[[task_queue]]
 name = "havana-train"
 kind = "sample"
+accumulator = { config = "scalar" }
 
 [task_queue.stop_condition]
 max_samples = "$(train_samples:200000)"

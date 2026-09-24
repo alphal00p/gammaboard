@@ -1,4 +1,5 @@
-# Ghost bump with the MADNIS process sampler runtime under resources/runtimes/madnis.
+# Ghost bump with the MADNIS Apptainer runtime under resources/runtimes/madnis.
+# Run: ./gammaboard run create resources/templates/runs/ghost_bump_madnis_apptainer.toml
 #
 # Required artifacts/tools:
 # - Apptainer with GPU support must be installed on the worker host.
@@ -16,23 +17,17 @@ expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) - 1/2"
 args = ["x", "y"]
 
 [[task_queue]]
-name = "accumulator"
-kind = "set_accumulator"
-accumulator = "scalar"
-
-[[task_queue]]
 name = "madnis-train"
 kind = "sample"
+accumulator = { config = "scalar" }
 
 [task_queue.stop_condition]
 max_samples = "$(train_samples:200000)"
 
 [task_queue.sampler_aggregator.config]
 kind = "process_sampler"
-command = ["/usr/bin/apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources:$resources", "$resources/$(madnis_dir:\"runtimes/madnis\")/madnis.sif", "madnis-gammaboard-sampler"]
+command = ["apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources:$resources", "$resources/$(madnis_dir:\"runtimes/madnis\")/madnis.sif", "madnis-gammaboard-sampler"]
 cwd = "$resources"
-# Alternative with the Nix runtime when Nix is available:
-# command = ["$resources/runtimes/madnis/result/bin/python", "-u", "-m", "run_sampler"]
 requires_training_values = true
 
 [task_queue.sampler_aggregator.config.args]

@@ -1323,8 +1323,7 @@ accumulator = { config = "scalar" }
             "process_api/examples/python_sampler_symbolica_havana/run.toml",
             "process_api/examples/python_scalar_sin/run.toml",
             "process_api/examples/rust_breit_wigner_evaluator/run.toml",
-            "ops/ubelix/resources/templates/runs/ghost_bump_madnis.toml",
-            "ops/ubelix/resources/templates/tasks/train_sample.toml",
+            "resources/templates/runs/ghost_bump_madnis_apptainer.toml",
         ] {
             let raw = fs::read_to_string(root.join(relative_path)).expect("template file");
             if relative_path.contains("/tasks/") {
@@ -1341,7 +1340,6 @@ accumulator = { config = "scalar" }
                 "resources/templates/runs/gammaloop.toml",
                 "resources/templates/runs/integration-campaign-qft-like.toml",
                 "resources/templates/runs/tt_h.toml",
-                "ops/ubelix/resources/templates/runs/epem_a_tth.toml",
             ] {
                 load_run_add_config_file(&root.join(relative_path))
                     .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));

@@ -62,8 +62,8 @@ if apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" ldd /usr/local/bin/gammaboa
   exit 1
 fi
 
-# Gate on the public CLI being executable. GammaBoard does not expose a
-# top-level --version option; run provenance carries the build revision.
+# Gate on the public CLI being executable and show the installed version.
 apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --help >/dev/null
+apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --version
 
 echo "smoke check completed"

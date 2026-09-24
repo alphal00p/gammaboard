@@ -34,7 +34,6 @@ FRONTEND_PORT = 8080
 DB_PORT = 5400
 DEFAULT_SSH_HOST = "submit03.unibe.ch"
 DEFAULT_CONTROL_TIME = "00:20:00"
-DB_PATH = os.path.join(WORKSPACE_ROOT, "resources/db")
 
 
 def shifted_port(base: int, port_offset: int, label: str) -> int:
@@ -69,24 +68,6 @@ def frontend_port(port_offset: int | None = None) -> int:
 def db_port(port_offset: int | None = None) -> int:
     resolved = port_offset if port_offset is not None else port_offset_from_env()
     return shifted_port(DB_PORT, resolved, "postgres port")
-
-
-def command_clear_db(*_) -> None:
-    import shutil
-
-    print(
-        f"are you sure you want to delete the local PostgreSQL data directory at {DB_PATH}? [y/N]",
-        file=sys.stderr,
-    )
-    response = input().strip().lower()
-    if response != "y":
-        print("aborting", file=sys.stderr)
-        return
-
-    if os.path.exists(DB_PATH):
-        shutil.rmtree(DB_PATH)
-
-    print("database cleared")
 
 
 @dataclass(frozen=True)
@@ -1136,8 +1117,6 @@ def parser() -> argparse.ArgumentParser:
     build_apptainer.add_argument("def_file", help="Apptainer definition file")
     build_apptainer.set_defaults(func=command_build)
 
-    clear = sub.add_parser("clear-db", help="delete the local PostgreSQL data directory")
-    clear.set_defaults(func=command_clear_db)
 
     return p
 

@@ -1,5 +1,0 @@
-host := "ubelix"
-remote_folder := "gammaboard"
-
-sync-ops:
-    ops/ubelix/sync_ops.sh "{{host}}" "{{remote_folder}}"

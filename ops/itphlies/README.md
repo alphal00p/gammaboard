@@ -27,7 +27,8 @@ Nginx access logs are disabled in the checked-in ITPhlies deploy profile so the 
 
 ## Notes
 
-- Runtime config uses the embedded default. Pass `--runtime-config` only for custom database/resource/Postgres settings.
+- Runtime config uses `ops/local/config/runtime.toml` when present, with embedded
+  defaults for omitted fields. Pass `--runtime-config` for another configuration.
 - `--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to `8081/4001/5401` and suffixes local Postgres state paths with `-1`.
 - If deploy fails with `Address already in use`, free the conflicting frontend, API, or Postgres port and retry.
 - If deploy fails during DB start, inspect `resources/db/logfile`; an offset

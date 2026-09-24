@@ -6,6 +6,9 @@ organization wiki.
 Start with [quickstart.md](quickstart.md), then use the topic pages as needed:
 
 - [requirements.md](requirements.md): supported environment and reproducibility metadata.
+- [examples.md](examples.md): shared examples, dependencies, and expected workload sizes.
+- [benchmarking.md](benchmarking.md): bounded development measurements and comparisons.
+- [performance-development.md](performance-development.md): simplifications and optimization experiments.
 - [config.md](config.md): runtime, server, deploy, run, task, and node config.
 - [deployment.md](deployment.md): shared deploy model, profiles, paths, images, and ports.
 - [operations.md](operations.md): auth, node/run lifecycle, logs, and recovery.
@@ -17,5 +20,3 @@ Repository-local operator notes that are not copied into this directory:
 - `ops/ubelix/README.md`: UBELIX Slurm/Apptainer workflow.
 - `ops/itphlies/README.md`: ITPhlies profile notes.
 - `process_api/README.md`: process API examples and wrappers.
-
-- `benchmarking.md`: CLI inspection, direct baselines, bounded scaling suites, and plots.

@@ -7,9 +7,9 @@ dashboard node-launch requests into child worker processes.
 
 ## Profiles
 
-- `local`: development profile for running from the checkout.
-- `itphlies`: foreground-supervised deployment on the ITPhlies server.
-- `ubelix`: Slurm-supervised control and worker jobs on UBELIX.
+- [local](../ops/local/README.md): development profile for running from the checkout.
+- [itphlies](../ops/itphlies/README.md): foreground-supervised deployment on the ITPhlies server.
+- [ubelix](../ops/ubelix/README.md): Slurm-supervised control and worker jobs on UBELIX.
 
 Profile-specific commands stay in `ops/*/README.md`. Shared config semantics are
 documented in [config.md](config.md).

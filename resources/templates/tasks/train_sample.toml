@@ -8,6 +8,8 @@ replacements = { train_samples = 100_000_000, sample_samples = 1_000_000_000, re
 [[task_queue]]
 name = "train"
 kind = "sample"
+publish_result = false
+accumulator = { config = "gammaloop" }
 stop_condition = { max_samples = "$(train_samples:100_000_000)" }
 sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:128)", samples_for_update = "$(samples_for_update:10_000_000)", initial_training_rate = 0.05, final_training_rate = 0.005 } }
 
@@ -19,5 +21,6 @@ max_batch_size = "$(max_batch_size:100_000)"
 [[task_queue]]
 name = "sample"
 kind = "sample"
+accumulator = { config = "gammaloop" }
 stop_condition = { max_samples = "$(sample_samples:1_000_000_000)", relative_error = "$(relative_error:0.001)" }
 sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
