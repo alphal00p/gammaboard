@@ -202,7 +202,14 @@ pub async fn launch(
     let id = store
         .reserve_worker_launch_with_args(if local { "local" } else { "external" }, groups, args)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| match e {
+            sqlx::Error::Protocol(message)
+                if message.starts_with("worker connection budget exceeded:") =>
+            {
+                ApiError::BadRequest(message)
+            }
+            other => ApiError::Internal(other.to_string()),
+        })?;
     if local {
         resolve_local_requests(store, runtime).await?;
     }

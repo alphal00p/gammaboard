@@ -21,6 +21,8 @@ const DEFAULT_MAX_BATCH_RETRIES: i32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerQueueConfig {
+    #[serde(default)]
+    pub bulk_sample_generation: bool,
     pub queue_buffer: f64,
     pub target_batch_eval_ms: f64,
     #[serde(default = "default_batch_size_deadband_ratio")]
@@ -42,6 +44,10 @@ pub struct SamplerQueueConfig {
 
 impl SamplerQueueConfig {
     pub fn apply_tuning(&mut self, tuning: &SamplerQueueTuning) {
+        apply_option(
+            &mut self.bulk_sample_generation,
+            tuning.bulk_sample_generation,
+        );
         apply_option(&mut self.queue_buffer, tuning.queue_buffer);
         apply_option(&mut self.target_batch_eval_ms, tuning.target_batch_eval_ms);
         apply_option(
@@ -91,6 +97,7 @@ pub struct SamplerQueue<S> {
     cached_db_queue_counts: Option<BatchQueueCounts>,
     cached_tick_queue_counts: Option<BatchQueueCounts>,
     cached_active_evaluator_count: Option<usize>,
+    blocker: Option<crate::core::QueueBlocker>,
     last_reclaim_at: Instant,
     last_completed_cleanup_at: Instant,
     batch_size_tune_cooldown_remaining: u32,
@@ -248,6 +255,7 @@ where
             cached_db_queue_counts: None,
             cached_tick_queue_counts: None,
             cached_active_evaluator_count: None,
+            blocker: None,
             last_reclaim_at: now.checked_sub(RECLAIM_INTERVAL).unwrap_or(now),
             last_completed_cleanup_at: now.checked_sub(COMPLETED_CLEANUP_INTERVAL).unwrap_or(now),
             batch_size_tune_cooldown_remaining: 0,
@@ -291,6 +299,7 @@ where
 
     pub fn runtime_metrics(&self) -> SamplerQueueRuntimeMetrics {
         SamplerQueueRuntimeMetrics {
+            blocker: self.blocker.clone(),
             db_pending_batches: self.cached_db_queue_counts.map(|counts| counts.pending),
             db_claimed_batches: self.cached_db_queue_counts.map(|counts| counts.claimed),
             db_completed_batches: self.cached_db_queue_counts.map(|counts| counts.completed),
@@ -393,7 +402,11 @@ where
     async fn db_queue_counts(&mut self) -> Result<BatchQueueCounts, StoreError> {
         let counts = self
             .store
-            .get_batch_queue_counts(self.run_id, self.last_completed_batch_id())
+            .get_batch_queue_counts(
+                self.run_id,
+                Some(self.task_id),
+                self.last_completed_batch_id(),
+            )
             .await?;
         self.cached_db_queue_counts = Some(counts);
         Ok(counts)
@@ -453,24 +466,49 @@ where
         training_remaining: Option<usize>,
         queue_counts: BatchQueueCounts,
     ) -> Result<Vec<usize>, StoreError> {
-        let active_evaluator_count = self
+        self.available_batch_slots(queue_counts).await?;
+        let batch_size = self.production_batch_size(training_remaining);
+        self.cached_tick_queue_counts = Some(queue_counts);
+        Ok(self.get_sample(
+            max_producable,
+            queue_counts,
+            self.cached_active_evaluator_count.unwrap_or(0),
+            batch_size,
+        ))
+    }
+
+    pub(crate) fn production_batch_size(&mut self, training_remaining: Option<usize>) -> usize {
+        self.training_batch_sizing.batch_size(
+            self.checkpoint.batch_size_current,
+            training_remaining,
+            self.cached_active_evaluator_count.unwrap_or(0),
+        )
+    }
+
+    pub(crate) async fn available_batch_slots(
+        &mut self,
+        counts: BatchQueueCounts,
+    ) -> Result<usize, StoreError> {
+        let evaluators = self
             .store
             .count_active_evaluator_nodes(self.run_id)
             .await?
             .max(0) as usize;
-        self.cached_active_evaluator_count = Some(active_evaluator_count);
-        self.cached_tick_queue_counts = Some(queue_counts);
-        let batch_size = self.training_batch_sizing.batch_size(
-            self.checkpoint.batch_size_current,
-            training_remaining,
-            active_evaluator_count,
-        );
-        Ok(self.get_sample(
-            max_producable,
-            queue_counts,
-            active_evaluator_count,
-            batch_size,
-        ))
+        self.cached_active_evaluator_count = Some(evaluators);
+        self.cached_tick_queue_counts = Some(counts);
+        Ok(self.production_capacity(counts, evaluators))
+    }
+
+    fn production_capacity(&self, counts: BatchQueueCounts, evaluators: usize) -> usize {
+        self.config
+            .max_queue_size
+            .saturating_sub(counts.open().max(0) as usize)
+            .min(self.config.max_batches_per_tick)
+            .min(
+                self.target_pending_batches(evaluators)
+                    .unwrap_or(0)
+                    .saturating_sub(counts.pending.max(0) as usize),
+            )
     }
 
     pub fn validate_batch_plan(&self, batch_plan: &[usize]) -> Result<(), StoreError> {
@@ -579,20 +617,9 @@ where
         active_evaluator_count: usize,
         batch_size_current: usize,
     ) -> Vec<usize> {
-        let pending_before = queue_counts.pending.max(0) as usize;
-        let open_before = queue_counts.open().max(0) as usize;
-        let remaining_capacity = self.config.max_queue_size.saturating_sub(open_before);
-        let hard_limit = remaining_capacity.min(self.config.max_batches_per_tick);
-        if hard_limit == 0 {
-            return Vec::new();
-        }
-
-        let Some(target_pending) = self.target_pending_batches(active_evaluator_count) else {
-            return Vec::new();
-        };
         // queue_counts includes local and in-flight inserts. One pending target
         // therefore bounds both the database queue and unpersisted production.
-        let batch_limit = hard_limit.min(target_pending.saturating_sub(pending_before));
+        let batch_limit = self.production_capacity(queue_counts, active_evaluator_count);
         if batch_limit == 0 {
             return Vec::new();
         }
@@ -666,6 +693,10 @@ where
         }
         let reclaim_started = Instant::now();
         self.reclaim_abandoned_batches().await?;
+        self.blocker = self
+            .store
+            .get_queue_blocker(self.run_id, self.task_id, self.last_completed_batch_id())
+            .await?;
         self.last_reclaim_at = Instant::now();
         Ok(Some(reclaim_started.elapsed()))
     }
@@ -733,6 +764,7 @@ where
         self.account_utilization(Instant::now());
         let store = self.store.clone();
         let run_id = self.run_id;
+        let task_id = self.task_id;
         let fetch_limit = self.config.completed_batch_fetch_limit.max(1);
         let after_batch_id = self.checkpoint.last_completed_batch_id;
         // PostgreSQL cannot see an earlier bundle whose insert has not committed.
@@ -747,7 +779,7 @@ where
         self.pending_processed_fetch = Some(tokio::spawn(async move {
             let started = Instant::now();
             let batches = store
-                .fetch_completed_batches(run_id, fetch_limit, true, after_batch_id)
+                .fetch_completed_batches(run_id, task_id, fetch_limit, true, after_batch_id)
                 .await?;
             let batches = batches
                 .into_iter()
@@ -979,7 +1011,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::core::{
         AggregationStore, BatchClaim, ControlPlaneStore, DesiredAssignment,
@@ -1001,7 +1033,7 @@ mod tests {
     type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
 
     #[derive(Clone, Default)]
-    struct RecordingStore {
+    pub(crate) struct RecordingStore {
         inserts: RecordedInserts,
         fetch_completed_calls: Arc<Mutex<usize>>,
         completed_ids: Arc<Mutex<Vec<i64>>>,
@@ -1047,15 +1079,26 @@ mod tests {
         async fn get_batch_queue_counts(
             &self,
             _run_id: i32,
+            _task_id: Option<i64>,
             _completed_after_batch_id: Option<i64>,
         ) -> Result<BatchQueueCounts, StoreError> {
             unreachable!("unused in test")
+        }
+
+        async fn get_queue_blocker(
+            &self,
+            _run_id: i32,
+            _task_id: i64,
+            _after_batch_id: Option<i64>,
+        ) -> Result<Option<crate::core::QueueBlocker>, StoreError> {
+            Ok(None)
         }
 
         async fn claim_batch(
             &self,
             _run_id: i32,
             _node_uuid: &str,
+            _claim_token: &str,
         ) -> Result<Option<BatchClaim>, StoreError> {
             unreachable!("unused in test")
         }
@@ -1068,10 +1111,20 @@ mod tests {
             unreachable!("unused in test")
         }
 
+        async fn release_untracked_claims(
+            &self,
+            _run_id: i32,
+            _node_uuid: &str,
+            _tracked_tokens: &[String],
+        ) -> Result<u64, StoreError> {
+            unreachable!("unused in test")
+        }
+
         async fn submit_batch_results(
             &self,
             _batch_id: i64,
             _node_uuid: &str,
+            _claim_token: &str,
             _result: &crate::evaluation::BatchResult,
             _eval_time_ms: f64,
         ) -> Result<(), StoreError> {
@@ -1095,6 +1148,8 @@ mod tests {
         async fn fail_batch(
             &self,
             _batch_id: i64,
+            _node_uuid: &str,
+            _claim_token: &str,
             _last_error: &str,
             _max_batch_retries: i32,
         ) -> Result<crate::core::BatchFailOutcome, StoreError> {
@@ -1104,6 +1159,7 @@ mod tests {
         async fn fetch_completed_batches(
             &self,
             _run_id: i32,
+            _task_id: i64,
             _limit: usize,
             _strict_ordering: bool,
             _after_batch_id: Option<i64>,
@@ -1447,7 +1503,7 @@ mod tests {
         }
 
         async fn count_active_evaluator_nodes(&self, _run_id: i32) -> Result<i64, StoreError> {
-            unreachable!("unused in test")
+            Ok(20)
         }
 
         async fn request_node_shutdown(&self, _node_name: &str) -> Result<u64, StoreError> {
@@ -1582,6 +1638,7 @@ mod tests {
             1,
             true,
             SamplerQueueConfig {
+                bulk_sample_generation: false,
                 queue_buffer: 1.0,
                 target_batch_eval_ms: 500.0,
                 batch_size_deadband_ratio: 0.15,

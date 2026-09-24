@@ -239,6 +239,10 @@ impl GammaLoopAccumulatorState {
     pub fn rsd(&self) -> f64 {
         self.estimate.rsd()
     }
+
+    pub fn ess(&self) -> f64 {
+        self.estimate.ess()
+    }
 }
 
 impl GammaLoopDiagnostics {

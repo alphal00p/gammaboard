@@ -137,7 +137,10 @@ where
             }
         }
 
-        let queue_counts = self.store.get_batch_queue_counts(run_id, None).await?;
+        let queue_counts = self
+            .store
+            .get_batch_queue_counts(run_id, None, None)
+            .await?;
         let unfinished_batches = queue_counts.pending.saturating_add(queue_counts.claimed);
         if unfinished_batches > 0 {
             return Ok(());

@@ -748,25 +748,61 @@ impl WorkQueueStore for PgStore {
     async fn get_batch_queue_counts(
         &self,
         run_id: i32,
+        task_id: Option<i64>,
         completed_after_batch_id: Option<i64>,
     ) -> Result<BatchQueueCounts, StoreError> {
-        queries::get_batch_queue_counts(&self.pool, run_id, completed_after_batch_id)
+        queries::get_batch_queue_counts(&self.pool, run_id, task_id, completed_after_batch_id)
             .await
             .map_err(map_sqlx)
+    }
+
+    async fn get_queue_blocker(
+        &self,
+        run_id: i32,
+        task_id: i64,
+        after_batch_id: Option<i64>,
+    ) -> Result<Option<crate::core::QueueBlocker>, StoreError> {
+        let row: Option<(
+            i64,
+            String,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )> = sqlx::query_as(
+            "SELECT id, status,
+                    CASE WHEN status='claimed' THEN claimed_by_node_name END, claimed_at
+             FROM batches
+             WHERE run_id=$1 AND task_id=$2 AND id>$3 AND status<>'completed'
+             ORDER BY id LIMIT 1",
+        )
+        .bind(run_id)
+        .bind(task_id)
+        .bind(after_batch_id.unwrap_or(0))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(
+            |(batch_id, status, node_name, claimed_at)| crate::core::QueueBlocker {
+                batch_id,
+                status,
+                node_name,
+                claimed_at,
+            },
+        ))
     }
 
     async fn claim_batch(
         &self,
         run_id: i32,
         node_uuid: &str,
+        claim_token: &str,
     ) -> Result<Option<BatchClaim>, StoreError> {
-        let claimed = queries::claim_batch(&self.pool, run_id, node_uuid)
+        let claimed = queries::claim_batch(&self.pool, run_id, node_uuid, claim_token)
             .await
             .map_err(map_sqlx)?;
 
         Ok(claimed.map(
             |(batch_id, task_id, requires_training_values, latent_batch)| BatchClaim {
                 batch_id,
+                claim_token: claim_token.to_owned(),
                 task_id,
                 requires_training_values,
                 latent_batch,
@@ -784,14 +820,34 @@ impl WorkQueueStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn release_untracked_claims(
+        &self,
+        run_id: i32,
+        node_uuid: &str,
+        tracked_tokens: &[String],
+    ) -> Result<u64, StoreError> {
+        queries::release_untracked_claims(&self.pool, run_id, node_uuid, tracked_tokens)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn submit_batch_results(
         &self,
         batch_id: i64,
         node_uuid: &str,
+        claim_token: &str,
         result: &BatchResult,
         eval_time_ms: f64,
     ) -> Result<(), StoreError> {
-        queries::submit_batch_results(&self.pool, batch_id, node_uuid, result, eval_time_ms).await
+        queries::submit_batch_results(
+            &self.pool,
+            batch_id,
+            node_uuid,
+            claim_token,
+            result,
+            eval_time_ms,
+        )
+        .await
     }
 
     async fn record_evaluator_performance_snapshot(
@@ -815,17 +871,26 @@ impl WorkQueueStore for PgStore {
     async fn fail_batch(
         &self,
         batch_id: i64,
+        node_uuid: &str,
+        claim_token: &str,
         last_error: &str,
         max_batch_retries: i32,
     ) -> Result<crate::core::BatchFailOutcome, StoreError> {
-        queries::fail_batch(&self.pool, batch_id, last_error, max_batch_retries)
-            .await
-            .map_err(map_sqlx)
+        queries::fail_batch(
+            &self.pool,
+            batch_id,
+            node_uuid,
+            claim_token,
+            last_error,
+            max_batch_retries,
+        )
+        .await
     }
 
     async fn fetch_completed_batches(
         &self,
         run_id: i32,
+        task_id: i64,
         limit: usize,
         strict_ordering: bool,
         after_batch_id: Option<i64>,
@@ -833,6 +898,7 @@ impl WorkQueueStore for PgStore {
         let rows = queries::fetch_completed_batches(
             &self.pool,
             run_id,
+            task_id,
             limit,
             strict_ordering,
             after_batch_id,

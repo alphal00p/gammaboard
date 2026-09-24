@@ -1,4 +1,5 @@
 pub mod bootstrap;
+mod connection_budget;
 pub mod pg_store;
 mod queries;
 pub mod read_models;

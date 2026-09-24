@@ -176,6 +176,7 @@ pub enum AccumulatorMetricName {
     Variance,
     RelativeVarianceError,
     Rsd,
+    Ess,
     TimeNormalizedVariance,
 }
 
@@ -896,6 +897,7 @@ impl SampleStopCondition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct SamplerQueueTuning {
+    pub bulk_sample_generation: Option<bool>,
     pub queue_buffer: Option<f64>,
     pub target_batch_eval_ms: Option<f64>,
     pub batch_size_deadband_ratio: Option<f64>,

@@ -42,7 +42,7 @@ impl PgStore {
         let expected = produced - checkpoint.completed_samples;
         if retained != expected {
             return Err(StoreError::store(format!(
-                "checkpoint needs {expected} samples of queued work but only {retained} remain; refusing inconsistent recovery"
+                "checkpoint needs {expected} samples of queued work but {retained} remain; refusing inconsistent recovery"
             )));
         }
         // Result submission checks ownership on the batch row in its transaction. Deleting

@@ -88,6 +88,10 @@ impl VectorAccumulatorState {
         self.projection.state.rsd()
     }
 
+    pub fn ess(&self) -> f64 {
+        self.projection.state.ess()
+    }
+
     pub fn signal_to_noise(&self) -> f64 {
         self.projection.state.signal_to_noise()
     }

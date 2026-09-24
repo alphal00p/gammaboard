@@ -54,6 +54,10 @@ impl GammaLoopAccumulatorState {
         self.estimate.rsd()
     }
 
+    pub fn ess(&self) -> f64 {
+        self.estimate.ess()
+    }
+
     pub fn real_mean(&self) -> f64 {
         self.estimate
             .component("real")

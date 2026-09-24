@@ -27,8 +27,8 @@ use uuid::Uuid;
 use self::active_worker::ActiveWorker;
 use self::role_runner::RoleRunner;
 
-/// Each node retains one control-plane connection; cap the role pool so a
-/// worker fleet cannot exhaust the local PostgreSQL default by configuration.
+/// Each node has up to two control-plane connections and two role connections.
+/// Launch admission budgets for both pools, including idle workers and server headroom.
 const MAX_ROLE_DB_CONNECTIONS_PER_NODE: u32 = 2;
 
 #[derive(Debug, Clone)]
@@ -429,8 +429,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     async fn sleep_after_database_error(&mut self, err: &StoreError) {
         warn!(
+            node_name = %self.node_name,
+            node_uuid = %self.node_uuid,
+            run_id = self.current_target().map(|target| target.run_id),
             error = %err,
-            "node control-plane database operation failed; retrying while lease renewal remains within failure timeout"
+            "node database operation failed; retrying while lease renewal remains within failure timeout"
         );
         sleep(self.next_reconcile_sleep()).await;
     }

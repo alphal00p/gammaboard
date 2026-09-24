@@ -22,6 +22,16 @@ impl PgStore {
         sqlx::query("SELECT pg_advisory_xact_lock(71809241)")
             .execute(&mut *tx)
             .await?;
+        let requested = groups.iter().try_fold(0_i64, |total, group| {
+            let count = group["count"]
+                .as_i64()
+                .filter(|count| *count > 0)
+                .ok_or_else(|| sqlx::Error::Protocol("worker count must be positive".into()))?;
+            total
+                .checked_add(count)
+                .ok_or_else(|| sqlx::Error::Protocol("worker count overflow".into()))
+        })?;
+        super::connection_budget::check_worker_connection_budget(&mut tx, requested).await?;
         let names: Vec<String> = sqlx::query_scalar("SELECT name FROM nodes")
             .fetch_all(&mut *tx)
             .await?;
@@ -78,8 +88,15 @@ impl PgStore {
     /// Clear the marker in the same transaction that durably enqueues its replacement.
     pub async fn enqueue_resumed_workers(&self) -> Result<usize, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(71809241)")
+            .execute(&mut *tx)
+            .await?;
         let rows: Vec<(String, Value, String, Value)> = sqlx::query_as("SELECT n.name,n.launch_group,r.backend,r.args FROM nodes n JOIN node_launch_requests r ON r.id=n.launch_request_id WHERE n.resume_requested AND n.lease_expires_at <= now() AND n.launch_group IS NOT NULL ORDER BY n.name FOR UPDATE OF n")
             .fetch_all(&mut *tx).await?;
+        if !rows.is_empty() {
+            super::connection_budget::check_worker_connection_budget(&mut tx, rows.len() as i64)
+                .await?;
+        }
         for (name, group, backend, original_args) in &rows {
             let mut args = original_args.clone();
             args["groups"] = json!([group]);

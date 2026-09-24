@@ -16,6 +16,8 @@ pub async fn get_pg_pool(
     loop {
         match PgPoolOptions::new()
             .max_connections(max_connections)
+            .min_connections(0)
+            .idle_timeout(Duration::from_secs(30))
             .connect(database_url)
             .await
         {

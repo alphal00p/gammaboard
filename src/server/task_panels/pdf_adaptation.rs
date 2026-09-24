@@ -554,7 +554,12 @@ fn build_image_panel(
         x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
         y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
         color_mode: ImageColorMode::ScalarHeatmap,
-        normalization_mode: ImageNormalizationMode::Symmetric,
+        normalization_mode: match image_kind {
+            ImageKind::LogReferenceNormalizedIntegrand | ImageKind::LogPlaneNormalizedPdf => {
+                ImageNormalizationMode::Linear
+            }
+            ImageKind::Oversampling => ImageNormalizationMode::ZeroCentered,
+        },
         metric_label: Some(metric_label.to_string()),
         metric_mode: Some(metric_mode.to_string()),
         x_label: Some("t".to_string()),
@@ -978,29 +983,31 @@ mod tests {
     }
 
     #[test]
-    fn plane_normalized_pdf_panel_uses_symmetric_normalization() {
-        let panel = build_image_panel(
-            "pdf",
-            &geometry(),
-            &DerivedValues::from_output(output(), None),
+    fn integrand_and_pdf_panels_use_linear_normalization() {
+        for image_kind in [
+            ImageKind::LogReferenceNormalizedIntegrand,
             ImageKind::LogPlaneNormalizedPdf,
-            OversamplingMetric::RelativeMismatch,
-        )
-        .expect("build plane normalized pdf panel");
-        let PanelState::Image2d {
-            normalization_mode, ..
-        } = panel
-        else {
-            panic!("expected image panel");
-        };
-        assert!(matches!(
-            normalization_mode,
-            ImageNormalizationMode::Symmetric
-        ));
+        ] {
+            let panel = build_image_panel(
+                "pdf",
+                &geometry(),
+                &DerivedValues::from_output(output(), None),
+                image_kind,
+                OversamplingMetric::RelativeMismatch,
+            )
+            .expect("build plane normalized pdf panel");
+            let PanelState::Image2d {
+                normalization_mode, ..
+            } = panel
+            else {
+                panic!("expected image panel");
+            };
+            assert!(matches!(normalization_mode, ImageNormalizationMode::Linear));
+        }
     }
 
     #[test]
-    fn oversampling_panel_uses_symmetric_normalization() {
+    fn oversampling_panel_uses_zero_centered_normalization() {
         let panel = build_image_panel(
             "oversampling",
             &geometry(),
@@ -1017,7 +1024,7 @@ mod tests {
         };
         assert!(matches!(
             normalization_mode,
-            ImageNormalizationMode::Symmetric
+            ImageNormalizationMode::ZeroCentered
         ));
     }
 

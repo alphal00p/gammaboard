@@ -41,11 +41,23 @@ pub struct TracingConfig {
     pub db_external_level: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
-    #[serde(default)]
+    #[serde(default = "default_resource_roots")]
     pub roots: Vec<String>,
+}
+
+impl Default for ResourceConfig {
+    fn default() -> Self {
+        Self {
+            roots: default_resource_roots(),
+        }
+    }
+}
+
+fn default_resource_roots() -> Vec<String> {
+    vec!["resources".to_string()]
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -247,4 +259,32 @@ pub fn normalize_local_postgres_paths(local_postgres: &mut LocalPostgresConfig, 
     local_postgres.log_file = normalize_config_path(&resource_root, &local_postgres.log_file)
         .display()
         .to_string();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn postgres_only_override_preserves_embedded_resource_roots() {
+        let embedded: RuntimeConfig = toml::from_str(DEFAULT_RUNTIME_CONFIG_TOML).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("runtime.toml");
+        fs::write(&path, "[local_postgres]\nmax_connections = 512\n").unwrap();
+        let config = RuntimeConfig::load(&path).unwrap();
+        assert_eq!(config.local_postgres.max_connections, 512);
+        assert_eq!(config.resources.roots, embedded.resources.roots);
+        assert_eq!(config.resources.roots, ["resources"]);
+    }
+
+    #[test]
+    fn resource_roots_default_only_when_omitted() {
+        let omitted: RuntimeConfig = toml::from_str("[resources]\n").unwrap();
+        assert_eq!(omitted.resources.roots, ["resources"]);
+        let empty: RuntimeConfig = toml::from_str("[resources]\nroots = []\n").unwrap();
+        assert!(empty.resources.roots.is_empty());
+        let custom: RuntimeConfig =
+            toml::from_str("[resources]\nroots = [\"/scratch/state\"]\n").unwrap();
+        assert_eq!(custom.resources.roots, ["/scratch/state"]);
+    }
 }

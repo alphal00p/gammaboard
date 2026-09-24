@@ -163,9 +163,31 @@ pub(crate) async fn insert_batches(
 pub(crate) async fn get_batch_queue_counts(
     pool: &PgPool,
     run_id: i32,
+    task_id: Option<i64>,
     completed_after_batch_id: Option<i64>,
 ) -> Result<BatchQueueCounts, sqlx::Error> {
     let completed_after_batch_id = completed_after_batch_id.unwrap_or(0);
+    if let Some(task_id) = task_id {
+        let (pending, claimed, completed, failed) = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+            "SELECT count(*) FILTER (WHERE status='pending'),
+                    count(*) FILTER (WHERE status='claimed'),
+                    count(*) FILTER (WHERE status='completed' AND id>$3),
+                    count(*) FILTER (WHERE status='failed')
+             FROM batches WHERE run_id=$1 AND task_id=$2",
+        )
+        .bind(run_id)
+        .bind(task_id)
+        .bind(completed_after_batch_id)
+        .fetch_one(pool)
+        .await?;
+        return Ok(BatchQueueCounts {
+            pending,
+            claimed,
+            completed,
+            failed,
+        });
+    }
+
     let (pending, claimed, completed, failed) = sqlx::query_as::<_, (i64, i64, i64, i64)>(
         r#"
         SELECT
@@ -199,14 +221,21 @@ pub(crate) async fn claim_batch(
     pool: &PgPool,
     run_id: i32,
     node_uuid: &str,
+    claim_token: &str,
 ) -> Result<Option<(i64, i64, bool, LatentBatch)>, sqlx::Error> {
     let row = sqlx::query_as::<_, (i64, i64, bool, Vec<u8>)>(
         r#"
-        WITH next_batch AS (
+        WITH existing_claim AS (
+            SELECT b.id, b.task_id, b.requires_training_values
+            FROM batches b
+            WHERE b.claim_token = $3 AND b.claimed_by_node_uuid = $1
+              AND b.run_id = $2 AND b.status = 'claimed'
+        ), next_batch AS (
             SELECT b.id
             FROM batches b
             WHERE b.run_id = $2
               AND b.status = 'pending'
+              AND NOT EXISTS (SELECT 1 FROM batches WHERE claim_token = $3)
               AND EXISTS (
                   SELECT 1
                   FROM nodes n
@@ -252,18 +281,20 @@ pub(crate) async fn claim_batch(
                     WHERE n.uuid = $1
                 ),
                 claimed_by_node_uuid = $1,
-                claimed_at = now()
+                claimed_at = now(),
+                claim_token = $3
             FROM next_batch n
             WHERE b.id = n.id
             RETURNING b.id, b.task_id, b.requires_training_values
         )
         SELECT c.id, c.task_id, c.requires_training_values, i.latent_batch
-        FROM claimed c
+        FROM (SELECT * FROM existing_claim UNION ALL SELECT * FROM claimed) c
         JOIN batch_inputs i ON i.batch_id = c.id
         "#,
     )
     .bind(node_uuid)
     .bind(run_id)
+    .bind(claim_token)
     .fetch_optional(pool)
     .await?;
 
@@ -287,6 +318,7 @@ pub(crate) async fn release_claimed_batches_for_worker(
         SET status = 'pending',
             claimed_by_node_name = NULL,
             claimed_by_node_uuid = NULL,
+            claim_token = NULL,
             claimed_at = NULL
         WHERE run_id = $1
           AND status = 'claimed'
@@ -304,56 +336,81 @@ pub(crate) async fn submit_batch_results(
     pool: &PgPool,
     batch_id: i64,
     node_uuid: &str,
+    claim_token: &str,
     result: &BatchResult,
     eval_time_ms: f64,
 ) -> Result<(), StoreError> {
     result
         .validate_json_safe()
         .map_err(|err| StoreError::store(format!("invalid batch result payload: {err}")))?;
-    let accumulator =
-        encode_json("batch accumulator", &result.accumulator).map_err(StoreError::from)?;
+    let accumulator = encode_json("batch accumulator", &result.accumulator)?;
     let values = result.values_to_bytes().map_err(|err| {
         StoreError::store(format!("failed to serialize batch training values: {err}"))
     })?;
-    let mut tx = pool.begin().await.map_err(StoreError::from)?;
-    let update_result = sqlx::query(
-        r#"
-        UPDATE batches
-        SET status = 'completed',
-            completed_at = now()
-        WHERE id = $1
-          AND claimed_by_node_uuid = $2
-        "#,
+    let mut tx = pool.begin().await?;
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM batches WHERE id=$1 AND claimed_by_node_uuid=$2
+         AND claim_token=$3 FOR UPDATE",
     )
     .bind(batch_id)
     .bind(node_uuid)
-    .execute(&mut *tx)
-    .await
-    .map_err(StoreError::from)?;
-    if update_result.rows_affected() == 0 {
-        return Err(StoreError::batch_ownership_lost(batch_id, node_uuid));
+    .bind(claim_token)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match status.as_deref() {
+        Some("completed") => {
+            // The transaction committed but its acknowledgement may have been lost.
+            // Never replace a previously accepted result or count completion twice.
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM batch_results WHERE batch_id=$1)")
+                    .bind(batch_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if !exists {
+                return Err(StoreError::store(format!(
+                    "completed batch {batch_id} has no result"
+                )));
+            }
+            return Ok(());
+        }
+        Some("claimed") => {}
+        _ => return Err(StoreError::batch_ownership_lost(batch_id, node_uuid)),
     }
+    sqlx::query("UPDATE batches SET status='completed', completed_at=now() WHERE id=$1")
+        .bind(batch_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
-        r#"
-        INSERT INTO batch_results (
-            batch_id,
-            "values",
-            batch_observable,
-            total_eval_time_ms,
-            completed_at
-        )
-        VALUES ($1, $2, $3, $4, now())
-        "#,
-    )
-    .bind(batch_id)
-    .bind(values)
-    .bind(accumulator)
-    .bind(eval_time_ms)
-    .execute(&mut *tx)
-    .await
-    .map_err(StoreError::from)?;
-    tx.commit().await.map_err(StoreError::from)?;
+        r#"INSERT INTO batch_results (batch_id, "values", batch_observable, total_eval_time_ms, completed_at)
+           VALUES ($1, $2, $3, $4, now())"#
+    ).bind(batch_id).bind(values).bind(accumulator).bind(eval_time_ms).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(())
+}
+
+/// Only the evaluator itself knows which claims it still has in memory. Include
+/// outstanding claim requests as well as ready/evaluating/submitting batches, so
+/// a slow evaluation or a concurrent prefetch is never mistaken for lost work.
+pub(crate) async fn release_untracked_claims(
+    pool: &PgPool,
+    run_id: i32,
+    node_uuid: &str,
+    tracked_tokens: &[String],
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE batches SET status='pending', claimed_by_node_name=NULL,
+             claimed_by_node_uuid=NULL, claimed_at=NULL, claim_token=NULL,
+             retry_count=COALESCE(retry_count,0)+1,
+             last_error='untracked evaluator claim reclaimed'
+         WHERE run_id=$1 AND claimed_by_node_uuid=$2 AND status='claimed'
+           AND (claim_token IS NULL OR NOT (claim_token=ANY($3)))",
+    )
+    .bind(run_id)
+    .bind(node_uuid)
+    .bind(tracked_tokens)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 pub(crate) async fn reclaim_abandoned_batches(
@@ -367,6 +424,7 @@ pub(crate) async fn reclaim_abandoned_batches(
             status = 'pending',
             claimed_by_node_name = NULL,
             claimed_by_node_uuid = NULL,
+            claim_token = NULL,
             claimed_at = NULL,
             retry_count = COALESCE(retry_count, 0) + 1,
             last_error = 'abandoned evaluator claim reclaimed'
@@ -517,33 +575,48 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
 pub(crate) async fn fail_batch(
     pool: &PgPool,
     batch_id: i64,
+    node_uuid: &str,
+    claim_token: &str,
     last_error: &str,
     max_batch_retries: i32,
-) -> Result<BatchFailOutcome, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64, i32, String)>(
-        r#"
-        UPDATE batches
-        SET
-            status = CASE
-                WHEN COALESCE(retry_count, 0) + 1 >= $3 THEN 'failed'
-                ELSE 'pending'
-            END,
-            last_error = $2,
-            claimed_by_node_name = NULL,
-            claimed_by_node_uuid = NULL,
-            claimed_at = NULL,
-            completed_at = NULL,
-            retry_count = COALESCE(retry_count, 0) + 1
-        WHERE id = $1
-        RETURNING task_id, retry_count, status::text
-        "#,
+) -> Result<BatchFailOutcome, StoreError> {
+    let mut tx = pool.begin().await?;
+    let row: Option<(i64, i32, String)> = sqlx::query_as(
+        "SELECT task_id, COALESCE(retry_count,0), status FROM batches
+         WHERE id=$1 AND claimed_by_node_uuid=$2 AND claim_token=$3 FOR UPDATE",
     )
     .bind(batch_id)
-    .bind(last_error)
-    .bind(max_batch_retries)
-    .fetch_one(pool)
+    .bind(node_uuid)
+    .bind(claim_token)
+    .fetch_optional(&mut *tx)
     .await?;
-    let (task_id, retry_count, status) = row;
+    let Some((task_id, mut retry_count, mut status)) = row else {
+        return Err(StoreError::batch_ownership_lost(batch_id, node_uuid));
+    };
+    if status == "claimed" {
+        retry_count += 1;
+        status = if retry_count >= max_batch_retries {
+            "failed"
+        } else {
+            "pending"
+        }
+        .to_owned();
+        // Retain the token/owner until the next claim to recognize a repeated
+        // failure notification after a lost commit acknowledgement.
+        sqlx::query(
+            "UPDATE batches SET status=$2, retry_count=$3, last_error=$4,
+                     claimed_at=NULL, completed_at=NULL WHERE id=$1",
+        )
+        .bind(batch_id)
+        .bind(&status)
+        .bind(retry_count)
+        .bind(last_error)
+        .execute(&mut *tx)
+        .await?;
+    } else if status != "pending" && status != "failed" {
+        return Err(StoreError::batch_ownership_lost(batch_id, node_uuid));
+    }
+    tx.commit().await?;
     if status == "failed" {
         Ok(BatchFailOutcome::PermanentlyFailed {
             task_id,
@@ -560,6 +633,7 @@ pub(crate) async fn fail_batch(
 pub(crate) async fn fetch_completed_batches(
     pool: &PgPool,
     run_id: i32,
+    task_id: i64,
     limit: usize,
     strict_ordering: bool,
     after_batch_id: Option<i64>,
@@ -590,6 +664,7 @@ pub(crate) async fn fetch_completed_batches(
                 FROM batches b
                 WHERE b.run_id = $1
                   AND b.id > $2
+                  AND b.task_id = $4
                 ORDER BY b.id ASC
                 LIMIT $3
             ),
@@ -626,6 +701,7 @@ pub(crate) async fn fetch_completed_batches(
         .bind(run_id)
         .bind(after_batch_id)
         .bind(limit as i64)
+        .bind(task_id)
         .fetch_all(pool)
         .await?
     } else {
@@ -656,6 +732,7 @@ pub(crate) async fn fetch_completed_batches(
             JOIN batch_results r ON r.batch_id = b.id
             WHERE b.run_id = $1
               AND b.id > $2
+                  AND b.task_id = $4
               AND b.status = 'completed'
             ORDER BY b.id ASC
             LIMIT $3
@@ -664,6 +741,7 @@ pub(crate) async fn fetch_completed_batches(
         .bind(run_id)
         .bind(after_batch_id)
         .bind(limit as i64)
+        .bind(task_id)
         .fetch_all(pool)
         .await?
     };

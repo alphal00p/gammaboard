@@ -93,6 +93,7 @@ pub struct NodeLaunchRequest {
 #[derive(Debug, Clone)]
 pub struct BatchClaim {
     pub batch_id: i64,
+    pub claim_token: String,
     pub task_id: i64,
     pub requires_training_values: bool,
     pub latent_batch: LatentBatch,
@@ -121,6 +122,19 @@ impl BatchQueueCounts {
     pub fn open(self) -> i64 {
         self.pending + self.claimed + self.completed
     }
+}
+
+/// The first unfinished batch after the sampler's task-local completion cursor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueBlocker {
+    #[serde(
+        serialize_with = "crate::utils::serde_bigint::serialize_i64_as_string",
+        deserialize_with = "crate::utils::serde_bigint::deserialize_i64_from_string_or_number"
+    )]
+    pub batch_id: i64,
+    pub status: String,
+    pub node_name: Option<String>,
+    pub claimed_at: Option<DateTime<Utc>>,
 }
 
 /// Status of a batch in the work queue.
@@ -343,6 +357,7 @@ pub struct SamplerQueueRollingAverages {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SamplerQueueRuntimeMetrics {
+    pub blocker: Option<QueueBlocker>,
     pub db_pending_batches: Option<i64>,
     pub db_claimed_batches: Option<i64>,
     pub db_completed_batches: Option<i64>,
@@ -445,6 +460,29 @@ pub struct RunStageSnapshot {
 mod tests {
     use super::{ResultSourceRef, WorkerRole};
     use std::str::FromStr;
+
+    #[test]
+    fn queue_blocker_survives_persisted_performance_roundtrip() {
+        let metrics = super::SamplerQueueRuntimeMetrics {
+            blocker: Some(super::QueueBlocker {
+                batch_id: i64::MAX,
+                status: "claimed".into(),
+                node_name: Some("worker".into()),
+                claimed_at: Some(chrono::Utc::now()),
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&metrics).unwrap();
+        assert_eq!(json["blocker"]["batch_id"], i64::MAX.to_string());
+        let restored: super::SamplerQueueRuntimeMetrics = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.blocker.unwrap().batch_id, i64::MAX);
+        assert!(
+            serde_json::from_str::<super::SamplerQueueRuntimeMetrics>("{}")
+                .unwrap()
+                .blocker
+                .is_none()
+        );
+    }
 
     #[test]
     fn worker_role_accepts_only_canonical_spelling() {
