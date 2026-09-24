@@ -34,9 +34,8 @@ Backend panel poll endpoints -> usePanelSource -> PanelCollection -> renderers
 - `TaskOutputPanel` renders the selected task from one server-owned poll
   response containing panel specs plus `replace` and `append` updates.
 - `PerformanceWorkspace` has Overview, Diagnostics, and Graphs views.
-  Overview and Diagnostics use the latest 60 seconds. Graphs has full recorded
-  history with one linked time selection for activity and throughput; there is
-  no window dropdown.
+  All three share 30 s, 5 min and All presets plus a Custom graph selection.
+  The graph navigator retains the full recorded history in every mode.
   Overview shows accepted progress/rate, live-worker reporting coverage, busy
   fractions, allocated core-hours, GammaBoard process RSS with coverage, and age.
   Diagnostics holds worker intervals, queue/batch state, operation timings,
@@ -73,21 +72,33 @@ queue. The frontend does not branch on local vs external spawning.
 
 ## Measurement semantics
 
-The performance endpoint accepts `window_seconds` (default 60, bounded to
-15–300); the dashboard uses 60 seconds. Current usage requires a live matching
-identity and task. Publications are asynchronous: the
-requested bounds are shared, while each worker's actual observed span is shown
-in Diagnostics. Rate and busy fractions require two current-epoch reports;
-warm-up, resets, missing reports, and reports older than ten seconds yield
-unavailable values. A failed refresh or ten seconds without a successful
-response hides the previous measurements. Measured zero remains zero.
+Overview, Diagnostics and Graphs share **30 s · 5 min · All**, defaulting to
+30 seconds. Presets follow the latest recorded timestamp, including for completed
+runs. Dragging a graph selects a shared Custom interval; a preset restores rolling
+navigation. Activity is first in Overview. Live worker status, report age, memory
+and queue state remain current; accepted progress and allocated core-hours are run
+totals. Their labels distinguish them from selected-interval measurements.
 
-Accepted rate uses the sampler's accepted-sample counter difference over its
-observed interval. The Activity table has two rows (Evaluators and Sampler) and
-two measurements per row (Compute busy and I/O active). Both use cumulative
-occupied seconds and elapsed seconds from one monotonic clock per worker.
-Evaluator rates weight measured worker-time and require all live evaluators to
-report. Missing/legacy counters are unavailable, never inferred from slot counts.
+Both performance endpoints accept either `window_seconds` (positive, supports
+fractional seconds) or `start_ms` and `end_ms` together. No range parameters means
+all recorded history. Requests mixing these modes or selecting an empty range
+are rejected. Intervals at selection boundaries are apportioned uniformly. This
+is an estimate within the reporting cadence, not additional timing resolution.
+
+Graphs and summaries share adjacent, same-identity counter differences. Restarts,
+worker replacements and task changes are never bridged. Activity averages
+measured monotonic worker-time; accepted rate uses sampler counter differences
+over observed publication time. These cover reporting workers, not an assumed
+complete historical fleet. Invalid/reset counters yield unavailable summaries;
+unreported time is not filled with zero. Diagnostics use summed evaluator timing
+deltas divided by sample deltas, including durations in zero-sample intervals.
+Sampler operation counts include only complete reporting intervals, with means
+weighted by operation counts. The measurement panel shows the selected bounds,
+reporting workers and observed worker-time.
+
+Current resources require live, matching worker/task identities and reports at
+most ten seconds old. A failed refresh or ten seconds without a successful
+response hides the summary panels. Measured zero remains zero.
 
 Compute covers materialization/evaluation or generation/training/merge calls,
 including failed attempts. I/O covers work-related database operations, including
@@ -104,10 +115,11 @@ records in pages rather than retaining the entire raw history in server memory.
 One report on either side of the selection preserves intervals across its edges.
 
 The two graphs share draggable time sliders. Zooming requests finer detail;
-Full history restores the complete range. Past selections stay fixed in absolute
+All restores the complete range. Past selections stay fixed in absolute
 time, while a selection at the right edge follows new reports at constant width.
 Graph refresh is five seconds; the coarse navigation history refreshes every
-30 seconds while zoomed. Query cost grows with the number of selected raw reports,
+30 seconds while inspecting a fixed past interval. The full navigator remains
+available in every mode. Query cost grows with the number of selected raw reports,
 although response size and plotting cost stay bounded. Historical data remains
 visible with a warning if refreshing fails.
 
@@ -115,8 +127,7 @@ Graphs keep four stable traces with 0–100% axes and average measured worker-ti
 No min/max overlay or smoothing is applied. Identity changes break lines and
 missing measurements remain gaps. Completed runs retain their history. The
 observed report spacing and display-bin width are shown separately: smaller bins
-cannot recover detail below the original reporting interval. The overview
-requires full live-worker coverage; historical fleet means cover reporting workers.
+cannot recover detail below the original reporting interval. Both overview and graph fleet means cover reporting workers.
 
 Both worker roles default to `performance_snapshot_interval_ms = 2000`. A shorter
 configured interval is a target, not a guaranteed cadence: snapshots run within

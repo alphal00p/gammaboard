@@ -8,7 +8,7 @@ vi.mock("../hooks/useRunTasks", () => ({ useRunTasks: () => ({ tasks: [] }) }));
 vi.mock("../hooks/useRunPerformancePanels", () => ({ useRunPerformancePanels: vi.fn() }));
 vi.mock("./common/RunScopedWorkspace", () => ({ default: ({ children }) => children }));
 vi.mock("./runs/QueueTuningPanel", () => ({ default: () => <div>Queue controls</div> }));
-vi.mock("./PerformanceGraphs", () => ({ default: () => <div>Historical graphs</div> }));
+vi.mock("./PerformanceGraphs", () => ({ default: ({ onSelectionChange }) => <button onClick={() => onSelectionChange({ start: 1000, end: 2000, follow: false })}>Historical graphs</button> }));
 vi.mock("./panels/PanelCollection", () => ({ default: ({ panelStates }) => <div data-testid="measurements">{JSON.stringify(panelStates)}</div> }));
 
 const props = { runs: [{ run_id: 1 }], workers: [], selectedRun: 1, isConnected: true };
@@ -49,12 +49,22 @@ describe("performance measurements", () => {
     expect(screen.queryByText("Queue controls")).not.toBeInTheDocument();
   });
 
-  test("uses a fixed live window without a dropdown; graphs navigate history separately", () => {
-    render(<PerformanceWorkspace {...props} />);
-    expect(screen.queryByRole("combobox", { name: "Measurement window" })).not.toBeInTheDocument();
-    expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ windowSeconds: 60 }));
+  test("shares presets and custom graph selections across tabs and resets on run change", () => {
+    const { rerender } = render(<PerformanceWorkspace {...props} />);
+    expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { seconds: 30 } }));
+    fireEvent.click(screen.getByRole("button", { name: "5 min" }));
+    expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { seconds: 300 } }));
+    fireEvent.click(screen.getByRole("tab", { name: "Diagnostics" }));
+    expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { seconds: 300 } }));
     fireEvent.click(screen.getByRole("tab", { name: "Graphs" }));
-    expect(screen.getByText("Historical graphs")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Historical graphs"));
+    expect(screen.getByRole("button", { name: "Custom" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { start: 1000, end: 2000, follow: false } }));
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ selection: null }));
+    rerender(<PerformanceWorkspace {...props} selectedRun={2} />);
+    expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { seconds: 30 } }));
   });
 
   test("hides retained values on a failed or missing refresh", () => {

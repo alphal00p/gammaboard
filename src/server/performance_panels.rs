@@ -4,13 +4,14 @@ use crate::api::performance::PerformanceSnapshot;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelResponse, PanelSpec, PanelState, PanelWidth,
     format_bytes_human, key_value, key_value_panel, replace_panel, sized_panel_spec,
-    table_panel_with_payload, text_panel,
+    table_panel_with_payload,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 mod graphs;
 pub(super) mod history;
+mod measurements;
 
 const MAX_AGE_SECONDS: f64 = 10.0;
 
@@ -80,53 +81,6 @@ impl Interval<'_> {
         // Both counters use the same monotonic clock; tolerate only floating-point error.
         (busy <= seconds + 1e-9).then_some(100.0 * (busy / seconds).min(1.0))
     }
-
-    fn cost_us(&self, pointer: &str) -> Option<f64> {
-        let samples = self.delta("/samples_evaluated")?;
-        if samples <= 0.0 {
-            return None;
-        }
-        self.delta(pointer).map(|v| v * 1e6 / samples)
-    }
-}
-
-fn interval<'a>(
-    rows: &'a [Value],
-    latest: &Value,
-    node: &Value,
-    snapshot: &PerformanceSnapshot,
-    since: DateTime<Utc>,
-) -> Option<Interval<'a>> {
-    if !matches_worker(latest, node, snapshot)
-        || age(latest, snapshot.observed_at).is_none_or(|age| age > MAX_AGE_SECONDS)
-    {
-        return None;
-    }
-    let evaluator = node["active_role"] == "evaluator";
-    let mut matching = rows.iter().filter(|r| {
-        matches_worker(r, node, snapshot)
-            && epoch(r, evaluator) == epoch(latest, evaluator)
-            && timestamp(r).is_some_and(|t| t >= since && t <= snapshot.observed_at)
-    });
-    let first = matching.next()?;
-    let last = matching.next_back()?;
-    let seconds = (timestamp(last)? - timestamp(first)?).num_milliseconds() as f64 / 1000.0;
-    if seconds <= 0.0 || age(last, snapshot.observed_at)? > MAX_AGE_SECONDS {
-        return None;
-    }
-    let result = Interval {
-        first,
-        last,
-        seconds,
-        evaluator,
-    };
-    // A reset is not a zero-throughput interval.
-    result.delta(if evaluator {
-        "/samples_evaluated"
-    } else {
-        "/completed_samples_total"
-    })?;
-    Some(result)
 }
 
 fn add_panel(
@@ -147,14 +101,12 @@ fn add_panel(
     states.push(state);
 }
 
-pub(super) fn build_performance_response(
+fn build_performance_response(
     snapshot: &PerformanceSnapshot,
-    evaluator_rows: &[Value],
-    sampler_rows: &[Value],
-    window_seconds: i64,
+    measurement: &measurements::Measurements,
+    range: Option<[i64; 2]>,
     selected_node: Option<&str>,
 ) -> PanelResponse {
-    let since = snapshot.observed_at - chrono::Duration::seconds(window_seconds);
     let nodes = snapshot
         .nodes
         .iter()
@@ -168,16 +120,11 @@ pub(super) fn build_performance_response(
         })
         .collect::<Vec<_>>();
     let mut fresh_count = 0;
-    let mut interval_count = 0;
     let mut memory_count = 0;
     let mut rss = 0i64;
     let mut ages = Vec::new();
-    let mut spans = Vec::new();
-    let mut evaluator_busy = Vec::new();
-    let mut sampler_interval = None;
     let mut sampler_latest = None;
     let mut worker_rows = Vec::new();
-    let mut evaluator_details = Vec::new();
     for node in &nodes {
         let evaluator = node["active_role"] == "evaluator";
         let latest = if evaluator {
@@ -199,36 +146,10 @@ pub(super) fn build_performance_response(
             rss = rss.saturating_add(bytes);
             memory_count += 1;
         }
-        let measured = fresh.and_then(|r| {
-            interval(
-                if evaluator {
-                    evaluator_rows
-                } else {
-                    sampler_rows
-                },
-                r,
-                node,
-                snapshot,
-                since,
-            )
-        });
-        if let Some(value) = &measured {
-            interval_count += 1;
-            spans.push(value.seconds);
-            if evaluator {
-                evaluator_busy.push((
-                    value.busy_percent("compute"),
-                    value.busy_percent("io"),
-                    value.busy_seconds(),
-                ));
-            }
-        }
         let status = if matched.is_none() {
             "Missing/current identity not reported"
         } else if fresh.is_none() {
             "Stale"
-        } else if measured.is_none() {
-            "Waiting for two snapshots"
         } else {
             "Current"
         };
@@ -237,25 +158,9 @@ pub(super) fn build_performance_response(
             node["active_role"].clone(),
             json!(status),
             json!(age_seconds),
-            json!(measured.as_ref().map(|v| v.seconds)),
             json!(memory.map(format_bytes_human)),
         ]);
-        if evaluator && selected_node.is_none_or(|name| node["name"] == name) {
-            let value = measured.as_ref();
-            evaluator_details.push(vec![
-                node["name"].clone(),
-                json!(value.and_then(|v| v.busy_percent("compute"))),
-                json!(value.and_then(|v| v.busy_percent("io"))),
-                json!(value.and_then(|v| v.delta("/samples_evaluated"))),
-                json!(value.and_then(|v| v.cost_us("/cumulative/evaluate_seconds"))),
-                json!(value.and_then(|v| v.cost_us("/cumulative/materialize_seconds"))),
-                json!(value.and_then(|v| v.cost_us("/cumulative/fetch_wait_seconds"))),
-                json!(value.and_then(|v| v.cost_us("/cumulative/submit_seconds"))),
-                json!(value.and_then(|v| v.cost_us("/cumulative/submit_wait_seconds"))),
-            ]);
-        }
         if !evaluator {
-            sampler_interval = measured;
             sampler_latest = fresh;
         }
     }
@@ -265,48 +170,58 @@ pub(super) fn build_performance_response(
         .count();
     let sampler_count = nodes.len() - evaluator_count;
     if sampler_count != 1 {
-        sampler_interval = None;
         sampler_latest = None;
     }
-    let sampler_windows = sampler_interval
-        .as_ref()
-        .map(|interval| graphs::sampler_rows_in_interval(sampler_rows, interval))
-        .unwrap_or_default();
-    let rate = sampler_interval
-        .as_ref()
-        .and_then(|v| v.delta("/completed_samples_total").map(|n| n / v.seconds));
-    let eval_busy = |io: bool| -> Option<f64> {
-        if evaluator_count == 0 || evaluator_busy.len() != evaluator_count {
-            return None;
-        }
-        let (mut total, mut elapsed) = (0.0, 0.0);
-        for &(compute, input_output, seconds) in &evaluator_busy {
-            let seconds = seconds?;
-            total += if io { input_output? } else { compute? } * seconds;
-            elapsed += seconds;
-        }
-        Some(total / elapsed)
-    };
     let mut panels = Vec::new();
     let mut states = Vec::new();
     add_panel(
         &mut panels,
         &mut states,
+        "busy_rates",
+        "Activity — selected interval",
+        PanelKind::Table,
+        table_panel_with_payload(
+            "busy_rates",
+            ["Role", "Compute busy (%)", "I/O active (%)"]
+                .map(String::from)
+                .to_vec(),
+            vec![
+                vec![
+                    json!("Evaluators"),
+                    json!(measurement.busy[0].value()),
+                    json!(measurement.busy[1].value()),
+                ],
+                vec![
+                    json!("Sampler"),
+                    json!(measurement.busy[2].value()),
+                    json!(measurement.busy[3].value()),
+                ],
+            ],
+            None,
+        ),
+    );
+    add_panel(
+        &mut panels,
+        &mut states,
         "performance_overview",
-        "Usage overview",
+        "Progress and current resources",
         PanelKind::KeyValue,
         key_value_panel(
             "performance_overview",
             vec![
                 key_value(
                     "accepted_samples",
-                    "Accepted Samples",
+                    "Accepted Samples (run total)",
                     snapshot.completed_samples,
                 ),
-                key_value("accepted_rate", "Accepted Samples / s", rate),
+                key_value(
+                    "accepted_rate",
+                    "Accepted Samples / s (selected interval)",
+                    measurement.rate.value(),
+                ),
                 key_value(
                     "live_workers",
-                    "Live Workers (evaluators / samplers)",
+                    "Live Workers Now (evaluators / samplers)",
                     format!("{evaluator_count} / {sampler_count}"),
                 ),
                 key_value(
@@ -315,18 +230,13 @@ pub(super) fn build_performance_response(
                     format!("{fresh_count} / {}", nodes.len()),
                 ),
                 key_value(
-                    "interval_coverage",
-                    "Workers With Measured Intervals",
-                    format!("{interval_count} / {}", nodes.len()),
-                ),
-                key_value(
                     "allocated_core_hours",
                     "Allocated Core-hours (run total)",
                     snapshot.allocated_core_seconds / 3600.0,
                 ),
                 key_value(
                     "process_rss",
-                    "Reported GammaBoard Process RSS",
+                    "Current GammaBoard Process RSS",
                     (memory_count > 0).then(|| format_bytes_human(rss)),
                 ),
                 key_value(
@@ -345,54 +255,45 @@ pub(super) fn build_performance_response(
     add_panel(
         &mut panels,
         &mut states,
-        "busy_rates",
-        "Activity",
-        PanelKind::Table,
-        table_panel_with_payload(
-            "busy_rates",
-            ["Role", "Compute busy (%)", "I/O active (%)"]
-                .map(String::from)
-                .to_vec(),
-            vec![
-                vec![
-                    json!("Evaluators"),
-                    json!(eval_busy(false)),
-                    json!(eval_busy(true)),
-                ],
-                vec![
-                    json!("Sampler"),
-                    json!(
-                        sampler_interval
-                            .as_ref()
-                            .and_then(|v| v.busy_percent("compute"))
-                    ),
-                    json!(sampler_interval.as_ref().and_then(|v| v.busy_percent("io"))),
-                ],
-            ],
-            None,
-        ),
-    );
-    add_panel(
-        &mut panels,
-        &mut states,
         "measurement_window",
         "Measurement window",
         PanelKind::KeyValue,
         key_value_panel(
             "measurement_window",
             vec![
-                key_value("since", "From", since),
-                key_value("until", "To", snapshot.observed_at),
-                key_value("window_seconds", "Requested Window (s)", window_seconds),
+                key_value(
+                    "since",
+                    "From",
+                    range.and_then(|r| DateTime::from_timestamp_millis(r[0])),
+                ),
+                key_value(
+                    "until",
+                    "To",
+                    range.and_then(|r| DateTime::from_timestamp_millis(r[1])),
+                ),
+                key_value(
+                    "window_seconds",
+                    "Recorded Window (s)",
+                    range.map(|r| (r[1] - r[0]) as f64 / 1000.0),
+                ),
                 key_value(
                     "observed_seconds",
-                    "Shortest Observed Worker Interval (s)",
-                    spans.into_iter().reduce(f64::min),
+                    "Observed Reporting Worker-time (s)",
+                    measurement.workers.values().map(|w| w.seconds).sum::<f64>(),
+                ),
+                key_value(
+                    "measured_workers",
+                    "Reporting Workers in Interval (evaluators / samplers)",
+                    format!(
+                        "{} / {}",
+                        measurement.workers.keys().filter(|(e, _)| *e).count(),
+                        measurement.workers.keys().filter(|(e, _)| !*e).count()
+                    ),
                 ),
                 key_value(
                     "scope",
                     "Scope",
-                    "Activity uses measured worker-time within this window, with full live-worker coverage. Compute and I/O can overlap; I/O stops at completion. These are operation wall times. RSS excludes subprocesses, GPUs and services.",
+                    "Activity and rates cover recorded reporting intervals; missing time is not zero. Boundary intervals are apportioned uniformly, as in the graphs. Compute and I/O can overlap; I/O stops at completion. These are operation wall times. Worker status, memory and queue state are current; accepted progress and core-hours are run totals. RSS excludes subprocesses, GPUs and services.",
                 ),
             ],
         ),
@@ -401,20 +302,13 @@ pub(super) fn build_performance_response(
         &mut panels,
         &mut states,
         "worker_coverage",
-        "Worker reporting coverage",
+        "Current worker reporting coverage",
         PanelKind::Table,
         table_panel_with_payload(
             "worker_coverage",
-            [
-                "Worker",
-                "Role",
-                "Telemetry",
-                "Age (s)",
-                "Observed interval (s)",
-                "Process RSS",
-            ]
-            .map(String::from)
-            .to_vec(),
+            ["Worker", "Role", "Telemetry", "Age (s)", "Process RSS"]
+                .map(String::from)
+                .to_vec(),
             worker_rows,
             None,
         ),
@@ -423,7 +317,7 @@ pub(super) fn build_performance_response(
         &mut panels,
         &mut states,
         "evaluator_diagnostics",
-        "Evaluator operations — separate wall durations",
+        "Evaluator operations — selected interval",
         PanelKind::Table,
         table_panel_with_payload(
             "evaluator_diagnostics",
@@ -431,7 +325,7 @@ pub(super) fn build_performance_response(
                 "Worker",
                 "Compute busy (%)",
                 "I/O active (%)",
-                "Submitted samples",
+                "Submitted samples (boundary estimate)",
                 "Evaluate (µs/sample)",
                 "Materialize (µs/sample)",
                 "Exposed fetch wait (µs/sample)",
@@ -440,7 +334,14 @@ pub(super) fn build_performance_response(
             ]
             .map(String::from)
             .to_vec(),
-            evaluator_details,
+            measurement
+                .workers
+                .iter()
+                .filter(|((evaluator, name), _)| {
+                    *evaluator && selected_node.is_none_or(|selected| selected == name)
+                })
+                .map(|((_, name), worker)| worker.row(name))
+                .collect(),
             None,
         ),
     );
@@ -448,21 +349,7 @@ pub(super) fn build_performance_response(
     if let Some(latest) = sampler_latest {
         sampler_queue_panels(&mut panels, &mut states, latest, snapshot.observed_at);
     }
-    if sampler_interval.is_some() {
-        add_sampler_timings(&mut panels, &mut states, &sampler_windows);
-    } else {
-        add_panel(
-            &mut panels,
-            &mut states,
-            "sampler_diagnostics_status",
-            "Sampler diagnostics",
-            PanelKind::Text,
-            text_panel(
-                "sampler_diagnostics_status",
-                "No current sampler measurement interval is available.",
-            ),
-        );
-    }
+    add_sampler_timings(&mut panels, &mut states, &measurement.timings);
     PanelResponse::new(
         format!("run:{}:performance", snapshot.run_id),
         None,
@@ -537,99 +424,97 @@ fn sampler_queue_panels(
     );
 }
 
-fn add_sampler_timings(panels: &mut Vec<PanelSpec>, states: &mut Vec<PanelState>, rows: &[&Value]) {
+const SAMPLER_TIMINGS: &[(&str, &str, &str)] = &[
+    (
+        "/sampler/eval_ms_per_batch",
+        "Evaluate + materialize",
+        "batch",
+    ),
+    (
+        "/sampler/eval_ms_per_sample",
+        "Evaluate + materialize",
+        "sample",
+    ),
+    (
+        "/sampler/produce_ms_per_sample",
+        "Sample generation",
+        "sample",
+    ),
+    (
+        "/sampler/training_ingest_ms_per_sample",
+        "Training ingestion",
+        "sample",
+    ),
+    (
+        "/sampler/completed_training_ingest_ms",
+        "Training ingestion",
+        "pass",
+    ),
+    (
+        "/sampler/completed_merge_ingest_ms",
+        "Accumulator merge",
+        "pass",
+    ),
+    (
+        "/sampler/persist_accumulator_ms",
+        "Accumulator persistence",
+        "operation",
+    ),
+    (
+        "/sampler/completed_delete_ms",
+        "Completed batch cleanup",
+        "operation",
+    ),
+    (
+        "/sampler/reclaim_ms",
+        "Abandoned batch reclaim",
+        "operation",
+    ),
+    (
+        "/queue/rolling/fetch_completed_ms",
+        "Result fetch",
+        "operation",
+    ),
+    (
+        "/queue/rolling/insert_bundle_ms",
+        "Insert bundle",
+        "operation",
+    ),
+    (
+        "/queue/rolling/insert_bundle_ms_per_batch",
+        "Insert bundle",
+        "batch",
+    ),
+    (
+        "/queue/rolling/insert_bundle_serialize_ms",
+        "Insert serialization",
+        "operation",
+    ),
+    (
+        "/queue/rolling/insert_bundle_db_batches_ms",
+        "Batch SQL",
+        "operation",
+    ),
+    (
+        "/queue/rolling/insert_bundle_db_inputs_ms",
+        "Input SQL",
+        "operation",
+    ),
+    (
+        "/queue/rolling/insert_bundle_commit_ms",
+        "Insert commit",
+        "operation",
+    ),
+];
+
+fn add_sampler_timings(
+    panels: &mut Vec<PanelSpec>,
+    states: &mut Vec<PanelState>,
+    timings: &std::collections::BTreeMap<&str, (u64, f64)>,
+) {
     let mut timing_rows = Vec::new();
-    for (path, label, unit) in [
-        (
-            "/sampler/eval_ms_per_batch",
-            "Evaluate + materialize",
-            "batch",
-        ),
-        (
-            "/sampler/eval_ms_per_sample",
-            "Evaluate + materialize",
-            "sample",
-        ),
-        (
-            "/sampler/produce_ms_per_sample",
-            "Sample generation",
-            "sample",
-        ),
-        (
-            "/sampler/training_ingest_ms_per_sample",
-            "Training ingestion",
-            "sample",
-        ),
-        (
-            "/sampler/completed_training_ingest_ms",
-            "Training ingestion",
-            "pass",
-        ),
-        (
-            "/sampler/completed_merge_ingest_ms",
-            "Accumulator merge",
-            "pass",
-        ),
-        (
-            "/sampler/persist_accumulator_ms",
-            "Accumulator persistence",
-            "operation",
-        ),
-        (
-            "/sampler/completed_delete_ms",
-            "Completed batch cleanup",
-            "operation",
-        ),
-        (
-            "/sampler/reclaim_ms",
-            "Abandoned batch reclaim",
-            "operation",
-        ),
-        (
-            "/queue/rolling/fetch_completed_ms",
-            "Result fetch",
-            "operation",
-        ),
-        (
-            "/queue/rolling/insert_bundle_ms",
-            "Insert bundle",
-            "operation",
-        ),
-        (
-            "/queue/rolling/insert_bundle_ms_per_batch",
-            "Insert bundle",
-            "batch",
-        ),
-        (
-            "/queue/rolling/insert_bundle_serialize_ms",
-            "Insert serialization",
-            "operation",
-        ),
-        (
-            "/queue/rolling/insert_bundle_db_batches_ms",
-            "Batch SQL",
-            "operation",
-        ),
-        (
-            "/queue/rolling/insert_bundle_db_inputs_ms",
-            "Input SQL",
-            "operation",
-        ),
-        (
-            "/queue/rolling/insert_bundle_commit_ms",
-            "Insert commit",
-            "operation",
-        ),
-    ] {
-        let mut count = 0u64;
-        let mut total = 0.0;
-        for row in rows {
-            let metric = data(row, false).pointer(path).unwrap_or(&Value::Null);
-            if let (Some(n), Some(sum)) = (metric["count"].as_u64(), finite(&metric["total"])) {
-                count += n;
-                total += sum;
-            }
-        }
+    for &(path, label, unit) in SAMPLER_TIMINGS {
+        let (count, total) = timings.get(path).copied().unwrap_or_default();
         if count > 0 {
             timing_rows.push(vec![
                 json!(label),
@@ -644,7 +529,7 @@ fn add_sampler_timings(panels: &mut Vec<PanelSpec>, states: &mut Vec<PanelState>
         panels,
         states,
         "sampler_operation_timings",
-        "Sampler and I/O observations in the measured interval",
+        "Sampler observations — complete reporting intervals only",
         PanelKind::Table,
         table_panel_with_payload(
             "sampler_operation_timings",

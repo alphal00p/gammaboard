@@ -40,7 +40,6 @@ use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelRequest, PanelResponse, PanelWidth, replace_panel,
     sized_panel_spec, text_panel,
 };
-use crate::server::performance_panels::build_performance_response;
 use crate::server::run_panels::build_run_panel_response;
 use crate::server::task_panels::{TaskPanelSource, parse_cursor as parse_task_panel_cursor};
 use crate::server::worker_panels::build_worker_panel_response;
@@ -428,17 +427,6 @@ struct LogQuery {
 
 fn default_log_limit() -> i64 {
     500
-}
-
-#[derive(Deserialize)]
-struct PerformanceHistoryQuery {
-    #[serde(default = "default_performance_window")]
-    window_seconds: i64,
-    node_name: Option<String>,
-}
-
-fn default_performance_window() -> i64 {
-    60
 }
 
 fn clamp_limit(limit: i64) -> i64 {
@@ -1680,59 +1668,34 @@ async fn shutdown_control_process(
     json_response(serde_json::json!({ "shutdown_requested": true }))
 }
 
-#[derive(Deserialize)]
-struct PerformanceGraphQuery {
-    start_ms: Option<i64>,
-    end_ms: Option<i64>,
-}
-
 async fn get_run_performance_graphs(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
-    Query(params): Query<PerformanceGraphQuery>,
+    Query(params): Query<performance_panels::history::RangeQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if state.store.get_run_progress(id).await?.is_none() {
         return Err(ApiError::NotFound(format!("run {id}")));
     }
-    if params.start_ms.is_some() != params.end_ms.is_some()
-        || params
-            .start_ms
-            .zip(params.end_ms)
-            .is_some_and(|(a, b)| a >= b)
-    {
-        return Err(ApiError::BadRequest(
-            "supply start_ms < end_ms together".into(),
-        ));
-    }
     json_response(
-        performance_panels::history::response(&state.store, id, params.start_ms, params.end_ms)
-            .await?,
+        performance_panels::history::load(&state.store, id, &params, false)
+            .await?
+            .response()?,
     )
 }
 
 async fn get_run_performance(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
-    Query(params): Query<PerformanceHistoryQuery>,
+    Query(params): Query<performance_panels::history::RangeQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     if state.store.get_run_progress(id).await?.is_none() {
         return Err(ApiError::NotFound(format!("run {id}")));
     }
-    let seconds = params.window_seconds.clamp(15, 300);
     let snapshot = crate::api::performance::snapshot(&state.store, id)
         .await
         .map_err(|err| ApiError::Internal(err.to_string()))?;
-    let (evaluators, samplers) =
-        crate::api::performance::history_window(&state.store, &snapshot, seconds)
-            .await
-            .map_err(|err| ApiError::Internal(err.to_string()))?;
-    json_response(build_performance_response(
-        &snapshot,
-        &evaluators,
-        &samplers,
-        seconds,
-        params.node_name.as_deref(),
-    ))
+    let history = performance_panels::history::load(&state.store, id, &params, true).await?;
+    json_response(history.performance_response(&snapshot, params.node_name.as_deref()))
 }
 
 async fn export_histogram_bundle(

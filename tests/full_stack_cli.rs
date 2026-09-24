@@ -7090,6 +7090,51 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
     assert!(
         zoomed["bin_seconds"].as_f64().unwrap() < history_graphs["bin_seconds"].as_f64().unwrap()
     );
+    let selected_summary: JsonValue = serde_json::from_str(
+        &http_get_with_cookie(
+            &url,
+            &format!(
+                "/api/runs/{run_id}/performance?start_ms={}&end_ms={}",
+                end - 50,
+                end - 10
+            ),
+            &cookie,
+        )
+        .await?,
+    )?;
+    assert_eq!(selected_summary["panels"][0]["panel_id"], "busy_rates");
+    let selected_updates = selected_summary["updates"].as_array().unwrap();
+    let busy = &selected_updates
+        .iter()
+        .find(|v| v["panel"]["panel_id"] == "busy_rates")
+        .unwrap()["panel"];
+    assert!((busy["rows"][0][1].as_f64().unwrap() - 50.).abs() < 1e-9);
+    assert!((busy["rows"][0][2].as_f64().unwrap() - 10.).abs() < 1e-9);
+    let window = &selected_updates
+        .iter()
+        .find(|v| v["panel"]["panel_id"] == "measurement_window")
+        .unwrap()["panel"];
+    let duration = window["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["key"] == "window_seconds")
+        .unwrap();
+    assert!((duration["value"].as_f64().unwrap() - 0.04).abs() < 1e-9);
+    for seconds in [30., 300., 0.04] {
+        let rolling: JsonValue = serde_json::from_str(
+            &http_get_with_cookie(
+                &url,
+                &format!("/api/runs/{run_id}/performance/graphs?window_seconds={seconds}"),
+                &cookie,
+            )
+            .await?,
+        )?;
+        assert_eq!(
+            rolling["selection"][1].as_i64().unwrap() - rolling["selection"][0].as_i64().unwrap(),
+            (seconds * 1000.) as i64
+        );
+    }
     assert_eq!(
         snapshot["samplers"][0]["runtime_metrics"]["batch_size_current"],
         64
@@ -7128,6 +7173,19 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
         ])
         .assert()
         .success();
+    let historical_summary: JsonValue = serde_json::from_str(
+        &http_get_with_cookie(&url, &format!("/api/runs/{run_id}/performance"), &cookie).await?,
+    )?;
+    let busy = &historical_summary["updates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["panel"]["panel_id"] == "busy_rates")
+        .unwrap()["panel"];
+    assert!(
+        busy["rows"][0][1].as_f64().is_some(),
+        "paused runs retain selected measurements"
+    );
     harness.cleanup().await?;
     Ok(())
 }

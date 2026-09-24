@@ -6,12 +6,73 @@ use super::{
 use crate::PgStore;
 use crate::api::ApiError;
 
-pub(in crate::server) async fn response(
+#[derive(Default, serde::Deserialize)]
+pub(in crate::server) struct RangeQuery {
+    pub window_seconds: Option<f64>,
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
+    pub node_name: Option<String>,
+}
+
+impl RangeQuery {
+    pub(super) fn validate(&self) -> Result<(), ApiError> {
+        if self.start_ms.is_some() != self.end_ms.is_some()
+            || self.start_ms.zip(self.end_ms).is_some_and(|(a, b)| a >= b)
+            || self.window_seconds.is_some_and(|seconds| {
+                !seconds.is_finite()
+                    || seconds <= 0.0
+                    || seconds > i32::MAX as f64
+                    || self.start_ms.is_some()
+            })
+        {
+            return Err(ApiError::BadRequest(
+                "supply either a positive window_seconds or start_ms < end_ms together".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(in crate::server) struct History {
+    bounds: Option<[i64; 2]>,
+    selection: Option<[i64; 2]>,
+    graphs: Graphs,
+}
+
+impl History {
+    pub(in crate::server) fn performance_response(
+        &self,
+        snapshot: &PerformanceSnapshot,
+        selected_node: Option<&str>,
+    ) -> PanelResponse {
+        build_performance_response(
+            snapshot,
+            &self.graphs.measurements,
+            self.selection,
+            selected_node,
+        )
+    }
+
+    pub(in crate::server) fn response(self) -> Result<Value, ApiError> {
+        let Some([start, end]) = self.selection else {
+            return Ok(json!({"bounds": null, "panels": [], "states": []}));
+        };
+        let cadence = serde_json::to_value(&self.graphs.cadence)
+            .map_err(|error| ApiError::Internal(error.to_string()))?;
+        let (panels, states) = self.graphs.panels();
+        Ok(json!({"bounds": self.bounds, "selection": [start, end],
+            "bin_seconds": (end - start) as f64 / DISPLAY_BINS as f64 / 1000.0,
+            "cadence": cadence, "panels": panels, "states": states}))
+    }
+}
+
+pub(in crate::server) async fn load(
     store: &PgStore,
     run_id: i32,
-    start_ms: Option<i64>,
-    end_ms: Option<i64>,
-) -> Result<Value, ApiError> {
+    range: &RangeQuery,
+    diagnostics: bool,
+) -> Result<History, ApiError> {
+    range.validate()?;
     let bounds: (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
         r#"
         SELECT min(first), max(last) FROM (
@@ -28,14 +89,25 @@ pub(in crate::server) async fn response(
     .await
     .map_err(crate::core::StoreError::from)?;
     let Some((first, last)) = bounds.0.zip(bounds.1) else {
-        return Ok(json!({"bounds": null, "panels": [], "states": []}));
+        return Ok(History {
+            bounds: None,
+            selection: None,
+            graphs: Graphs::new([0.0, 1.0]),
+        });
     };
     let bounds = [
         first.timestamp_millis(),
         last.timestamp_millis().max(first.timestamp_millis() + 1),
     ];
-    let start = start_ms.unwrap_or(bounds[0]).max(bounds[0]);
-    let end = end_ms.unwrap_or(bounds[1]).min(bounds[1]);
+    let end = range.end_ms.unwrap_or(bounds[1]).min(bounds[1]);
+    let start = range
+        .start_ms
+        .unwrap_or_else(|| {
+            range.window_seconds.map_or(bounds[0], |seconds| {
+                end.saturating_sub((seconds * 1000.0).round().max(1.0) as i64)
+            })
+        })
+        .max(bounds[0]);
     if start >= end {
         return Err(ApiError::BadRequest(
             "selected range does not overlap recorded history".into(),
@@ -59,14 +131,23 @@ pub(in crate::server) async fn response(
             "runtime_metrics",
         ),
     ] {
-        // Only project counters needed by graphs. Never load histogram/engine diagnostics.
+        // Bound memory with keyset pages; exclude histogram/engine diagnostics.
+        let diagnostic_fields = if !diagnostics {
+            String::new()
+        } else if evaluator {
+            format!(", 'cumulative', {field}->'cumulative'")
+        } else {
+            format!(
+                ", 'sampler', {field}->'sampler', 'queue', jsonb_build_object('rolling', {field}->'queue'->'rolling')"
+            )
+        };
         let payload = format!(
             r#"jsonb_build_object('worker_id', worker_id, 'created_at', created_at,
             '{field}', jsonb_build_object('epoch', {field}->'epoch',
             'runner_epoch', {field}->'runner_epoch', 'node_uuid', {field}->'node_uuid',
             'task_id', {field}->'task_id', 'busy', {field}->'busy',
             'samples_evaluated', {field}->'samples_evaluated',
-            'completed_samples_total', {field}->'completed_samples_total'))"#
+            'completed_samples_total', {field}->'completed_samples_total'{diagnostic_fields}))"#
         );
         // Boundary neighbors preserve intervals when zooming below the reporting cadence.
         let query = format!(
@@ -117,10 +198,9 @@ pub(in crate::server) async fn response(
             graphs.observe(row, evaluator);
         }
     }
-    let cadence = serde_json::to_value(&graphs.cadence)
-        .map_err(|error| ApiError::Internal(error.to_string()))?;
-    let (panels, states) = graphs.panels();
-    Ok(json!({"bounds": bounds, "selection": [start, end],
-        "bin_seconds": (end - start) as f64 / DISPLAY_BINS as f64 / 1000.0,
-        "cadence": cadence, "panels": panels, "states": states}))
+    Ok(History {
+        bounds: Some(bounds),
+        selection: Some([start, end]),
+        graphs,
+    })
 }

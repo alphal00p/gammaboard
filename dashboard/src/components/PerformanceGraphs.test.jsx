@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import PerformanceGraphs, { mergeHistoryDetail, selectedBounds } from "./PerformanceGraphs";
@@ -9,6 +10,11 @@ vi.mock("./panels/PanelCollection", () => ({ default: (props) => {
   renderPanels(props);
   return <button onClick={() => props.onPanelValueChange("busy_history", { zoom: { start: 25, end: 50 } })}>Select history</button>;
 } }));
+const Harness = ({ initial = null }) => {
+  const [selection, setSelection] = useState(initial);
+  return <><button onClick={() => setSelection(null)}>All</button>
+    <PerformanceGraphs runId={12} selection={selection} onSelectionChange={setSelection} /></>;
+};
 const full = {
   bounds: [1000, 401000], selection: [1000, 401000], bin_seconds: 2 / 3,
   cadence: [{ intervals: 10, total_seconds: 5, min_seconds: 0.49, max_seconds: 0.51 }, { intervals: 0 }],
@@ -27,17 +33,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 test("graph navigation fetches detail, synchronizes ranges, and can restore full history", async () => {
-  render(<PerformanceGraphs runId={12} />);
+  render(<Harness />);
   await act(async () => vi.advanceTimersByTimeAsync(1));
   expect(fetchRunPerformanceGraphs).toHaveBeenCalledWith(12, null, expect.any(AbortSignal));
   expect(screen.getByText(/Observed report spacing/)).toHaveTextContent("0.5 s average");
   fireEvent.click(screen.getByText("Select history"));
   await act(async () => vi.advanceTimersByTimeAsync(151));
-  expect(fetchRunPerformanceGraphs).toHaveBeenLastCalledWith(12, [101000, 201000], expect.any(AbortSignal));
+  expect(fetchRunPerformanceGraphs).toHaveBeenLastCalledWith(12, { start: 101000, end: 201000 }, expect.any(AbortSignal));
   const values = renderPanels.mock.lastCall[0].panelValues;
   expect(values.busy_history.zoom).toEqual({ start: 25, end: 50 });
   expect(values.accepted_rate_history.zoom).toEqual(values.busy_history.zoom);
-  fireEvent.click(screen.getByText("Full history"));
+  fireEvent.click(screen.getByText("All"));
   await act(async () => vi.advanceTimersByTimeAsync(1));
   expect(fetchRunPerformanceGraphs).toHaveBeenLastCalledWith(12, null, expect.any(AbortSignal));
 });
@@ -58,10 +64,33 @@ test("detail replaces coarse values without drawing across unknown intervals", (
 });
 
 test("a failed refresh keeps historical data visible with a warning", async () => {
-  render(<PerformanceGraphs runId={12} />);
+  render(<Harness />);
   await act(async () => vi.advanceTimersByTimeAsync(1));
   fetchRunPerformanceGraphs.mockRejectedValue(new Error("History offline"));
   await act(async () => vi.advanceTimersByTimeAsync(5000));
   expect(screen.getByText("Select history")).toBeInTheDocument();
   expect(screen.getByRole("alert")).toHaveTextContent("History offline");
+});
+
+
+test("rolling presets constrain the plot and keep full navigation context", async () => {
+  render(<Harness initial={{ seconds: 30 }} />);
+  await act(async () => vi.advanceTimersByTimeAsync(151));
+  expect(fetchRunPerformanceGraphs).toHaveBeenLastCalledWith(12, { start: 371000, end: 401000 }, expect.any(AbortSignal));
+  const props = renderPanels.mock.lastCall[0];
+  expect(props.panelStates[0].x_range).toEqual(full.bounds);
+  expect(props.panelValues.busy_history.zoom).toEqual({ start: 92.5, end: 100 });
+  expect(selectedBounds({ seconds: 300 }, [1000, 2000])).toEqual([1000, 2000]);
+});
+
+
+test("vertical zoom preserves a rolling preset", async () => {
+  const change = vi.fn();
+  render(<PerformanceGraphs runId={12} selection={{ seconds: 30 }} onSelectionChange={change} />);
+  await act(async () => vi.advanceTimersByTimeAsync(151));
+  act(() => renderPanels.mock.lastCall[0].onPanelValueChange("busy_history", {
+    zoom: { start: 92.5, end: 100 }, yZoom: { start: 20, end: 80 },
+  }));
+  expect(change).not.toHaveBeenCalled();
+  expect(renderPanels.mock.lastCall[0].panelValues.busy_history.yZoom).toEqual({ start: 20, end: 80 });
 });

@@ -1,4 +1,4 @@
-import { Alert, Button, Stack, Typography } from "@mui/material";
+import { Alert, Stack, Typography } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRunPerformanceGraphs } from "../services/api";
 import PanelCollection from "./panels/PanelCollection";
@@ -9,8 +9,9 @@ const seconds = (value) => `${Number(value).toLocaleString(undefined, { maximumF
 
 export const selectedBounds = (selection, bounds) => {
   if (!selection || !bounds) return bounds;
-  const end = selection.follow ? bounds[1] : selection.end;
-  const start = selection.follow ? end - (selection.end - selection.start) : selection.start;
+  const end = selection.seconds != null || selection.follow ? bounds[1] : selection.end;
+  const start = selection.seconds != null ? end - selection.seconds * 1000
+    : selection.follow ? end - (selection.end - selection.start) : selection.start;
   return [Math.max(bounds[0], start), Math.min(bounds[1], end)];
 };
 
@@ -32,8 +33,7 @@ export const mergeHistoryDetail = (full, detail) => full.states.map((state) => {
   }) };
 });
 
-const PerformanceGraphs = ({ runId }) => {
-  const [selection, setSelection] = useState(null);
+const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
   const [yViews, setYViews] = useState({});
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -50,14 +50,14 @@ const PerformanceGraphs = ({ runId }) => {
         // Full history is only a bounded navigation overview. Refresh it less
         // often while inspecting a fixed past interval.
         let full = cache.current?.data;
-        if (!full || !selection || selection.follow || Date.now() - cache.current.at > 30000) {
+        if (!full || !selection || selection.seconds != null || selection.follow || Date.now() - cache.current.at > 30000) {
           full = await fetchRunPerformanceGraphs(runId, null, controller.signal);
           if (controller.signal.aborted) return;
           cache.current = { data: full, at: Date.now() };
         }
         const range = selectedBounds(selection, full.bounds);
         const detail = selection && range?.[0] < range?.[1]
-          ? await fetchRunPerformanceGraphs(runId, range, controller.signal) : null;
+          ? await fetchRunPerformanceGraphs(runId, { start: range[0], end: range[1] }, controller.signal) : null;
         if (controller.signal.aborted) return;
         boundsRef.current = full.bounds;
         setData({ full, detail });
@@ -81,15 +81,17 @@ const PerformanceGraphs = ({ runId }) => {
     const bounds = boundsRef.current;
     if (!bounds) return;
     const zoom = readZoomFromPanelValue(value);
-    if (zoom.start <= 0 && zoom.end >= 100) { setSelection(null); return; }
     const width = bounds[1] - bounds[0];
     const start = Math.round(bounds[0] + width * zoom.start / 100);
     const end = Math.round(bounds[0] + width * zoom.end / 100);
     if (end <= start) return;
+    const current = selectedBounds(selection, bounds);
+    // A vertical zoom must not change the shared time-window mode.
+    if (Math.abs(start - current[0]) < 1 && Math.abs(end - current[1]) < 1) return;
+    if (zoom.start <= 0 && zoom.end >= 100) { onSelectionChange(null); return; }
     const follow = zoom.end >= 99.999;
-    setSelection((previous) => previous?.start === start && previous?.end === end && previous?.follow === follow
-      ? previous : { start, end, follow });
-  }, []);
+    if (selection?.start !== start || selection?.end !== end || selection?.follow !== follow) onSelectionChange({ start, end, follow });
+  }, [selection, onSelectionChange]);
 
   const full = data?.full;
   const measured = data?.detail ?? full;
@@ -103,14 +105,13 @@ const PerformanceGraphs = ({ runId }) => {
 
   return <Stack spacing={2}>
     <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
-      <Button size="small" onClick={() => setSelection(null)} disabled={!selection}>Full history</Button>
       <Typography variant="body2" color="text.secondary">
-        {selection ? (selection.follow ? "Following latest" : "Selected interval") : "All recorded history"}
+        {selection ? (selection.follow || selection.seconds != null ? "Following latest recorded data" : "Selected interval") : "All recorded history"}
         {loading ? " · Updating…" : ""}
       </Typography>
     </Stack>
     <Typography variant="body2" color="text.secondary">
-      Drag the time slider handles to zoom; drag its selection to pan. Both graphs share the range.
+      Drag the time slider handles to zoom; drag its selection to pan. All three tabs share the range.
       Select the right edge to follow new data. Zooming loads finer detail.
     </Typography>
     {error && <Alert severity="warning">{error} Displaying the last loaded history.</Alert>}
@@ -124,7 +125,6 @@ const PerformanceGraphs = ({ runId }) => {
       <Typography variant="body2" color="text.secondary">
         Lines are interval averages. No smoothing is applied; gaps are unavailable.
         Historical averages cover reporting workers. Zoom in to resolve pauses.
-        Overview and Diagnostics show the latest 60 seconds.
       </Typography>
     </> : !loading && <Alert severity="info">No recorded performance history yet.</Alert>}
   </Stack>;

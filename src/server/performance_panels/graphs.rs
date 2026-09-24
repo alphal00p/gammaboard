@@ -3,19 +3,6 @@ use super::*;
 use crate::server::panels::{PlotPoint, PlotSeries, PlotXAxis};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) fn sampler_rows_in_interval<'a>(
-    rows: &'a [Value],
-    interval: &Interval<'_>,
-) -> Vec<&'a Value> {
-    rows.iter()
-        .filter(|row| {
-            identity(row, false) == identity(interval.last, false)
-                && timestamp(row) > timestamp(interval.first)
-                && timestamp(row) <= timestamp(interval.last)
-        })
-        .collect()
-}
-
 fn identity(row: &Value, evaluator: bool) -> Option<(&str, &str, &str, &str)> {
     let metrics = data(row, evaluator);
     Some((
@@ -129,6 +116,7 @@ pub(super) struct Graphs {
     groups: BTreeMap<(bool, String), usize>,
     next_group: usize,
     pub(super) cadence: [Cadence; 2],
+    pub(super) measurements: measurements::Measurements,
 }
 
 #[derive(Default, serde::Serialize)]
@@ -146,6 +134,7 @@ impl Graphs {
             groups: BTreeMap::new(),
             next_group: 0,
             cadence: Default::default(),
+            measurements: Default::default(),
         }
     }
 
@@ -184,6 +173,12 @@ impl Graphs {
             seconds,
             evaluator,
         };
+        let overlap = end.min(self.bounds[1]) - start.max(self.bounds[0]);
+        self.measurements.observe(
+            &interval,
+            overlap / (end - start),
+            start >= self.bounds[0] && end <= self.bounds[1],
+        );
         let count = interval.delta(if evaluator {
             "/samples_evaluated"
         } else {

@@ -38,7 +38,17 @@ fn fixture() -> (PerformanceSnapshot, Vec<Value>, Vec<Value>) {
 }
 
 fn overview(snapshot: &PerformanceSnapshot, e: &[Value], s: &[Value]) -> Value {
-    let response = build_performance_response(snapshot, e, s, 60, None);
+    let mut history = graphs::Graphs::new([40000.0, 100000.0]);
+    for (evaluator, rows) in [(true, e), (false, s)] {
+        let mut rows = rows.to_vec();
+        rows.sort_by_key(timestamp);
+        for row in rows {
+            history.observe(row, evaluator);
+        }
+    }
+    let response =
+        build_performance_response(snapshot, &history.measurements, Some([40000, 100000]), None);
+    assert_eq!(response.panels[0].panel_id, "busy_rates");
     let state = response
         .updates
         .iter()
@@ -68,7 +78,7 @@ fn overview(snapshot: &PerformanceSnapshot, e: &[Value], s: &[Value]) -> Value {
 }
 
 #[test]
-fn overview_uses_live_identities_and_counter_intervals() {
+fn overview_separates_current_resources_from_recorded_intervals() {
     let (snapshot, e, s) = fixture();
     let result = overview(&snapshot, &e, &s);
     assert_eq!(result["accepted_rate"], 10.0);
@@ -85,13 +95,13 @@ fn stale_replaced_and_stopped_workers_do_not_supply_current_usage() {
     let (mut snapshot, e, s) = fixture();
     snapshot.nodes[0]["uuid"] = json!("replacement");
     let replaced = overview(&snapshot, &e, &s);
-    assert!(replaced["evaluator_busy"].is_null());
+    assert_eq!(replaced["evaluator_busy"], 50.0);
     assert_eq!(replaced["coverage"], "1 / 2");
     assert_eq!(replaced["memory_coverage"], "1 / 2");
     snapshot.observed_at += chrono::Duration::seconds(20);
     let stale = overview(&snapshot, &e, &s);
-    assert!(stale["accepted_rate"].is_null());
-    assert!(stale["sampler_busy"].is_null());
+    assert_eq!(stale["accepted_rate"], 10.0);
+    assert_eq!(stale["sampler_busy"], 50.0);
     assert!(stale["process_rss"].is_null());
     snapshot
         .nodes
@@ -101,7 +111,7 @@ fn stale_replaced_and_stopped_workers_do_not_supply_current_usage() {
 }
 
 #[test]
-fn rates_require_two_points_in_the_current_epoch_and_requested_window() {
+fn rates_require_two_points_in_one_epoch_and_clip_boundary_intervals() {
     let (snapshot, e, mut s) = fixture();
     s[0]["runtime_metrics"]["runner_epoch"] = json!("old-epoch");
     assert!(overview(&snapshot, &e, &s)["accepted_rate"].is_null());
@@ -110,18 +120,27 @@ fn rates_require_two_points_in_the_current_epoch_and_requested_window() {
     assert!(overview(&snapshot, &e, &s)["accepted_rate"].is_null());
     s[0]["runtime_metrics"]["completed_samples_total"] = json!(0);
     s[0]["created_at"] = json!(DateTime::from_timestamp(30, 0).unwrap());
-    assert!(overview(&snapshot, &e, &s)["accepted_rate"].is_null());
+    assert!(
+        (overview(&snapshot, &e, &s)["accepted_rate"]
+            .as_f64()
+            .unwrap()
+            - 480.0 / 68.0)
+            .abs()
+            < 1e-9
+    );
 }
 
 #[test]
 fn operation_means_use_totals_and_counts_instead_of_summing_conditional_means() {
     let mut panels = Vec::new();
     let mut states = Vec::new();
-    let rows = [
-        json!({"runtime_metrics":{"sampler":{"eval_ms_per_sample":{"count":1,"total":10.0}}}}),
-        json!({"runtime_metrics":{"sampler":{"eval_ms_per_sample":{"count":1000,"total":100.0}}}}),
-    ];
-    add_sampler_timings(&mut panels, &mut states, &rows.iter().collect::<Vec<_>>());
+    let mut history = graphs::Graphs::new([0., 3000.]);
+    for (time, n, total) in [(0, 999, 99999.), (1000, 1, 10.), (2000, 1000, 100.)] {
+        history.observe(json!({"worker_id":"s", "created_at": DateTime::from_timestamp_millis(time).unwrap(),
+            "runtime_metrics":{"runner_epoch":"one", "task_id":"t", "node_uuid":"s", "completed_samples_total":time,
+                "sampler":{"eval_ms_per_sample":{"count":n,"total":total}}}}), false);
+    }
+    add_sampler_timings(&mut panels, &mut states, &history.measurements.timings);
     let value = serde_json::to_value(&states[0]).unwrap();
     let mean = value["rows"][0][4].as_f64().unwrap();
     assert!((mean - 110.0 / 1001.0).abs() < 1e-12);
@@ -163,7 +182,7 @@ fn graphs_keep_four_traces_and_completed_work_without_stale_current_values() {
     let (mut snapshot, e, s) = fixture();
     snapshot.task_id = None;
     snapshot.nodes.clear();
-    assert!(overview(&snapshot, &e, &s)["sampler_busy"].is_null());
+    assert_eq!(overview(&snapshot, &e, &s)["sampler_busy"], 50.0);
     let busy = graph(&snapshot, &e, &s, "busy_history");
     assert_eq!(busy["x_range"], json!([40000.0, 100000.0]));
     assert_eq!(busy["y_range"], json!([0.0, 100.0]));
@@ -219,7 +238,7 @@ fn missing_busy_is_unknown_while_reported_idle_is_zero() {
 }
 
 #[test]
-fn evaluator_fleet_is_time_weighted_and_requires_complete_current_coverage() {
+fn evaluator_fleet_is_time_weighted_and_missing_counters_are_unknown() {
     let (mut snapshot, mut e, s) = fixture();
     let mut node = snapshot.nodes[0].clone();
     node["name"] = json!("e2");
@@ -239,4 +258,68 @@ fn evaluator_fleet_is_time_weighted_and_requires_complete_current_coverage() {
     assert_eq!(value["evaluator_io"], 50.0);
     e.last_mut().unwrap()["metrics"]["busy"] = Value::Null;
     assert!(overview(&snapshot, &e, &s)["evaluator_io"].is_null());
+}
+
+#[test]
+fn selected_interval_clips_counters_but_excludes_partial_operation_counts() {
+    let (_, e, s) = fixture();
+    let mut graphs = graphs::Graphs::new([70000., 82000.]);
+    for (evaluator, rows) in [(true, e), (false, s)] {
+        for row in rows {
+            graphs.observe(row, evaluator);
+        }
+    }
+    let measured = &graphs.measurements;
+    assert_eq!(measured.rate.value(), Some(10.));
+    assert_eq!(measured.busy[0].value(), Some(50.));
+    assert_eq!(measured.workers[&(true, "e".into())].seconds, 12.);
+    assert_eq!(measured.workers[&(true, "e".into())].row("e")[3], 120.);
+    assert!(measured.timings.is_empty());
+}
+
+#[test]
+fn operation_costs_include_time_spent_in_zero_sample_intervals() {
+    let (_, mut e, _) = fixture();
+    let mut middle = e[0].clone();
+    middle["created_at"] = json!(DateTime::from_timestamp(70, 0).unwrap());
+    middle["metrics"]["cumulative"]["evaluate_seconds"] = json!(12.);
+    e.insert(1, middle);
+    let mut graphs = graphs::Graphs::new([50000., 98000.]);
+    for row in e {
+        graphs.observe(row, true);
+    }
+    assert_eq!(
+        graphs.measurements.workers[&(true, "e".into())].row("e")[4],
+        50000.
+    );
+}
+
+#[test]
+fn range_modes_reject_ambiguous_or_invalid_requests() {
+    for query in [
+        json!({"window_seconds":0}),
+        json!({"window_seconds":-1}),
+        json!({"start_ms":100}),
+        json!({"start_ms":100,"end_ms":100}),
+        json!({"window_seconds":30,"start_ms":100,"end_ms":200}),
+    ] {
+        assert!(
+            serde_json::from_value::<history::RangeQuery>(query)
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+    }
+    for query in [
+        json!({}),
+        json!({"window_seconds":0.04}),
+        json!({"start_ms":100,"end_ms":200}),
+    ] {
+        assert!(
+            serde_json::from_value::<history::RangeQuery>(query)
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+    }
 }
