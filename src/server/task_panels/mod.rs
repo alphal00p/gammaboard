@@ -230,12 +230,28 @@ impl RunTaskSpec {
     fn panel_projectors(
         &self,
         effective_accumulator_config: Option<AccumulatorConfig>,
+        evaluator: Option<&crate::core::EvaluatorConfig>,
     ) -> Result<Vec<TaskPanelProjector>, EngineError> {
+        if matches!(self, Self::IntegrationCampaign { .. }) {
+            let mut projectors = integration_campaign::projectors();
+            projectors.push(task_summary_projector(effective_accumulator_config));
+            return Ok(projectors);
+        }
         let mut projectors = vec![task_summary_projector(effective_accumulator_config.clone())];
         projectors.extend(match self {
             Self::SetAccumulator { .. } => Vec::new(),
             Self::Sample { .. } => effective_accumulator_config
-                .map(sample::projectors)
+                .map(|config| {
+                    sample::projectors(
+                        config,
+                        match evaluator {
+                            Some(crate::core::EvaluatorConfig::Gammaloop { params }) => {
+                                Some(params.training_projection)
+                            }
+                            _ => None,
+                        },
+                    )
+                })
                 .unwrap_or_default(),
             Self::Image {
                 geometry, display, ..
@@ -668,12 +684,26 @@ fn plot_accumulator_label(kind: crate::core::PlotAccumulatorKind) -> &'static st
 }
 
 impl TaskPanelSource {
+    pub fn for_campaign(workers: &[crate::core::RegisteredNode]) -> Self {
+        let mut projectors = integration_campaign::projectors_for_workers(workers);
+        projectors.push(task_summary_projector(None));
+        Self { projectors }
+    }
+
     pub fn new(
         task_spec: &RunTaskSpec,
         effective_accumulator_config: Option<AccumulatorConfig>,
     ) -> Result<Self, EngineError> {
+        Self::for_evaluator(task_spec, effective_accumulator_config, None)
+    }
+
+    pub fn for_evaluator(
+        task_spec: &RunTaskSpec,
+        effective_accumulator_config: Option<AccumulatorConfig>,
+        evaluator: Option<&crate::core::EvaluatorConfig>,
+    ) -> Result<Self, EngineError> {
         Ok(Self {
-            projectors: task_spec.panel_projectors(effective_accumulator_config)?,
+            projectors: task_spec.panel_projectors(effective_accumulator_config, evaluator)?,
         })
     }
 
@@ -1085,6 +1115,42 @@ mod tests {
             values_row_major: vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0],
             invalid_entries: vec![],
         })
+    }
+
+    #[test]
+    fn campaign_layout_places_summary_after_sub_runs_and_observables() {
+        let task = RunTaskSpec::IntegrationCampaign {
+            children: vec![],
+            measurement: Default::default(),
+            stop_condition: Default::default(),
+            allocation: Default::default(),
+        };
+        let source = TaskPanelSource::new(&task, None).unwrap();
+        let specs = source
+            .projectors
+            .iter()
+            .map(TaskPanelProjector::spec)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            specs
+                .iter()
+                .map(|spec| spec.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Campaign Progress",
+                "Result",
+                "Campaign Sub-runs",
+                "Combined Observables",
+                "Task Summary"
+            ]
+        );
+        assert!(matches!(specs[0].width, PanelWidth::Half));
+        assert!(matches!(specs[1].width, PanelWidth::Half));
+        assert!(
+            specs[2..]
+                .iter()
+                .all(|spec| matches!(spec.width, PanelWidth::Full))
+        );
     }
 
     #[test]

@@ -89,6 +89,10 @@ impl ScalarAccumulatorState {
         mean_from_sums(self.sum_abs, self.count)
     }
 
+    pub fn mean_abs_stderr(&self) -> f64 {
+        stderr_from_sums(self.sum_abs, self.sum_sq, self.count)
+    }
+
     pub fn variance(&self) -> f64 {
         variance_from_sums(self.sum_weighted_value, self.sum_sq, self.count)
     }

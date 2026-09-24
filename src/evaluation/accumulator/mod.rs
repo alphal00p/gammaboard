@@ -6,6 +6,7 @@ mod gammaloop;
 #[cfg(not(feature = "gammaloop"))]
 #[path = "gammaloop_disabled.rs"]
 mod gammaloop;
+mod gammaloop_statistics;
 mod metrics;
 mod scalar;
 mod vector;

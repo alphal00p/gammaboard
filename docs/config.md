@@ -253,6 +253,29 @@ Sample tasks use direct source specs:
 
 Task names are unique per run and can be referenced by `from_name`.
 
+For gammaloop sample tasks, Result reports the signed real and imaginary means,
+their target comparisons, the means of the absolute real and imaginary
+contributions, and the mean complex norm. `Norm Mean` is the average of each
+sample's `sqrt(re² + im²)`, including Monte Carlo weights; it is not the norm of
+the final complex mean. The absolute-component estimates include uncertainties
+computed from their own absolute moments.
+
+RSD and normalized ESS use the evaluator's training projection, including sampling
+weights, independently of `Norm Mean`. RSD is the standard deviation divided by
+the mean absolute contribution; ESS is `(Σ|w|)² / (N Σw²)`, displayed as a
+dimensionless value from 0 to 1. Existing native gammaloop snapshots have enough
+moments to recover real, imaginary, and norm projection statistics. Historical
+`abs_sq` statistics are unavailable because the required weighted squared-norm
+moments were not stored; Result shows `n/a` instead of a partial estimate. New
+accumulators record these moments when `training_projection = "abs_sq"`.
+
+In Max Weight Points, `Integrand` is the raw real or imaginary gammaloop
+integrand component before parameterization, `Jacobian` is gammaloop's returned
+parameterization Jacobian, and `w` is the point's sampling weight. The weighted
+extremum still includes all applicable weight factors. Numeric columns use
+scientific notation; continuous coordinates show three significant digits,
+with their stored values available under `Full Precision (f64)`.
+
 The top-level `[evaluator]` is shorthand for the initial evaluator stage. If it is omitted, the first explicit compute-task evaluator establishes the immutable run domain. Every later evaluator stage must resolve to that domain. Controller runs never resolve or inherit an evaluator; their child-run TOML owns each child evaluator. This keeps batches, materializers, and accumulator state compatible while allowing implementation and parameters to vary between compute stages.
 
 `batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
@@ -395,6 +418,17 @@ Independent children combine as `I = sum(c_i I_i)` and
 `variance = sum(c_i^2 variance_i)`. Compatible histogram bins are also combined;
 incompatible layouts are reported as omitted. Child-native results remain
 available separately.
+
+The campaign panel places progress and the combined result side by side, followed
+by sub-runs, combined observables, task details, and run identity/lifecycle.
+Sub-run headers sort descending on the first click and ascending on the second;
+the `#` column shows the current row position. Means and errors use scientific
+notation. Relative errors are `100 * error / abs(mean)` (zero for an exact zero,
+infinite for a zero mean with nonzero error). **Absolute components** displays
+the means of `|real|` and `|imag|` with their own standard errors and relative
+errors. The `var ctrb (%)` column still refers to the signed campaign result.
+Older results recover absolute diagnostics from matching child snapshots when
+available; unavailable diagnostics display `n/a`.
 
 Error-based stopping waits until every child has a usable result from its final
 publishing stage and has met its pilot minimum. Sample budgets and allocation

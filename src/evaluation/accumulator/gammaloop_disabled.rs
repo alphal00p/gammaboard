@@ -6,6 +6,10 @@ use crate::core::{AccumulatorMomentConfig, EngineError, RunSpec, TrainingProject
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GammaLoopAccumulatorState {
     pub estimate: VectorAccumulatorState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_projection: Option<crate::evaluation::evaluator::gammaloop::TrainingProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_norm_sqr: Option<Box<super::ScalarAccumulatorState>>,
     #[serde(default)]
     pub diagnostics: GammaLoopDiagnostics,
 }
@@ -42,20 +46,13 @@ pub struct GammaLoopAccumulatorDigest {
 
 impl GammaLoopAccumulatorState {
     pub fn merge_in_place(&mut self, other: Self) -> Result<(), EngineError> {
+        self.merge_training_statistics(&other);
         Accumulator::merge(&mut self.estimate, other.estimate);
         Ok(())
     }
 
     pub fn signal_to_noise(&self) -> f64 {
         self.estimate.signal_to_noise()
-    }
-
-    pub fn rsd(&self) -> f64 {
-        self.estimate.rsd()
-    }
-
-    pub fn ess(&self) -> f64 {
-        self.estimate.ess()
     }
 
     pub fn real_mean(&self) -> f64 {
@@ -188,6 +185,8 @@ impl Default for GammaLoopAccumulatorState {
                 AccumulatorMomentConfig::MaxOrder4,
             ),
             diagnostics: GammaLoopDiagnostics::default(),
+            training_projection: None,
+            training_norm_sqr: None,
         }
     }
 }

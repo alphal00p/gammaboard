@@ -812,8 +812,10 @@ async fn get_run_panels(
     let mut response = build_run_panel_response(&run, &run_spec, &tasks, &workers)
         .map_err(|err| ApiError::Internal(err.to_string()))?;
 
-    let checkpoint = state.store.checkpoint_status(run_id).await?;
-    crate::server::run_panels::append_checkpoint_panel(&mut response, &checkpoint);
+    if run.kind() == "integration" {
+        let checkpoint = state.store.checkpoint_status(run_id).await?;
+        crate::server::run_panels::append_checkpoint_panel(&mut response, &checkpoint);
+    }
 
     let active_task = tasks.iter().find(|task| task.state.as_str() == "active");
     let configs = match active_task {
@@ -1012,7 +1014,9 @@ async fn get_run_task_output(
         .get_run_progress(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let task = load_run_task(&state.store, run_id, task_id).await?;
+    let mut task = load_run_task(&state.store, run_id, task_id).await?;
+    crate::services::measurement::hydrate_campaign_absolute_results(&state.store, &mut task)
+        .await?;
     let effective_accumulator_config =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. }) {
             crate::services::stage::try_resolve_effective_sample_accumulator_config(
@@ -1047,8 +1051,32 @@ async fn get_run_task_output(
     } else {
         None
     };
-    let panel_source = TaskPanelSource::new(&task.task, effective_accumulator_config)
-        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let evaluator = if matches!(
+        effective_accumulator_config,
+        Some(crate::core::AccumulatorConfig::Gammaloop)
+    ) {
+        crate::services::stage::try_resolve_effective_evaluator_config(&state.store, run_id, &task)
+            .await?
+    } else {
+        None
+    };
+    let panel_source = if matches!(
+        task.task,
+        crate::core::RunTaskSpec::IntegrationCampaign { .. }
+    ) {
+        let workers = crate::core::ControlPlaneStore::list_nodes(&state.store, None).await?;
+        TaskPanelSource::for_campaign(&workers)
+    } else {
+        match evaluator.as_ref() {
+            Some(evaluator) => TaskPanelSource::for_evaluator(
+                &task.task,
+                effective_accumulator_config,
+                Some(evaluator),
+            ),
+            None => TaskPanelSource::new(&task.task, effective_accumulator_config),
+        }
+        .map_err(|err| ApiError::Internal(err.to_string()))?
+    };
     let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
             .store

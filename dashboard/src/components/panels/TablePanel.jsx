@@ -5,6 +5,7 @@ import {
   Card,
   CardContent,
   Chip,
+  FormControlLabel,
   Stack,
   Table as MuiTable,
   TableBody,
@@ -12,13 +13,17 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
+  Switch,
+  Tooltip,
   Typography,
 } from "@mui/material";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { apiUrl } from "../../services/api";
 import { asArray } from "../../utils/collections";
-import { formatCentralValueWithError } from "../../utils/formatters";
+import { formatCentralValueWithError, formatScientific } from "../../utils/formatters";
 import { renderStructuredValue } from "./BasicPanels";
+import SamplePointValue from "./SamplePointValue";
 import { downloadTextFile } from "./FigureExportActions";
 import { readHistogramBundleSelectedValue, writeHistogramBundlePanelValue } from "./histogramUtils";
 
@@ -77,6 +82,18 @@ const rowToneChipColor = (rowTone) => {
   return "default";
 };
 
+const compareTableValues = (left, right, direction) => {
+  // Missing results remain last in either direction; compare unformatted values.
+  if (left == null) return right == null ? 0 : 1;
+  if (right == null) return -1;
+  const a = left === "∞" ? Infinity : left;
+  const b = right === "∞" ? Infinity : right;
+  const order = typeof a === "number" && typeof b === "number"
+    ? (a > b ? 1 : a < b ? -1 : 0)
+    : String(a).localeCompare(String(b), undefined, { numeric: true });
+  return direction === "desc" ? -order : order;
+};
+
 const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, onUploadBundle, onRemoveBundle, inputRef }) => (
   <Box sx={{ mb: 1.5 }}>
     <input
@@ -116,9 +133,17 @@ const TablePanel = ({
   bundleUploadError = null,
 }) => {
   const uploadInputRef = useRef(null);
-  const columns = asArray(state?.columns);
-  const rows = asArray(state?.rows);
+  const [sort, setSort] = useState(null);
+  const [absolute, setAbsolute] = useState(false);
   const payload = state?.payload;
+  const absoluteComponents = payload?.absolute_components;
+  const activeData = absolute && absoluteComponents ? absoluteComponents : state;
+  const columns = asArray(activeData?.columns);
+  const rows = asArray(activeData?.rows);
+  const displayRows = rows.map((row, rowIndex) => ({ row, rowIndex }));
+  if (payload?.sortable && sort) {
+    displayRows.sort((a, b) => compareTableValues(a.row[sort.column], b.row[sort.column], sort.direction));
+  }
   const isHistogramBundle = payload?.histograms && typeof payload.histograms === "object" && !Array.isArray(payload.histograms);
   const actions = payload?.actions && typeof payload.actions === "object" ? payload.actions : {};
   const supportsBundleExport = actions.export === true || actions.export_json === true;
@@ -202,6 +227,11 @@ const TablePanel = ({
   };
 
   const renderTableCell = (row, columnIndex) => {
+    const value = row?.[columnIndex];
+    if (value?.kind === "sample_point") return <SamplePointValue point={value} />;
+    if (payload?.column_formats?.[columns[columnIndex]] === "scientific") {
+      return <Box component="span" sx={{ whiteSpace: "nowrap" }}>{typeof value === "number" ? formatScientific(value) : renderStructuredValue(value)}</Box>;
+    }
     if (columnIndex === centralValueIndex && errorIndex >= 0) {
       return formatCentralValueWithError(row?.[columnIndex], row?.[errorIndex], "n/a");
     }
@@ -213,6 +243,15 @@ const TablePanel = ({
       <CardContent>
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
+          {absoluteComponents ? (
+            <Tooltip describeChild title="Means of |real| and |imag|, with their own errors. Variance contribution still refers to the signed campaign result.">
+              <FormControlLabel
+                sx={{ mr: 0 }}
+                control={<Switch size="small" checked={absolute} onChange={(event) => setAbsolute(event.target.checked)} />}
+                label="Absolute components"
+              />
+            </Tooltip>
+          ) : null}
           {supportsBundleExport ? (
             <Stack direction="row" spacing={1} alignItems="center">
               {actions.export_json !== false ? (
@@ -245,18 +284,34 @@ const TablePanel = ({
           </Alert>
         ) : null}
         <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
-          <MuiTable size="small" stickyHeader>
+          <MuiTable size="small" stickyHeader sx={payload?.sortable ? { "& .MuiTableCell-root": { px: 1, whiteSpace: "nowrap" } } : undefined}>
             <TableHead>
               <TableRow>
+                {payload?.row_numbers ? <TableCell sx={{ fontWeight: 600 }}>#</TableCell> : null}
                 {visibleColumnIndices.map((columnIndex) => (
-                  <TableCell key={`${columns[columnIndex]}-${columnIndex}`} sx={{ fontWeight: 600, whiteSpace: "nowrap" }}>
-                    {columns[columnIndex]}
+                  <TableCell
+                    key={`${columns[columnIndex]}-${columnIndex}`}
+                    sortDirection={payload?.sortable && sort?.column === columnIndex ? sort.direction : false}
+                    sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
+                  >
+                    {payload?.sortable ? (
+                      <TableSortLabel
+                        active={sort?.column === columnIndex}
+                        direction={sort?.column === columnIndex ? sort.direction : "desc"}
+                        onClick={() => setSort((previous) => ({
+                          column: columnIndex,
+                          direction: previous?.column === columnIndex && previous.direction === "desc" ? "asc" : "desc",
+                        }))}
+                      >
+                        {columns[columnIndex]}
+                      </TableSortLabel>
+                    ) : columns[columnIndex]}
                   </TableCell>
                 ))}
               </TableRow>
             </TableHead>
             <TableBody>
-              {rows.map((row, rowIndex) => {
+              {displayRows.map(({ row, rowIndex }, position) => {
                 const rowTone = rowTones[rowIndex] || null;
                 return (
                   <TableRow
@@ -294,6 +349,7 @@ const TablePanel = ({
                       : undefined
                   }
                   >
+                  {payload?.row_numbers ? <TableCell>{position + 1}</TableCell> : null}
                   {visibleColumnIndices.map((columnIndex) => (
                     <TableCell
                       key={`${rowIndex}-${columnIndex}`}

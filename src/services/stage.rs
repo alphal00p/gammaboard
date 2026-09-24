@@ -101,3 +101,26 @@ where
 
     Ok(None)
 }
+
+pub async fn try_resolve_effective_evaluator_config<S>(
+    store: &S,
+    run_id: i32,
+    task: &RunTask,
+) -> Result<Option<crate::core::EvaluatorConfig>, StoreError>
+where
+    S: AggregationStore + RunTaskStore + Send + Sync,
+{
+    if let Some(config) = task.task.evaluator_config() {
+        return Ok(Some(config));
+    }
+    if let Some(snapshot) =
+        resolve_task_source_snapshot(store, run_id, task, task.task.evaluator_source()).await?
+        && snapshot.evaluator.is_some()
+    {
+        return Ok(snapshot.evaluator);
+    }
+    Ok(store
+        .load_latest_stage_snapshot_before_sequence(run_id, task.sequence_nr)
+        .await?
+        .and_then(|snapshot| snapshot.evaluator))
+}

@@ -384,13 +384,13 @@ const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
     LEFT JOIN (
         SELECT desired_run_id AS run_id, COUNT(*) AS desired_assignment_count
         FROM nodes
-        WHERE desired_run_id IS NOT NULL
+        WHERE desired_run_id IS NOT NULL AND lease_expires_at > now()
         GROUP BY desired_run_id
     ) da ON r.id = da.run_id
     LEFT JOIN (
         SELECT active_run_id AS run_id, COUNT(*) AS active_worker_count
         FROM nodes
-        WHERE active_run_id IS NOT NULL
+        WHERE active_run_id IS NOT NULL AND lease_expires_at > now()
         GROUP BY active_run_id
     ) aw ON r.id = aw.run_id
 "#;

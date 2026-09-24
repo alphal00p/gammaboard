@@ -1881,6 +1881,211 @@ fn empty_batch_result() -> gammaboard::evaluation::BatchResult {
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn campaign_stall_checkpoint_jsonb_number_roundtrip_preserves_recovery() {
+    use gammaboard::core::{AggregationStore, SamplerAggregatorCheckpoint};
+    use gammaboard::evaluation::AccumulatorState;
+    use gammaboard::sampling::SamplerAggregatorSnapshot;
+    use serde_json::{Value, json};
+
+    let (_guard, store) = locked_test_store().await;
+    let (run, task, node, ids) = reliability_fixture(&store, 2).await;
+    for _ in 0..2 {
+        let token = unique_id("checkpoint-claim");
+        let batch = store
+            .claim_batch(run, &node, &token)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .submit_batch_results(batch.batch_id, &node, &token, &empty_batch_result(), 1.0)
+            .await
+            .unwrap();
+    }
+    // The actual Jacobian that prevented campaign 55's GL00 sampler from restarting.
+    let mut point = Point::new(vec![0.5], vec![], 1.0);
+    point.parameterization_jacobian = Some(7.553_746_958_286_027e18);
+    point.add_weight_factor(
+        "gammaloop_parameterization_jacobian",
+        point.parameterization_jacobian.unwrap(),
+    );
+    let AccumulatorState::Vector(mut observable) = AccumulatorState::empty_scalar() else {
+        unreachable!()
+    };
+    observable.ingest_vector(&[1.0], &point).unwrap();
+    let checkpoint: SamplerAggregatorCheckpoint = serde_json::from_value(json!({
+        "completed_samples": 1, "task_id": task, "output_snapshot_id": null, "batches_completed": 1,
+        "sampler_snapshot": SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({"seed": 1}) },
+        "observable_state": AccumulatorState::Vector(observable),
+        "runtime_state": {
+            "produced_batches_total": 3, "produced_samples_total": 3,
+            "ingested_batches_total": 1, "ingested_samples_total": 1,
+            "sampler_uptime_ms_accumulated": 10.0, "accumulator_checkpoint_state": "Ready"
+        },
+        "queue": {"last_completed_batch_id": ids[0] - 1, "last_produced_batch_id": ids[1], "batch_size_current": 1}
+    })).unwrap();
+    store
+        .save_sampler_checkpoint(run, &checkpoint, None)
+        .await
+        .unwrap();
+    let loaded = store.load_sampler_checkpoint(run).await.unwrap().unwrap();
+    let raw: Value = sqlx::query_scalar(
+        "SELECT sampler_checkpoint FROM run_sampler_checkpoints WHERE run_id=$1",
+    )
+    .bind(run)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_ne!(
+        raw,
+        serde_json::to_value(&loaded).unwrap(),
+        "fixture must reproduce the JSONB integer/f64 mismatch"
+    );
+    store
+        .restore_sampler_checkpoint(run, &loaded)
+        .await
+        .expect("unchanged checkpoint must restore despite JSON number representation");
+    let restored = store.get_run_progress(run).await.unwrap().unwrap();
+    assert_eq!(
+        (restored.nr_produced_samples, restored.nr_completed_samples),
+        (3, 1)
+    );
+    let retained = store
+        .fetch_completed_batches(run, task, 10, true, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        retained
+            .iter()
+            .map(|batch| batch.batch_id)
+            .collect::<Vec<_>>(),
+        ids
+    );
+
+    // The fix must retain protection against both progress and sampler-state changes.
+    let mut changed = loaded.clone();
+    changed.completed_samples += 1;
+    assert!(
+        store
+            .restore_sampler_checkpoint(run, &changed)
+            .await
+            .unwrap_err()
+            .is_retry_activation()
+    );
+    let mut changed = loaded.clone();
+    changed.sampler_snapshot = SamplerAggregatorSnapshot::NaiveMonteCarlo {
+        raw: json!({"seed": 2}),
+    };
+    store
+        .save_sampler_checkpoint(run, &changed, None)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .restore_sampler_checkpoint(run, &loaded)
+            .await
+            .unwrap_err()
+            .is_retry_activation()
+    );
+    store.expire_node_lease(&node).await.unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn campaign_stall_lifecycle_counts_only_live_worker_assignments() {
+    use gammaboard::stores::RunLifecycleState;
+
+    let (_guard, store) = locked_test_store().await;
+    let parent: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('lease-parent','{\"run_kind\":\"integration_campaign\"}','{}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let mut children = Vec::new();
+    let mut nodes = Vec::new();
+    for index in 0..2 {
+        let child: i32 = sqlx::query_scalar("INSERT INTO runs (name,parent_run_id,integration_params,point_spec) VALUES ($1,$2,'{}','{}') RETURNING id")
+            .bind(format!("lease-child-{index}")).bind(parent).fetch_one(store.pool()).await.unwrap();
+        let node = unique_id("lease-node");
+        store
+            .announce_node(&node, &node, &Default::default())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE nodes SET desired_run_id=$2,desired_role='evaluator',active_run_id=$2,active_role='evaluator',lease_expires_at=now()+interval '1 hour' WHERE name=$1")
+            .bind(&node).bind(child).execute(store.pool()).await.unwrap();
+        children.push(child);
+        nodes.push(node);
+    }
+    // An expired worker retains both desired and active columns after an unclean exit.
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name=$1")
+        .bind(&nodes[0])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let stale = store.get_run_progress(children[0]).await.unwrap().unwrap();
+    assert_eq!(stale.desired_assignment_count, 0);
+    assert_eq!(stale.active_worker_count, 0);
+    assert_eq!(stale.lifecycle_state, RunLifecycleState::Paused);
+    let live = store.get_run_progress(children[1]).await.unwrap().unwrap();
+    assert_eq!(
+        (live.desired_assignment_count, live.active_worker_count),
+        (1, 1)
+    );
+    assert_eq!(live.lifecycle_state, RunLifecycleState::Running);
+    assert_eq!(
+        store
+            .get_run_progress(parent)
+            .await
+            .unwrap()
+            .unwrap()
+            .lifecycle_state,
+        RunLifecycleState::Running
+    );
+
+    // A live draining worker is still pausing; expiry removes it from that count too.
+    sqlx::query("UPDATE nodes SET desired_run_id=NULL,desired_role=NULL WHERE name=$1")
+        .bind(&nodes[1])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_run_progress(parent)
+            .await
+            .unwrap()
+            .unwrap()
+            .lifecycle_state,
+        RunLifecycleState::Pausing
+    );
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name=$1")
+        .bind(&nodes[1])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_run_progress(parent)
+            .await
+            .unwrap()
+            .unwrap()
+            .lifecycle_state,
+        RunLifecycleState::Paused
+    );
+    let listed = store.get_runs_page(500, 0, true).await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .filter(|run| run.run_id == parent || children.contains(&run.run_id))
+            .all(|run| run.lifecycle_state == RunLifecycleState::Paused)
+    );
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes WHERE name=ANY($1)")
+        .bind(&nodes)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(stored, 2, "lifecycle reads must preserve worker history");
+    store.remove_run(parent).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn completed_fetch_and_counts_isolate_tasks_before_ordering_and_limit() {
     let (_guard, store) = locked_test_store().await;
     let (run, current_task, node, ids) = reliability_fixture(&store, 10).await;

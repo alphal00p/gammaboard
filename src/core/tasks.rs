@@ -1861,6 +1861,9 @@ pub struct IntegrationCampaignChildOutput {
     pub child: ControllerChildOutput,
     pub selected: bool,
     pub score: Option<f64>,
+    /// Absolute component means from the same accumulator as `child.measurement`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute_results: Option<Vec<MeasurementResult>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

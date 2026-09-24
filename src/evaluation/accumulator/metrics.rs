@@ -72,7 +72,14 @@ fn metric_for_gammaloop(
     gammaloop: &GammaLoopAccumulatorState,
     selector: &AccumulatorMetricSelector,
 ) -> Option<AccumulatorMetricValue> {
-    metric_for_vector(&gammaloop.estimate, selector)
+    match selector.component.as_deref() {
+        None | Some("training_projection") => Some(metric_for_scalar(
+            gammaloop.training_statistics()?,
+            selector.name,
+            Some("training_projection".to_string()),
+        )),
+        _ => metric_for_vector(&gammaloop.estimate, selector),
+    }
 }
 
 fn metric_for_named_scalar(
@@ -107,7 +114,8 @@ fn metric_for_scalar(
         ),
     };
     let uncertainty = match name {
-        AccumulatorMetricName::Mean | AccumulatorMetricName::AbsMean => Some(mean_error),
+        AccumulatorMetricName::Mean => Some(mean_error),
+        AccumulatorMetricName::AbsMean => Some(state.mean_abs_stderr()),
         AccumulatorMetricName::Variance => variance_error,
         AccumulatorMetricName::Rsd => state.rsd_stderr(),
         AccumulatorMetricName::Error

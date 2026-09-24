@@ -29,6 +29,18 @@ impl PgStore {
         .bind(run_id)
         .fetch_one(&mut *tx)
         .await?;
+        // JSONB expands exponential floats into decimal numbers; serde_json may
+        // then read them as integers. Compare both sides through the same typed
+        // representation, including defaults for older checkpoints. Keep the
+        // row lock and exact comparison so genuine runtime changes still retry.
+        let saved: SamplerAggregatorCheckpoint =
+            serde_json::from_value(saved).map_err(|error| {
+                StoreError::store(format!(
+                    "failed to decode saved recovery checkpoint: {error}"
+                ))
+            })?;
+        let saved =
+            serde_json::to_value(saved).map_err(|error| StoreError::store(error.to_string()))?;
         if saved != payload {
             return Err(StoreError::retry_activation(
                 "recovery checkpoint changed during runtime initialization",

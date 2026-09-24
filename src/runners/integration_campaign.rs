@@ -553,6 +553,12 @@ fn build_output(
                 },
                 selected: selected.contains(&child.run_id),
                 score: child.score(algorithm).filter(|score| score.is_finite()),
+                absolute_results: child.accumulator.as_ref().map(|accumulator| {
+                    crate::services::measurement::absolute_component_results(
+                        accumulator,
+                        child.results().unwrap_or_default(),
+                    )
+                }),
             })
             .collect(),
     }
