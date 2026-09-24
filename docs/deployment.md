@@ -14,6 +14,17 @@ dashboard node-launch requests into child worker processes.
 Profile-specific commands stay in `ops/*/README.md`. Shared config semantics are
 documented in [config.md](config.md).
 
+## CPU Threads
+
+Worker and CLI processes use one background Tokio thread by default. Worker
+computation runs on the calling thread while leases and queue I/O continue in
+the background. The API server retains Tokio's automatic pool size.
+`TOKIO_WORKER_THREADS` overrides either default. Help and version output do not
+start a runtime.
+
+The MADNIS sampler defaults to one OpenMP thread; see its
+[runtime options](../integrations/madnis/README.md#runtime-options).
+
 ## Runtime Layout
 
 Paths are resolved from the configured resources root unless explicitly

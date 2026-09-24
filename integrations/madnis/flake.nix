@@ -97,7 +97,6 @@
 #!/bin/sh
 export PYTHONPATH="@out@/src:''${PYTHONPATH:-}"
 export LD_LIBRARY_PATH="@libPath@:/run/opengl-driver/lib:''${LD_LIBRARY_PATH:-}"
-export OMP_NUM_THREADS=''${OMP_NUM_THREADS:-64}
 exec @python@ "$@"
 WRAPPER
 
@@ -122,7 +121,6 @@ WRAPPER
           shellHook = ''
             export PYTHONPATH="$PWD/src:''${PYTHONPATH:-}"
             export LD_LIBRARY_PATH="${libPath}:/run/opengl-driver/lib:''${LD_LIBRARY_PATH:-}"
-            export OMP_NUM_THREADS=''${OMP_NUM_THREADS:-64}
           '';
         };
       });

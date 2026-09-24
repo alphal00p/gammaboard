@@ -5,6 +5,10 @@ MADNIS sampler implementation for GammaBoard using the
 
 ## Runtime Options
 
+The sampler entrypoint defaults `OMP_NUM_THREADS` to `1` before importing the
+numerical libraries, for all runtime options. Set it explicitly to use more CPU
+threads within the sampler's allocated CPU budget.
+
 ### Direct venv
 
 For local demos or machines where Apptainer is not available, install the

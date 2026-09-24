@@ -81,7 +81,19 @@ enum Command {
     Deploy(DeployArgs),
 }
 
-pub async fn dispatch(cli: Cli) -> Result<()> {
+pub fn dispatch(cli: Cli) -> Result<()> {
+    let mut runtime = tokio::runtime::Builder::new_multi_thread();
+    // Worker computation runs on the calling thread; one background thread
+    // keeps leases and queue I/O moving without a machine-sized pool per node.
+    if !matches!(cli.command, Command::Server(_))
+        && std::env::var_os("TOKIO_WORKER_THREADS").is_none()
+    {
+        runtime.worker_threads(1);
+    }
+    runtime.enable_all().build()?.block_on(dispatch_async(cli))
+}
+
+async fn dispatch_async(cli: Cli) -> Result<()> {
     let quiet = cli.quiet;
     shared::set_json_output(cli.json);
     if cli.postgres_trusted_network && !cli.json {

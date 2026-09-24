@@ -20,6 +20,25 @@ and complete, repeatable measurements.
 - The frontend's build cache reinstalls npm dependencies when the package files
   change. An existing Vite executable is not sufficient evidence that installed
   dependencies match the lockfile.
+- GammaLoop observable batches reset once at entry. The returned observable
+  bundle owns its data, so a second full integrand clone after evaluation is
+  unnecessary. Entry reset also isolates batches after mixed accumulator modes
+  or failed evaluations.
+- Worker and CLI processes default to one background I/O thread, with the
+  existing `TOKIO_WORKER_THREADS` override. The API server keeps automatic
+  sizing. MADNIS sets its one-thread OpenMP default in the Python entrypoint
+  instead of repeating a 64-thread default in runtime packaging.
+
+The real-physics reset regression uses a read-only generated state with
+histograms. Set `GAMMABOARD_TEST_PHYSICS_STATE` and
+`GAMMABOARD_TEST_PHYSICS_INTEGRAND`, then run:
+
+```bash
+cargo test --lib observable_batches_are_isolated_after_mixed_modes_and_failure -- --ignored
+```
+
+It compares complete results apart from timing fields across variable-sized
+batches, scalar/vector/empty modes, and an external failure after a valid sample.
 
 ## Optimization candidates
 
@@ -28,7 +47,7 @@ small and independent; do not change several scheduling mechanisms at once.
 
 | Priority | Location | Finding | Next experiment |
 | --- | --- | --- | --- |
-| 1 | `src/evaluation/evaluator/gammaloop.rs`, `reset_observables` / `eval_batch` | GammaLoop observable batches clone the full pristine integrand both before and after evaluation. The post-batch clone appears redundant because the next observable batch resets at entry. | Compare one reset with two on a compatible physics state. Verify repeated batches, histogram totals, mixed accumulator modes, and recovery after a failed evaluation before removing it. Longer term, inspect whether GammaLoop can reset only observable state. |
+| 1 | `src/evaluation/evaluator/gammaloop.rs`, `eval_batch` | The remaining entry reset clones the full pristine integrand. | Inspect whether GammaLoop can reset only observable state without changing evaluation caches or failure recovery. |
 | 2 | `src/runners/queue.rs`, `tune_batch_size` | Smoothing, a deadband, and a cooldown all regulate batch sizing. Despite its `batch_size_cooldown_ticks` name, the cooldown advances when completed batches are observed, so its wall duration depends on batch completion rate. | Compare cooldown zero with the default on repeated training windows; retain it only if it reduces oscillation or improves throughput without delaying adaptation. Fixed-batch CPU presets intentionally bypass this code and cannot answer this question. |
 | 3 | `src/runners/queue.rs`, insert/fetch pumps | Several limits bound pending work and concurrent inserts. More concurrency can increase database work when batches are cheap. | First vary batch size with `tuning.toml`; then compare one versus the default concurrent insert tasks using a focused run card. Measure accepted progress and database latency, not just evaluator rate. |
 | 4 | `src/evaluation/evaluator/gammaloop.rs`, `ingest_vector_batch` | Scalar/complex projection creates a small `Vec` per sample. | Profile allocation cost on a real integrand before replacing these with stack arrays or borrowed slices. Physics evaluation may dominate. |

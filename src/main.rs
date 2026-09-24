@@ -4,8 +4,7 @@ use clap::{Parser, error::ErrorKind};
 use cli::Cli;
 use std::process::ExitCode;
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let json_requested = std::env::args_os().any(|argument| argument == "--json");
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -28,7 +27,7 @@ async fn main() -> ExitCode {
     };
     let json_output = cli.json_output_requested();
     let result = match gammaboard::activate_symbolica_oem_license() {
-        Ok(()) => cli::dispatch(cli).await,
+        Ok(()) => cli::dispatch(cli),
         Err(error) => Err(error),
     };
 
