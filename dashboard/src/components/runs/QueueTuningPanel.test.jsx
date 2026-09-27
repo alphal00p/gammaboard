@@ -10,6 +10,12 @@ const defaults = {
 };
 
 describe("queue bulk generation toggle", () => {
+  test("controller-owned children cannot be tuned independently", () => {
+    render(<QueueTuningPanel run={{ parent_run_id: 9 }} runId={1}
+      task={{ id: 2, is_sample: true, state: "active" }} authenticated />);
+    expect(screen.getByText(/managed by its parent/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+  });
   test("defaults old runs to false and submits a boolean task override", async () => {
     const onSave = vi.fn();
     render(<QueueTuningPanel run={{ queue_tuning_defaults: defaults }} runId={1}

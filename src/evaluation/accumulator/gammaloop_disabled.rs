@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Accumulator, VectorAccumulatorState};
+use super::{Accumulator, GammaLoopDiagnostics, VectorAccumulatorState};
 use crate::core::{AccumulatorMomentConfig, EngineError, RunSpec, TrainingProjection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,24 +12,6 @@ pub struct GammaLoopAccumulatorState {
     pub training_norm_sqr: Option<Box<super::ScalarAccumulatorState>>,
     #[serde(default)]
     pub diagnostics: GammaLoopDiagnostics,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GammaLoopDiagnostics {
-    pub count_total: i64,
-    pub count_double_precision: i64,
-    pub count_quad_precision: i64,
-    pub count_arb_precision: i64,
-    pub count_nan: i64,
-    pub count_nan_or_unstable: i64,
-    pub count_loop_momenta_escalated: i64,
-    pub total_eval_time_ms: f64,
-    pub total_integrand_eval_time_ms: f64,
-    pub total_evaluator_eval_time_ms: f64,
-    pub total_parameterization_time_ms: f64,
-    pub total_event_processing_time_ms: f64,
-    pub total_generated_events: i64,
-    pub total_accepted_events: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +29,7 @@ pub struct GammaLoopAccumulatorDigest {
 impl GammaLoopAccumulatorState {
     pub fn merge_in_place(&mut self, other: Self) -> Result<(), EngineError> {
         self.merge_training_statistics(&other);
+        self.diagnostics.merge_in_place(other.diagnostics);
         Accumulator::merge(&mut self.estimate, other.estimate);
         Ok(())
     }
@@ -89,51 +72,6 @@ impl GammaLoopAccumulatorState {
 
     pub fn abs_stderr(&self) -> f64 {
         self.estimate.projection.state.stderr()
-    }
-}
-
-impl GammaLoopDiagnostics {
-    pub fn avg_eval_time_ms(&self) -> f64 {
-        safe_ratio(self.total_eval_time_ms, self.count_total)
-    }
-
-    pub fn avg_integrand_eval_time_ms(&self) -> f64 {
-        safe_ratio(self.total_integrand_eval_time_ms, self.count_total)
-    }
-
-    pub fn avg_evaluator_eval_time_ms(&self) -> f64 {
-        safe_ratio(self.total_evaluator_eval_time_ms, self.count_total)
-    }
-
-    pub fn avg_parameterization_time_ms(&self) -> f64 {
-        safe_ratio(self.total_parameterization_time_ms, self.count_total)
-    }
-
-    pub fn avg_event_processing_time_ms(&self) -> f64 {
-        safe_ratio(self.total_event_processing_time_ms, self.count_total)
-    }
-
-    pub fn promoted_to_quad_ratio(&self) -> f64 {
-        safe_ratio(self.count_quad_precision as f64, self.count_total)
-    }
-
-    pub fn promoted_to_arb_ratio(&self) -> f64 {
-        safe_ratio(self.count_arb_precision as f64, self.count_total)
-    }
-
-    pub fn nan_or_unstable_ratio(&self) -> f64 {
-        safe_ratio(self.count_nan_or_unstable as f64, self.count_total)
-    }
-
-    pub fn loop_momenta_escalated_ratio(&self) -> f64 {
-        safe_ratio(self.count_loop_momenta_escalated as f64, self.count_total)
-    }
-
-    pub fn accepted_event_ratio(&self) -> f64 {
-        safe_ratio(
-            self.total_accepted_events as f64,
-            self.total_generated_events,
-        )
     }
 }
 
@@ -188,13 +126,5 @@ impl Default for GammaLoopAccumulatorState {
             training_projection: None,
             training_norm_sqr: None,
         }
-    }
-}
-
-fn safe_ratio(numerator: f64, denominator: i64) -> f64 {
-    if denominator > 0 {
-        numerator / denominator as f64
-    } else {
-        0.0
     }
 }

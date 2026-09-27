@@ -145,6 +145,12 @@ async fn locked_test_store() -> (tokio::sync::MutexGuard<'static, ()>, PgStore) 
         .connect(&db_url)
         .await
         .expect("connect to explicitly configured test database");
+    // These tests share one isolated database under TEST_LOCK. A removed run
+    // leaves its workers alive, so their leases must not affect the next test.
+    sqlx::raw_sql("DELETE FROM nodes; DELETE FROM node_launch_requests;")
+        .execute(&pool)
+        .await
+        .expect("clear worker fixtures from preceding tests");
     (guard, PgStore::new(pool))
 }
 

@@ -76,17 +76,13 @@ retained.
 
 ## Symbolica OEM License
 
-GammaBoard and GammaLoop use their bundled Symbolica OEM activation by default.
-Users do not need to set a Symbolica environment variable or provide their own
-license:
+GammaBoard and GammaLoop use their own bundled Symbolica 3 application licenses.
+Users and runtime Slurm jobs do not need `SYMBOLICA_LICENSE`. The binaries use
+Symbolica's application-key API; the old v2 OEM keys are no longer accepted.
 
-- The binaries call `symbolica::activate_oem_license!(...)` at startup.
-- Runtime Slurm jobs do not need `SYMBOLICA_LICENSE`.
-
-To opt out of OEM activation for a local/custom build, set
-`NO_SYMBOLICA_OEM_LICENSE=1` while compiling and provide a regular license with
-`SYMBOLICA_LICENSE` at runtime. `NO_SYMBOLICA_OEM_LICENSE` is a compile-time
-switch; setting it only when launching an already-built binary has no effect.
+`NO_SYMBOLICA_OEM_LICENSE=1` during compilation disables the embedded key. Those
+builds require a regular v3 `SYMBOLICA_LICENSE` at runtime. Never put a personal
+license in a run card, deployment log, or tracked configuration.
 
 ## Nested Runtimes
 

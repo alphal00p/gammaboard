@@ -1,0 +1,38 @@
+# Sampling acceptance through a generated GammaLoop v10 state.
+# Use a state with no observables or active physical selectors. Width is in the
+# state's momentum units; select a useful scale for the maps under examination.
+# Both real and imaginary targets are one (normalization and normalized moment).
+name = "gammaloop_reference"
+target = { kind = "vector", components = { real = 1.0, imag = 1.0 } }
+
+[evaluator]
+kind = "gammaloop"
+state_folder = "$(state_folder:states/reference/state)"
+integrand_name = "$(integrand_name:default)"
+reference_gaussian = { width = "$(width:300.0)" }
+
+[[task_queue]]
+name = "train-reference"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = 10000 }
+accumulator = { config = "gammaloop" }
+[task_queue.sampler_aggregator.config]
+kind = "havana_training"
+seed = 0
+bins = 32
+samples_for_update = 1000
+[task_queue.queue_tuning]
+target_batch_eval_ms = 100.0
+max_batch_size = 1000
+
+[[task_queue]]
+name = "reference"
+kind = "sample"
+stop_condition = { max_samples = "$(samples:100000)" }
+measurement = { quantity = "central_value" }
+sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
+accumulator = { config = "gammaloop" }
+[task_queue.queue_tuning]
+target_batch_eval_ms = 100.0
+max_batch_size = 1000

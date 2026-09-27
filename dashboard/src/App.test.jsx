@@ -90,7 +90,7 @@ describe("App Component", () => {
     await waitFor(() => expect(api.fetchRunTaskPanels).toHaveBeenCalled());
     if (kind === "integration") {
       expect(screen.getByText("Task Queue")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Add Task" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add tasks" })).toBeInTheDocument();
     } else {
       expect(screen.queryByText("Task Queue")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Add Task" })).not.toBeInTheDocument();

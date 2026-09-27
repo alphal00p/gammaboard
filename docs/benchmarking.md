@@ -239,3 +239,48 @@ regenerated from a compact RNG-state payload. There are no training barriers.
 It exercises large input transfers, not large result vectors or multi-host
 networking. The deployment uses the local PostgreSQL defaults, including
 `synchronous_commit = false`; do not interpret it as a durability benchmark.
+
+## Sampling correctness
+
+The GammaLoop migration adds a small acceptance suite independent of throughput:
+
+```sh
+cargo test --locked --lib evaluation::evaluator::gammaloop::acceptance -- --nocapture
+```
+
+To retain the generated fixture and test the PostgreSQL training/inference path:
+
+```sh
+GAMMABOARD_TEST_STATE_OUTPUT=/tmp/gammaboard-reference-state \
+  cargo test --locked --lib evaluation::evaluator::gammaloop::acceptance -- --nocapture
+GAMMABOARD_TEST_REFERENCE_STATE=/tmp/gammaboard-reference-state \
+  cargo test --locked --test full_stack_cli full_stack_gammaloop_reference_training_and_inference -- --ignored --nocapture
+```
+
+The output directory must not already exist. The pipeline check uses a fresh
+test database on the configured local PostgreSQL server and cleans up afterward.
+
+It generates a fresh version-10 scalar cut-bubble state, reloads it, and checks
+ordinary and cut-focused maps with both summed and discrete channels. A shifted
+Gaussian tests normalization and a nonconstant second moment against one.
+Deterministic Halton quadrature uses fixed tolerances, not IID confidence claims.
+The physical test checks nonunit outer weights in native histograms, squared
+histogram weights, all training-feedback modes, merged batches and recovery.
+It prints reference throughput for development feedback; debug-build timings
+are not a production scaling baseline. Symbolica 3 licensing is required.
+
+`resources/templates/runs/gammaloop-reference.toml` runs the same known targets
+through the normal training/inference pipeline on a supplied generated state.
+The state must have no observables or active physical selectors. Remove them
+with upstream `set process remove observable NAME` / `remove selector NAME`
+commands in preprocessing, or generate a separate acceptance state without them.
+Choose a width comparable to the map's momentum scale. Check both real and
+imaginary estimates, uncertainty and invalid-point counts; agreement within an
+uninformatively large error bar is not acceptance.
+
+Regenerate physics states and repeat real-physics baselines after the GammaLoop
+upgrade. Record sampling choices and retry counts: summed channels and stability
+retries can perform several target evaluations per accepted outer sample.
+The four worker busy fractions keep their existing meaning. Native map/partition
+work is part of evaluator compute; GammaLoop's preparation timings are inclusive
+subsets in diagnostics, not additional concurrent workers or additive busy rates.

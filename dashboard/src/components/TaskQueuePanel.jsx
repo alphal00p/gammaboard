@@ -12,7 +12,7 @@ import {
 } from "@mui/material";
 import { formatCompactNumber } from "../utils/formatters";
 
-const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null }) => {
+const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null, renderTaskActions = null }) => {
   return (
     <>
       <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
@@ -32,6 +32,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                   <TableCell align="right">Goal</TableCell>
                   <TableCell align="right">Completed</TableCell>
                   <TableCell align="right">Allocated Core-hours</TableCell>
+                  {renderTaskActions && <TableCell align="right">Actions</TableCell>}
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -63,6 +64,9 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                       <TableCell align="right">
                         {formatCompactNumber(task.cpu_hours_including_children ?? 0)}
                       </TableCell>
+                      {renderTaskActions && <TableCell align="right" onClick={(event) => event.stopPropagation()}>
+                        {renderTaskActions(task)}
+                      </TableCell>}
                     </TableRow>
                   );
                 })}

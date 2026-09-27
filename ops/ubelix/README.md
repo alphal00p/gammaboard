@@ -165,6 +165,6 @@ therefore part of the deployment trust boundary.
 Local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch
 scripts source it when present. The workspace is self-locating from the
 installed `ubelix.py` and sbatch paths, so `GAMMABOARD_WORKSPACE_ROOT` is only
-needed as an explicit override. GammaBoard/GammaLoop use the Symbolica OEM
-license compiled during the build jobs, so runtime Slurm jobs do not require
+needed as an explicit override. GammaBoard and GammaLoop use their own bundled
+Symbolica 3 application keys, so runtime Slurm jobs do not require
 `SYMBOLICA_LICENSE`.

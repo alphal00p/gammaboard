@@ -32,12 +32,13 @@ pub enum RunCommand {
     },
     /// Create a run from a run TOML file
     Create { config_file: PathBuf },
-    /// Clone a run from a persisted stage snapshot
-    Clone {
+    /// Create a fresh run from another run's complete definition
+    Duplicate {
         source_run: String,
-        from_snapshot_id: i64,
         new_name: String,
     },
+    /// Export a run definition as TOML (without results or checkpoints)
+    Export { run: String },
     /// List runs, optionally filtered by exact name
     List { run_name: Option<String> },
     /// Show run state, tasks, persisted configuration, and recent logs
@@ -56,7 +57,7 @@ pub enum RunCommand {
     },
     /// Delete one run or all runs
     Remove(RunRemovalSelection),
-    /// Append, list, or remove queued run tasks
+    /// Add, duplicate, edit, export, or inspect run tasks
     Task(TaskArgs),
 }
 
@@ -70,6 +71,16 @@ pub struct TaskArgs {
 pub enum TaskCommand {
     /// Append tasks from a task TOML file
     Append { run: String, task_file: PathBuf },
+    /// Export one task definition as TOML
+    Export { run: String, task_id: i64 },
+    /// Append a copy of a task definition with a new name
+    Duplicate { run: String, task_id: i64 },
+    /// Replace a pending task definition from a task TOML file
+    Edit {
+        run: String,
+        task_id: i64,
+        task_file: PathBuf,
+    },
     /// List queued and historical tasks for a run
     List { run: String },
     /// Remove a pending task
@@ -109,11 +120,19 @@ pub async fn run_run_commands(
                     super::performance::wait(&store, run.run_id, args).await?;
                 }
                 RunCommand::Create { config_file } => run_create(&store, &config_file).await?,
-                RunCommand::Clone {
-                    source_run,
-                    from_snapshot_id,
-                    new_name,
-                } => clone_run(&store, &source_run, from_snapshot_id, &new_name).await?,
+                RunCommand::Duplicate { source_run, new_name } => {
+                    let source = resolve_run_ref(&store, &source_run).await?;
+                    let raw = run_api::export_run_definition(&store, source.run_id).await.map_err(api_to_anyhow)?;
+                    let raw = run_api::rename_run_definition(&raw, &new_name).map_err(api_to_anyhow)?;
+                    let config = run_api::parse_run_add_config_toml(&raw).map_err(api_to_anyhow)?;
+                    eprintln!("Duplicating definitions only. External paths are unchanged; use separate writable output paths.");
+                    let created = run_api::create_run(&store, config).await.map_err(api_to_anyhow)?;
+                    print_json(&created);
+                }
+                RunCommand::Export { run } => {
+                    let run = resolve_run_ref(&store, &run).await?;
+                    print_definition(&run_api::export_run_definition(&store, run.run_id).await.map_err(api_to_anyhow)?);
+                }
                 RunCommand::List { run_name } => list_runs(&store, run_name.as_deref()).await?,
                 RunCommand::Inspect { run, log_limit } => {
                     inspect_run(&store, &run, log_limit).await?
@@ -138,7 +157,8 @@ fn run_command_name(command: &RunCommand) -> &'static str {
         RunCommand::Performance(_) => "run_performance",
         RunCommand::Wait(_) => "run_wait",
         RunCommand::Create { .. } => "run_create",
-        RunCommand::Clone { .. } => "run_clone",
+        RunCommand::Duplicate { .. } => "run_duplicate",
+        RunCommand::Export { .. } => "run_export",
         RunCommand::List { .. } => "run_list",
         RunCommand::Inspect { .. } => "run_inspect",
         RunCommand::Pause(_) => "run_pause",
@@ -209,30 +229,12 @@ async fn run_create(store: &PgStore, config_file: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn clone_run(
-    store: &PgStore,
-    source_run_ref: &str,
-    from_snapshot_id: i64,
-    new_name: &str,
-) -> Result<()> {
-    let source_run = resolve_run_ref(store, source_run_ref).await?;
-    let cloned = run_api::clone_run(store, source_run.run_id, from_snapshot_id, new_name)
-        .await
-        .map_err(api_to_anyhow)?;
-
+fn print_definition(toml: &str) {
     if json_output_enabled() {
-        print_json(&cloned);
+        print_json(&serde_json::json!({"toml": toml}));
     } else {
-        println!(
-            "cloned run_id={} name={} from run_id={} snapshot_id={} copied_tasks={}",
-            cloned.run_id,
-            cloned.run_name,
-            cloned.source_run_id,
-            cloned.from_snapshot_id,
-            cloned.cloned_tasks
-        );
+        print!("{toml}");
     }
-    Ok(())
 }
 
 async fn list_runs(store: &PgStore, run_name: Option<&str>) -> Result<()> {
@@ -343,6 +345,44 @@ async fn remove_runs(store: &PgStore, selection: RunRemovalSelection) -> Result<
 
 async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
     match command {
+        TaskCommand::Export { run, task_id } => {
+            let run = resolve_run_ref(store, &run).await?;
+            print_definition(
+                &run_api::export_task_definition(store, run.run_id, task_id, false)
+                    .await
+                    .map_err(api_to_anyhow)?,
+            );
+        }
+        TaskCommand::Duplicate { run, task_id } => {
+            let run = resolve_run_ref(store, &run).await?;
+            let raw = run_api::export_task_definition(store, run.run_id, task_id, true)
+                .await
+                .map_err(api_to_anyhow)?;
+            eprintln!(
+                "Duplicating the definition: latest sources use the destination queue; external paths are unchanged."
+            );
+            let tasks = run_api::parse_task_queue_toml(&raw).map_err(api_to_anyhow)?;
+            let result = run_api::append_tasks(store, run.run_id, tasks)
+                .await
+                .map_err(api_to_anyhow)?;
+            print_json(&result.tasks);
+        }
+        TaskCommand::Edit {
+            run,
+            task_id,
+            task_file,
+        } => {
+            let run = resolve_run_ref(store, &run).await?;
+            let expected = run_api::export_task_definition(store, run.run_id, task_id, false)
+                .await
+                .map_err(api_to_anyhow)?;
+            let raw = std::fs::read_to_string(task_file)?;
+            run_api::edit_pending_task(store, run.run_id, task_id, &raw, &expected)
+                .await
+                .map_err(api_to_anyhow)?;
+            print_json(&serde_json::json!({"run_id":run.run_id, "task_id":task_id}));
+        }
+
         TaskCommand::Append { run, task_file } => {
             let run = resolve_run_ref(store, &run).await?;
             let run_id = run.run_id;

@@ -309,8 +309,33 @@ pub trait AggregationStore: Send + Sync {
     async fn save_run_stage_snapshot(&self, snapshot: &RunStageSnapshot) -> Result<(), StoreError>;
 }
 
+/// An atomic edit to the user-visible task definitions.
+#[derive(Debug, Clone)]
+pub enum TaskQueueChange {
+    Append(Vec<RunTaskInput>),
+    Replace {
+        task_id: i64,
+        task: Box<RunTaskInput>,
+    },
+    Remove {
+        task_id: i64,
+    },
+}
+
 #[async_trait]
 pub trait RunTaskStore: Send + Sync {
+    /// Apply only if the queue definitions still match those used for validation.
+    async fn apply_task_queue_change(
+        &self,
+        _run_id: i32,
+        _expected: &[RunTask],
+        _change: TaskQueueChange,
+    ) -> Result<Vec<RunTask>, StoreError> {
+        Err(StoreError::store(
+            "task definition editing is not supported by this store",
+        ))
+    }
+
     async fn append_run_tasks(
         &self,
         run_id: i32,

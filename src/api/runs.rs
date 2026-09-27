@@ -1,8 +1,9 @@
 use crate::api::{ApiError, toml_template};
 use crate::core::IntegrationParams;
+use crate::core::traits::TaskQueueChange;
 use crate::core::{
-    AccumulatorConfig, AggregationStore, ControlPlaneStore, EvaluatorConfig, RunStageSnapshot,
-    RunTask, RunTaskInput, RunTaskState, RunTaskStore, SamplerQueueTuning, SourceRefSpec,
+    AccumulatorConfig, AggregationStore, ControlPlaneStore, EvaluatorConfig, RunTask, RunTaskInput,
+    RunTaskState, RunTaskStore, SamplerQueueTuning, SourceRefSpec,
 };
 use crate::preprocess::{RunAddConfig, preprocess_run_add};
 use crate::provenance::RunProvenance;
@@ -31,15 +32,6 @@ pub struct ChildRunRequest {
     pub spawn_label: Option<String>,
     pub run: crate::core::tasks::ChildRunSource,
     pub replacements: BTreeMap<String, toml::Value>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ClonedRun {
-    pub run_id: i32,
-    pub run_name: String,
-    pub source_run_id: i32,
-    pub from_snapshot_id: i64,
-    pub cloned_tasks: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -73,9 +65,8 @@ pub struct UpdatedTaskQueueTuning {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct RunReproToml {
+struct RunDefinitionToml {
     name: String,
-    gammaboard: serde_json::Value,
     #[serde(flatten)]
     integration_params: IntegrationParams,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -354,110 +345,14 @@ pub async fn create_child_run(
     .await
 }
 
-/// Clones a run from a specific persisted stage snapshot into a new idle run.
-pub async fn clone_run(
-    store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore + crate::core::RunReadStore),
-    source_run_id: i32,
-    from_snapshot_id: i64,
-    new_name: &str,
-) -> Result<ClonedRun, ApiError> {
-    let source_run = load_run_progress(store, source_run_id).await?;
-    if source_run.kind() != "integration" {
-        return Err(ApiError::BadRequest("only integration runs can be cloned from a stage snapshot; submit the controller TOML to create a new orchestration run".into()));
-    }
-    let new_name = new_name.trim();
-    if new_name.is_empty() {
-        return Err(ApiError::BadRequest(
-            "invalid run name (`new_name`): expected non-empty string".to_string(),
-        ));
-    }
-
-    let domain = source_run.domain.clone().ok_or_else(|| {
-        ApiError::Internal(format!("source run {source_run_id} is missing domain"))
-    })?;
-    let integration_params = source_run.integration_params.clone().ok_or_else(|| {
-        ApiError::Internal(format!(
-            "source run {source_run_id} is missing integration_params"
-        ))
-    })?;
-    let integration_params_typed: IntegrationParams =
-        serde_json::from_value(integration_params.clone()).map_err(|err| {
-            ApiError::Internal(format!(
-                "source run {source_run_id} has invalid integration_params payload: {err}"
-            ))
-        })?;
-
-    let snapshot = store
-        .load_stage_snapshot(from_snapshot_id)
-        .await?
-        .ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "cannot clone from snapshot {from_snapshot_id}: no stage snapshot exists"
-            ))
-        })?;
-    if snapshot.run_id != source_run_id {
-        return Err(ApiError::BadRequest(format!(
-            "snapshot {from_snapshot_id} belongs to run {}, not source run {source_run_id}",
-            snapshot.run_id
-        )));
-    }
-
-    let source_tasks = store.list_run_tasks(source_run_id).await?;
-    let root_snapshot_name =
-        format_clone_root_snapshot_name(&source_run.run_name, &source_tasks, &snapshot);
-    let cloned_tasks: Vec<RunTaskInput> = Vec::new();
-    let run_toml = canonical_run_toml(
-        new_name,
-        &integration_params_typed,
-        source_run.target.as_ref(),
-        &cloned_tasks,
-    )?;
-    let provenance = serde_json::to_value(RunProvenance::capture(None, run_toml.clone()))
-        .map_err(|err| ApiError::Internal(format!("failed to serialize run provenance: {err}")))?;
-    let run_id = store
-        .create_run(
-            new_name,
-            &run_toml,
-            &provenance,
-            &integration_params,
-            source_run.target.as_ref(),
-            &domain,
-            &RunStageSnapshot {
-                id: None,
-                run_id: 0,
-                task_id: None,
-                name: root_snapshot_name,
-                sequence_nr: Some(0),
-                queue_empty: snapshot.queue_empty,
-                sampler_snapshot: snapshot.sampler_snapshot.clone(),
-                observable_state: snapshot.observable_state.clone(),
-                evaluator: snapshot.evaluator.clone(),
-                sampler_aggregator: snapshot.sampler_aggregator.clone(),
-                batch_transforms: snapshot.batch_transforms.clone(),
-            },
-            &cloned_tasks,
-            None,
-        )
-        .await?;
-
-    Ok(ClonedRun {
-        run_id,
-        run_name: new_name.to_string(),
-        source_run_id,
-        from_snapshot_id,
-        cloned_tasks: cloned_tasks.len(),
-    })
-}
-
 fn canonical_run_toml(
     name: &str,
     integration_params: &IntegrationParams,
     target: Option<&serde_json::Value>,
     task_queue: &[RunTaskInput],
 ) -> Result<String, ApiError> {
-    toml::to_string(&RunReproToml {
+    toml::to_string(&RunDefinitionToml {
         name: name.to_string(),
-        gammaboard: serde_json::json!({}),
         integration_params: integration_params.clone(),
         target: target.cloned().filter(|value| !value.is_null()),
         task_queue: task_queue.to_vec(),
@@ -473,11 +368,7 @@ pub async fn append_tasks(
 ) -> Result<AppendedTasks, ApiError> {
     let tasks = task_file.into_tasks();
     let run = load_run_progress(store, run_id).await?;
-    if run.kind() != "integration" {
-        return Err(ApiError::BadRequest(
-            "only integration runs have a task queue".into(),
-        ));
-    }
+    ensure_editable_queue(&run)?;
     for task in &tasks {
         if matches!(
             task.task,
@@ -503,8 +394,15 @@ pub async fn append_tasks(
     let domain = run
         .domain
         .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing domain")))?;
-    preflight_task_batch(store, run_id, &tasks, integration_params.evaluator, domain).await?;
-    let tasks = store.append_run_tasks(run_id, &tasks).await?;
+    let existing = store.list_run_tasks(run_id).await?;
+    TaskPreflightContext::from_existing_tasks(&existing, integration_params.evaluator, domain)?
+        .validate_batch(&tasks)?;
+    if tasks.is_empty() {
+        return Err(ApiError::BadRequest("provide at least one task".into()));
+    }
+    let tasks = store
+        .apply_task_queue_change(run_id, &existing, TaskQueueChange::Append(tasks))
+        .await?;
     Ok(AppendedTasks { tasks })
 }
 
@@ -543,17 +441,17 @@ pub async fn remove_pending_task(
     task_id: i64,
 ) -> Result<RemovedPendingTask, ApiError> {
     let run = load_run_progress(store, run_id).await?;
-    if run.kind() != "integration" {
-        return Err(ApiError::BadRequest(
-            "only integration runs have removable tasks".into(),
-        ));
-    }
-    let removed = store.remove_pending_run_task(run_id, task_id).await?;
-    if !removed {
-        return Err(ApiError::BadRequest(format!(
-            "run task {task_id} was not removed; only pending tasks can be removed"
-        )));
-    }
+    ensure_editable_queue(&run)?;
+    let tasks = store.list_run_tasks(run_id).await?;
+    let definitions = tasks
+        .iter()
+        .filter(|task| task.id != task_id)
+        .map(task_definition)
+        .collect::<Vec<_>>();
+    validate_queue_definition(&run, &definitions)?;
+    store
+        .apply_task_queue_change(run_id, &tasks, TaskQueueChange::Remove { task_id })
+        .await?;
     Ok(RemovedPendingTask { run_id, task_id })
 }
 
@@ -564,11 +462,7 @@ pub async fn update_task_queue_tuning(
     queue_tuning: Option<SamplerQueueTuning>,
 ) -> Result<UpdatedTaskQueueTuning, ApiError> {
     let run = load_run_progress(store, run_id).await?;
-    if run.kind() != "integration" {
-        return Err(ApiError::BadRequest(
-            "only integration runs have tunable task queues".into(),
-        ));
-    }
+    ensure_editable_queue(&run)?;
     if let Some(queue_tuning) = queue_tuning.as_ref() {
         queue_tuning
             .validate()
@@ -580,66 +474,240 @@ pub async fn update_task_queue_tuning(
     Ok(UpdatedTaskQueueTuning { run_id, task })
 }
 
-pub async fn export_run_repro_toml(
+/// Export the complete current definition, independently of execution status.
+pub async fn export_run_definition(
     store: &(impl crate::core::RunReadStore + RunTaskStore),
     run_id: i32,
 ) -> Result<String, ApiError> {
     let run = load_run_progress(store, run_id).await?;
     if run.kind() != "integration" {
-        return run.run_toml.ok_or_else(|| {
-            ApiError::Internal("controller run is missing its frozen definition".into())
-        });
+        // Controller documents contain frozen child definitions, not their execution records.
+        let raw = run
+            .provenance
+            .get("effective_toml")
+            .and_then(serde_json::Value::as_str)
+            .or(run.run_toml.as_deref())
+            .ok_or_else(|| ApiError::Internal("controller run is missing its definition".into()))?;
+        let mut document: toml::Value =
+            toml::from_str(raw).map_err(|err| ApiError::Internal(err.to_string()))?;
+        if let Some(table) = document.as_table_mut() {
+            table.remove("gammaboard");
+        }
+        return toml::to_string_pretty(&document)
+            .map_err(|err| ApiError::Internal(err.to_string()));
     }
-    let integration_params_value = run
-        .integration_params
-        .clone()
-        .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing integration_params")))?;
-    let integration_params: IntegrationParams = serde_json::from_value(integration_params_value)
-        .map_err(|err| {
-            ApiError::Internal(format!(
-                "run {run_id} has invalid integration_params payload: {err}"
-            ))
-        })?;
-    let completed_tasks = store
+    let params: IntegrationParams =
+        serde_json::from_value(run.integration_params.ok_or_else(|| {
+            ApiError::Internal(format!("run {run_id} has no integration parameters"))
+        })?)
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let tasks = store
         .list_run_tasks(run_id)
         .await?
-        .into_iter()
-        .filter(|task| matches!(task.state, RunTaskState::Completed))
-        .map(|task| RunTaskInput {
-            name: Some(task.name),
-            task: task.task,
-        })
+        .iter()
+        .map(task_definition)
         .collect::<Vec<_>>();
-
-    toml::to_string(&RunReproToml {
-        name: run.run_name,
-        gammaboard: repro_provenance(run.provenance),
-        integration_params,
-        target: run.target.filter(|value| !value.is_null()),
-        task_queue: completed_tasks,
-    })
-    .map_err(|err| ApiError::Internal(format!("failed to serialize run repro TOML: {err}")))
+    canonical_run_toml(&run.run_name, &params, run.target.as_ref(), &tasks)
 }
 
-// JSON metadata can contain unset optional fields (including nested evaluator
-// metadata). TOML has no null value; omit those fields, preserving all other
-// metadata and array positions rather than changing the stored provenance.
-fn repro_provenance(mut value: serde_json::Value) -> serde_json::Value {
-    match &mut value {
-        serde_json::Value::Object(fields) => {
-            fields.retain(|_, value| !value.is_null());
-            for value in fields.values_mut() {
-                *value = repro_provenance(value.take());
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                *value = repro_provenance(value.take());
-            }
-        }
-        _ => {}
+/// Duplication edits a definition and uses the ordinary creation path.
+pub fn rename_run_definition(raw: &str, name: &str) -> Result<String, ApiError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("run name must not be empty".into()));
     }
-    value
+    let mut document: toml::Value =
+        toml::from_str(raw).map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    document["name"] = toml::Value::String(name.to_owned());
+    toml::to_string_pretty(&document).map_err(|err| ApiError::Internal(err.to_string()))
+}
+
+/// Keep the edited draft, choosing a fresh name only when its name is already used.
+pub async fn prepare_run_duplicate(
+    store: &impl crate::core::RunReadStore,
+    mut config: RunAddConfig,
+) -> Result<RunAddConfig, ApiError> {
+    let base = config.name.clone();
+    let mut suffix = 1;
+    while !store.get_runs_by_name(&config.name).await?.is_empty() {
+        config.name = copy_name(&base, suffix);
+        suffix += 1;
+    }
+    if let Some(raw) = &mut config.original_toml {
+        *raw = rename_run_definition(raw, &config.name)?;
+    }
+    if let Some(document) = &mut config.effective_document {
+        document["name"] = toml::Value::String(config.name.clone());
+    }
+    Ok(config)
+}
+
+fn copy_name(base: &str, suffix: usize) -> String {
+    if suffix == 1 {
+        format!("{base}-copy")
+    } else {
+        format!("{base}-copy-{suffix}")
+    }
+}
+
+fn available_task_name(name: &str, tasks: &[RunTask]) -> String {
+    let mut candidate = name.to_owned();
+    let mut suffix = 1;
+    while tasks.iter().any(|task| task.name == candidate) {
+        candidate = copy_name(name, suffix);
+        suffix += 1;
+    }
+    candidate
+}
+
+pub async fn append_task_duplicate(
+    store: &(impl AggregationStore + crate::core::RunReadStore + RunTaskStore),
+    run_id: i32,
+    draft: TaskQueueFile,
+) -> Result<AppendedTasks, ApiError> {
+    let mut tasks = draft.into_tasks();
+    if tasks.len() != 1 {
+        return Err(ApiError::BadRequest(
+            "duplicating requires exactly one task".into(),
+        ));
+    }
+    let mut task = tasks.remove(0);
+    if let Some(name) = &task.name {
+        task.name = Some(available_task_name(
+            name,
+            &store.list_run_tasks(run_id).await?,
+        ));
+    }
+    append_tasks(
+        store,
+        run_id,
+        TaskQueueFile {
+            task: Some(task),
+            task_queue: None,
+        },
+    )
+    .await
+}
+
+fn task_definition(task: &RunTask) -> RunTaskInput {
+    RunTaskInput {
+        name: Some(task.name.clone()),
+        task: task.task.clone(),
+    }
+}
+
+pub async fn export_task_definition(
+    store: &(impl crate::core::RunReadStore + RunTaskStore),
+    run_id: i32,
+    task_id: i64,
+    duplicate: bool,
+) -> Result<String, ApiError> {
+    let run = load_run_progress(store, run_id).await?;
+    if run.kind() != "integration" {
+        return Err(ApiError::BadRequest(
+            "export the controller run definition instead".into(),
+        ));
+    }
+    let tasks = store.list_run_tasks(run_id).await?;
+    let task = tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| ApiError::NotFound(format!("task {task_id} not found in run {run_id}")))?;
+    let mut definition = task_definition(task);
+    if duplicate {
+        definition.name = Some(available_task_name(&task.name, &tasks));
+    }
+    crate::core::canonical_task_toml(&definition).map_err(|err| ApiError::Internal(err.to_string()))
+}
+
+fn ensure_editable_queue(run: &RunProgress) -> Result<(), ApiError> {
+    if run.kind() != "integration" {
+        return Err(ApiError::BadRequest(
+            "only integration runs have an editable task queue".into(),
+        ));
+    }
+    if run.parent_run_id.is_some() {
+        return Err(ApiError::BadRequest("this task queue is managed by its parent; duplicate the child as a standalone run to edit it".into()));
+    }
+    Ok(())
+}
+
+/// Replace a pending definition, preserving history and validating downstream sources.
+pub async fn edit_pending_task(
+    store: &(impl crate::core::RunReadStore + RunTaskStore),
+    run_id: i32,
+    task_id: i64,
+    raw: &str,
+    expected_raw: &str,
+) -> Result<(), ApiError> {
+    let run = load_run_progress(store, run_id).await?;
+    ensure_editable_queue(&run)?;
+    let tasks = store.list_run_tasks(run_id).await?;
+    let current = tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| ApiError::NotFound(format!("task {task_id} not found in run {run_id}")))?;
+    if current.state != RunTaskState::Pending {
+        return Err(ApiError::BadRequest(
+            "only pending tasks can be edited".into(),
+        ));
+    }
+    let parse_one = |raw: &str| -> Result<RunTaskInput, ApiError> {
+        let mut tasks = parse_task_queue_toml(raw)?.into_tasks();
+        if tasks.len() != 1 {
+            return Err(ApiError::BadRequest(
+                "editing requires exactly one task".into(),
+            ));
+        }
+        Ok(tasks.remove(0))
+    };
+    let expected = parse_one(expected_raw)?;
+    let encode = |task: RunTaskInput| {
+        serde_json::to_value(task).map_err(|err| ApiError::Internal(err.to_string()))
+    };
+    if encode(expected)? != encode(task_definition(current))? {
+        return Err(ApiError::BadRequest(
+            "task definition changed; reopen the editor before saving".into(),
+        ));
+    }
+    let mut replacement = parse_one(raw)?;
+    replacement.name.get_or_insert_with(|| current.name.clone());
+    let definitions = tasks
+        .iter()
+        .map(|task| {
+            if task.id == task_id {
+                replacement.clone()
+            } else {
+                task_definition(task)
+            }
+        })
+        .collect::<Vec<_>>();
+    validate_queue_definition(&run, &definitions)?;
+    store
+        .apply_task_queue_change(
+            run_id,
+            &tasks,
+            TaskQueueChange::Replace {
+                task_id,
+                task: Box::new(replacement),
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+fn validate_queue_definition(run: &RunProgress, tasks: &[RunTaskInput]) -> Result<(), ApiError> {
+    let params: IntegrationParams = serde_json::from_value(
+        run.integration_params
+            .clone()
+            .ok_or_else(|| ApiError::Internal("run has no integration parameters".into()))?,
+    )
+    .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let domain = run
+        .domain
+        .clone()
+        .ok_or_else(|| ApiError::Internal("run has no domain".into()))?;
+    TaskPreflightContext::from_existing_tasks(&[], params.evaluator, domain)?.validate_batch(tasks)
 }
 
 async fn preflight_task_batch(
@@ -899,33 +967,6 @@ impl TaskPreflightContext {
     }
 }
 
-fn format_clone_root_snapshot_name(
-    source_run_name: &str,
-    source_tasks: &[RunTask],
-    snapshot: &RunStageSnapshot,
-) -> String {
-    match snapshot.task_id {
-        None => format!(
-            "clone_of:{}:root_snapshot:{}",
-            source_run_name,
-            snapshot.id.unwrap_or_default()
-        ),
-        Some(task_id) => {
-            let task_name = source_tasks
-                .iter()
-                .find(|task| task.id == task_id)
-                .map(|task| task.name.as_str())
-                .unwrap_or("unknown_task");
-            format!(
-                "clone_of:{}:{}:snapshot:{}",
-                source_run_name,
-                task_name,
-                snapshot.id.unwrap_or_default()
-            )
-        }
-    }
-}
-
 async fn load_run_progress(
     store: &impl crate::core::RunReadStore,
     run_id: i32,
@@ -1012,37 +1053,23 @@ mod tests {
     }
 
     #[test]
-    fn repro_export_omits_null_metadata_fields_and_preserves_run_configuration() {
+    fn definition_export_contains_configuration_without_execution_metadata() {
         let config = preprocess_run_add(parse_run_add_config_toml(
-            "name = 'repro-null-metadata'\ntarget = { kind = 'scalar', value = 1.25 }\n[evaluator]\nkind = 'unit'\n",
+            "name = 'definition'\ntarget = { kind = 'scalar', value = 1.25 }\n[evaluator]\nkind = 'unit'\n",
         ).unwrap()).unwrap();
-        let provenance = serde_json::json!({
-            "git_revision": null,
-            "submitted_toml": null,
-            "evaluator_metadata": {
-                "graph_groups": null,
-                "integrand_name": "1L",
-                "graphs": [{"name": "graph", "optional": null}],
-            },
-            "enabled_features": ["gammaloop"],
-        });
-        let raw = toml::to_string(&RunReproToml {
-            name: config.name.clone(),
-            gammaboard: repro_provenance(provenance.clone()),
-            integration_params: config.resolved_integration_params.unwrap(),
-            target: config.target.clone(),
-            task_queue: vec![],
-        })
+        let raw = canonical_run_toml(
+            &config.name,
+            &config.resolved_integration_params.unwrap(),
+            config.target.as_ref(),
+            &[],
+        )
         .unwrap();
-        let restored = parse_run_add_config_toml(&raw).unwrap();
-        assert_eq!(restored.name, config.name);
+        let renamed = rename_run_definition(&raw, "copy").unwrap();
+        let restored = parse_run_add_config_toml(&renamed).unwrap();
+        assert_eq!(restored.name, "copy");
         assert_eq!(restored.target, config.target);
-        let document: toml::Value = toml::from_str(&raw).unwrap();
-        let metadata = &document["gammaboard"]["evaluator_metadata"];
-        assert_eq!(metadata["integrand_name"].as_str(), Some("1L"));
-        assert_eq!(metadata["graphs"][0]["name"].as_str(), Some("graph"));
-        assert!(metadata.get("graph_groups").is_none());
-        assert!(provenance["evaluator_metadata"]["graph_groups"].is_null());
+        let document: toml::Value = toml::from_str(&renamed).unwrap();
+        assert!(document.get("gammaboard").is_none());
     }
 
     #[test]

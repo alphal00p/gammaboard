@@ -628,8 +628,8 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
     let columns = vec![
         "Component".to_string(),
         "Sign".to_string(),
-        "Integrand".to_string(),
-        "Jacobian".to_string(),
+        "Returned integrand".to_string(),
+        "Top-level Jacobian".to_string(),
         "Max Weighted Value".to_string(),
         "Impact".to_string(),
         "Point".to_string(),
@@ -689,8 +689,8 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
         columns,
         rows,
         Some(json!({ "column_formats": {
-            "Integrand": "scientific",
-            "Jacobian": "scientific",
+            "Returned integrand": "scientific",
+            "Top-level Jacobian": "scientific",
             "Max Weighted Value": "scientific",
             "Impact": "scientific",
         }})),
@@ -1698,6 +1698,26 @@ fn gammaloop_diagnostics_entries(
             diagnostics.total_accepted_events,
         ),
         key_value(
+            "canonical_sampling_preparation_ms",
+            "Sampling preparation / eval (ms, within mapping)",
+            json_number_or_na(
+                diagnostics
+                    .total_canonical_sampling_preparation_time_ms
+                    .filter(|_| diagnostics.count_total > 0)
+                    .map(|ms| ms / diagnostics.count_total as f64),
+            ),
+        ),
+        key_value(
+            "canonical_physical_preparation_ms",
+            "Physical preparation / eval (ms, within physical evaluation)",
+            json_number_or_na(
+                diagnostics
+                    .total_canonical_physical_preparation_time_ms
+                    .filter(|_| diagnostics.count_total > 0)
+                    .map(|ms| ms / diagnostics.count_total as f64),
+            ),
+        ),
+        key_value(
             "accepted_event_ratio",
             "Accepted/Generated",
             diagnostics.accepted_event_ratio(),
@@ -1720,8 +1740,8 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
     let raw_evaluator = diagnostics.avg_evaluator_eval_time_ms().max(0.0);
     let raw_events = diagnostics.avg_event_processing_time_ms().max(0.0);
 
-    // GammaLoop timings are flamegraph-style: evaluator/event are nested inside
-    // integrand. Keep only the explicitly reported categories here.
+    // Evaluator/event timings are nested inside physical time. Preparation
+    // subsets stay in diagnostics; the remainder preserves the total denominator.
     let parameterization = raw_parameterization.min(total_eval_ms);
     let remaining_after_parameterization = (total_eval_ms - parameterization).max(0.0);
     let integrand = raw_integrand.min(remaining_after_parameterization);
@@ -1739,18 +1759,24 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
     let segments = vec![
         timing_segment(
             "parameterization",
-            "Parameterization",
+            "Mapping & partition",
             parameterization,
             "#0a9396",
         ),
         timing_segment(
             "integrand_core",
-            "Integrand Core",
+            "Physical evaluation (other)",
             integrand_core,
             "#ca6702",
         ),
         timing_segment("evaluator", "Evaluator Call", evaluator, "#bb3e03"),
         timing_segment("events", "Event Processing", events, "#6d597a"),
+        timing_segment(
+            "other",
+            "Other evaluation overhead",
+            remaining_after_parameterization - integrand,
+            "#64748b",
+        ),
     ]
     .into_iter()
     .filter(|segment| segment.value_ms.is_finite() && segment.value_ms > 0.0)
@@ -1766,7 +1792,7 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
 
     Some(tick_breakdown_panel(
         "gammaloop_evaluation_timing",
-        segment_sum_ms,
+        total_eval_ms,
         segments,
     ))
 }
@@ -1786,6 +1812,43 @@ mod tests {
     use crate::{
         NamedScalarAccumulator, VectorAccumulatorState, evaluation::ScalarAccumulatorState,
     };
+
+    #[test]
+    fn gammaloop_timing_keeps_the_full_evaluation_denominator() {
+        let state = crate::evaluation::GammaLoopAccumulatorState {
+            diagnostics: GammaLoopDiagnostics {
+                count_total: 2,
+                total_eval_time_ms: 20.0,
+                total_parameterization_time_ms: 4.0,
+                total_integrand_eval_time_ms: 12.0,
+                total_evaluator_eval_time_ms: 8.0,
+                total_event_processing_time_ms: 2.0,
+                total_canonical_sampling_preparation_time_ms: Some(3.0),
+                total_canonical_physical_preparation_time_ms: Some(1.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let PanelState::TickBreakdown {
+            total_ms, segments, ..
+        } = gammaloop_evaluation_timing_panel(AccumulatorState::Gammaloop(state)).unwrap()
+        else {
+            panic!("timing breakdown")
+        };
+        assert_eq!(total_ms, 10.0);
+        assert_eq!(
+            segments.iter().map(|segment| segment.value_ms).sum::<f64>(),
+            total_ms
+        );
+        assert_eq!(
+            segments
+                .iter()
+                .find(|segment| segment.key == "other")
+                .unwrap()
+                .value_ms,
+            2.0
+        );
+    }
 
     fn complex_samples() -> AccumulatorState {
         let mut state = crate::evaluation::GammaLoopAccumulatorState::default();
@@ -1834,7 +1897,12 @@ mod tests {
             assert_eq!(row[6]["discrete"], json!([2]));
             assert_eq!(row[6]["sampling_weight"], 7.0);
         }
-        for column in ["Integrand", "Jacobian", "Max Weighted Value", "Impact"] {
+        for column in [
+            "Returned integrand",
+            "Top-level Jacobian",
+            "Max Weighted Value",
+            "Impact",
+        ] {
             assert_eq!(
                 payload.as_ref().unwrap()["column_formats"][column],
                 "scientific"

@@ -15,14 +15,20 @@ pub(super) fn build_app(state: AppState) -> Router {
     let protected = Router::new()
         .route("/settings", get(settings::get_settings_overview))
         .route("/runs", get(get_runs).post(create_run))
-        .route("/runs/clone", post(clone_run))
         .route("/runs/:id", delete(delete_run))
         .route("/run-removals/:id", get(get_run_removal))
         .route("/runs/:id/pause", post(pause_run))
-        .route("/runs/:id/repro-toml", get(get_run_repro_toml))
+        .route("/runs/:id/definition", get(get_run_definition))
         .route("/runs/:id/panels", get(get_run_panels))
         .route("/runs/:id/tasks", get(get_run_tasks).post(add_run_tasks))
-        .route("/runs/:id/tasks/:task_id", delete(delete_run_task))
+        .route(
+            "/runs/:id/tasks/:task_id",
+            delete(delete_run_task).put(edit_run_task),
+        )
+        .route(
+            "/runs/:id/tasks/:task_id/definition",
+            get(get_task_definition),
+        )
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route(
             "/runs/:id/tasks/:task_id/queue-tuning",

@@ -1575,7 +1575,9 @@ training_projection = "abs"
 [evaluator.preprocessing]
 read_only = true
 commands = [
-  "set process string '\n[sampling]\ngraphs = \"summed\"\norientations = \"summed\"\nlmb_multichanneling = false\nlmb_channels = \"summed\"\n'",
+  # Keep a rectangular graph axis while retaining native graph-aware maps.
+  # Orientation and channel counts may differ between graphs, so sum those axes.
+  "set process string '\n[sampling]\ngraphs = \"monte_carlo\"\norientations = \"summed\"\nsampling_multichanneling = true\nsampling_channels = \"summed\"\n'",
   "set model MT=173.0",
   "set model WT=0.0",
   "set model ymt=173.0",
@@ -2185,17 +2187,48 @@ fn hash_password_for_tests(password: &str) -> String {
         .to_string()
 }
 
+async fn assert_fresh_controller_duplicate(
+    harness: &FullStackHarness,
+    source: &str,
+) -> anyhow::Result<()> {
+    let name = format!("{source}-copy");
+    harness
+        .cli()
+        .args(["run", "duplicate", source, &name])
+        .assert()
+        .success();
+    let duplicate_id = harness.run_id(&name).await?;
+    let children: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE parent_run_id=$1")
+        .bind(duplicate_id)
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(children, 0, "new controllers must not adopt old child runs");
+    let copied_state: (String, Option<JsonValue>) =
+        sqlx::query_as("SELECT state, controller_output FROM run_tasks WHERE run_id=$1")
+            .bind(duplicate_id)
+            .fetch_one(&harness.pool)
+            .await?;
+    assert_eq!(copied_state, ("pending".into(), None));
+    let store = gammaboard::PgStore::new(harness.pool.clone());
+    let source_id = harness.run_id(source).await?;
+    let source = gammaboard::api::runs::export_run_definition(&store, source_id).await?;
+    let copy = gammaboard::api::runs::export_run_definition(&store, duplicate_id).await?;
+    let source = gammaboard::api::runs::rename_run_definition(&source, &name)?;
+    assert_eq!(
+        toml::from_str::<toml::Value>(&source)?,
+        toml::from_str::<toml::Value>(&copy)?
+    );
+    Ok(())
+}
+
 const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
 
 fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Grid<f64> {
     match domain {
-        Domain::Continuous { dims } => Grid::Continuous(ContinuousGrid::new(
-            *dims,
-            params.bins,
-            params.samples_for_update,
-            None,
-            false,
-        )),
+        Domain::Continuous { dims } => Grid::Continuous(
+            ContinuousGrid::new(*dims, params.bins, params.samples_for_update, None, false)
+                .unwrap(),
+        ),
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,
@@ -2205,11 +2238,7 @@ fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Gr
                 .iter()
                 .map(|branch| Some(build_direct_havana_grid(branch.domain.as_ref(), params)))
                 .collect();
-            Grid::Discrete(DiscreteGrid::new(
-                bins,
-                DEFAULT_DISCRETE_MAX_PROB_RATIO,
-                false,
-            ))
+            Grid::Discrete(DiscreteGrid::new(bins, DEFAULT_DISCRETE_MAX_PROB_RATIO, false).unwrap())
         }
     }
 }
@@ -2229,19 +2258,20 @@ fn build_direct_rectangular_havana_grid(
                 ))
             })
             .collect();
-        return Grid::Discrete(DiscreteGrid::new(
-            bins,
-            DEFAULT_DISCRETE_MAX_PROB_RATIO,
-            false,
-        ));
+        return Grid::Discrete(
+            DiscreteGrid::new(bins, DEFAULT_DISCRETE_MAX_PROB_RATIO, false).unwrap(),
+        );
     }
-    Grid::Continuous(ContinuousGrid::new(
-        continuous_dims,
-        params.bins,
-        params.samples_for_update,
-        None,
-        false,
-    ))
+    Grid::Continuous(
+        ContinuousGrid::new(
+            continuous_dims,
+            params.bins,
+            params.samples_for_update,
+            None,
+            false,
+        )
+        .unwrap(),
+    )
 }
 
 fn direct_unit_training_value(_sample: &Sample<f64>) -> f64 {
@@ -4883,7 +4913,7 @@ seed = 2
     let cookie = login_cookie(&server_url).await?;
     let exported = http_get_with_cookie(
         &server_url,
-        &format!("/api/runs/{run_id}/repro-toml"),
+        &format!("/api/runs/{run_id}/definition"),
         &cookie,
     )
     .await?;
@@ -4900,7 +4930,7 @@ seed = 2
         .await?;
     let exported = http_get_with_cookie(
         &server_url,
-        &format!("/api/runs/{child_id}/repro-toml"),
+        &format!("/api/runs/{child_id}/definition"),
         &cookie,
     )
     .await?;
@@ -4910,14 +4940,38 @@ seed = 2
     assert_eq!(child_config.name, "campaign-result-left");
     assert_eq!(child_config.task_queue.unwrap().len(), 1);
     let document: toml::Value = toml::from_str(raw)?;
-    assert_eq!(
-        document["gammaboard"]["evaluator_metadata"]["label"].as_str(),
-        Some("retained")
+    assert!(document.get("gammaboard").is_none());
+    // Controller duplication starts a new orchestration; child duplication is standalone.
+    assert_fresh_controller_duplicate(&harness, "integration-campaign-result-e2e").await?;
+    harness
+        .cli()
+        .args([
+            "run",
+            "duplicate",
+            "campaign-result-left",
+            "standalone-copy",
+        ])
+        .assert()
+        .success();
+    let standalone_id = harness.run_id("standalone-copy").await?;
+    let parent: Option<i32> = sqlx::query_scalar("SELECT parent_run_id FROM runs WHERE id=$1")
+        .bind(standalone_id)
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(parent, None);
+    let store = gammaboard::PgStore::new(harness.pool.clone());
+    let tasks = gammaboard::api::runs::parse_task_queue_toml(
+        "[task]\nkind='set_accumulator'\naccumulator='scalar'",
+    )?;
+    assert!(
+        gammaboard::api::runs::append_tasks(&store, child_id, tasks)
+            .await
+            .is_err()
     );
     assert!(
-        document["gammaboard"]["evaluator_metadata"]
-            .get("graph_groups")
-            .is_none()
+        gammaboard::api::runs::update_task_queue_tuning(&store, child_id, 0, None)
+            .await
+            .is_err()
     );
 
     harness.cleanup().await?;
@@ -5301,6 +5355,7 @@ kind = "naive_monte_carlo"
         "server-side scan controller should release parent compute assignments"
     );
 
+    assert_fresh_controller_duplicate(&harness, "parameter-scan-e2e").await?;
     harness.cleanup().await?;
     Ok(())
 }
@@ -5690,6 +5745,7 @@ kind = "naive_monte_carlo"
     .await?;
     assert_eq!(measured_children, 4);
 
+    assert_fresh_controller_duplicate(&harness, "hyperparameter-tuning-random-e2e").await?;
     harness.cleanup().await?;
     Ok(())
 }
@@ -6214,108 +6270,363 @@ kind = "naive_monte_carlo"
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
-async fn full_stack_cli_can_clone_run_from_task_snapshot() -> anyhow::Result<()> {
+async fn full_stack_definition_editor_duplicates_current_drafts() -> anyhow::Result<()> {
+    use gammaboard::api::runs;
+    use gammaboard::core::{RunTaskState, RunTaskStore};
+
     let mut harness = FullStackHarness::new().await?;
-
-    let config = temp_config(
-        r#"
-name = "clone-source-e2e"
-
+    let raw = r#"
+name = "editor-source"
 [evaluator]
 kind = "unit"
 continuous_dims = 1
-discrete_dims = 0
-
 [[task_queue]]
+name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 16 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+"#;
+    harness.add_run(&temp_config(raw));
+    let run_id = harness.run_id("editor-source").await?;
+    let store = gammaboard::PgStore::new(harness.pool.clone());
+    let server_url = harness.start_server().await?;
+    let cookie = login_cookie(&server_url).await?;
+    let draft = runs::export_run_definition(&store, run_id)
+        .await?
+        .replace("max_samples = 16", "max_samples = 123");
+    for name in ["editor-source-copy", "editor-source-copy-2", "custom-name"] {
+        let draft = if name == "custom-name" {
+            runs::rename_run_definition(&draft, name)?
+        } else {
+            draft.clone()
+        };
+        let response = http_post_json(
+            &server_url,
+            "/api/runs",
+            json!({"toml": draft, "duplicate": true}),
+            Some(&cookie),
+        )
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+        let response: JsonValue = serde_json::from_str(&response)?;
+        assert_eq!(response["run_name"], name);
+        let id = response["run_id"].as_i64().unwrap() as i32;
+        let tasks = store.list_run_tasks(id).await?;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].state, RunTaskState::Pending);
+        assert_eq!(tasks[0].nr_completed_samples, 0);
+        assert_eq!(
+            serde_json::to_value(&tasks[0].task)?["stop_condition"]["max_samples"],
+            123
+        );
+        let exported: toml::Value =
+            toml::from_str(&runs::export_run_definition(&store, id).await?)?;
+        assert_eq!(exported["name"].as_str(), Some(name));
+    }
 
+    let source = store.list_run_tasks(run_id).await?;
+    let draft = runs::export_task_definition(&store, run_id, source[0].id, false)
+        .await?
+        .replace("max_samples = 16", "max_samples = 321");
+    for name in ["sample-copy", "sample-copy-2", "custom-task"] {
+        let draft = if name == "custom-task" {
+            draft.replace("name = \"sample\"", "name = \"custom-task\"")
+        } else {
+            draft.clone()
+        };
+        let response = http_post_json(
+            &server_url,
+            &format!("/api/runs/{run_id}/tasks"),
+            json!({"toml": draft, "duplicate": true}),
+            Some(&cookie),
+        )
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+        let response: JsonValue = serde_json::from_str(&response)?;
+        assert_eq!(response[0]["name"], name);
+    }
+    let tasks = store.list_run_tasks(run_id).await?;
+    assert_eq!(tasks.len(), 4);
+    assert_eq!(
+        serde_json::to_value(&tasks[0].task)?["stop_condition"]["max_samples"],
+        16
+    );
+    for task in &tasks[1..] {
+        assert_eq!(task.state, RunTaskState::Pending);
+        assert_eq!(
+            serde_json::to_value(&task.task)?["stop_condition"]["max_samples"],
+            321
+        );
+    }
+    let queued = draft
+        .replace("[task]", "[[task_queue]]")
+        .replace("[task.", "[task_queue.");
+    let two_tasks = format!("{queued}\n{queued}");
+    let rejected = http_post_json(
+        &server_url,
+        &format!("/api/runs/{run_id}/tasks"),
+        json!({"toml": two_tasks, "duplicate": true}),
+        Some(&cookie),
+    )
+    .await?;
+    assert_eq!(rejected.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(rejected.text().await?.contains("exactly one task"));
+    assert_eq!(store.list_run_tasks(run_id).await?.len(), 4);
+
+    // Controller exports read the frozen effective document, whose name must also change.
+    let controller = format!(
+        r#"
+kind = "parameter_scan"
+name = "editor-scan"
+max_concurrent_runs = 1
+[[parameters]]
+name = "scale"
+values = [1]
+[measurement]
+source_task = "sample"
+[child]
+run = '''{raw}'''
+"#
+    );
+    harness.add_run(&temp_config(&controller));
+    let draft = controller.replace("values = [1]", "values = [1, 2]");
+    let response = http_post_json(
+        &server_url,
+        "/api/runs",
+        json!({"toml": draft, "duplicate": true}),
+        Some(&cookie),
+    )
+    .await?
+    .error_for_status()?
+    .text()
+    .await?;
+    let response: JsonValue = serde_json::from_str(&response)?;
+    assert_eq!(response["run_name"], "editor-scan-copy");
+    let id = response["run_id"].as_i64().unwrap() as i32;
+    let exported: toml::Value = toml::from_str(&runs::export_run_definition(&store, id).await?)?;
+    assert_eq!(exported["name"].as_str(), Some("editor-scan-copy"));
+    assert_eq!(
+        exported["parameters"][0]["values"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let children: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE parent_run_id=$1")
+        .bind(id)
+        .fetch_one(&harness.pool)
+        .await?;
+    assert_eq!(children, 0);
+    harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_definition_duplication_and_pending_task_edits() -> anyhow::Result<()> {
+    use gammaboard::api::runs;
+    use gammaboard::core::{RunTaskState, RunTaskStore, traits::TaskQueueChange};
+    let mut harness = FullStackHarness::new().await?;
+    let config = temp_config(
+        r#"
+name = "definition-source"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
 [[task_queue]]
+name = "setup"
+kind = "set_accumulator"
+accumulator = "scalar"
+[[task_queue]]
+name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 16 }
+sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+[[task_queue]]
+name = "later"
+kind = "sample"
+stop_condition = { max_samples = 16 }
+accumulator = { from_name = "sample" }
 "#,
     );
-
     harness.add_run(&config);
-    let source_run_id = harness.run_id("clone-source-e2e").await?;
-    let source_task_1: i64 =
-        sqlx::query_scalar("SELECT id FROM run_tasks WHERE run_id = $1 AND sequence_nr = 1")
-            .bind(source_run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-
-    harness.start_nodes(&["w-1", "w-2"]).await?;
-
-    harness.assign_node("w-1", "sampler_aggregator", "clone-source-e2e");
-    harness.assign_node("w-2", "evaluator", "clone-source-e2e");
-
-    harness
-        .wait_for("source run completes", Duration::from_secs(20), || async {
-            let w1 = harness.node_state("w-1").await?;
-            let w2 = harness.node_state("w-2").await?;
-            let completed: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM run_tasks WHERE run_id = $1 AND state = 'completed'",
-            )
-            .bind(source_run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-            Ok(w1.0.is_none()
-                && w1.1.is_none()
-                && w1.2.is_none()
-                && w1.3.is_none()
-                && w2.0.is_none()
-                && w2.1.is_none()
-                && w2.2.is_none()
-                && w2.3.is_none()
-                && completed == 2)
-        })
-        .await?;
-
-    let source_snapshot_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM run_stage_snapshots WHERE run_id = $1 AND task_id = $2 AND queue_empty = TRUE ORDER BY id DESC LIMIT 1",
+    let run_id = harness.run_id("definition-source").await?;
+    let store = gammaboard::PgStore::new(harness.pool.clone());
+    let tasks = store.list_run_tasks(run_id).await?;
+    let sample_id = tasks[1].id;
+    let server_url = harness.start_server().await?;
+    let cookie = login_cookie(&server_url).await?;
+    let definition = http_get_with_cookie(
+        &server_url,
+        &format!("/api/runs/{run_id}/tasks/{sample_id}/definition"),
+        &cookie,
     )
-    .bind(source_run_id)
-    .bind(source_task_1)
-    .fetch_one(&harness.pool)
     .await?;
-
+    let definition: JsonValue = serde_json::from_str(&definition)?;
+    let raw = definition["toml"].as_str().unwrap().to_owned();
+    let edited = raw.replace("max_samples = 16", "max_samples = 24");
+    let response = reqwest::Client::new()
+        .put(format!("{server_url}/api/runs/{run_id}/tasks/{sample_id}"))
+        .header("cookie", &cookie)
+        .header("content-type", "application/json")
+        .body(json!({"toml": edited, "expected_toml": raw}).to_string())
+        .send()
+        .await?;
+    let status = response.status();
+    assert!(
+        status.is_success(),
+        "edit response {status}: {}",
+        response.text().await?
+    );
+    assert!(
+        runs::edit_pending_task(&store, run_id, sample_id, &raw, &raw)
+            .await
+            .is_err(),
+        "stale editor must not overwrite an edit"
+    );
+    let renamed = edited.replace("name = \"sample\"", "name = \"renamed\"");
+    assert!(
+        runs::edit_pending_task(&store, run_id, sample_id, &renamed, &edited)
+            .await
+            .is_err(),
+        "later named sources must stay valid"
+    );
+    assert!(
+        runs::remove_pending_task(&store, run_id, sample_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .apply_task_queue_change(
+                run_id,
+                &tasks,
+                TaskQueueChange::Remove { task_id: sample_id }
+            )
+            .await
+            .is_err(),
+        "optimistic writes must reject changed queues"
+    );
     harness
         .cli()
         .args([
             "run",
-            "clone",
-            "clone-source-e2e",
-            &source_snapshot_id.to_string(),
-            "clone-branch-e2e",
+            "task",
+            "duplicate",
+            "definition-source",
+            &sample_id.to_string(),
         ])
         .assert()
         .success();
-
-    let cloned_run_id = harness.run_id("clone-branch-e2e").await?;
-    let cloned_task_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM run_tasks WHERE run_id = $1")
-            .bind(cloned_run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-    assert_eq!(cloned_task_count, 0);
-
-    let cloned_root_snapshot_name: String = sqlx::query_scalar(
-        "SELECT name FROM run_stage_snapshots WHERE run_id = $1 AND task_id IS NULL ORDER BY id ASC LIMIT 1",
-    )
-    .bind(cloned_run_id)
-    .fetch_one(&harness.pool)
-    .await?;
+    let tasks = store.list_run_tasks(run_id).await?;
+    assert_eq!(tasks.len(), 4);
+    assert_eq!(tasks[3].name, "sample-copy");
+    assert_eq!(tasks[3].state, RunTaskState::Pending);
+    // Export includes all definitions, even when execution states differ.
+    sqlx::query("UPDATE run_tasks SET state='completed' WHERE id=$1")
+        .bind(tasks[0].id)
+        .execute(&harness.pool)
+        .await?;
+    sqlx::query("UPDATE run_tasks SET state='failed' WHERE id=$1")
+        .bind(tasks[1].id)
+        .execute(&harness.pool)
+        .await?;
     assert!(
-        cloned_root_snapshot_name.contains("clone_of:clone-source-e2e"),
-        "unexpected cloned root snapshot name: {cloned_root_snapshot_name}"
+        runs::edit_pending_task(&store, run_id, sample_id, &edited, &edited)
+            .await
+            .is_err()
     );
-
-    harness.cleanup().await?;
-    Ok(())
+    harness
+        .cli()
+        .args(["run", "duplicate", "definition-source", "definition-copy"])
+        .assert()
+        .success();
+    let copy_id = harness.run_id("definition-copy").await?;
+    let copied = store.list_run_tasks(copy_id).await?;
+    assert_eq!(copied.len(), 4);
+    assert!(
+        copied
+            .iter()
+            .all(|task| task.state == RunTaskState::Pending && task.nr_completed_samples == 0)
+    );
+    let inherited: i64 = sqlx::query_scalar("SELECT count(*) FROM run_stage_snapshots WHERE run_id=$1 AND (sampler_snapshot IS NOT NULL OR observable_state IS NOT NULL)")
+        .bind(copy_id).fetch_one(&harness.pool).await?;
+    assert_eq!(inherited, 0);
+    // Live tuning must retain other fields saved by an overlapping definition edit.
+    let tune_id = copied[3].id;
+    let mut task_json = serde_json::to_value(&copied[3].task)?;
+    task_json["stop_condition"]["max_samples"] = json!(123);
+    let task_toml = runs::export_task_definition(&store, copy_id, tune_id, false)
+        .await?
+        .replace("max_samples = 24", "max_samples = 123");
+    let mut editing = harness.pool.begin().await?;
+    sqlx::query("UPDATE run_tasks SET task=$2, task_toml=$3 WHERE id=$1")
+        .bind(tune_id)
+        .bind(task_json)
+        .bind(task_toml)
+        .execute(&mut *editing)
+        .await?;
+    let tuning_store = store.clone();
+    let mut tuning = tokio::spawn(async move {
+        tuning_store
+            .update_run_task_queue_tuning(copy_id, tune_id, None)
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut tuning)
+            .await
+            .is_err()
+    );
+    editing.commit().await?;
+    let tuned = tuning.await??;
+    assert_eq!(
+        serde_json::to_value(tuned.task)?["stop_condition"]["max_samples"],
+        json!(123)
+    );
+    // Edits reject activation races, even when definitions are unchanged.
+    let expected = store.list_run_tasks(copy_id).await?;
+    // A queue edit must not make activation skip a task or report an exhausted queue.
+    let mut editing = harness.pool.begin().await?;
+    sqlx::query("SELECT id FROM run_tasks WHERE id=$1 FOR UPDATE")
+        .bind(expected[0].id)
+        .fetch_one(&mut *editing)
+        .await?;
+    let activation_store = store.clone();
+    let mut activation =
+        tokio::spawn(async move { activation_store.activate_next_run_task(copy_id).await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut activation)
+            .await
+            .is_err()
+    );
+    editing.commit().await?;
+    let active = activation.await??.unwrap();
+    assert_eq!(active.id, expected[0].id);
+    assert!(
+        store
+            .apply_task_queue_change(
+                copy_id,
+                &expected,
+                TaskQueueChange::Remove { task_id: active.id }
+            )
+            .await
+            .is_err()
+    );
+    let response = harness
+        .cli()
+        .args(["run", "export", "definition-copy"])
+        .output()?;
+    anyhow::ensure!(response.status.success());
+    let exported = runs::parse_run_add_config_toml(std::str::from_utf8(&response.stdout)?)?;
+    assert_eq!(exported.task_queue.unwrap().len(), 4);
+    harness.cleanup().await
 }
 
 #[tokio::test]
@@ -7915,4 +8226,104 @@ completed_batch_fetch_limit = 2
     assert_eq!(diag["pending_training_samples"], 0);
     harness.cleanup().await?;
     Ok(())
+}
+
+#[cfg(feature = "gammaloop")]
+#[tokio::test]
+#[ignore = "requires postgres and GAMMABOARD_TEST_REFERENCE_STATE from the acceptance fixture"]
+async fn full_stack_gammaloop_reference_training_and_inference() -> anyhow::Result<()> {
+    let Some(state_folder) = std::env::var_os("GAMMABOARD_TEST_REFERENCE_STATE") else {
+        eprintln!(
+            "skipping reference E2E; set GAMMABOARD_TEST_REFERENCE_STATE to the saved acceptance fixture"
+        );
+        return Ok(());
+    };
+    let state_folder =
+        toml::Value::String(state_folder.into_string().map_err(|_| {
+            anyhow::anyhow!("GAMMABOARD_TEST_REFERENCE_STATE must be a UTF-8 path")
+        })?)
+        .to_string();
+    let mut harness = FullStackHarness::new().await?;
+    let config = temp_config(&format!(
+        r#"
+name = "gammaloop-reference-e2e"
+[evaluator]
+kind = "gammaloop"
+state_folder = {state_folder}
+integrand_name = "default"
+reference_gaussian = {{ width = 1.5, center = [0.2, -0.3, 0.1] }}
+[evaluator.preprocessing]
+commands = ["""set process string '
+[sampling]
+graphs = "monte_carlo"
+sampling_channels = "monte_carlo"
+'"""]
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = {{ max_samples = 512 }}
+accumulator = {{ config = "gammaloop" }}
+sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 21, bins = 16, samples_for_update = 128 }} }}
+[[task_queue]]
+name = "infer"
+kind = "sample"
+stop_condition = {{ max_samples = 2048 }}
+accumulator = {{ config = "gammaloop" }}
+sampler_aggregator = {{ config = {{ kind = "havana_inference", source = "latest_training_sampler_aggregator" }} }}
+[sampler_aggregator_runner_params.queue]
+max_batch_size = 64
+fixed_batch_size = 64
+max_queue_size = 4
+"#
+    ));
+    harness.add_run(&config);
+    let run_id = harness.run_id("gammaloop-reference-e2e").await?;
+    harness
+        .start_nodes(&["reference-s", "reference-e1", "reference-e2"])
+        .await?;
+    harness.assign_node(
+        "reference-s",
+        "sampler_aggregator",
+        "gammaloop-reference-e2e",
+    );
+    harness.assign_node("reference-e1", "evaluator", "gammaloop-reference-e2e");
+    harness.assign_node("reference-e2", "evaluator", "gammaloop-reference-e2e");
+    harness
+        .wait_for(
+            "reference training and inference complete",
+            Duration::from_secs(120),
+            || async {
+                let rows: Vec<(String, Option<String>)> =
+                    sqlx::query_as("SELECT state, failure_reason FROM run_tasks WHERE run_id=$1")
+                        .bind(run_id)
+                        .fetch_all(&harness.pool)
+                        .await?;
+                for (state, reason) in &rows {
+                    anyhow::ensure!(state != "failed", "reference task failed: {reason:?}");
+                }
+                Ok(rows.len() == 2 && rows.iter().all(|(state, _)| state == "completed"))
+            },
+        )
+        .await?;
+    let state: gammaboard::evaluation::GammaLoopAccumulatorState = serde_json::from_value(
+        harness
+            .run_current_accumulator(run_id)
+            .await?
+            .expect("reference accumulator"),
+    )?;
+    assert_eq!(state.diagnostics.count_total, 2048);
+    assert_eq!(state.diagnostics.count_nan_or_unstable, 0);
+    for (label, mean, stderr) in [
+        ("normalization", state.real_mean(), state.real_stderr()),
+        ("moment", state.imag_mean(), state.imag_stderr()),
+    ] {
+        eprintln!("reference inference {label}: {mean:.6} +/- {stderr:.6}");
+        assert!(stderr.is_finite() && stderr < 0.15);
+        assert!(
+            (mean - 1.0).abs() < 6.0 * stderr,
+            "{label}: {mean} +/- {stderr}"
+        );
+    }
+    harness.cleanup().await
 }

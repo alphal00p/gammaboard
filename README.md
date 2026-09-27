@@ -275,14 +275,14 @@ cargo build --no-default-features
 
 GammaBoard is licensed under the MIT License.
 
-Normal GammaBoard builds include OEM-licensed Symbolica activation, so users do
+Normal GammaBoard builds include a Symbolica 3 application license, so users do
 not need to obtain or configure a separate Symbolica license. Symbolica remains
 subject to its own license terms: https://symbolica.io/license.html
 
 Builds without the default `gammaloop` feature do not link GammaLoop, but
 GammaBoard still depends directly on Symbolica for built-in Symbolica
-evaluators. Developers who explicitly compile with
-`NO_SYMBOLICA_OEM_LICENSE=1` must provide `SYMBOLICA_LICENSE` at runtime.
+evaluators and Havana. `NO_SYMBOLICA_OEM_LICENSE=1` at build time disables the
+application key and selects regular licensing at runtime.
 
 Graceful `deploy` shutdown automatically marks live workers for later recreation and
 preserves their intended assignments. Use `gammaboard deploy --resume-workers` to

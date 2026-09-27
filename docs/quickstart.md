@@ -123,8 +123,12 @@ Run commands:
 ```bash
 ./gammaboard run list [RUN_NAME]
 ./gammaboard run pause <RUN>
-./gammaboard run clone <SOURCE_RUN> <FROM_SNAPSHOT_ID> <NEW_NAME>
+./gammaboard run duplicate <SOURCE_RUN> <NEW_NAME>
+./gammaboard run export <RUN> > run.toml
 ./gammaboard run task append <RUN> <TASK_FILE.toml>
+./gammaboard run task export <RUN> <TASK_ID> > task.toml
+./gammaboard run task duplicate <RUN> <TASK_ID>
+./gammaboard run task edit <RUN> <TASK_ID> <TASK_FILE.toml>
 ./gammaboard run task remove <RUN> <TASK_ID>
 ./gammaboard run remove <RUN>
 ```

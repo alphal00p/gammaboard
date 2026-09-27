@@ -1,6 +1,6 @@
 use symbolica::numerical_integration::{ContinuousGrid, DiscreteGrid, Grid, Sample};
 
-use crate::core::{BuildError, EngineError};
+use crate::core::{BuildError, EngineError, EngineResultExt};
 use crate::evaluation::Point;
 use crate::sampling::HavanaSamplerParams;
 use crate::utils::domain::Domain;
@@ -19,13 +19,10 @@ pub(crate) fn build_havana_grid(
                     "havana sampler requires continuous_dims > 0",
                 ));
             }
-            Ok(Grid::Continuous(ContinuousGrid::new(
-                *dims,
-                params.bins,
-                params.samples_for_update,
-                None,
-                false,
-            )))
+            Ok(Grid::Continuous(
+                ContinuousGrid::new(*dims, params.bins, params.samples_for_update, None, false)
+                    .build_err()?,
+            ))
         }
         Domain::Rectangular {
             discrete_cardinalities,
@@ -41,11 +38,9 @@ pub(crate) fn build_havana_grid(
                 .iter()
                 .map(|branch| build_havana_grid(branch.domain.as_ref(), params).map(Some))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(Grid::Discrete(DiscreteGrid::new(
-                bins,
-                DEFAULT_DISCRETE_MAX_PROB_RATIO,
-                false,
-            )))
+            Ok(Grid::Discrete(
+                DiscreteGrid::new(bins, DEFAULT_DISCRETE_MAX_PROB_RATIO, false).build_err()?,
+            ))
         }
     }
 }
@@ -64,11 +59,9 @@ fn build_rectangular_havana_grid(
         let bins = (0..cardinality)
             .map(|_| build_rectangular_havana_grid(continuous_dims, tail, params).map(Some))
             .collect::<Result<Vec<_>, _>>()?;
-        return Ok(Grid::Discrete(DiscreteGrid::new(
-            bins,
-            DEFAULT_DISCRETE_MAX_PROB_RATIO,
-            false,
-        )));
+        return Ok(Grid::Discrete(
+            DiscreteGrid::new(bins, DEFAULT_DISCRETE_MAX_PROB_RATIO, false).build_err()?,
+        ));
     }
     build_havana_grid(&Domain::continuous(continuous_dims), params)
 }

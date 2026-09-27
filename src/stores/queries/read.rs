@@ -59,7 +59,6 @@ struct RunProgressBaseRow {
     parent_task_id: Option<i64>,
     spawn_kind: Option<String>,
     spawn_label: Option<String>,
-    root_stage_snapshot_id: Option<i64>,
     desired_assignment_count: i64,
     active_worker_count: i64,
     integration_params: Option<JsonValue>,
@@ -110,7 +109,6 @@ impl RunProgressBaseRow {
             parent_task_id: self.parent_task_id.map(id_text),
             spawn_kind: self.spawn_kind,
             spawn_label: self.spawn_label,
-            root_stage_snapshot_id: self.root_stage_snapshot_id.map(id_text),
             lifecycle_state,
             desired_assignment_count: self.desired_assignment_count,
             active_worker_count: self.active_worker_count,
@@ -395,16 +393,6 @@ const RUN_ASSIGNMENT_STATS_SUBQUERY: &str = r#"
     ) aw ON r.id = aw.run_id
 "#;
 
-const RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY: &str = r#"
-    SELECT
-        run_id,
-        id AS root_stage_snapshot_id
-    FROM run_stage_snapshots
-    WHERE queue_empty = TRUE
-      AND task_id IS NULL
-      AND sequence_nr = 0
-"#;
-
 fn run_progress_sql(run_where_clause: &str) -> String {
     format!(
         r#"
@@ -420,7 +408,6 @@ fn run_progress_sql(run_where_clause: &str) -> String {
             r.parent_task_id,
             r.spawn_kind,
             r.spawn_label,
-            root.root_stage_snapshot_id,
             COALESCE(a.desired_assignment_count, 0) as desired_assignment_count,
             COALESCE(a.active_worker_count, 0) as active_worker_count,
             COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
@@ -441,16 +428,12 @@ fn run_progress_sql(run_where_clause: &str) -> String {
             FROM run_tasks
             GROUP BY run_id
         ) task_cpu ON r.id = task_cpu.run_id
-        LEFT JOIN (
-            {root_stage_snapshot_subquery}
-        ) root ON r.id = root.run_id
         LEFT JOIN run_tasks active_task
             ON active_task.run_id = r.id
            AND active_task.state = 'active'
         {run_where_clause}
         "#,
         assignment_stats_subquery = RUN_ASSIGNMENT_STATS_SUBQUERY,
-        root_stage_snapshot_subquery = RUN_ROOT_STAGE_SNAPSHOT_SUBQUERY,
         run_where_clause = run_where_clause
     )
 }

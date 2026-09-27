@@ -107,6 +107,20 @@ pub(crate) async fn append_run_tasks(
     tasks: &[RunTaskInput],
 ) -> Result<Vec<RunTask>, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM runs WHERE id=$1 FOR UPDATE")
+        .bind(run_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let inserted = append_tasks_in_transaction(&mut tx, run_id, tasks).await?;
+    tx.commit().await?;
+    Ok(inserted)
+}
+
+async fn append_tasks_in_transaction(
+    connection: &mut PgConnection,
+    run_id: i32,
+    tasks: &[RunTaskInput],
+) -> Result<Vec<RunTask>, sqlx::Error> {
     let next_sequence = sqlx::query_scalar::<_, i32>(
         r#"
         SELECT COALESCE(MAX(sequence_nr), 0) + 1
@@ -115,7 +129,7 @@ pub(crate) async fn append_run_tasks(
         "#,
     )
     .bind(run_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *connection)
     .await?;
 
     let mut inserted = Vec::with_capacity(tasks.len());
@@ -145,11 +159,10 @@ pub(crate) async fn append_run_tasks(
         .bind(canonical_task_toml(task).map_err(|err| {
             sqlx::Error::Protocol(format!("failed to serialize task TOML: {err}"))
         })?)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut *connection)
         .await?;
         inserted.push(decode_task_row(row)?);
     }
-    tx.commit().await?;
     Ok(inserted)
 }
 
@@ -255,9 +268,18 @@ pub(crate) async fn update_run_task_queue_tuning(
     task_id: i64,
     queue_tuning: Option<SamplerQueueTuning>,
 ) -> Result<RunTask, sqlx::Error> {
-    let current = load_run_task(pool, task_id)
-        .await?
-        .ok_or_else(|| sqlx::Error::Protocol(format!("run task {task_id} not found for update")))?;
+    // Read under the same row lock used for replacement, so live tuning cannot
+    // overwrite other fields saved by a concurrent definition edit.
+    let mut tx = pool.begin().await?;
+    let current = sqlx::query_as::<_, RunTaskRow>(&format!(
+        "SELECT {RUN_TASK_COLUMNS} FROM run_tasks WHERE id=$1 FOR UPDATE"
+    ))
+    .bind(task_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(decode_task_row)
+    .transpose()?
+    .ok_or_else(|| sqlx::Error::Protocol(format!("run task {task_id} not found for update")))?;
     if current.run_id != run_id {
         return Err(sqlx::Error::Protocol(format!(
             "run task {task_id} belongs to run {}, not run {run_id}",
@@ -300,7 +322,7 @@ pub(crate) async fn update_run_task_queue_tuning(
     .bind(run_id)
     .bind(encode_task(&next_task_spec)?)
     .bind(next_task_toml)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| {
         sqlx::Error::Protocol(format!(
@@ -308,7 +330,9 @@ pub(crate) async fn update_run_task_queue_tuning(
         ))
     })?;
 
-    decode_task_row(row)
+    let task = decode_task_row(row)?;
+    tx.commit().await?;
+    Ok(task)
 }
 
 pub(crate) async fn load_active_run_task(
@@ -354,6 +378,8 @@ pub(crate) async fn activate_next_run_task(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunTask>, sqlx::Error> {
+    // Wait for definition edits: skipping locked tasks could reorder the queue
+    // or make the controller mistake a locked queue for an exhausted one.
     let row = sqlx::query_as::<_, RunTaskRow>(&format!(
         r#"
         WITH next_task AS (
@@ -363,7 +389,7 @@ pub(crate) async fn activate_next_run_task(
               AND state = 'pending'
             ORDER BY sequence_nr ASC, id ASC
             LIMIT 1
-            FOR UPDATE SKIP LOCKED
+            FOR UPDATE
         )
         UPDATE run_tasks
         SET
@@ -541,4 +567,82 @@ pub(crate) async fn fail_run_task(
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Lock definitions while checking the optimistic edit, then update only pending work.
+pub(crate) async fn apply_task_queue_change(
+    pool: &PgPool,
+    run_id: i32,
+    expected: &[RunTask],
+    change: crate::core::traits::TaskQueueChange,
+) -> Result<Vec<RunTask>, crate::core::StoreError> {
+    use crate::core::{StoreError, traits::TaskQueueChange};
+    use crate::stores::pg_store::map_sqlx;
+    let mut tx = pool.begin().await.map_err(map_sqlx)?;
+    sqlx::query("SELECT id FROM runs WHERE id=$1 FOR UPDATE")
+        .bind(run_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+    let current = sqlx::query_as::<_, RunTaskRow>(&format!(
+        "SELECT {RUN_TASK_COLUMNS} FROM run_tasks WHERE run_id=$1 ORDER BY sequence_nr, id FOR UPDATE"
+    )).bind(run_id).fetch_all(&mut *tx).await.map_err(map_sqlx)?;
+    let matches = current.len() == expected.len()
+        && current.iter().zip(expected).all(|(row, expected)| {
+            row.id == expected.id
+                && row.name == expected.name
+                && row.sequence_nr == expected.sequence_nr
+                && serde_json::to_value(&expected.task).ok().as_ref() == Some(&row.task)
+        });
+    if !matches {
+        tx.rollback().await.map_err(map_sqlx)?;
+        return Err(StoreError::InvalidInput(
+            "task queue changed; reload it before retrying".into(),
+        ));
+    }
+    let changed = match change {
+        TaskQueueChange::Append(tasks) => append_tasks_in_transaction(&mut tx, run_id, &tasks)
+            .await
+            .map_err(map_sqlx)?,
+        change => {
+            let task_id = match &change {
+                TaskQueueChange::Replace { task_id, .. } | TaskQueueChange::Remove { task_id } => {
+                    *task_id
+                }
+                TaskQueueChange::Append(_) => unreachable!(),
+            };
+            if !current
+                .iter()
+                .any(|task| task.id == task_id && task.state == "pending")
+            {
+                tx.rollback().await.map_err(map_sqlx)?;
+                return Err(StoreError::InvalidInput(
+                    "only pending tasks can be changed; reload the task queue".into(),
+                ));
+            }
+            match change {
+                TaskQueueChange::Replace { task_id, task } => {
+                    let row = sqlx::query_as::<_, RunTaskRow>(&format!(
+                        "UPDATE run_tasks SET name=$3, task=$4, task_toml=$5 WHERE run_id=$1 AND id=$2 RETURNING {RUN_TASK_COLUMNS}"
+                    )).bind(run_id).bind(task_id).bind(&task.name)
+                        .bind(encode_task(&task.task).map_err(map_sqlx)?)
+                        .bind(canonical_task_toml(&task).map_err(|err| StoreError::store(err.to_string()))?)
+                        .fetch_one(&mut *tx).await.map_err(map_sqlx)?;
+                    vec![decode_task_row(row).map_err(map_sqlx)?]
+                }
+                TaskQueueChange::Remove { task_id } => {
+                    sqlx::query("DELETE FROM run_tasks WHERE run_id=$1 AND id=$2")
+                        .bind(run_id)
+                        .bind(task_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(map_sqlx)?;
+                    Vec::new()
+                }
+                TaskQueueChange::Append(_) => unreachable!(),
+            }
+        }
+    };
+    tx.commit().await.map_err(map_sqlx)?;
+    Ok(changed)
 }

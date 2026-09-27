@@ -12,6 +12,7 @@ import {
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { useTemplates } from "../../hooks/useTemplates";
+import { copyToClipboard } from "../../utils/clipboard";
 
 const TomlActionDialog = ({
   open,
@@ -20,6 +21,7 @@ const TomlActionDialog = ({
   submitLabel,
   initialValue,
   helperText = null,
+  warningText = null,
   templateKind = null,
   templatesEnabled = true,
   allowTemplateDelete = false,
@@ -30,12 +32,17 @@ const TomlActionDialog = ({
   templateSelectionStorageKey = null,
   onClose,
   onSubmit,
+  submitDisabled = false,
+  onDuplicate = null,
+  duplicateLabel = "Duplicate task",
+  exportName = null,
 }) => {
   const [value, setValue] = useState(initialValue || "");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [templateBusy, setTemplateBusy] = useState(false);
   const [templateActionBusy, setTemplateActionBusy] = useState(false);
   const [templateError, setTemplateError] = useState(null);
+  const [exportNotice, setExportNotice] = useState(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveTemplateName, setSaveTemplateName] = useState("");
   const wasOpenRef = useRef(false);
@@ -69,11 +76,12 @@ const TomlActionDialog = ({
     }
     if (wasOpenRef.current) return;
     wasOpenRef.current = true;
+    setExportNotice(null);
 
     const restoreGeneration = restoreGenerationRef.current;
     const canApplyRestore = () => restoreGenerationRef.current === restoreGeneration;
     const restore = async () => {
-      const restoredSelection = readStoredSelection();
+      const restoredSelection = initialValue ? "" : readStoredSelection();
       setSelectedTemplate(restoredSelection);
       setTemplateError(null);
       if (!restoredSelection || !loadTemplate) {
@@ -101,13 +109,24 @@ const TomlActionDialog = ({
   }, [open]);
 
   const handleClose = () => {
-    if (busy || templateActionBusy || saveDialogOpen) return;
+    if (busy || templateBusy || templateActionBusy || saveDialogOpen) return;
     onClose();
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    await onSubmit(value);
+    if (!submitDisabled && !busy && !templateBusy && !templateActionBusy && value.trim()) {
+      await onSubmit?.(value);
+    }
+  };
+
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([value], { type: "application/toml" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${exportName.replace(/[^a-zA-Z0-9_.-]/g, "_") || "definition"}.toml`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   };
 
   const handleTemplateChange = async (event) => {
@@ -195,15 +214,16 @@ const TomlActionDialog = ({
                   {helperText}
                 </Typography>
               ) : null}
-              {templates.length > 0 ? (
+              {warningText ? <Alert severity="warning">{warningText}</Alert> : null}
+              {templateKind ? (
                 <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems={{ md: "center" }}>
-                  <TextField
+                  {templatesEnabled && <TextField
                     select
                     fullWidth
                     label="Template"
                     value={selectedTemplate}
                     onChange={handleTemplateChange}
-                    disabled={templateActionBusy}
+                    disabled={busy || templateBusy || templateActionBusy}
                   >
                     <MenuItem value="">Custom</MenuItem>
                     {templates.map((template) => (
@@ -211,9 +231,9 @@ const TomlActionDialog = ({
                         {template}
                       </MenuItem>
                     ))}
-                  </TextField>
+                  </TextField>}
                   {templateKind ? (
-                    <Button variant="outlined" onClick={handleSaveTemplate} disabled={templateActionBusy || templateBusy}>
+                    <Button variant="outlined" onClick={handleSaveTemplate} disabled={busy || templateActionBusy || templateBusy}>
                       Save as Template
                     </Button>
                   ) : null}
@@ -222,7 +242,7 @@ const TomlActionDialog = ({
                       variant="outlined"
                       color="error"
                       onClick={handleDeleteTemplate}
-                      disabled={templateActionBusy || templateBusy || !selectedTemplate}
+                      disabled={busy || templateActionBusy || templateBusy || !selectedTemplate}
                     >
                       Delete Template
                     </Button>
@@ -237,20 +257,32 @@ const TomlActionDialog = ({
                 label={label}
                 value={value}
                 onChange={(event) => setValue(event.target.value)}
-                disabled={templateBusy || templateActionBusy}
+                disabled={busy || templateBusy || templateActionBusy}
                 InputLabelProps={{ shrink: true }}
               />
               {templateError ? <Alert severity="error">{templateError}</Alert> : null}
               {error ? <Alert severity="error">{error}</Alert> : null}
+              {exportNotice && <Alert severity={exportNotice.severity}>{exportNotice.message}</Alert>}
             </Stack>
           </DialogContent>
-          <DialogActions>
-            <Button onClick={handleClose} disabled={busy || templateActionBusy}>
-              Cancel
+          <DialogActions sx={{ flexWrap: "wrap", gap: 1, px: 3, pb: 2 }}>
+            {exportName != null && <>
+              <Button disabled={busy || templateBusy || templateActionBusy || !value.trim()} onClick={async () => {
+                try { await copyToClipboard(value); setExportNotice({ severity: "success", message: "TOML copied." }); }
+                catch (error) { setExportNotice({ severity: "error", message: error.message }); }
+              }}>Copy TOML</Button>
+              <Button disabled={busy || templateBusy || templateActionBusy || !value.trim()} onClick={download}>Download</Button>
+            </>}
+            <Button onClick={handleClose} disabled={busy || templateBusy || templateActionBusy}>
+              {exportName != null ? "Close" : "Cancel"}
             </Button>
-            <Button type="submit" variant="contained" disabled={busy || templateBusy || templateActionBusy || !value.trim()}>
+            {onDuplicate && <Button variant={onSubmit && !submitDisabled ? "outlined" : "contained"}
+              disabled={busy || templateBusy || templateActionBusy || !value.trim()} onClick={() => onDuplicate(value)}>
+              {duplicateLabel}
+            </Button>}
+            {onSubmit && <Button type="submit" variant={submitDisabled ? "outlined" : "contained"} disabled={submitDisabled || busy || templateBusy || templateActionBusy || !value.trim()}>
               {submitLabel}
-            </Button>
+            </Button>}
           </DialogActions>
         </form>
       </Dialog>
@@ -269,13 +301,13 @@ const TomlActionDialog = ({
                 label="Template file name"
                 value={saveTemplateName}
                 onChange={(event) => setSaveTemplateName(event.target.value)}
-                disabled={templateActionBusy}
+                disabled={busy || templateActionBusy}
                 helperText="Use a concise .toml file name."
               />
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button onClick={handleSaveDialogClose} disabled={templateActionBusy}>
+            <Button onClick={handleSaveDialogClose} disabled={busy || templateActionBusy}>
               Cancel
             </Button>
             <Button type="submit" variant="contained" disabled={templateActionBusy || !saveTemplateName.trim()}>

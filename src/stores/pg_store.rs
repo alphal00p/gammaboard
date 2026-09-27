@@ -18,7 +18,6 @@ use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
-use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct PgStore {
@@ -53,21 +52,6 @@ impl PgStore {
         &self.pool
     }
 
-    pub async fn list_latest_stage_snapshot_ids_by_task(
-        &self,
-        run_id: i32,
-    ) -> Result<HashMap<i64, i64>, StoreError> {
-        queries::list_latest_stage_snapshot_ids_by_task(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
-    pub async fn get_root_stage_snapshot_id(&self, run_id: i32) -> Result<Option<i64>, StoreError> {
-        queries::get_root_stage_snapshot_id(&self.pool, run_id)
-            .await
-            .map_err(map_sqlx)
-    }
-
     pub async fn get_registered_worker_summaries(
         &self,
         run_id: Option<i32>,
@@ -87,7 +71,7 @@ fn store_err(message: impl Into<String>) -> StoreError {
     StoreError::store(message)
 }
 
-fn map_sqlx(err: sqlx::Error) -> StoreError {
+pub(crate) fn map_sqlx(err: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(db_err) = &err {
         if db_err.code().as_deref() == Some("23505") {
             if db_err.constraint() == Some("idx_nodes_current_sampler_run") {
@@ -1136,6 +1120,15 @@ impl RunTaskStore for PgStore {
         queries::remove_pending_run_task(&self.pool, run_id, task_id)
             .await
             .map_err(map_sqlx)
+    }
+
+    async fn apply_task_queue_change(
+        &self,
+        run_id: i32,
+        expected: &[RunTask],
+        change: crate::core::traits::TaskQueueChange,
+    ) -> Result<Vec<RunTask>, StoreError> {
+        queries::apply_task_queue_change(&self.pool, run_id, expected, change).await
     }
 
     async fn update_run_task_queue_tuning(

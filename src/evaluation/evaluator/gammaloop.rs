@@ -9,10 +9,16 @@ use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::evaluation::EvaluationResult;
-use gammalooprs::integrands::process::{MomentumSpaceEvaluationInput, ProcessIntegrand};
+use gammalooprs::integrands::process::{
+    EvaluationTarget, GaussianReferenceFunction, MomentumSpaceEvaluationInput, ProcessIntegrand,
+    SamplingChannelInspection,
+};
 use gammalooprs::model::Model;
 use gammalooprs::settings::RuntimeSettings;
-use gammalooprs::settings::runtime::{DiscreteGraphSamplingType, SamplingSettings};
+use gammalooprs::settings::runtime::{
+    DiscreteGraphSamplingType, Precision, SamplingSettings, SamplingSettingsParser,
+    StabilityLevelSetting,
+};
 use gammalooprs::utils::F;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -40,6 +46,7 @@ pub struct GammaLoopEvaluator {
     training_projection: TrainingProjection,
     graph_groups: Option<Vec<usize>>,
     domain: Domain,
+    reference_gaussian: Option<GaussianReferenceFunction>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +59,10 @@ struct GammaLoopMetadata {
     coordinate_space: &'static str,
     domain_axes: Vec<&'static str>,
     graph_groups: Option<Vec<usize>>,
+    sampling_channels: Vec<SamplingChannelInspection>,
+    sampling: SamplingSettingsParser,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reference_gaussian: Option<GaussianReferenceFunction>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -86,6 +97,9 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
+    /// Replace physics with known normalization and second-moment targets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_gaussian: Option<GaussianReferenceFunction>,
     pub preprocessing: GammaLoopPreprocessing,
 }
 
@@ -116,6 +130,7 @@ impl Default for GammaLoopParams {
             momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),
+            reference_gaussian: None,
             preprocessing: GammaLoopPreprocessing::default(),
         }
     }
@@ -131,7 +146,14 @@ impl GammaLoopEvaluator {
                 params.state_folder.display()
             ))
         })?;
-        _ = initialise();
+        crate::activate_symbolica_oem_license().build_err()?;
+        initialise()
+            .map_err(|err| BuildError::build(format!("gammaloop initialization: {err}")))?;
+        if params.momentum_space && params.reference_gaussian.is_some() {
+            return Err(BuildError::invalid_input(
+                "reference_gaussian requires x-space evaluation to exercise sampling maps",
+            ));
+        }
         let selection = if params.preprocessing.commands.is_empty() && params.process_id.is_none() {
             params.integrand_name.as_ref().map(|name| {
                 gammalooprs::processes::ProcessLoadSelection {
@@ -153,17 +175,40 @@ impl GammaLoopEvaluator {
                     ))
                 })?;
         Self::run_preprocessing(&params, &mut state)?;
+        state
+            .activate_loaded_integrand_backends(false)
+            .build_err()?;
 
         let (process_id, integrand_name) = state
             .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
             .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
 
+        let model = state
+            .resolve_model_for_integrand(process_id, &integrand_name)
+            .build_err()?;
         let integrand = state
             .process_list
             .get_integrand_mut(process_id, integrand_name.clone())
-            .build_err()?
-            .clone();
-        let model = state.model.clone();
+            .build_err()?;
+        let selected_names = integrand.get_settings().sampling.selected_graph_names();
+        let mut integrand = integrand
+            .clone_with_selected_graph_groups(selected_names)
+            .build_err()?;
+        if params.use_f128 {
+            let levels = &mut integrand.get_mut_settings().stability.levels;
+            levels.retain(|level| level.precision != Precision::Double);
+            if levels.is_empty() {
+                levels.push(StabilityLevelSetting::default_quad());
+            }
+        }
+        let reference_gaussian = params
+            .reference_gaussian
+            .as_ref()
+            .map(|reference| reference.for_integrand(&integrand))
+            .transpose()
+            .build_err()?;
+        let sampling_channels =
+            Self::sampling_channels(&integrand, params.graph_groups.as_deref())?;
         let momentum_space = params.momentum_space;
         let metadata = GammaLoopMetadata {
             kind: "gammaloop",
@@ -178,8 +223,47 @@ impl GammaLoopEvaluator {
             },
             domain_axes: Self::domain_axes(&integrand),
             graph_groups: params.graph_groups,
+            sampling_channels,
+            sampling: integrand.get_settings().sampling.as_parser(),
+            reference_gaussian,
         };
         Ok((integrand, model, metadata))
+    }
+
+    fn sampling_channels(
+        integrand: &ProcessIntegrand,
+        selected_groups: Option<&[usize]>,
+    ) -> Result<Vec<SamplingChannelInspection>, BuildError> {
+        let Some(parameters) = integrand
+            .get_settings()
+            .sampling
+            .get_parameterization_settings()
+        else {
+            return Ok(Vec::new());
+        };
+        integrand
+            .graph_group_master_names()
+            .into_iter()
+            .enumerate()
+            .filter(|(group, _)| selected_groups.is_none_or(|selected| selected.contains(group)))
+            .map(|(_, name)| {
+                let graph_id = integrand
+                    .find_graph_id_by_name(name)
+                    .ok_or_else(|| BuildError::build(format!("missing master graph '{name}'")))?;
+                let setup = match integrand {
+                    ProcessIntegrand::Amplitude(amplitude) => {
+                        &amplitude.data.graph_terms[graph_id].multi_channeling_setup
+                    }
+                    ProcessIntegrand::CrossSection(cross_section) => {
+                        &cross_section.data.graph_terms[graph_id].multi_channeling_setup
+                    }
+                };
+                Ok(setup
+                    .canonical_sampling_catalogue(name, &parameters)
+                    .build_err()?
+                    .inspection())
+            })
+            .collect()
     }
 
     pub fn resolve_domain_from_params(params: GammaLoopParams) -> Result<Domain, BuildError> {
@@ -201,25 +285,6 @@ impl GammaLoopEvaluator {
         momentum_space: bool,
         selected_graph_groups: Option<&[usize]>,
     ) -> Result<Domain, BuildError> {
-        fn discrete_group_count(integrand: &ProcessIntegrand) -> usize {
-            let discrete_depth = integrand.discrete_sampling_depth();
-            debug_assert!(discrete_depth > 0);
-
-            let mut group_count = 0usize;
-            loop {
-                let mut selection = vec![0; discrete_depth];
-                selection[0] = group_count;
-                if integrand
-                    .resolve_discrete_selection(selection.as_slice())
-                    .is_err()
-                {
-                    break;
-                }
-                group_count += 1;
-            }
-            group_count
-        }
-
         fn continuous_leaf(
             integrand: &ProcessIntegrand,
             momentum_space: bool,
@@ -270,7 +335,7 @@ impl GammaLoopEvaluator {
                     .map(|orientation_idx| {
                         let mut selection = vec![group_idx, orientation_idx];
                         let domain = match &discrete_settings.sampling_type {
-                            DiscreteGraphSamplingType::DiscreteMultiChanneling(_) => {
+                            DiscreteGraphSamplingType::SamplingMultiChanneling(_) => {
                                 let channel_count =
                                     integrand.group_channel_count(group_id).ok_or_else(|| {
                                         BuildError::build(format!(
@@ -303,7 +368,7 @@ impl GammaLoopEvaluator {
             }
 
             match &discrete_settings.sampling_type {
-                DiscreteGraphSamplingType::DiscreteMultiChanneling(_) => {
+                DiscreteGraphSamplingType::SamplingMultiChanneling(_) => {
                     let channel_count =
                         integrand.group_channel_count(group_id).ok_or_else(|| {
                             BuildError::build(format!(
@@ -337,7 +402,7 @@ impl GammaLoopEvaluator {
                 continuous_leaf(integrand, momentum_space, &[])
             }
             SamplingSettings::DiscreteGraphs(_) => {
-                let group_count = discrete_group_count(integrand);
+                let group_count = integrand.graph_group_master_names().len();
                 let group_indices = selected_graph_groups
                     .map(|indices| indices.to_vec())
                     .unwrap_or_else(|| (0..group_count).collect());
@@ -347,16 +412,13 @@ impl GammaLoopEvaluator {
                     ));
                 }
                 let mut group_branches = Vec::with_capacity(group_indices.len());
-                for (local_group_idx, group_idx) in group_indices.into_iter().enumerate() {
+                for (local_group_idx, group_idx) in group_indices.iter().copied().enumerate() {
                     if group_idx >= group_count {
                         return Err(BuildError::build(format!(
                             "gammaloop graph_groups contains {group_idx}, but the integrand has {group_count} graph groups"
                         )));
                     }
-                    if group_branches
-                        .iter()
-                        .any(|branch: &DomainBranch| branch.index == group_idx)
-                    {
+                    if group_indices[..local_group_idx].contains(&group_idx) {
                         return Err(BuildError::build(format!(
                             "gammaloop graph_groups contains duplicate graph group {group_idx}"
                         )));
@@ -387,7 +449,7 @@ impl GammaLoopEvaluator {
                 }
                 if matches!(
                     discrete_settings.sampling_type,
-                    DiscreteGraphSamplingType::DiscreteMultiChanneling(_)
+                    DiscreteGraphSamplingType::SamplingMultiChanneling(_)
                 ) {
                     axes.push("channel");
                 }
@@ -415,7 +477,7 @@ impl GammaLoopEvaluator {
     {
         match std::panic::catch_unwind(AssertUnwindSafe(action)) {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(err)) => Err(EvalError::eval(format!("{label} failed: {err}"))),
+            Ok(Err(err)) => Err(EvalError::eval(format!("{label} failed: {err:#}"))),
             Err(payload) => Err(EvalError::eval(format!(
                 "{label} panicked: {}",
                 Self::panic_message(payload)
@@ -466,33 +528,6 @@ impl GammaLoopEvaluator {
             }
         }
 
-        if params.use_f128 {
-            let command = CommandHistory::from_raw_string("set process bool use_f128 true")
-                .map_err(|err| {
-                    BuildError::build(format!(
-                        "failed to parse built-in use_f128 post-load command: {err}"
-                    ))
-                })?;
-            let execution = command
-                .command
-                .run(
-                    state,
-                    &mut run_history,
-                    &mut cli_settings,
-                    &mut default_runtime_settings,
-                )
-                .map_err(|err| {
-                    BuildError::build(format!(
-                        "failed to execute built-in use_f128 post-load command: {err}"
-                    ))
-                })?;
-            if let ControlFlow::Break(_) = execution.flow {
-                return Err(BuildError::build(
-                    "built-in use_f128 post-load command triggered unsupported flow break",
-                ));
-            }
-        }
-
         Ok(())
     }
 
@@ -504,14 +539,29 @@ impl GammaLoopEvaluator {
                 metadata.momentum_space,
                 params.graph_groups.as_deref(),
             )?;
-            integrand
-                .warm_up(&model)
-                .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))?;
+            // Native map compilation needs a larger stack, especially in debug
+            // builds. Join before returning; evaluation stays on the worker thread.
+            std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .name("gammaloop-warmup".into())
+                    .stack_size(64 * 1024 * 1024)
+                    .spawn_scoped(scope, || integrand.warm_up(&model))
+                    .build_err()?
+                    .join()
+                    .map_err(|payload| {
+                        BuildError::build(format!(
+                            "gammaloop warm-up panicked: {}",
+                            Self::panic_message(payload)
+                        ))
+                    })?
+                    .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))
+            })?;
             Ok(Self {
                 pristine_integrand: integrand.clone(),
                 integrand,
                 model,
                 momentum_space: metadata.momentum_space,
+                reference_gaussian: metadata.reference_gaussian.clone(),
                 metadata,
                 training_projection: params.training_projection,
                 graph_groups: params.graph_groups,
@@ -526,12 +576,12 @@ impl GammaLoopEvaluator {
         }
     }
 
-    fn raw_result_value(result: &EvaluationResult) -> num::Complex<f64> {
+    fn returned_result_value(result: &EvaluationResult) -> num::Complex<f64> {
         num::Complex::new(result.integrand_result.re.0, result.integrand_result.im.0)
     }
 
     fn project_result_value(result: &EvaluationResult) -> num::Complex<f64> {
-        let mut value = Self::raw_result_value(result);
+        let mut value = Self::returned_result_value(result);
         if let Some(jac) = result.parameterization_jacobian {
             value *= jac.0;
         }
@@ -626,9 +676,10 @@ impl GammaLoopEvaluator {
                 debug_point.parameterization_jacobian = Some(jacobian);
                 debug_point.add_weight_factor("gammaloop_parameterization_jacobian", jacobian);
             }
-            // Keep jacobian as an explicit weight factor on the point so max-weight
-            // diagnostics can report integrand/jacobian contributions separately.
-            let value = Self::raw_result_value(result);
+            // Keep any remaining top-level Jacobian separate. Current GammaLoop's
+            // returned contribution already includes native map/partition factors;
+            // its top-level Jacobian is unity. Older records may have a nonunit one.
+            let value = Self::returned_result_value(result);
             estimate
                 .ingest_vector(&[value.re, value.im], &debug_point)
                 .expect("gammaloop estimate vector components should match");
@@ -699,7 +750,7 @@ impl GammaLoopEvaluator {
 
                     Ok(MomentumSpaceEvaluationInput {
                         loop_momenta,
-                        integrator_weight: F(1.0),
+                        integrator_weight: F(point.total_weight()),
                         graph_id: None,
                         group_id,
                         orientation,
@@ -745,13 +796,16 @@ impl GammaLoopEvaluator {
                         cont.len()
                     )));
                 }
-                Ok(havana_sample(cont, discrete_dim.as_slice(), F(1.0)))
+                Ok(havana_sample(cont, discrete_dim.as_slice(), F(point.total_weight())))
             })
             .collect::<Result<Vec<Sample<F<f64>>>, _>>()?;
 
         let results = Self::call_external("evaluate_samples_raw", || {
             self.integrand.evaluate_samples_raw(
-                &self.model,
+                self.reference_gaussian.as_ref().map_or(
+                    EvaluationTarget::Physical(&self.model),
+                    EvaluationTarget::Reference,
+                ),
                 samples.as_slice(),
                 1,
                 false,
@@ -840,6 +894,8 @@ impl Evaluator for GammaLoopEvaluator {
                                 self.training_projection
                                     .project(Self::project_result_value(result))
                             })
+                            .zip(points.iter())
+                            .map(|(value, point)| value * point.total_weight())
                             .collect(),
                     )
                 } else {
@@ -916,5 +972,7 @@ impl Evaluator for GammaLoopEvaluator {
     }
 }
 
+#[cfg(test)]
+mod acceptance;
 #[cfg(test)]
 mod tests;

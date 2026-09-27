@@ -6,6 +6,7 @@ mod gammaloop;
 #[cfg(not(feature = "gammaloop"))]
 #[path = "gammaloop_disabled.rs"]
 mod gammaloop;
+mod gammaloop_diagnostics;
 mod gammaloop_statistics;
 mod metrics;
 mod scalar;
@@ -19,9 +20,8 @@ use serde_json::Value as JsonValue;
 pub use self::discrete_bins::{DiscreteProjectionBinState, discrete_bin_key};
 pub use self::empty::EmptyAccumulatorState;
 pub use self::full::{FullAccumulatorProgress, FullVectorAccumulatorState};
-pub use self::gammaloop::{
-    GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, GammaLoopDiagnostics,
-};
+pub use self::gammaloop::{GammaLoopAccumulatorDigest, GammaLoopAccumulatorState};
+pub use self::gammaloop_diagnostics::GammaLoopDiagnostics;
 pub use self::metrics::{
     AccumulatorMetricValue, extract_accumulator_metric, extract_accumulator_metric_with_runtime,
     relative_error,

@@ -4,6 +4,24 @@ use crate::evaluation::Materializer;
 use crate::sampling::{IdentityMaterializer, NaiveMonteCarloSamplerParams};
 
 #[test]
+fn legacy_state_is_rejected_without_modifying_its_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let manifest = temp.path().join("state_manifest.toml");
+    std::fs::write(&manifest, "version = 7\n").unwrap();
+    let error = GammaLoopEvaluator::from_params(GammaLoopParams {
+        state_folder: temp.path().to_path_buf(),
+        ..Default::default()
+    })
+    .err()
+    .unwrap();
+    assert!(
+        error.to_string().contains("regenerate the saved state"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(manifest).unwrap(), "version = 7\n");
+}
+
+#[test]
 fn read_only_preprocessing_rejects_saving_into_the_active_state() {
     let temp = tempfile::tempdir().unwrap();
     let state_folder = temp.path().join("state");
@@ -124,7 +142,7 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
         ];
         let failure = GammaLoopEvaluator::call_external("evaluate_samples_raw", || {
             evaluator.integrand.evaluate_samples_raw(
-                &evaluator.model,
+                EvaluationTarget::Physical(&evaluator.model),
                 &samples,
                 1,
                 false,

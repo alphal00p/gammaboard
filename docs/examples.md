@@ -9,6 +9,7 @@ cards under the cluster operations directory.
 | Installation check | `resources/templates/runs/installation-smoke.toml` | Two local workers; exact unit integral, 10,000 samples |
 | Adaptive sampling and images | `resources/templates/runs/ghost_bump.toml` | Symbolica; 200,000 training samples and two images |
 | GammaLoop training and inference | `resources/templates/runs/gammaloop.toml` | Generated ttH LO state; 100,000 training and 1,000,000 inference samples |
+| GammaLoop sampling correctness | `resources/templates/runs/gammaloop-reference.toml` | Generated v10 state without physical observables/selectors; two exact unit targets; see [acceptance checks](benchmarking.md#sampling-correctness) |
 | Multiple physics contributions | `resources/templates/runs/integration-campaign-qft-like.toml` | Same state; references `tt_h.toml` for graph-group children |
 | MADNIS in Apptainer | `resources/templates/runs/ghost_bump_madnis_apptainer.toml` | GPU worker and `resources/runtimes/madnis/madnis.sif` |
 | MADNIS in a local virtualenv | `integrations/madnis/README.md` | The integration's Python environment |

@@ -127,18 +127,11 @@ export const logout = async (signal) => apiPost("/auth/logout", {}, "Failed to l
 
 export const pauseRun = async (runId, signal) => apiPost(`/runs/${runId}/pause`, {}, "Failed to pause run", signal);
 
-export const createRun = async (toml, signal) => apiPost("/runs", { toml }, "Failed to create run", signal);
+export const createRun = async (toml, { duplicate = false, signal } = {}) =>
+  apiPost("/runs", { toml, duplicate }, "Failed to create run", signal);
 
-export const cloneRun = async ({ sourceRunId, fromSnapshotId, newName }, signal) =>
-  apiPost(
-    "/runs/clone",
-    { source_run_id: sourceRunId, from_snapshot_id: fromSnapshotId, new_name: newName },
-    "Failed to clone run",
-    signal,
-  );
-
-export const addRunTasks = async (runId, toml, signal) =>
-  apiPost(`/runs/${runId}/tasks`, { toml }, "Failed to add tasks", signal);
+export const addRunTasks = async (runId, toml, { duplicate = false, signal } = {}) =>
+  apiPost(`/runs/${runId}/tasks`, { toml, duplicate }, "Failed to add tasks", signal);
 
 export const updateRunTaskQueueTuning = async (runId, taskId, queueTuning, signal) =>
   apiPost(
@@ -229,8 +222,17 @@ export const fetchNodes = async (runId = null, signal) => {
 export const fetchNodePanels = async (nodeName, signal) =>
   apiGet(`/nodes/${nodeName}/panels`, "Failed to fetch node panels", signal);
 
-export const fetchRunReproToml = async (runId, signal) =>
-  apiGet(`/runs/${runId}/repro-toml`, "Failed to export run TOML", signal);
+export const fetchRunDefinition = async (runId, duplicate = false, signal) =>
+  apiGet(`/runs/${runId}/definition?duplicate=${duplicate}`, "Failed to load run definition", signal);
+
+export const fetchTaskDefinition = async (runId, taskId, duplicate = false, signal) =>
+  apiGet(`/runs/${runId}/tasks/${taskId}/definition?duplicate=${duplicate}`, "Failed to load task definition", signal);
+
+export const editRunTask = async (runId, taskId, toml, expectedToml, signal) =>
+  apiRequest(`/runs/${runId}/tasks/${taskId}`, "Failed to edit task", signal, {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ toml, expected_toml: expectedToml }),
+  });
 
 export const fetchRunPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/panels`, "Failed to fetch run panels", signal);

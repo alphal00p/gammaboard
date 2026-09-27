@@ -30,6 +30,8 @@ pub struct GammaLoopParams {
     pub momentum_space: bool,
     pub use_f128: bool,
     pub training_projection: TrainingProjection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_gaussian: Option<JsonValue>,
     pub preprocessing: GammaLoopPreprocessing,
 }
 
@@ -60,6 +62,7 @@ impl Default for GammaLoopParams {
             momentum_space: false,
             use_f128: false,
             training_projection: TrainingProjection::default(),
+            reference_gaussian: None,
             preprocessing: GammaLoopPreprocessing::default(),
         }
     }

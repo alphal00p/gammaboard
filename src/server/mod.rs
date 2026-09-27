@@ -509,7 +509,6 @@ struct RunSummaryResponse {
     run_name: String,
     parent_run_id: Option<i32>,
     spawn_label: Option<String>,
-    root_stage_snapshot_id: Option<String>,
     lifecycle_state: RunLifecycleState,
     nr_completed_samples_including_children: i64,
     cpu_hours_including_children: f64,
@@ -532,7 +531,6 @@ impl From<RunProgress> for RunSummaryResponse {
             run_name: run.run_name,
             parent_run_id: run.parent_run_id,
             spawn_label: run.spawn_label,
-            root_stage_snapshot_id: run.root_stage_snapshot_id,
             lifecycle_state: run.lifecycle_state,
             nr_completed_samples_including_children: run.nr_completed_samples_including_children,
             cpu_hours_including_children: run.cpu_seconds_including_children / 3600.0,
@@ -567,23 +565,22 @@ struct NodeLaunchRequestProgressRequest {
 }
 
 #[derive(Deserialize)]
-struct CreateRunRequest {
+struct DefinitionRequest {
     toml: String,
+    #[serde(default)]
+    duplicate: bool,
+}
+
+#[derive(Default, Deserialize)]
+struct DefinitionQuery {
+    #[serde(default)]
+    duplicate: bool,
 }
 
 #[derive(Deserialize)]
-struct CloneRunRequest {
-    source_run_id: i32,
-    #[serde(
-        deserialize_with = "crate::utils::serde_bigint::deserialize_i64_from_string_or_number"
-    )]
-    from_snapshot_id: i64,
-    new_name: String,
-}
-
-#[derive(Deserialize)]
-struct AddTasksRequest {
+struct EditTaskRequest {
     toml: String,
+    expected_toml: String,
 }
 
 #[derive(Deserialize)]
@@ -611,7 +608,7 @@ struct TemplateListResponse {
 }
 
 #[derive(Serialize)]
-struct RunReproTomlResponse {
+struct DefinitionResponse {
     toml: String,
 }
 
@@ -630,18 +627,10 @@ struct RunTaskResponse {
     nr_completed_samples_including_children: i64,
     cpu_hours_including_children: f64,
     failure_reason: Option<String>,
-    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
-    latest_stage_snapshot_id: Option<i64>,
-    #[serde(serialize_with = "crate::utils::serde_bigint::serialize_option_i64_as_string")]
-    root_stage_snapshot_id: Option<i64>,
 }
 
 impl RunTaskResponse {
-    fn new(
-        task: RunTask,
-        latest_stage_snapshot_id: Option<i64>,
-        root_stage_snapshot_id: Option<i64>,
-    ) -> Self {
+    fn new(task: RunTask) -> Self {
         let task_kind = task.task.kind_str().to_string();
         let goal_label = match &task.task {
             RunTaskSpec::SetAccumulator { .. } => "-".to_string(),
@@ -668,8 +657,6 @@ impl RunTaskResponse {
             nr_completed_samples_including_children: task.nr_completed_samples_including_children,
             cpu_hours_including_children: task.cpu_seconds_including_children / 3600.0,
             failure_reason: task.failure_reason,
-            latest_stage_snapshot_id,
-            root_stage_snapshot_id,
         }
     }
 }
@@ -774,12 +761,56 @@ async fn get_node_panels(
     json_response(response)
 }
 
-async fn get_run_repro_toml(
+async fn get_run_definition(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i32>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let toml = run_api::export_run_repro_toml(&state.store, id).await?;
-    json_response(RunReproTomlResponse { toml })
+    Query(query): Query<DefinitionQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut toml = run_api::export_run_definition(&state.store, id).await?;
+    if query.duplicate {
+        let document: toml::Value =
+            toml::from_str(&toml).map_err(|err| ApiError::Internal(err.to_string()))?;
+        toml = run_api::rename_run_definition(
+            &toml,
+            &format!("{}-copy", document["name"].as_str().unwrap_or("run")),
+        )?;
+    }
+    json_response(DefinitionResponse { toml })
+}
+
+async fn get_task_definition(
+    State(state): State<AppState>,
+    AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
+    Query(query): Query<DefinitionQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let toml =
+        run_api::export_task_definition(&state.store, run_id, task_id, query.duplicate).await?;
+    json_response(DefinitionResponse { toml })
+}
+
+async fn edit_run_task(
+    State(state): State<AppState>,
+    AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
+    AxumJson(payload): AxumJson<EditTaskRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    run_api::edit_pending_task(
+        &state.store,
+        run_id,
+        task_id,
+        &payload.toml,
+        &payload.expected_toml,
+    )
+    .await
+    .inspect_err(|err| log_control_api_error("run_task_edit", err))?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "run_task_edit",
+        run_id,
+        task_id,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({"run_id":run_id,"task_id":task_id.to_string()}))
 }
 
 async fn get_run_panels(
@@ -855,17 +886,9 @@ async fn get_run_tasks(
     AxumPath(id): AxumPath<i32>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let tasks = state.store.list_run_tasks(id).await?;
-    let latest_snapshot_ids = state
-        .store
-        .list_latest_stage_snapshot_ids_by_task(id)
-        .await?;
-    let root_stage_snapshot_id = state.store.get_root_stage_snapshot_id(id).await?;
     let response = tasks
         .into_iter()
-        .map(|task| {
-            let latest_stage_snapshot_id = latest_snapshot_ids.get(&task.id).copied();
-            RunTaskResponse::new(task, latest_stage_snapshot_id, root_stage_snapshot_id)
-        })
+        .map(RunTaskResponse::new)
         .collect::<Vec<_>>();
     json_response(response)
 }
@@ -1199,11 +1222,16 @@ async fn get_logs(
 
 async fn create_run(
     State(state): State<AppState>,
-    AxumJson(payload): AxumJson<CreateRunRequest>,
+    AxumJson(payload): AxumJson<DefinitionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let config =
         run_api::parse_run_add_config_toml_from_base(&payload.toml, &state.run_templates_dir)
             .inspect_err(|err| log_control_api_error("run_create", err))?;
+    let config = if payload.duplicate {
+        run_api::prepare_run_duplicate(&state.store, config).await?
+    } else {
+        config
+    };
     let run = run_api::create_run(&state.store, config)
         .await
         .inspect_err(|err| log_control_api_error("run_create", err))?;
@@ -1222,45 +1250,19 @@ async fn create_run(
     }))
 }
 
-async fn clone_run(
-    State(state): State<AppState>,
-    AxumJson(payload): AxumJson<CloneRunRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let run = run_api::clone_run(
-        &state.store,
-        payload.source_run_id,
-        payload.from_snapshot_id,
-        &payload.new_name,
-    )
-    .await
-    .inspect_err(|err| log_control_api_error("run_clone", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_clone",
-        run_id = run.run_id,
-        new_name = %run.run_name,
-        source_run_id = run.source_run_id,
-        from_snapshot_id = run.from_snapshot_id,
-        cloned_tasks = run.cloned_tasks,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "run_id": run.run_id,
-        "run_name": run.run_name,
-    }))
-}
-
 async fn add_run_tasks(
     State(state): State<AppState>,
     AxumPath(run_id): AxumPath<i32>,
-    AxumJson(payload): AxumJson<AddTasksRequest>,
+    AxumJson(payload): AxumJson<DefinitionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let tasks = run_api::parse_task_queue_toml(payload.toml.trim())
         .inspect_err(|err| log_control_api_error("run_add_tasks", err))?;
-    let result = run_api::append_tasks(&state.store, run_id, tasks)
-        .await
-        .inspect_err(|err| log_control_api_error("run_add_tasks", err))?;
+    let result = if payload.duplicate {
+        run_api::append_task_duplicate(&state.store, run_id, tasks).await
+    } else {
+        run_api::append_tasks(&state.store, run_id, tasks).await
+    }
+    .inspect_err(|err| log_control_api_error("run_add_tasks", err))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1819,7 +1821,7 @@ mod tests {
             measurement_output: None,
             controller_output: None,
         };
-        let value = serde_json::to_value(RunTaskResponse::new(task, Some(8), Some(2))).unwrap();
+        let value = serde_json::to_value(RunTaskResponse::new(task)).unwrap();
 
         assert_eq!(value["id"], "7");
         assert_eq!(value["cpu_hours_including_children"], 1.0);

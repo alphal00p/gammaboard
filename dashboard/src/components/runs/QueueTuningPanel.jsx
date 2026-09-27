@@ -39,6 +39,8 @@ const QueueTuningPanel = ({
   onClear,
 }) => {
   const isSampleTask = task?.is_sample === true;
+  const managedByParent = run?.parent_run_id != null;
+  const editableState = task?.state == null || ["pending", "active"].includes(task.state);
 
   const initialForm = useMemo(() => {
     const defaults = run?.queue_tuning_defaults ?? {};
@@ -66,7 +68,7 @@ const QueueTuningPanel = ({
     setError(null);
   }, [initialForm, refreshHoldUntilMs, skipNextExternalRefreshes]);
 
-  const disabled = busy || !authenticated || runId == null || !task?.id || !isSampleTask;
+  const disabled = busy || !authenticated || managedByParent || !editableState || runId == null || !task?.id || !isSampleTask;
 
   const handleSave = async () => {
     if (!onSave || disabled) return;
@@ -108,6 +110,10 @@ const QueueTuningPanel = ({
               <Alert severity="info">Queue tuning is only supported for sample tasks.</Alert>
             ) : !authenticated ? (
               <Alert severity="info">Log in to update queue tuning.</Alert>
+            ) : managedByParent ? (
+              <Alert severity="info">This task queue is managed by its parent run.</Alert>
+            ) : !editableState ? (
+              <Alert severity="info">Queue tuning can only change pending or active tasks.</Alert>
             ) : (
               <>
                 <Box
@@ -122,6 +128,7 @@ const QueueTuningPanel = ({
                       key={field.key}
                       label={field.label}
                       control={<Switch
+                        disabled={disabled}
                         checked={form[field.key] === true}
                         onChange={(_event, checked) => {
                           setRefreshHoldUntilMs(Date.now() + FORM_REFRESH_HOLD_MS);
@@ -131,6 +138,7 @@ const QueueTuningPanel = ({
                     />
                   ) : (
                     <TextField
+                      disabled={disabled}
                       key={field.key}
                       size="small"
                       label={field.label}
@@ -158,7 +166,7 @@ const QueueTuningPanel = ({
                         setRefreshHoldUntilMs(0);
                       }
                     }}
-                    disabled={busy}
+                    disabled={disabled}
                   >
                     Apply
                   </Button>
@@ -172,7 +180,7 @@ const QueueTuningPanel = ({
                         setRefreshHoldUntilMs(0);
                       }
                     }}
-                    disabled={busy}
+                    disabled={disabled}
                   >
                     Clear Task Override
                   </Button>

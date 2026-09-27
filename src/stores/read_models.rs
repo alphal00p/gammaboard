@@ -49,7 +49,6 @@ pub struct RunProgress {
     pub parent_task_id: Option<String>,
     pub spawn_kind: Option<String>,
     pub spawn_label: Option<String>,
-    pub root_stage_snapshot_id: Option<String>,
     pub lifecycle_state: RunLifecycleState,
     pub desired_assignment_count: i64,
     pub active_worker_count: i64,

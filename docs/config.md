@@ -202,12 +202,35 @@ changing the generated state.
 
 GammaBoard evaluates GammaLoop runs in x-space so GammaLoop's parameterized observable and histogram path is used.
 
+The pinned GammaLoop revision is `80e6e91e0` (Symbolica 3, state format 10).
+Regenerate older saved states with that revision; they cannot be migrated by
+editing the manifest. Rebuild any compiled Symbolica evaluators as well. Start a
+new run when changing channel definitions or ordering; existing trained grids
+refer to the old domain. `graph_groups` indexes the loaded integration view,
+after any upstream `sampling.graph_names` selection.
+
+Evaluator metadata includes the effective `sampling` settings and the canonical
+`sampling_channels` catalogue (graph names, selectors and ordered entries).
+Graph groups, orientations and channels retain their separate discrete axes;
+native maps and channel partitions are evaluated inside the evaluator worker.
+
+`reference_gaussian = { width = 300.0 }` replaces physics with two known targets
+while retaining those real sampling maps: real is Gaussian normalization and
+imaginary is the normalized raw momentum second moment, both with expectation
+one. An optional `center` supplies one coordinate per spatial loop-momentum
+component. This requires x-space, a common nonzero loop count, no active physical
+selectors and no observables. Use a separate run with a vector or GammaLoop
+accumulator and check both targets. See the reference run template and
+[benchmarking](benchmarking.md#sampling-correctness).
+
 `[evaluator.preprocessing]` is optional and runs GammaLoop commands after loading
 the state and before integrand selection. `read_only = true` is the default and
 enables GammaLoop's protection against preprocessing commands writing into the
 active state folder. In-memory changes and exports outside that folder remain
 allowed by GammaLoop. Set `read_only = false` explicitly when preprocessing
 must modify files in the loaded state. Commands are executed in order.
+`use_f128 = true` skips double-precision stability levels while retaining the
+configured higher-precision rescue levels (or a default quad level if none remain).
 
 ### Process Evaluator
 
@@ -265,6 +288,37 @@ Process sampler construction semantics:
 - Python worker protocol entrypoints are included in each example runtime, but `command` must explicitly start the desired process.
 - GammaBoard does not infer paths, append worker scripts, or inject Apptainer binds. Use `$resources` explicitly where the host resources path is needed.
 
+## Reusing definitions
+
+Open the definition icon beside a run or task to edit its TOML draft. Deletion has
+a separate button. The editor offers **Copy TOML**, **Download**, templates, and
+creation or duplication; every action uses the current text, including unsaved edits.
+Duplicate names receive a `-copy` suffix (then `-copy-2`, etc.) only when needed.
+
+**Create duplicate run** creates a fresh run from the full definition, including
+pending and failed task definitions. It does not copy results, checkpoints or
+worker assignments. Campaigns, scans and tuning runs create new children;
+**Create standalone run** reuses a child's resolved definition independently of
+its controller. Existing runs cannot be overwritten from this editor.
+
+Integration queues support **Add tasks**. A task's editor offers **Save changes**
+for pending tasks and **Duplicate task** to append the draft. Active and historical
+tasks allow draft edits for duplication or export, with in-place saving disabled.
+Omitted sources resolve at the new queue position; named sources still refer to
+earlier tasks in that run. Only pending tasks can be removed, and changes must
+preserve downstream references. Campaign-owned queues are managed by the controller,
+so create a standalone run before changing its task definitions.
+
+Run definitions include all current task definitions and omit execution metadata.
+Templates can be loaded, saved and deleted from the shared editors, including
+**New run** and **Add tasks**.
+
+External paths and explicit source references are retained. Files are not copied
+or verified: use distinct writable output paths for independent runs, especially
+MadNIS `save_path`. Saved artifacts can still be required for ordinary resume.
+Historical run cloning/branching is no longer supported; use **Duplicate** for a
+fresh execution or **Assign / Resume** to continue the existing run.
+
 ## Task Queue
 
 Sample tasks use direct source specs:
@@ -301,10 +355,12 @@ moments to recover real, imaginary, and norm projection statistics. Historical
 moments were not stored; Result shows `n/a` instead of a partial estimate. New
 accumulators record these moments when `training_projection = "abs_sq"`.
 
-In Max Weight Points, `Integrand` is the raw real or imaginary gammaloop
-integrand component before parameterization, `Jacobian` is gammaloop's returned
-parameterization Jacobian, and `w` is the point's sampling weight. The weighted
-extremum still includes all applicable weight factors. Numeric columns use
+In Max Weight Points, `Returned integrand` is the component returned by GammaLoop.
+New GammaLoop contributions include native map Jacobians and channel partitions;
+`Top-level Jacobian` is the remaining factor, normally one. Older records may
+store an unapplied Jacobian separately. `w` is the point's sampling weight.
+Estimates, histograms and training feedback apply the outer weight exactly once.
+The weighted extremum includes all applicable weight factors. Numeric columns use
 scientific notation; continuous coordinates show three significant digits,
 with their stored values available under `Full Precision (f64)`.
 
