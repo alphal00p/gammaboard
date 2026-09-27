@@ -23,4 +23,10 @@ name = "integrate-one"
 kind = "sample"
 accumulator = { config = "scalar" }
 stop_condition = { max_samples = 10_000 }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+# TOML 1.1 allows inline tables to span lines, with comments and trailing commas.
+sampler_aggregator = {
+    config = {
+        kind = "naive_monte_carlo",
+        seed = 0,
+    },
+}

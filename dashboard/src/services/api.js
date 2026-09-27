@@ -25,7 +25,10 @@ const extractErrorDetails = async (response) => {
     if (text.trim()) {
       if (contentType.includes("text/html")) {
         const summary = stripHtml(text);
-        if (response.status === 502 || response.status === 503 || response.status === 504) {
+        if (response.status === 504) {
+          return "gateway timeout (504): the request took too long and may still be running";
+        }
+        if (response.status === 502 || response.status === 503) {
           return `gateway error (${response.status}): backend unavailable or restarting`;
         }
         return summary || `HTTP ${response.status}`;
@@ -36,7 +39,10 @@ const extractErrorDetails = async (response) => {
     // Fall through to status fallback.
   }
 
-  if (response.status === 502 || response.status === 503 || response.status === 504) {
+  if (response.status === 504) {
+    return "gateway timeout (504): the request took too long and may still be running";
+  }
+  if (response.status === 502 || response.status === 503) {
     return `gateway error (${response.status}): backend unavailable or restarting`;
   }
 
@@ -142,7 +148,36 @@ export const updateRunTaskQueueTuning = async (runId, taskId, queueTuning, signa
     signal,
   );
 
-export const deleteRun = async (runId, signal) => apiDelete(`/runs/${runId}`, "Failed to delete run", signal);
+const waitForRemovalPoll = (delay, signal) => new Promise((resolve, reject) => {
+  signal?.throwIfAborted();
+  const abort = () => {
+    clearTimeout(timer);
+    reject(signal.reason);
+  };
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", abort);
+    resolve();
+  }, delay);
+  signal?.addEventListener("abort", abort, { once: true });
+});
+
+export const deleteRun = async (runId, signal) => {
+  let operation = await apiDelete(`/runs/${runId}`, "Failed to delete run", signal);
+  // Older servers return the completed deletion directly.
+  if (!operation?.operation_id) return operation;
+  while (operation.status === "running") {
+    await waitForRemovalPoll(operation.poll_after_ms ?? 1000, signal);
+    operation = await apiGet(
+      `/run-removals/${encodeURIComponent(operation.operation_id)}`,
+      "Unable to check deletion status; refresh the run list before retrying",
+      signal,
+    );
+  }
+  if (operation.status !== "completed") {
+    throw new Error(`Failed to delete run: ${operation.error || "deletion did not complete"}`);
+  }
+  return operation;
+};
 
 export const deleteRunTask = async (runId, taskId, signal) =>
   apiDelete(`/runs/${runId}/tasks/${taskId}`, "Failed to delete pending task", signal);

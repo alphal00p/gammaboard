@@ -129,7 +129,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
             />
             <Button
               variant="contained"
-              disabled={!selectedRun || pausing || autoAssigning || autoUnassigning}
+              disabled={!selectedRun || pausing || autoAssigning || autoUnassigning || deletingRun}
               onClick={async () => {
                 setAutoAssigning(true);
                 try {
@@ -159,7 +159,7 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
             <Button
               variant="contained"
               color="warning"
-              disabled={!selectedRun || pausing || autoAssigning || autoUnassigning}
+              disabled={!selectedRun || pausing || autoAssigning || autoUnassigning || deletingRun}
               onClick={async () => {
                 setAutoUnassigning(true);
                 try {
@@ -240,11 +240,14 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
                 }
               }}
             >
-              Delete Run
+              {deletingRun ? "Deleting…" : "Delete Run"}
             </Button>
           </Stack>
         </Box>
       ) : null}
+      {deletingRun && <Alert severity="info" sx={{ mb: 2 }}>
+        Deleting this run and its child runs. Large histories can take several minutes.
+      </Alert>}
       {isIntegration && <TaskQueuePanel
         tasks={taskList}
         selectedTaskId={selectedTask?.id ?? null}
@@ -382,9 +385,10 @@ const RunModeContent = ({ runs, selectedRun, onRunCreated, onRunDeleted, onSelec
       />
       <Snackbar
         open={Boolean(snackbar)}
-        autoHideDuration={4000}
-        onClose={() => setSnackbar(null)}
+        autoHideDuration={snackbar?.severity === "error" ? null : 4000}
+        onClose={(_event, reason) => { if (reason !== "clickaway") setSnackbar(null); }}
         message={snackbar?.message || ""}
+        action={<Button color="inherit" size="small" onClick={() => setSnackbar(null)}>Dismiss</Button>}
       />
     </>
   );
@@ -517,9 +521,10 @@ const RunsWorkspace = ({
       />
       <Snackbar
         open={Boolean(snackbar)}
-        autoHideDuration={4000}
-        onClose={() => setSnackbar(null)}
+        autoHideDuration={snackbar?.severity === "error" ? null : 4000}
+        onClose={(_event, reason) => { if (reason !== "clickaway") setSnackbar(null); }}
         message={snackbar?.message || ""}
+        action={<Button color="inherit" size="small" onClick={() => setSnackbar(null)}>Dismiss</Button>}
       />
     </>
   );
@@ -527,4 +532,3 @@ const RunsWorkspace = ({
 
 
 export default RunsWorkspace;
-

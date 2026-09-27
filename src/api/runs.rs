@@ -613,12 +613,33 @@ pub async fn export_run_repro_toml(
 
     toml::to_string(&RunReproToml {
         name: run.run_name,
-        gammaboard: run.provenance,
+        gammaboard: repro_provenance(run.provenance),
         integration_params,
         target: run.target.filter(|value| !value.is_null()),
         task_queue: completed_tasks,
     })
     .map_err(|err| ApiError::Internal(format!("failed to serialize run repro TOML: {err}")))
+}
+
+// JSON metadata can contain unset optional fields (including nested evaluator
+// metadata). TOML has no null value; omit those fields, preserving all other
+// metadata and array positions rather than changing the stored provenance.
+fn repro_provenance(mut value: serde_json::Value) -> serde_json::Value {
+    match &mut value {
+        serde_json::Value::Object(fields) => {
+            fields.retain(|_, value| !value.is_null());
+            for value in fields.values_mut() {
+                *value = repro_provenance(value.take());
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                *value = repro_provenance(value.take());
+            }
+        }
+        _ => {}
+    }
+    value
 }
 
 async fn preflight_task_batch(
@@ -988,6 +1009,136 @@ mod tests {
         EvaluatorConfig::Unit {
             params: UnitEvaluatorParams::default(),
         }
+    }
+
+    #[test]
+    fn repro_export_omits_null_metadata_fields_and_preserves_run_configuration() {
+        let config = preprocess_run_add(parse_run_add_config_toml(
+            "name = 'repro-null-metadata'\ntarget = { kind = 'scalar', value = 1.25 }\n[evaluator]\nkind = 'unit'\n",
+        ).unwrap()).unwrap();
+        let provenance = serde_json::json!({
+            "git_revision": null,
+            "submitted_toml": null,
+            "evaluator_metadata": {
+                "graph_groups": null,
+                "integrand_name": "1L",
+                "graphs": [{"name": "graph", "optional": null}],
+            },
+            "enabled_features": ["gammaloop"],
+        });
+        let raw = toml::to_string(&RunReproToml {
+            name: config.name.clone(),
+            gammaboard: repro_provenance(provenance.clone()),
+            integration_params: config.resolved_integration_params.unwrap(),
+            target: config.target.clone(),
+            task_queue: vec![],
+        })
+        .unwrap();
+        let restored = parse_run_add_config_toml(&raw).unwrap();
+        assert_eq!(restored.name, config.name);
+        assert_eq!(restored.target, config.target);
+        let document: toml::Value = toml::from_str(&raw).unwrap();
+        let metadata = &document["gammaboard"]["evaluator_metadata"];
+        assert_eq!(metadata["integrand_name"].as_str(), Some("1L"));
+        assert_eq!(metadata["graphs"][0]["name"].as_str(), Some("graph"));
+        assert!(metadata.get("graph_groups").is_none());
+        assert!(provenance["evaluator_metadata"]["graph_groups"].is_null());
+    }
+
+    #[test]
+    fn toml_1_1_runcard_preserves_multiline_input_and_round_trips_effective_config() {
+        let raw = r#"
+replacements = {
+    samples = 20_000, # Comments and trailing commas inside inline tables.
+    sampler = {
+        kind = "naive_monte_carlo",
+        seed = 42,
+    },
+}
+name = "multiline-runcard"
+evaluator = {
+    kind = "unit",
+    continuous_dims = 1,
+    discrete_dims = 0,
+}
+task_queue = [{
+    kind = "sample",
+    stop_condition = {
+        max_samples = "$(samples:10)",
+    },
+    accumulator = { config = "scalar", },
+    sampler_aggregator = {
+        config = '$(sampler:{ kind = "naive_monte_carlo" })',
+    },
+}]
+"#;
+        let parsed = parse_run_add_config_toml(raw).expect("TOML 1.1 run config");
+        let tasks = parsed.task_queue.as_ref().unwrap();
+        let RunTaskSpec::Sample {
+            stop_condition,
+            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
+            ..
+        } = &tasks[0].task
+        else {
+            panic!("expected sample task with sampler config");
+        };
+        assert_eq!(stop_condition.max_samples, Some(20_000));
+        assert_eq!(serde_json::to_value(config).unwrap()["seed"], 42);
+
+        let processed = preprocess_run_add(parsed).expect("preprocess multiline run");
+        let params = processed.resolved_integration_params.as_ref().unwrap();
+        let tasks = processed.resolved_task_queue.as_ref().unwrap();
+        assert_eq!(
+            stored_run_toml(&processed, params, processed.target.as_ref(), tasks).unwrap(),
+            raw,
+            "reproduction must preserve the submitted layout and comments"
+        );
+        let canonical =
+            canonical_run_toml(&processed.name, params, processed.target.as_ref(), tasks)
+                .expect("serialize effective run");
+        let restored = preprocess_run_add(parse_run_add_config_toml(&canonical).unwrap()).unwrap();
+        assert_eq!(restored.name, processed.name);
+        assert_eq!(
+            serde_json::to_value(restored.resolved_integration_params).unwrap(),
+            serde_json::to_value(params).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(restored.resolved_task_queue).unwrap(),
+            serde_json::to_value(tasks).unwrap()
+        );
+    }
+
+    #[test]
+    fn toml_1_1_task_append_accepts_nested_multiline_inline_tables() {
+        let raw = r#"
+replacements = {
+    samples = 20_000,
+}
+task = {
+    name = "multiline-task",
+    kind = "sample",
+    stop_condition = { max_samples = "$(samples:10)", },
+    accumulator = { config = "scalar", },
+    sampler_aggregator = {
+        config = {
+            kind = "naive_monte_carlo", # Nested tables allow comments too.
+        },
+    },
+}
+"#;
+        let tasks = parse_task_queue_toml(raw).unwrap().into_tasks();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].name.as_deref(), Some("multiline-task"));
+        let RunTaskSpec::Sample { stop_condition, .. } = &tasks[0].task else {
+            panic!("expected sample task");
+        };
+        assert_eq!(stop_condition.max_samples, Some(20_000));
+        let canonical = crate::core::canonical_task_toml(&tasks[0]).unwrap();
+        let restored = parse_task_queue_toml(&canonical).unwrap().into_tasks();
+        assert_eq!(
+            serde_json::to_value(restored).unwrap(),
+            serde_json::to_value(tasks).unwrap()
+        );
     }
 
     #[test]

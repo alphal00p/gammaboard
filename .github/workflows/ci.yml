@@ -86,7 +86,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python -m pip install --upgrade build pytest
+      - run: python -m pip install --upgrade build pytest 'tomli>=2.4,<3'
       - run: python -m build process_api/python
       - name: Install process wheel into a clean environment
         run: |
@@ -106,14 +106,15 @@ jobs:
         run: |
           python - <<'PY'
           import subprocess
-          import tomllib
+          # Python 3.13's tomllib only supports TOML 1.0.
+          import tomli
 
           paths = subprocess.check_output(
               ["git", "ls-files", "*.toml"], text=True
           ).splitlines()
           for path in paths:
               with open(path, "rb") as handle:
-                  tomllib.load(handle)
+                  tomli.load(handle)
           PY
 
   ubelix:

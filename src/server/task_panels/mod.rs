@@ -1122,6 +1122,58 @@ mod tests {
     }
 
     #[test]
+    fn campaign_combined_result_compares_real_and_imaginary_targets() {
+        let mut task = run_task(RunTaskSpec::IntegrationCampaign {
+            children: vec![],
+            measurement: Default::default(),
+            stop_condition: Default::default(),
+            allocation: Default::default(),
+        });
+        task.controller_output = Some(serde_json::from_value(serde_json::json!({
+            "completed_children": 2, "running_children": 0, "total_children": 2,
+            "total_samples": 100, "selected_child_run_ids": [],
+            "allocation_started_total_samples": 100, "children": [],
+            "combined_measurement": {"status": "completed", "results": [
+                {"name": "mean", "component": "real", "value": 1.5, "uncertainty": 0.1, "sample_count": 100},
+                {"name": "mean", "component": "imag", "value": -0.5, "uncertainty": 0.2, "sample_count": 100}
+            ]}
+        })).unwrap());
+        let target =
+            serde_json::json!({"kind": "vector", "components": {"real": 1.4, "imag": -0.7}});
+        let panel_state = serde_json::json!({});
+        let ctx = TaskPanelContext {
+            task: &task,
+            source: TaskPanelCurrentSource::Empty,
+            panel_state: &panel_state,
+            run_target: Some(&target),
+            completed_samples_per_second: None,
+            eta_seconds: None,
+            sampler_engine_diagnostics: None,
+        };
+        let panel = integration_campaign::projectors()
+            .into_iter()
+            .find(|projector| projector.spec().panel_id == "campaign_combined_result")
+            .unwrap()
+            .current(&ctx)
+            .unwrap()
+            .unwrap();
+        let PanelState::KeyValue { entries, .. } = panel else {
+            panic!("expected result entries");
+        };
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Real", "Imag", "Real vs Target", "Imag vs Target"]
+        );
+        assert_eq!(entries[2].value["target"], 1.4);
+        assert_eq!(entries[3].value["target"], -0.7);
+        assert!((entries[2].value["delta_sigma"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+        assert!((entries[3].value["delta_sigma"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
     fn campaign_layout_places_summary_after_sub_runs_and_observables() {
         let task = RunTaskSpec::IntegrationCampaign {
             children: vec![],

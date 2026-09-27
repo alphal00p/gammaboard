@@ -94,6 +94,20 @@ then deletes the records. If controller activity or draining exceeds 60 seconds,
 removal fails and retains the records; retry after workers finish. This prevents
 checkpoint and queue writes from racing with deletion.
 
+Dashboard deletion runs in the background because removing a large history can
+take longer than a proxy's HTTP timeout. `DELETE /api/runs/:id` returns HTTP 202
+with an `operation_id`; poll `GET /api/run-removals/:operation_id` until `status`
+is `completed` or `failed` (with an `error`). Both endpoints require dashboard
+authentication. Repeated submissions for the same run share its active operation.
+Closing the browser does not cancel deletion; the dashboard only reports success
+after the transaction commits and keeps errors visible until dismissed. The CLI
+continues to wait synchronously for deletion.
+
+Operation status is held in server memory, with completed entries eligible for
+cleanup after one hour. If the server restarts or status has expired, refresh the
+run list before retrying: a committed deletion remains deleted, while an
+interrupted transaction rolls back.
+
 ## Logs
 
 Runtime logs are persisted to Postgres and exposed in the dashboard Logs tab.
