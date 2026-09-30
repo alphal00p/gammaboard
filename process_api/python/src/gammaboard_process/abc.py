@@ -55,16 +55,17 @@ class Sampler(ABC):
     """
 
     @abstractmethod
-    def sample_plan(self) -> dict[str, Any]:
-        """Return a sampler plan, e.g. ``{"kind": "produce", "nr_samples": 1024}``."""
+    def generate(self, remaining_sample_budget: int | None) -> Any:
+        """Return a sampler-sized SampleBatch, GenerationStatus.WAITING or FINISHED.
+
+        Respect the remaining task budget, if present. Set the batch's
+        training_remaining to the ungenerated training window size to request
+        one feedback value per sample. Evaluator splitting is runtime-owned.
+        """
 
     @abstractmethod
-    def produce_latent_batch(self, nr_samples: int) -> Any:
-        """Return a ``SampleBatch`` or compatible object."""
-
-    @abstractmethod
-    def ingest_training_values(self, training_values: np.ndarray) -> None:
-        """Ingest one scalar training value per produced training sample."""
+    def feedback(self, values: np.ndarray) -> None:
+        """Consume weighted values for exactly one draw, in generation order."""
 
     @abstractmethod
     def snapshot(self) -> Any:
@@ -82,9 +83,6 @@ class Sampler(ABC):
     ) -> Any:
         """Optional constructor used when restoring a persisted sampler snapshot."""
         raise NotImplementedError("override from_snapshot(...) to support sampler restore")
-
-    def training_samples_remaining(self) -> int | None:
-        return None
 
     def pdf(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
         return None

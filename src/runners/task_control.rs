@@ -114,13 +114,9 @@ where
     }
 
     async fn is_current_leader(&self) -> Result<bool, StoreError> {
-        let leader = self
-            .store
-            .list_nodes(None)
-            .await?
-            .into_iter()
-            .min_by(|a, b| a.name.cmp(&b.name));
-        Ok(leader.is_some_and(|node| node.name == self.node_name && node.uuid == self.node_uuid))
+        self.store
+            .is_task_control_leader(&self.node_name, &self.node_uuid)
+            .await
     }
 
     async fn reconcile_run(&self, run_id: i32) -> Result<(), StoreError> {

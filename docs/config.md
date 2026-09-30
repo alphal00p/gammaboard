@@ -272,7 +272,7 @@ For `sampler_aggregator.kind = "process_sampler"`, configure:
 
 - `command`: exact process argv after `$resources` expansion, for example `["python", "-m", "my_runtime.sampler_worker"]` or `["apptainer", "exec", "--nv", "--bind", "$resources:$resources", "$resources/runtimes/my_runtime/runtime.sif", "python", "-m", "my_runtime.sampler_worker"]`.
 - `cwd`: optional working directory; defaults to `$resources`.
-- `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `ingest_training_values`.
+- `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `feedback`.
 - `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
 
 Process evaluator and sampler methods use ragged row-major arrays plus offsets. Homogeneous wrappers may validate that offsets match the fixed-width shape derived from `domain` and reject inhomogeneous batches.
@@ -637,28 +637,12 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 
 - `frontend_sync_interval_ms` sets how often the sampler runner refreshes frontend-facing and persisted accumulator snapshots during sampling.
 - Sampler queue settings live under `[sampler_aggregator_runner_params.queue]`.
-- `bulk_sample_generation` (default `false`) separates sampler draws from evaluator
-  work units. With `true`, one draw requests up to `min(training_samples_remaining,
-  max_batch_size)`, also respecting the sampler's production plan and the task's
-  remaining sample budget. After training (`training_samples_remaining = None`),
-  the draw requests up to `max_batch_size`. `fixed_batch_size`, the timing target,
-  and training load balancing determine evaluator chunk sizes, not the bulk draw size.
-  The initial accumulator probe dispatches only a small slice of the first draw.
-  Remaining slices stay in one bounded sampler buffer and enter the work queue
-  under the usual pending, total-queue, and per-tick limits. Completed training
-  values are concatenated in sample order and delivered once per original draw.
-  The buffer and partially collected values are checkpointed, including on pause.
-  Disabling the option live drains an existing draw before returning to ordinary
-  generation. Queue limits count dispatched work; the sampler can additionally
-  hold one generated draw of up to `max_batch_size` samples in memory. Native
-  Havana inference uses concrete points in this mode to preserve the RNG sequence
-  when partitioning its normally seed-only payloads.
-  This boolean is also available in `[task_queue.queue_tuning]` and the dashboard's
-  Queue Tuning panel. For example, use `bulk_sample_generation = true` with
-  `max_batch_size = 20000` to draw a full 20,000-sample training window while
-  retaining smaller evaluator batches.
-- `target_batch_eval_ms`, `batch_size_deadband_ratio`, `batch_size_cooldown_ticks`, and `max_batch_size` are queue-level controls.
-- `queue_buffer` targets `ceil(queue_buffer * active_evaluator_count)` pending batches, including local and in-flight inserts. `0.0` stops new production; larger values keep more work buffered. There are no separate refill-ratio or local-buffer controls.
-- Both runner roles default to `min_tick_time_ms = 10`. Raising this interval reduces polling load when low latency is unnecessary.
-- Total open batches (`pending + claimed + completed`) are capped by `max_queue_size`.
-- Pause/unassign drains the local queue fully before the sampler checkpoint is persisted.
+- `target_batch_eval_ms` (default 2000), `max_batch_size`, and optional `fixed_batch_size` control evaluator work units. They can be overridden live in task `queue_tuning` and the dashboard. Fixed sizing is an advanced option.
+- Generation size belongs to the sampler. Native Havana and Naive Monte Carlo accept `generation_batch_size` (default 1,048,576), independently of evaluator limits. Draws respect training boundaries and the remaining task budget.
+- One pending batch per active evaluator is the fixed soft refill threshold, including local and in-flight inserts. An existing draw can exceed it; only starting another draw waits for the queue to fall below it.
+- The adaptive controller uses a fixed 15% deadband and a three-completion cooldown.
+- `max_batches_per_tick`, `max_insert_bundle_size`, `max_concurrent_insert_tasks`, `completed_batch_fetch_limit`, and `max_batch_retries` remain deployment settings under the runner queue config, not task tuning.
+- Both runner roles default to `min_tick_time_ms = 10`.
+- Pause/unassign flushes local I/O before checkpointing the undispatched draw and partially assembled feedback along with sampler state.
+
+See [the sampler contract](sampling.md) for generation, feedback, memory, and migration details.

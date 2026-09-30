@@ -1,150 +1,159 @@
-# Performance work during development
+# Performance findings
 
-Use the small benchmark preset that answers the current question. Keep its raw
-inputs and measurements, but do not freeze development or prepare release
-artifacts just to investigate a change. Publication follows functional stability
-and complete, repeatable measurements.
+Use [benchmarking](benchmarking.md) for commands, settings and validity rules.
+This page records current measurements and retained mechanisms; historical
+experiments are not current deployment defaults.
 
-## Simplifications in this pass
+## Current capability study — 2026-09-29
 
-- One CLI-based benchmark runner owns deployment, readiness, measurement,
-  teardown, and reports. The separate sleep-based queue runner and SQL-based
-  campaign script duplicated that lifecycle and maintained separate SQL-based
-  measurement semantics outside the CLI contract.
-- Shared run/task examples replace copied UBELIX physics cards. Cluster-specific
-  worker launch cards remain in ops. The Slurm helper no longer has a separate
-  recursive database deletion command.
-- Sampling tasks initialize their accumulator directly. The main GammaLoop
-  example and appended training/inference workflow now exclude training from
-  published results and initialize a fresh inference accumulator.
-- The frontend's build cache reinstalls npm dependencies when the package files
-  change. An existing Vite executable is not sufficient evidence that installed
-  dependencies match the lockfile.
-- GammaLoop observable batches reset once at entry. The returned observable
-  bundle owns its data, so a second full integrand clone after evaluation is
-  unnecessary. Entry reset also isolates batches after mixed accumulator modes
-  or failed evaluations.
-- Worker and CLI processes default to one background I/O thread, with the
-  existing `TOKIO_WORKER_THREADS` override. The API server keeps automatic
-  sizing. MADNIS sets its one-thread OpenMP default in the Python entrypoint
-  instead of repeating a 64-thread default in runtime packaging.
+The sampler-generation implementation was measured with the default sparse
+frontier: **87 configurations**, three data paths, four delays and up to 512
+evaluator processes. Initial coverage, missing-point follow-up and targeted repeats
+took 60.1 minutes including deployment and cleanup. Of 92 attempts, 89 were valid;
+all planned configurations have usable evidence.
 
-The real-physics reset regression uses a read-only generated state with
-histograms. Set `GAMMABOARD_TEST_PHYSICS_STATE` and
-`GAMMABOARD_TEST_PHYSICS_INTEGRAND`, then run:
+The shared host was an AMD EPYC 9754. One core served the sampler, fifteen the
+database/server, and evaluators shared 240 physical cores. The build used
+`dev-optim` (optimization level 2). Delayed evaluators sleep; these are
+coordination/transport measurements rather than CPU-bound scaling results.
 
-```bash
-cargo test --lib observable_batches_are_isolated_after_mixed_modes_and_failure -- --ignored
-```
+| Mode | Zero-delay peak samples/s | Evaluators at peak | Samples/s at 512 | Fewer-worker candidate within 5% |
+| --- | ---: | ---: | ---: | --- |
+| RNG inference | 30.56M | 64 | 28.65M | 16 workers, 524,288 samples/batch |
+| Materialized | 2.62M | 256 | 2.21M | 16 workers, 131,072 samples/batch |
+| Training | 2.56M | 128 | 1.89M | 64 workers, 131,072 samples/batch |
 
-It compares complete results apart from timing fields across variable-sized
-batches, scalar/vector/empty modes, and an external failure after a valid sample.
+![Sparse throughput frontier](benchmarks/2026-09-29/frontier.svg)
 
-## Optimization candidates
+At the zero-delay peaks, RNG sampler compute was 95.5% busy. Materialized/training
+sampler I/O was 96.0%/95.6% busy, with sampler compute around 12–13%. Compute and
+I/O overlap; these are occupied wall times, not CPU usage.
 
-These are code-review findings, not measured speedup claims. Keep each comparison
-small and independent; do not change several scheduling mechanisms at once.
+The 5-µs RNG curve used smaller 65,536-sample evaluator batches and peaked at
+19.76M/s. Zero delay is not a universal ceiling for other batch choices.
+At 200 µs, 256 evaluators delivered roughly 1.26–1.28M/s in all three modes,
+close to the ideal 1.28M/s. Higher counts were less reliable:
 
-| Priority | Location | Finding | Next experiment |
-| --- | --- | --- | --- |
-| 1 | `src/evaluation/evaluator/gammaloop.rs`, `eval_batch` | The remaining entry reset clones the full pristine integrand. | Inspect whether GammaLoop can reset only observable state without changing evaluation caches or failure recovery. |
-| 2 | `src/runners/queue.rs`, `tune_batch_size` | Smoothing, a deadband, and a cooldown all regulate batch sizing. Despite its `batch_size_cooldown_ticks` name, the cooldown advances when completed batches are observed, so its wall duration depends on batch completion rate. | Compare cooldown zero with the default on repeated training windows; retain it only if it reduces oscillation or improves throughput without delaying adaptation. Fixed-batch CPU presets intentionally bypass this code and cannot answer this question. |
-| 3 | `src/runners/queue.rs`, insert/fetch pumps | The insert pump now has one enqueue/refill path. Comparing 1, 2, and 8 inserts did not establish a consistently better lower limit; the default remains 8. | Investigate claim/query contention at large evaluator counts, holding batch size and polling cadence fixed. Use the four activity rates and operation timings alongside accepted progress. |
-| 4 | `src/evaluation/evaluator/gammaloop.rs`, `ingest_vector_batch` | Scalar/complex projection creates a small `Vec` per sample. | Profile allocation cost on a real integrand before replacing these with stack arrays or borrowed slices. Physics evaluation may dominate. |
-| 5 | `src/sampling/generation.rs` and `src/runners/sampler_aggregator.rs` | Bulk generation trades fewer sampler calls for buffering, slicing, and retained training values. It is opt-in. | Compare bulk off/on at unchanged evaluator batch size; include a real process sampler before claiming a training benefit. Bound generation size to keep memory reasonable. |
+| Repeated configuration | First samples/s | Repeat samples/s |
+| --- | ---: | ---: |
+| RNG, 5 ms, 512 evaluators | 67,175 | 101,298 |
+| Training, 200 µs, 512 evaluators | 585,457 | 1,762,172 |
 
-## Insert scheduling experiments (2026-09-24)
+Both observations contribute to each plotted median. In the slow training
+interval, roughly 500 batches remained locally queued while insertion was slow;
+requested and actual mock sleep durations agreed. The fresh-deployment repeat
+was faster. Publication/database contention is a useful next investigation,
+but this does not isolate database history, CPU placement or shared-host load
+as the cause. A short high-count point is not a stable deployment limit.
 
-The focused I/O preset completed 99 valid trials, three repetitions per case,
-with one, two, or eight concurrent inserts. All processes shared eight physical
-cores. The stress matrix used 1/8/32/64 evaluators, batches of 16/256 samples,
-and 1 ms polling. Controls used normal 10 ms polling and deterministic CPU work.
-See [benchmarking.md](benchmarking.md) for the reproducible command.
+### Measurement corrections
 
-For the fast integrand with eight evaluators and batches of 256, normal-pacing
-median accepted rates were 91k/140k/147k samples/s for 1/2/8 inserts. The CPU-work
-control reached about 45k samples/s for all three limits, with evaluator compute
-activity around 96%. Two inserts are a useful tuning option; one can restrict
-cheap-batch throughput. Keep the default at eight until a lower bound has a
-clearer benefit across workloads.
+One 512-evaluator training point exceeded the old 120-second warmup while making
+progress. Warmup now allows five minutes within the suite budget. Two
+single-evaluator training intervals missed feedback because a full generation
+outlasted the old 12-second observation window. Training measurements now cover
+two nominal generation cycles, independently of evaluator batches.
 
-Batch size and polling mattered more than insert count in the stress cases.
-The 64-evaluator normal-pacing repetitions varied widely (27k–135k samples/s),
-with high sampler I/O activity in slower cases. These shared-host, fixed-core
-tests expose a contention problem to investigate; they do not establish its
-cause or measure CPU strong scaling. Check claim/query latency, database table
-churn, and polling before adding threads or enlarging connection pools.
+All three affected configurations passed their retries. Failures remain in the
+evidence. The default suite now has a 60-minute limit and finishes early when
+complete. Consolidation subsequently aligned accepted progress and feedback
+with the same telemetry endpoints. Replaying all 89 valid intervals preserved
+their rates and confirmed feedback inside every training interval.
 
-A follow-up with full six-dimensional inputs, batches of 65,536/262,144, and
-eight evaluators completed 18 valid trials and accepted 6.21 GiB of serialized
-input across the measurement windows. Configuration medians were 0.66–0.90
-million samples/s (36–50 MiB/s of logical input). One insert was competitive;
-larger batches did not improve throughput. Sampler I/O activity was 95–98%.
-Live PostgreSQL observations caught evaluator completion updates and inserts
-blocked by a large input COPY. Batch metadata updated a shared per-run queue
-counter before that COPY, holding its lock until commit. The subsequent changes
-below shorten that lock duration while preserving atomic batch/payload visibility.
-This observation does not isolate the cause of the earlier small-batch slowdown.
-The I/O preset now records batches/s and logical input volume alongside samples/s;
-see the large-payload command in [benchmarking.md](benchmarking.md).
+## Process-API overhead
 
-The new counters measure occupied wall time, including in-flight DB waits.
-They exclude completed handles awaiting collection, and overlapping operations
-count once. They are not CPU utilization or a requirement that every role stay
-at 100%. See [concurrency.md](concurrency.md) for the exact scope.
+The production Rust/Python adapters completed 72 cases across nine batch sizes
+from 16 to 1,048,576 samples in 74.7 seconds, excluding compilation. Inputs have
+six continuous coordinates and one output component. Solid curves have minimal
+callback work; dashed curves add 64 NumPy sine passes.
 
-## Queue throughput improvements
+![Process API overhead](benchmarks/2026-09-29/process-overhead.svg)
 
-Three changes were retained after separate comparisons:
+These are paired adapter wall times minus callback wall times, including packing,
+validation, IPC, native conversion/accumulation and scheduling. Startup, input
+construction, the database and worker fleet are excluded.
 
-- Queue-counter triggers defer updates until commit, freeing the shared counter
-  while payloads are written. Counters and batch changes still become visible
-  atomically; rollback and cascading deletion are covered by database tests.
-- Input serialization and COPY-buffer preparation precede connection acquisition
-  and the transaction. Binary serialization borrows the input arrays instead of
-  cloning them; golden fixtures preserve existing stored encodings.
-- New input writes use LZ4 where PostgreSQL supports it. Unsupported builds keep
-  their existing compression with a migration warning. WAL compression and
-  durability settings are unchanged.
+At 65,536 samples per call with minimal callback work:
 
-With eight evaluators, two inserts, normal polling, and three repetitions,
-median accepted rates changed as follows (million samples/s):
+| Operation | Overhead per sample |
+| --- | ---: |
+| Sampler generation | 0.227 µs |
+| Sampler feedback | 0.009 µs |
+| Evaluator, feedback off | 0.347 µs |
+| Evaluator, feedback on | 0.375 µs |
 
-| Stage | Batch 256 | Batch 65,536 | Batch 262,144 |
-| --- | ---: | ---: | ---: |
-| Fresh baseline | 0.141 | 0.868 | 0.753 |
-| Deferred counters | 0.142 | 1.327 | 1.179 |
-| Payload preparation | 0.153 | 1.351 | 1.048 |
-| LZ4 | 0.151 | 2.293 | 1.834 |
-| Uncompressed comparison | 0.152 | 2.103 | 1.605 |
+Batching amortizes fixed per-call cost; conversion and transfer leave a per-sample
+cost. Million-sample calls showed an upturn in this run. Callback workloads also
+produced different residuals, so these are not universal constants. The largest
+batch has only four measured repetitions per case.
 
-These shared-host trials establish a useful development result, not a universal
-speedup. Preparation reduced observed serialization cost but did not establish
-an independent throughput gain. Small-batch throughput ranges overlapped.
-One-batch insert bundles did not improve large-batch medians and substantially
-reduced small-batch throughput. No byte-based bundling policy was added; bundle
-size 5 and insert concurrency 8 remain the defaults. Further tuning was stopped
-at the user's request. See [benchmarking.md](benchmarking.md) for reproduction
-options and migration provenance.
+Process correctness checks passed, including weighted feedback and worker reuse.
+[Portable measurements and provenance](benchmarks/2026-09-29/summary.json) include
+all frontier attempts, configuration medians and process summaries. Full raw
+intervals, paired timings and executable inputs remain in the development study
+artifacts; the guide describes reproduction.
 
-## Mechanisms to preserve
+## Improvements already retained
 
-Claim tokens, retained results during database retries, task-scoped consumption,
-and checkpointed in-flight generation protect correctness. They are not removable
-performance tuning. Similarly, the fixed single-slot evaluator prefetch/submit
-pipeline provides bounded overlap; deeper buffering should require evidence.
+These came from earlier, differently configured experiments. Their speedups are
+not matched comparisons against the current frontier.
 
-The direct baseline is deliberately measured again for every case. Caching a
-single baseline across a shared-host run would save time but hide load changes.
-Reduce the experiment matrix before introducing that shortcut.
+- **Shorter transaction lock ownership.** Queue-counter updates are deferred to
+  commit, so large input COPY operations do not hold the shared counter lock
+  throughout transfer. Metadata and payload visibility remain atomic.
+- **Less payload copying.** Borrowed arrays serialize directly into the COPY
+  buffer before connection acquisition. New PostgreSQL input writes use LZ4 where
+  supported. Earlier eight-evaluator controls rose from about 0.87M/s to 2.29M/s
+  at 65,536 samples/batch across the retained changes; serialization preparation
+  alone did not establish a separate throughput gain.
+- **Flat sampler output and reusable Havana samples.** A shared indexed builder
+  removed temporary per-sample points. A six-dimensional 131,072-sample draw fell
+  from 393,240 allocations to six and from 43.8 to 9.4 MB of allocation traffic.
+  A historical matched Havana comparison rose from 0.39M/s to 2.12M/s; allocation
+  and freeing had dominated the earlier profile.
+- **One generation lifecycle.** Samplers own draws and training barriers.
+  Splitting, ordered whole-draw feedback and recovery share one path. Refill depth
+  is a soft fixed threshold. External samplers use SDK 0.2.0/protocol v3; see
+  [sampling](sampling.md).
+- **Bounded overlap and readiness.** Evaluator prefetch/submit stay bounded.
+  Completed handles awaiting collection do not count as busy. Fleet readiness is
+  separate from completed-work warmup; cleanup uses shared deadlines.
 
-## Measurement order
+Keep claim tokens, retained results during database retries, task-scoped
+consumption and checkpointed generation/feedback state: they protect correctness.
+Historical CPU frontiers, constant-one feedback and process echo tests are
+superseded as current capability evidence. Use their saved harnesses only for
+older-revision investigations.
 
-1. Run the smoke preset after runner or deployment changes.
-2. Use the tuning preset for batch-size and polling questions (about ten minutes).
-3. Run scaling when the relevant mechanism is stable (about twenty minutes).
-4. Add real-physics and training comparisons for claims outside warm CPU inference.
+## Raising sampler I/O throughput
 
-Use `just benchmark summary OUTPUT` to expose missing and invalid repetitions.
-Preserve failed runs as diagnostics; do not treat them as zero throughput or
-quietly discard them from a performance claim. See [benchmarking.md](benchmarking.md).
+These are proposed experiments, not established speedups. Start with materialized
+and training zero-delay cases at a modest fleet and at 512 workers. Hold binary,
+batch, draw size, telemetry and placement fixed while changing one resource or
+setting. Repeat against both fresh and aged databases.
+
+| Change to scale | Potential benefit | Evidence needed |
+| --- | --- | --- |
+| Database CPU, memory/cache and storage bandwidth | Faster insertion, fetching, compression and maintenance | PostgreSQL CPU/waits, buffers, WAL/disk traffic, operation latency and accepted MiB/s |
+| Insert lanes and connection capacity together | More publication overlap when the database has headroom | Compare 2/4/8 inserts; track pool waits and completion-collection starvation |
+| Evaluator batches and insert bundles | More samples per claim/transaction | Nearby sizes at equal sample pressure; watch latency, memory and lock duration |
+| Bounded parallel encoding | Relieve a saturated I/O thread during synchronous serialization | Profile CPU and separate serialization from database waits |
+| Independent run/database partitions | Higher aggregate throughput past a shared database limit | Independent runs; a single adaptive sampler still requires ordered feedback |
+
+The frontier uses two inserts; ordinary run defaults remain eight inserts.
+Role pools are currently capped at two connections, shared by inserts, completion
+fetches and persistence. A larger sampler pool requires a sampler-specific cap
+and matching connection-admission accounting; setting a larger config value today
+is clamped. Keep evaluator pools bounded when testing sampler capacity.
+Public task tuning changes batch sizing, not insert concurrency. More encoding
+threads also need more sampler CPU allocation to provide actual parallelism.
+
+Separating large immutable payloads from PostgreSQL coordination is a larger
+architectural option after bandwidth is established as the limit. Multiple
+samplers for one adaptive run require a partitioning/training model, not simply
+more processes.
+
+Other focused follow-ups remain separate: GammaLoop entry-reset cost, finite
+training windows/MadNIS behavior, and dependency numerical stability. An earlier
+Havana fixture exposed tiny negative rounded variance for identical values of
+1/6; varying benchmark feedback avoids that fixture but is not its numerical fix.

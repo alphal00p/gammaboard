@@ -31,7 +31,7 @@ kind = "process_sampler"
 #   cd integrations/madnis
 #   uv venv --python 3.13 --seed .venv
 #   . .venv/bin/activate
-#   python -m pip install .
+#   python -m pip install ../../process_api/python .
 command = ["$resources/../integrations/madnis/.venv/bin/madnis-gammaboard-sampler"]
 # Alternative with Apptainer when the host supports Apptainer/SIF execution:
 # command = ["apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources/..:$resources/..", "$resources/../integrations/madnis/madnis.sif", "madnis-gammaboard-sampler"]

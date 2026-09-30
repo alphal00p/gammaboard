@@ -173,11 +173,13 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
 fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
     let runner = value?.as_object()?.get("runner")?.as_object()?;
     let entries = [
-        ("queue_buffer", "Target Pending Batches / Evaluator"),
         ("active_evaluator_count", "Active Evaluators"),
-        ("target_pending_batches", "Target DB Pending Batches"),
+        (
+            "target_pending_batches",
+            "Refill Threshold (Pending Batches)",
+        ),
         ("db_pending_batches", "DB Pending Batches"),
-        ("pending_shortfall", "DB Pending Shortfall"),
+        ("pending_shortfall", "Pending Shortfall"),
         ("local_pending_batches", "Local Pending Batches"),
         (
             "local_inflight_insert_tasks",
@@ -189,7 +191,7 @@ fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
         ),
         ("local_ready_processed_batches", "Completed Prefetch Buffer"),
         ("accumulator_checkpoint_state", "Checkpoint State"),
-        ("training_samples_remaining", "Training Samples Remaining"),
+        ("buffered_generated_samples", "Undispatched Samples"),
     ]
     .into_iter()
     .filter_map(|(key, label)| {

@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from torch._tensor import Tensor
 from dataclasses import dataclass, asdict, field
 
-from gammaboard_process import SampleBatch, Sampler
+from gammaboard_process import GenerationStatus, SampleBatch, Sampler
 from madnis.integrator import Integrator, Integrand, losses
 from madnis.integrator import SampleBatch as MadnisSampleBatch
 
@@ -240,7 +240,6 @@ class MadnisSampler(Sampler):
         self.step: int = step or 0
         self.last_loss: float | None = last_loss or None
 
-        self.training_target_samples = self.cfg.training_steps * self.cfg.training_batch_size
         self.trained_samples: int = trained_samples or 0
         self.total_trained_samples: int = total_trained_samples or 0
         self.produced_batches: int = produced_batches or 0
@@ -389,55 +388,49 @@ class MadnisSampler(Sampler):
             snapshot["last_loss"] = self.last_loss
         return snapshot
 
-    def sample_plan(self) -> Dict[str, Any]:
-        n_batch_remaining = self.training_samples_remaining()
-        return dict(
-            kind="produce",
-            nr_samples=n_batch_remaining if n_batch_remaining is not None else self.cfg.max_batch_size,
-        )
-
-    def training_samples_remaining(self) -> int | None:
-        if self.total_trained_samples >= self.training_target_samples:
-            return None
+    def _training_samples_remaining(self) -> int | None:
         if self.step < self.cfg.training_steps:
             return max(self.cfg.training_batch_size - self.trained_samples, 0)
         return None
 
-    def produce_latent_batch(self, nr_samples: int) -> SampleBatch:
-        continuous = np.empty((nr_samples, self.continuous_dims), dtype=np.float64)
-        discrete = np.empty((nr_samples, len(self.discrete_cardinalities)), dtype=np.int64)
-        wgt = np.empty((nr_samples), dtype=np.float64)
-
-        n_eval = 0
-        while n_eval < nr_samples:
-            n = min(self.cfg.max_batch_size, nr_samples - n_eval)
-            with torch.no_grad():
-                x_all, prob = self.madnis.flow.sample(
-                    n,
-                    return_prob=True,
-                    device=self.device,
-                    dtype=torch.float64,
-                )
-            discrete[n_eval:n_eval+n, :], continuous[n_eval:n_eval+n, :] = self._madnis_output_to_disc_cont(x_all)
-            wgt[n_eval:n_eval+n] = 1 / prob.numpy(force=True)
-            n_eval += n
-            if self.training_samples_remaining() is not None:
-                self.pending_training_samples.append(x_all)
-                self.pending_training_probs.append(prob)
-                self.trained_samples += n
-                self.total_trained_samples += n
+    def generate(self, remaining_sample_budget: int | None) -> SampleBatch | GenerationStatus:
+        if remaining_sample_budget == 0:
+            return GenerationStatus.FINISHED
+        remaining = self._training_samples_remaining()
+        if remaining == 0:
+            return GenerationStatus.WAITING
+        nr_samples = min(self.cfg.max_batch_size, remaining_sample_budget if remaining_sample_budget is not None else self.cfg.max_batch_size)
+        if remaining is not None:
+            nr_samples = min(nr_samples, remaining)
+        with torch.no_grad():
+            x_all, prob = self.madnis.flow.sample(
+                nr_samples, return_prob=True, device=self.device, dtype=torch.float64,
+            )
+        discrete, continuous = self._madnis_output_to_disc_cont(x_all)
+        weights = 1 / prob.numpy(force=True)
+        if remaining is not None:
+            self.pending_training_samples.append(x_all)
+            self.pending_training_probs.append(prob)
+            self.trained_samples += nr_samples
+            self.total_trained_samples += nr_samples
 
         self.produced_batches += 1
         self.produced_samples += nr_samples
 
-        return SampleBatch(xs_discrete=discrete, xs_continuous=continuous, weights=wgt)
+        return SampleBatch(xs_discrete=discrete, xs_continuous=continuous, weights=weights, training_remaining=remaining)
 
-    def ingest_training_values(self, training_values: NDArray) -> None:
+    def feedback(self, training_values: NDArray) -> None:
+        if self._training_samples_remaining() is None and not self.pending_training_samples:
+            return
         training_values = np.asarray(training_values)
-        n_samples = training_values.shape[0]
+        if training_values.ndim != 1:
+            raise ValueError("training feedback must be one-dimensional")
+        received = sum(len(w) for w in self.pending_weights) + len(training_values)
+        if received > self.trained_samples:
+            raise ValueError("more training feedback than generated samples")
         self.pending_weights.append(training_values)
 
-        if self.trained_samples >= self.cfg.training_batch_size:
+        if self.trained_samples >= self.cfg.training_batch_size and received == self.trained_samples:
             self._train_step()
 
     def get_diagnostics(self) -> Dict[str, Any]:
@@ -445,6 +438,7 @@ class MadnisSampler(Sampler):
         diagnostics: Dict[str, Any] = dict(
             produced_batches=self.produced_batches,
             produced_samples=self.produced_samples,
+            training_updates=self.step,
             total_trained_samples=self.total_trained_samples,
         )
         if self.last_loss is not None:
@@ -524,16 +518,17 @@ class MadnisSampler(Sampler):
                 return None
 
     def _train_step(self) -> None:
-        f_lens = [len(w) for w in self.pending_weights]
-        x_lens = [len(s) for s in self.pending_training_samples]
-        p_lens = [len(p) for p in self.pending_training_probs]
-        if not (f_lens == x_lens == p_lens):
-            print(
-                f"Warning: Mismatch in pending training data lengths: weights {f_lens}, samples {x_lens}, probs {p_lens}. About to shit the bed.")
-        func_vals = torch.cat([torch.from_numpy(w).to(device=self.device, dtype=torch.float64)
-                               for w in self.pending_weights])
+        # Feedback may be partitioned differently from generation after queue slicing.
+        lengths = [sum(len(chunk) for chunk in parts) for parts in
+                   [self.pending_weights, self.pending_training_samples, self.pending_training_probs]]
+        if len(set(lengths)) != 1:
+            raise ValueError(f"incomplete MADNIS training window: feedback/samples/probabilities={lengths}")
+        weighted_values = torch.cat([torch.from_numpy(w).to(device=self.device, dtype=torch.float64)
+                                     for w in self.pending_weights])
         x_all = torch.cat(self.pending_training_samples, dim=0)
         probs = torch.cat(self.pending_training_probs, dim=0)
+        # GammaBoard returns f/q; MADNIS expects f and applies its own 1/q weight.
+        func_vals = weighted_values * probs
         madnis_samples = MadnisSampleBatch(
             x=x_all,
             y=None,

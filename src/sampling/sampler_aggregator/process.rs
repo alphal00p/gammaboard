@@ -1,11 +1,7 @@
-use crate::core::EngineResultExt;
-use std::sync::Mutex;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, Point};
 use crate::process_runtime::{
     build_process_worker_command, default_process_args, parse_process_offsets,
 };
@@ -13,8 +9,9 @@ use crate::process_worker::{
     PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds, extend_le_f64,
     read_le_f64, read_le_i64,
 };
+use crate::sampling::latent_batch::IndexedBatchBuilder;
 use crate::sampling::{
-    DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
+    DiscreteSubspace, Generation, LatentBatchSpec, PdfPoint, SamplerAggregator,
     SamplerAggregatorSnapshot,
 };
 use crate::utils::domain::Domain;
@@ -40,7 +37,7 @@ pub(crate) struct ProcessSamplerSnapshot {
 pub struct ProcessSampler {
     params: ProcessSamplerParams,
     domain: Domain,
-    worker: Mutex<ProcessSamplerWorker>,
+    worker: ProcessSamplerWorker,
 }
 
 impl ProcessSampler {
@@ -55,7 +52,7 @@ impl ProcessSampler {
         Ok(Self {
             params,
             domain: domain.clone(),
-            worker: Mutex::new(worker),
+            worker,
         })
     }
 
@@ -74,7 +71,7 @@ impl ProcessSampler {
         Ok(Self {
             params: snapshot.params,
             domain: domain.clone(),
-            worker: Mutex::new(worker),
+            worker,
         })
     }
 }
@@ -104,58 +101,30 @@ impl SamplerAggregator for ProcessSampler {
         Ok(())
     }
 
-    fn training_samples_remaining(&self) -> Option<usize> {
-        let mut worker = match self.worker.lock() {
-            Ok(guard) => guard,
-            Err(_) => return None,
-        };
-        worker.training_samples_remaining().ok().flatten()
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        self.worker.generate(remaining_sample_budget)
     }
 
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        self.worker_mut()?.sample_plan()
-    }
-
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        if nr_samples == 0 {
-            return Err(EngineError::engine(
-                "process_sampler requires nr_samples > 0",
-            ));
-        }
-        let sample_batch = self.worker_mut()?.produce_latent_batch(nr_samples)?;
-        let mut points = Vec::with_capacity(nr_samples);
-        for sample_idx in 0..nr_samples {
-            let discrete_start = sample_batch.xs_discrete_offsets[sample_idx];
-            let discrete_end = sample_batch.xs_discrete_offsets[sample_idx + 1];
-            let continuous_start = sample_batch.xs_continuous_offsets[sample_idx];
-            let continuous_end = sample_batch.xs_continuous_offsets[sample_idx + 1];
-            points.push(Point::new(
-                sample_batch.xs_continuous_row_major[continuous_start..continuous_end].to_vec(),
-                sample_batch.xs_discrete_row_major[discrete_start..discrete_end].to_vec(),
-                sample_batch.weights[sample_idx],
-            ));
-        }
-        let batch = Batch::new(points).engine_err()?;
-        Ok(LatentBatchSpec::from_batch(&batch))
-    }
-
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        self.worker_mut()?.ingest_training_values(training_values)
+    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+        self.worker.feedback(training_values)
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
-        self.worker_mut()?.pdf_batch(points)
+        self.worker.pdf_batch(points)
     }
 
     fn discrete_pdf_batch(
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
-        self.worker_mut()?.discrete_pdf_batch(subspaces)
+        self.worker.discrete_pdf_batch(subspaces)
     }
 
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
-        let sampler_state = self.worker_mut()?.snapshot()?;
+        let sampler_state = self.worker.snapshot()?;
         let raw = serde_json::to_value(ProcessSamplerSnapshot {
             params: self.params.clone(),
             sampler_state,
@@ -165,26 +134,10 @@ impl SamplerAggregator for ProcessSampler {
     }
 
     fn get_diagnostics(&mut self) -> Value {
-        self.worker_mut()
-            .and_then(|mut worker| worker.get_diagnostics())
+        self.worker
+            .get_diagnostics()
             .unwrap_or_else(|_| serde_json::json!({}))
     }
-}
-
-impl ProcessSampler {
-    fn worker_mut(&self) -> Result<std::sync::MutexGuard<'_, ProcessSamplerWorker>, EngineError> {
-        self.worker
-            .lock()
-            .map_err(|_| EngineError::engine("process sampler worker mutex poisoned"))
-    }
-}
-
-struct ProcessSampleBatch {
-    xs_discrete_row_major: Vec<i64>,
-    xs_discrete_offsets: Vec<usize>,
-    xs_continuous_row_major: Vec<f64>,
-    xs_continuous_offsets: Vec<usize>,
-    weights: Vec<f64>,
 }
 
 struct ProcessSamplerWorker {
@@ -234,50 +187,42 @@ impl ProcessSamplerWorker {
         Self::expect_ack(response).map_err(BuildError::build)
     }
 
-    fn training_samples_remaining(&mut self) -> Result<Option<usize>, EngineError> {
-        let response = self
-            .process
-            .request("training_samples_remaining", serde_json::json!({}))
-            .map_err(EngineError::engine)?;
-        let remaining = match response.get("remaining") {
-            Some(Value::Null) | None => None,
-            Some(value) => Some(value.as_u64().ok_or_else(|| {
-                EngineError::engine(
-                    "process sampler response field 'remaining' must be u64 or null",
-                )
-            })? as usize),
-        };
-        Ok(remaining)
-    }
-
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        let response = self
-            .process
-            .request("sample_plan", serde_json::json!({}))
-            .map_err(EngineError::engine)?;
-        let plan_value = response
-            .get("plan")
-            .cloned()
-            .ok_or_else(|| EngineError::engine("process sampler response missing 'plan'"))?;
-        serde_json::from_value(plan_value).map_err(|err| {
-            EngineError::engine(format!("invalid process sample_plan payload: {err}"))
-        })
-    }
-
-    fn produce_latent_batch(
+    fn generate(
         &mut self,
-        nr_samples: usize,
-    ) -> Result<ProcessSampleBatch, EngineError> {
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
         let (response, binary) = self
             .process
             .request_with_binary(
-                "produce_latent_batch",
-                serde_json::json!({
-                    "nr_samples": nr_samples,
-                }),
+                "generate",
+                serde_json::json!({"remaining_sample_budget": remaining_sample_budget}),
                 &[],
             )
             .map_err(EngineError::engine)?;
+        match response.get("kind").and_then(Value::as_str) {
+            Some("waiting") if binary.is_empty() => return Ok(Generation::Waiting),
+            Some("finished") if binary.is_empty() => return Ok(Generation::Finished),
+            Some("batch") => {}
+            _ => return Err(EngineError::engine("invalid process generation result")),
+        }
+        let nr_samples = response
+            .get("nr_samples")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n > 0 && remaining_sample_budget.is_none_or(|budget| *n <= budget))
+            .ok_or_else(|| {
+                EngineError::engine("process draw exceeds budget or has invalid sample count")
+            })?;
+        let training_remaining = match response.get("training_remaining") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n >= nr_samples)
+                    .ok_or_else(|| EngineError::engine("invalid process training window"))?,
+            ),
+        };
         // Binary block layout: i64 discrete, f64 continuous, f64 weights. Offsets
         // (and thus the array lengths) come from the JSON envelope.
         let discrete_dims = self.domain.fixed_discrete_depth().unwrap_or(0);
@@ -319,22 +264,35 @@ impl ProcessSamplerWorker {
                 )));
             }
         }
-        Ok(ProcessSampleBatch {
-            xs_discrete_row_major,
-            xs_discrete_offsets,
-            xs_continuous_row_major,
-            xs_continuous_offsets,
-            weights,
-        })
+        let mut builder = IndexedBatchBuilder::new(nr_samples);
+        for index in 0..nr_samples {
+            builder.push(
+                &xs_discrete_row_major[xs_discrete_offsets[index]..xs_discrete_offsets[index + 1]],
+                &xs_continuous_row_major
+                    [xs_continuous_offsets[index]..xs_continuous_offsets[index + 1]],
+                weights[index],
+            );
+        }
+        if _next != binary.len() {
+            return Err(EngineError::engine("trailing process sample bytes"));
+        }
+        Ok(Generation::batch(
+            LatentBatchSpec {
+                nr_samples,
+                accumulator: crate::core::AccumulatorConfig::scalar(),
+                payload: builder.finish(),
+            },
+            training_remaining,
+        ))
     }
 
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         let mut binary = Vec::with_capacity(training_values.len() * 8);
         extend_le_f64(&mut binary, training_values);
         let (response, _binary) = self
             .process
             .request_with_binary(
-                "ingest_training_values",
+                "feedback",
                 serde_json::json!({ "nr_values": training_values.len() }),
                 &binary,
             )

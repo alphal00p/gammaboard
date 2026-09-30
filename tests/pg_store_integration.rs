@@ -13,6 +13,60 @@ static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn copy_inputs_round_trip_mixed_payloads_and_row_lengths() {
+    use gammaboard::core::AccumulatorConfig;
+    use gammaboard::utils::rng::SerializableMonteCarloRng;
+    use gammaboard::{LatentBatch, LatentBatchPayload};
+
+    let (_test_guard, store) = locked_test_store().await;
+    let (run, task, _, _) = reliability_fixture(&store, 0).await;
+    let batches = [
+        LatentBatchSpec::from_batch(
+            &Batch::from_points([
+                Point::new(vec![0.25], vec![], 2.0),
+                Point::new(vec![0.5, 0.75, 0.125], vec![7, 2], 3.0),
+            ])
+            .unwrap(),
+        )
+        .build(),
+        LatentBatch {
+            nr_samples: 777,
+            accumulator: AccumulatorConfig::scalar(),
+            payload: LatentBatchPayload::HavanaInference {
+                rng_state: SerializableMonteCarloRng::new(42, 0),
+            },
+        },
+        LatentBatchSpec::from_batch(
+            &Batch::from_points(
+                (0..1024).map(|i| Point::new(vec![i as f64 / 1024.0; 6], vec![], 1.0)),
+            )
+            .unwrap(),
+        )
+        .build(),
+    ];
+    let ids = next_batch_ids(batches.len());
+    let outcome = store
+        .insert_batches(run, task, false, &ids, &batches)
+        .await
+        .unwrap();
+    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT batch_id, latent_batch FROM batch_inputs WHERE batch_id = ANY($1) ORDER BY batch_id"
+    ).bind(&ids).fetch_all(store.pool()).await.unwrap();
+    assert_eq!(rows.len(), batches.len());
+    assert_eq!(
+        outcome.metrics.payload_bytes,
+        rows.iter().map(|(_, bytes)| bytes.len()).sum::<usize>()
+    );
+    for ((id, bytes), (expected_id, batch)) in rows.iter().zip(ids.iter().zip(&batches)) {
+        assert_eq!(id, expected_id);
+        assert_eq!(*bytes, batch.to_bytes().unwrap());
+        assert_eq!(LatentBatch::from_bytes(bytes).unwrap(), *batch);
+    }
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn input_transaction_does_not_block_other_batches_and_counters_commit_atomically() {
     let (_test_guard, store) = locked_test_store().await;
     let run: i32 = sqlx::query_scalar(
@@ -222,6 +276,10 @@ async fn active_task_accumulates_declared_cpu_time() {
         .set_current_assignment(&node_uuid, WorkerRole::Evaluator, run_id)
         .await
         .expect("assign node");
+    store
+        .announce_node(&node_name, &node_uuid, &capabilities)
+        .await
+        .unwrap();
     // A progress writer may hold the task row while pause/activity updates
     // proceed. Those node updates must not acquire the CPU-accounting lock.
     let mut task_writer = store.pool().begin().await.expect("task writer");
@@ -236,6 +294,8 @@ async fn active_task_accumulates_declared_cpu_time() {
             .execute(store.pool())
             .await
             .expect("activity and pause do not write task CPU time");
+        store.announce_node(&node_name, &node_uuid, &capabilities).await
+            .expect("renewal updates its own accounting row while task progress is locked");
     })
     .await
     .expect("node metadata must not wait for the task lock");
@@ -245,6 +305,13 @@ async fn active_task_accumulates_declared_cpu_time() {
         .announce_node(&node_name, &node_uuid, &capabilities)
         .await
         .expect("account heartbeat");
+    let before_completion = store
+        .load_run_task(task.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .cpu_seconds;
+    sleep(Duration::from_millis(30)).await;
     store
         .complete_run_task(task.id)
         .await
@@ -261,6 +328,10 @@ async fn active_task_accumulates_declared_cpu_time() {
         completed.cpu_seconds
     );
     let accounted = completed.cpu_seconds;
+    assert!(
+        accounted >= before_completion + 0.04,
+        "completion must flush the final accounting interval"
+    );
     sleep(Duration::from_millis(20)).await;
     store
         .announce_node(&node_name, &node_uuid, &capabilities)
@@ -2000,6 +2071,225 @@ fn empty_batch_result() -> gammaboard::evaluation::BatchResult {
         None,
         gammaboard::evaluation::AccumulatorState::Empty(Default::default()),
     )
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn telemetry_does_not_lock_progress_and_still_cascades() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, task, node, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("INSERT INTO run_telemetry_workers (run_id,worker_id) VALUES ($1,$2)")
+        .bind(run)
+        .bind(&node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let mut writer = store.pool().begin().await.unwrap();
+    sqlx::query("SELECT id FROM runs WHERE id=$1 FOR UPDATE")
+        .bind(run)
+        .fetch_one(&mut *writer)
+        .await
+        .unwrap();
+    let tables = [
+        "evaluator_performance_history",
+        "evaluator_performance_latest",
+        "sampler_aggregator_performance_history",
+        "sampler_aggregator_performance_latest",
+    ];
+    tokio::time::timeout(Duration::from_secs(2), async {
+        for table in tables {
+            sqlx::query(&format!(
+                "WITH owner AS (INSERT INTO run_telemetry_workers VALUES ($1,$2) ON CONFLICT DO NOTHING)
+                 INSERT INTO {table} (id,run_id,worker_id) VALUES (0,$1,$2)"
+            ))
+            .bind(run)
+            .bind(&node)
+            .execute(store.pool())
+            .await
+            .unwrap();
+        }
+    })
+    .await
+    .expect("telemetry must not lock the mutable run row");
+    writer.rollback().await.unwrap();
+    store.expire_node_lease(&node).await.unwrap();
+    store.remove_run(run).await.unwrap();
+    for table in tables
+        .into_iter()
+        .chain(["run_telemetry_workers", "task_worker_cpu_time"])
+    {
+        let (column, id) = if table == "task_worker_cpu_time" {
+            ("task_id", task)
+        } else {
+            ("run_id", i64::from(run))
+        };
+        let remaining: i64 =
+            sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE {column}=$1"))
+                .bind(id)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(remaining, 0, "run deletion must cascade through {table}");
+    }
+    assert!(
+        sqlx::query("INSERT INTO evaluator_performance_history (run_id,worker_id) VALUES ($1,$2)")
+            .bind(run)
+            .bind(&node)
+            .execute(store.pool())
+            .await
+            .is_err(),
+        "missing runs must still be rejected"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn idle_evaluator_publishes_current_task_without_receiving_work() {
+    use gammaboard::core::EvaluatorConfig;
+    use gammaboard::runners::{EvaluatorRunner, EvaluatorRunnerParams};
+    let (_guard, store) = locked_test_store().await;
+    let (run, task, node, _) = reliability_fixture(&store, 0).await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut runner = EvaluatorRunner::new(
+        store.clone(),
+        run,
+        &node,
+        &node,
+        EvaluatorConfig::Unit {
+            params: Default::default(),
+        },
+        Box::new(CountingEvaluator(calls.clone())),
+        gammaboard::Domain::rectangular(1, 0),
+        EvaluatorRunnerParams {
+            db_pool_size: 2,
+            min_tick_time_ms: 10,
+            performance_snapshot_interval_ms: 0,
+        },
+        3,
+    );
+    runner.tick().await.unwrap();
+    let first = gammaboard::api::performance::snapshot(&store, run)
+        .await
+        .unwrap();
+    let metrics = &first.evaluators[0]["metrics"];
+    assert_eq!(metrics["task_id"], task.to_string());
+    assert_eq!(metrics["samples_evaluated"], 0);
+    assert_eq!(metrics["busy"]["compute_seconds"], 0.0);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    store.complete_run_task(task).await.unwrap();
+    let config = store.load_run_task(task).await.unwrap().unwrap().task;
+    let next = store
+        .append_run_tasks(
+            run,
+            &[RunTaskInput {
+                name: Some("next".into()),
+                task: config,
+            }],
+        )
+        .await
+        .unwrap()[0]
+        .id;
+    store.activate_next_run_task(run).await.unwrap();
+    runner.tick().await.unwrap();
+    let second = gammaboard::api::performance::snapshot(&store, run)
+        .await
+        .unwrap();
+    assert_eq!(second.evaluators[0]["metrics"]["task_id"], next.to_string());
+    assert_eq!(second.evaluators[0]["metrics"]["epoch"], metrics["epoch"]);
+    // Exercise the idle backoff, then ensure a newly populated queue is served.
+    for _ in 0..20 {
+        runner.tick().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let batch = Batch::from_points([Point::new(vec![0.5], Vec::new(), 1.0)]).unwrap();
+    let ids = next_batch_ids(8);
+    store
+        .insert_batches(
+            run,
+            next,
+            false,
+            &ids,
+            &vec![LatentBatchSpec::from_batch(&batch).build(); 8],
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            runner.tick().await.unwrap();
+            let completed: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM batches WHERE run_id=$1 AND status='completed'",
+            )
+            .bind(run)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+            if completed == 8 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("idle backoff must not strand newly queued batches");
+    runner.stop().await.unwrap();
+    store.expire_node_lease(&node).await.unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn shutdown_deadline_includes_the_initial_database_update() {
+    let (_guard, store) = locked_test_store().await;
+    let node = unique_id("shutdown-lock");
+    store
+        .announce_node(&node, &node, &Default::default())
+        .await
+        .unwrap();
+    let mut writer = store.pool().begin().await.unwrap();
+    sqlx::query("SELECT name FROM nodes WHERE name=$1 FOR UPDATE")
+        .bind(&node)
+        .fetch_one(&mut *writer)
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        gammaboard::api::nodes::suspend_nodes_gracefully(
+            &store,
+            gammaboard::api::nodes::GracefulNodeShutdownParams {
+                sampler_drain_timeout_seconds: 1,
+                node_stop_timeout_seconds: 0,
+                poll_interval_ms: 10,
+            },
+        ),
+    )
+    .await
+    .expect("outer shutdown deadline must bound blocked SQL");
+    assert!(result.unwrap_err().to_string().contains("exceeded 1s"));
+    writer.rollback().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn leader_lookup_tracks_lease_expiry_and_worker_replacement() {
+    let (_guard, store) = locked_test_store().await;
+    store
+        .announce_node("a", "a1", &Default::default())
+        .await
+        .unwrap();
+    store
+        .announce_node("b", "b1", &Default::default())
+        .await
+        .unwrap();
+    assert!(store.is_task_control_leader("a", "a1").await.unwrap());
+    assert!(!store.is_task_control_leader("b", "b1").await.unwrap());
+    store.expire_node_lease("a1").await.unwrap();
+    assert!(store.is_task_control_leader("b", "b1").await.unwrap());
+    store
+        .announce_node("a", "a2", &Default::default())
+        .await
+        .unwrap();
+    assert!(!store.is_task_control_leader("a", "a1").await.unwrap());
+    assert!(store.is_task_control_leader("a", "a2").await.unwrap());
 }
 
 #[tokio::test]

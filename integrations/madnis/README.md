@@ -19,7 +19,7 @@ cd integrations/madnis   # from the gammaboard repo root
 
 uv venv --python 3.13 --seed .venv
 . .venv/bin/activate
-python -m pip install .
+python -m pip install ../../process_api/python .
 ```
 
 Use this GammaBoard process command:
@@ -81,3 +81,22 @@ The process entrypoint is:
 ```bash
 python -u -m run_sampler
 ```
+
+## Training feedback
+
+GammaBoard delivers weighted feedback (`f/q`) in chunks that can differ from the
+generation batches. The adapter waits for every sample in a minibatch, removes
+the proposal weight before passing targets to MADNIS, and keeps the final training
+barrier closed until the optimizer step completes. `training_updates` counts
+completed steps; `total_trained_samples` is the existing generated-training-sample
+counter. Feedback from subsequent inference samples is not buffered.
+
+Run the adapter regressions from the repository root in the MADNIS environment:
+
+```sh
+PYTHONPATH=integrations/madnis/src:process_api/python/src \
+  python -m unittest discover -s integrations/madnis/tests
+```
+
+The sampler and the installed SDK must both come from this checkout (protocol v3).
+The Nix package also builds the SDK from this repository, so no separate SDK pin can drift.

@@ -1,0 +1,19 @@
+# Default: sparse curves at selected batch/queue settings, each in a fresh run.
+# Adaptive tuning is opt-in with --search; --points accepts targeted follow-ups.
+# eval_us is simulated delay per sample; zero disables sleep. No CPU arithmetic.
+# Nonzero delays have seeded, 10% Gaussian batch-duration jitter.
+modes = ["rng", "materialized", "training"]
+eval_us = [0.0, 5.0, 200.0, 5000.0]
+workers = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+budget_seconds = 3600
+max_batch_size = 4194304
+# Large-host allowance for the selected 524,288-sample RNG batches at 512 workers.
+# This counts samples, not bytes. The measured fleet can use roughly 70 GiB RSS.
+sample_memory_budget = 2147483648
+infrastructure_cores = 16
+duration_seconds = 3
+confirmation_seconds = 12
+max_batch_seconds = 30.0
+min_tick_time_ms = 10
+telemetry_interval_ms = 250
+insert_concurrency = 2

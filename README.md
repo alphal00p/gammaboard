@@ -157,26 +157,20 @@ The hot path is:
 sampler aggregator -> latent batch queue -> materializer -> batch transforms -> evaluator -> accumulator snapshot/training feedback
 ```
 
-Queue defaults target 2 seconds of evaluation per batch and one pending
-batch per active evaluator, counting queued and unpersisted work together.
-Workers use a 10 ms minimum polling interval; longer evaluation calls need no
-additional sleep. Task-level `queue_tuning` overrides apply live through the
-dashboard. A single `queue_buffer` sets the pending target; the separate refill
-low/high ratios and local buffer multiplier have been removed. Batch
-sizing uses a 15% deadband and waits for three completed evaluation batches
-between changes (`batch_size_cooldown_ticks` counts these observations, not
-worker polling ticks). The maximum batch size and queue/I/O limits remain independent
-safety bounds; increasing the pending buffer cannot make an adaptive sampler
-produce past its training boundary.
+Samplers choose their generation draw size. The runtime partitions each draw into
+adaptive evaluator batches, targeting 2 seconds per batch by default. Training
+windows belong to the sampler and can span multiple draws. Ordered feedback is
+returned once per complete draw; see [the sampler contract](docs/sampling.md).
 
+The queue draws again below one pending batch per active evaluator, counting
+local and in-flight inserts. This is a soft refill threshold: dispatching an
+existing draw may exceed it. The dashboard exposes the target evaluation duration
+and maximum evaluator batch size, with a fixed-size override under Advanced.
+The 15% deadband and three-completion cooldown are internal defaults.
 Finite training windows aim for at least four chunks per evaluator, subject to
-minimum batch size and queue limits. Fresh batches give evaluators without work
-priority over speculative prefetch for up to 250 ms; older work remains claimable
-if a peer is unresponsive. Evaluation-time smoothing uses an EWMA weight of 0.2
-per 1,000 samples for both queue sizing and evaluator timing statistics, retaining
-history across normal-sized batches. These defaults
-are starting points: adapters with substantial per-batch setup can benefit from
-longer batches, while finite training windows need enough chunks for parallelism.
+the minimum batch size. Evaluators use single-slot input prefetch and output
+submission. Workers poll at a 10 ms minimum interval; evaluation-time smoothing
+uses an EWMA weight of 0.2 per 1,000 samples.
 
 Sampler timing panels report observations from each performance snapshot
 interval. They do not maintain a second checkpointed smoothing history. Queue
@@ -370,11 +364,14 @@ credentials and shared resource paths available as for an ordinary launch.
 
 Use `gammaboard --json run performance RUN --duration 30s` to measure an active
 run, and `gammaboard benchmark evaluator` for a direct execution baseline. The
-CLI-only Python suite compares fixed CPU workloads across evaluator counts within
-a small CPU affinity set and an explicit time budget. Start with
-`just benchmark plan resources/templates/benchmarks/smoke.toml`, then run it with
-a prebuilt binary. See [docs/benchmarking.md](docs/benchmarking.md)
-for commands, presets, raw results, plots, and measurement semantics.
+default sparse frontier measures RNG, materialized and training data paths
+through 512 evaluators using zero delay and three simulated costs. Start with
+`just benchmark plan resources/templates/benchmarks/frontier.toml`, then run
+`just benchmark frontier --binary target/dev-optim/gammaboard --output results/frontier`.
+`just benchmark process` measures Rust/Python adapter overhead separately.
+See [benchmarking](docs/benchmarking.md) for prerequisites, focused CPU/I/O suites
+and measurement rules, and [performance findings](docs/performance-development.md)
+for current results and plots.
 
 ### Synthetic workloads
 
@@ -386,7 +383,6 @@ selects inference. Synthetic worker panels show requested/actual delay and updat
 counts. These engines are available in ordinary builds.
 
 Timing models are useful for lifecycle and training-barrier regression tests.
-Throughput experiments use the single `just benchmark` runner with fixed CPU
-work, so increasing evaluator count does not change the work per sample.
-The focused `tuning.toml` preset compares batch sizes under the normal polling
-policy; the larger `scaling.toml` preset measures pipeline overhead across costs.
+The default frontier uses batch sleeps to isolate coordination and transport.
+The optional `tuning.toml` and `scaling.toml` CPU presets instead keep calibrated
+arithmetic work fixed across evaluator counts for direct-baseline comparisons.

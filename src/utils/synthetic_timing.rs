@@ -58,13 +58,18 @@ impl TimingModel {
     /// A single correlated per-sample error and independent overhead error per operation.
     pub fn duration(&self, samples: usize, work_key: u64) -> Result<(Duration, bool), EngineError> {
         self.validate()?;
-        let mut rng = Xoshiro256StarStar::seed_from_u64(self.seed ^ work_key);
-        let radius = (-2.0 * (1.0 - rng.random::<f64>()).ln()).sqrt();
-        let angle = std::f64::consts::TAU * rng.random::<f64>();
-        let seconds = samples as f64
-            * (self.per_sample_seconds + self.sigma_per_sample_seconds * radius * angle.cos())
-            + self.overhead_seconds
-            + self.sigma_overhead_seconds * radius * angle.sin();
+        let seconds = if self.sigma_per_sample_seconds == 0.0 && self.sigma_overhead_seconds == 0.0
+        {
+            samples as f64 * self.per_sample_seconds + self.overhead_seconds
+        } else {
+            let mut rng = Xoshiro256StarStar::seed_from_u64(self.seed ^ work_key);
+            let radius = (-2.0 * (1.0 - rng.random::<f64>()).ln()).sqrt();
+            let angle = std::f64::consts::TAU * rng.random::<f64>();
+            samples as f64
+                * (self.per_sample_seconds + self.sigma_per_sample_seconds * radius * angle.cos())
+                + self.overhead_seconds
+                + self.sigma_overhead_seconds * radius * angle.sin()
+        };
         if !seconds.is_finite() {
             return Err(EngineError::invalid_input(
                 "synthetic batch duration overflow",

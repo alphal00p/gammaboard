@@ -176,13 +176,9 @@ fn panel_states(
             vec![
                 key_value("failed", "Failed Batches", run.failed_batches),
                 key_value(
-                    "queue_buffer",
-                    "Target Pending Batches / Evaluator",
-                    run_spec
-                        .integration_params
-                        .sampler_aggregator_runner_params
-                        .queue
-                        .queue_buffer,
+                    "refill_threshold",
+                    "Pending Batches / Evaluator (Refill Threshold)",
+                    1,
                 ),
                 key_value(
                     "active_evaluator_count",

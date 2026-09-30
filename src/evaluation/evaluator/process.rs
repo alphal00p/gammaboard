@@ -364,71 +364,9 @@ fn default_components() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ProcessAccumulatorKind, ProcessEvaluatorParams, ProcessRuntimeWorker, RaggedRowMajorInputs,
-    };
+    use super::{ProcessEvaluatorParams, ProcessRuntimeWorker, RaggedRowMajorInputs};
     use crate::utils::domain::Domain;
     use serde_json::json;
-    use std::error::Error;
-    use std::time::Instant;
-
-    const ECHO_EVALUATOR_WORKER: &str = r#"
-import json, sys
-
-def read_frame():
-    content_length = None
-    binary_length = 0
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line:
-            return None
-        line = line.decode("ascii", errors="replace").strip()
-        if not line:
-            if content_length is not None:
-                break
-            continue
-        name, sep, value = line.partition(":")
-        if not sep:
-            continue
-        key = name.strip().lower()
-        if key == "content-length":
-            content_length = int(value.strip())
-        elif key == "binary-length":
-            binary_length = int(value.strip())
-    body = sys.stdin.buffer.read(content_length)
-    binary = sys.stdin.buffer.read(binary_length) if binary_length else b""
-    return json.loads(body), binary
-
-def send_result(req_id, result, binary=b""):
-    body = json.dumps(
-        {"jsonrpc": "2.0", "id": req_id, "result": result},
-        separators=(",", ":"),
-    ).encode("utf-8")
-    header = "Content-Length: %d\r\n" % len(body)
-    if binary:
-        header += "Binary-Length: %d\r\n" % len(binary)
-    header += "\r\n"
-    sys.stdout.buffer.write(header.encode("ascii"))
-    sys.stdout.buffer.write(body)
-    if binary:
-        sys.stdout.buffer.write(binary)
-    sys.stdout.buffer.flush()
-
-while True:
-    frame = read_frame()
-    if frame is None:
-        break
-    req, _binary = frame
-    method = req.get("method")
-    params = req.get("params") or {}
-    if method == "eval_batch":
-        nr_samples = int(params["nr_samples"])
-        components = params.get("components") or ["value"]
-        # values_row_major as little-endian f64 zeros in the binary block.
-        send_result(req.get("id"), {}, bytes(8 * nr_samples * len(components)))
-    else:
-        send_result(req.get("id"), {"ok": True})
-"#;
 
     #[test]
     fn eval_input_pack_and_value_unpack_roundtrip() {
@@ -546,65 +484,5 @@ domain = { discrete = { axis_label = "d0", branches = [
         }))
         .expect("initialize ack should parse");
         assert_eq!(parsed, metadata);
-    }
-
-    #[test]
-    #[ignore = "manual protocol overhead benchmark; run with --ignored --nocapture"]
-    fn process_evaluator_eval_batch_protocol_benchmark() -> Result<(), Box<dyn Error>> {
-        let python = std::env::var("GAMMABOARD_PROTOCOL_BENCH_PYTHON")
-            .unwrap_or_else(|_| "python3".to_string());
-        let command = vec![
-            python,
-            "-u".to_string(),
-            "-c".to_string(),
-            ECHO_EVALUATOR_WORKER.to_string(),
-        ];
-        let params = ProcessEvaluatorParams {
-            shutdown_grace_seconds: 30,
-            command,
-            cwd: None,
-            domain: crate::utils::domain::Domain::continuous(2),
-            components: vec!["value".to_string()],
-            accumulator: ProcessAccumulatorKind::Vector,
-            args: json!({}),
-        };
-        let components = params.components.clone();
-        let continuous_dims = 2;
-        let domain = params.domain.clone();
-        let mut worker = ProcessRuntimeWorker::spawn(&params, domain)?;
-
-        let cases = [(1_usize, 2_000_usize), (1_024, 500), (65_536, 20)];
-        for (nr_samples, repetitions) in cases {
-            let xs_discrete_row_major = Vec::new();
-            let xs_continuous_row_major = vec![0.5; nr_samples * continuous_dims];
-            let inputs = RaggedRowMajorInputs {
-                xs_discrete_row_major,
-                xs_discrete_offsets: vec![0; nr_samples + 1],
-                xs_continuous_row_major,
-                xs_continuous_offsets: (0..=nr_samples)
-                    .map(|index| index * continuous_dims)
-                    .collect(),
-            };
-            for _ in 0..5 {
-                let values = worker.eval_batch(&inputs, nr_samples)?;
-                assert_eq!(values.len(), nr_samples * components.len());
-            }
-
-            let started = Instant::now();
-            for _ in 0..repetitions {
-                let values = worker.eval_batch(&inputs, nr_samples)?;
-                assert_eq!(values.len(), nr_samples * components.len());
-            }
-            let elapsed = started.elapsed();
-            let total_samples = repetitions * nr_samples;
-            let total_ms = elapsed.as_secs_f64() * 1_000.0;
-            let mean_ms = total_ms / repetitions as f64;
-            let us_per_sample = elapsed.as_secs_f64() * 1_000_000.0 / total_samples as f64;
-            eprintln!(
-                "process eval_batch protocol benchmark: samples_per_batch={nr_samples} reps={repetitions} total_ms={total_ms:.3} mean_batch_ms={mean_ms:.6} us_per_sample={us_per_sample:.6}",
-            );
-        }
-
-        Ok(())
     }
 }

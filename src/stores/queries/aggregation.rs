@@ -240,13 +240,14 @@ pub(crate) async fn get_task_activation_stage_snapshot(
 pub(crate) async fn get_run_sample_progress(
     pool: &PgPool,
     run_id: i32,
-) -> Result<Option<(i64, i64, f64)>, sqlx::Error> {
-    sqlx::query_as::<_, (i64, i64, f64)>(
+) -> Result<Option<(i64, i64, f64, Option<i64>)>, sqlx::Error> {
+    sqlx::query_as::<_, (i64, i64, f64, Option<i64>)>(
         r#"
         SELECT
             nr_produced_samples,
             nr_completed_samples,
-            sampler_runner_uptime_ms
+            sampler_runner_uptime_ms,
+            (SELECT id FROM run_tasks WHERE run_id=runs.id AND state='active')
         FROM runs
         WHERE id = $1
         "#,

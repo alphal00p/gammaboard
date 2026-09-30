@@ -7,9 +7,9 @@ Start with [quickstart.md](quickstart.md), then use the topic pages as needed:
 
 - [requirements.md](requirements.md): supported environment and reproducibility metadata.
 - [examples.md](examples.md): shared examples, dependencies, and expected workload sizes.
-- [benchmarking.md](benchmarking.md): bounded development measurements and comparisons.
-- [benchmark-frontier-plan.md](benchmark-frontier-plan.md): proposed adaptive capability suite; implementation deferred.
-- [performance-development.md](performance-development.md): simplifications and optimization experiments.
+- [benchmarking.md](benchmarking.md): sparse frontier, process overhead, targeted comparisons and measurement rules.
+- [performance-development.md](performance-development.md): current results, portable plots and optimization evidence.
+- [sampling.md](sampling.md): generation sizing, evaluator splitting, training barriers and checkpoint ownership.
 - [config.md](config.md): runtime, server, deploy, run, task, and node config.
 - [deployment.md](deployment.md): shared deploy model, profiles, paths, images, and ports.
 - [operations.md](operations.md): auth, node/run lifecycle, logs, and recovery.

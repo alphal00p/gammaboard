@@ -21,7 +21,7 @@ is single-threaded.
 During a training minibatch, the sampler produces the allowed number of samples
 and evaluators process them in parallel. Once that training window is exhausted,
 generation pauses until the needed results return. Training updates and new
-draws use the same mutable sampler and cannot run concurrently. With bulk
+draws use the same mutable sampler and cannot run concurrently. With sampler-owned
 generation, one draw is split into evaluator batches and its returned training
 values are collected before the corresponding ingestion. Heartbeats and
 independent database I/O can continue during this work.
@@ -82,6 +82,18 @@ Both role DB pools default to two connections, matching the existing two-
 connection worker cap. A requested size of one is supported. Legacy values
 outside 1–2 are clamped with a warning; the config panel shows the effective size.
 Control-plane connections remain separate so leases can progress during role I/O.
+
+Assignment/shutdown polling runs at most every 250 ms during active work,
+independently of batch ticks. Empty evaluator fetches back off exponentially
+with jitter, capped at 100 ms; a successful claim immediately resets that delay.
+Waiting between polls contributes no I/O busy time. This bounds idle-fleet query
+pressure without adding threads or slowing a worker with buffered work.
+
+Heartbeat accounting writes one row per worker incarnation and task. Telemetry
+references an immutable owner per worker/run, so neither operation continually
+locks a shared task/progress row. Idle evaluators publish telemetry even before
+their first batch. Database statements have a 30 s limit and lock waits a 5 s
+limit; graceful shutdown's overall deadline also includes its initial requests.
 
 One bounded insert pump handles both enqueue and refill. Completed inserts are
 collected before refill, avoiding recursive scheduling from each result handler.

@@ -1069,12 +1069,11 @@ frontend_sync_interval_ms = 2000
 db_pool_size = 2
 
 [sampler_aggregator_runner_params.queue]
-queue_buffer = 1.0
+
 target_batch_eval_ms = 500.0
-batch_size_deadband_ratio = 0.15
-batch_size_cooldown_ticks = 3
+
 max_batch_size = 100000
-max_queue_size = 200
+
 max_batches_per_tick = 100
 max_insert_bundle_size = 5
 max_concurrent_insert_tasks = 8
@@ -1355,6 +1354,7 @@ async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow:
     let mut harness = FullStackHarness::new().await?;
     let training_samples = 256usize;
     let havana_params = HavanaSamplerParams {
+        generation_batch_size: 1_048_576,
         seed: 0,
         bins: 8,
         samples_for_update: 8,
@@ -3391,10 +3391,10 @@ min_tick_time_ms = 10
 frontend_sync_interval_ms = 100
 
 [sampler_aggregator_runner_params.queue]
-queue_buffer = 1.0
+
 target_batch_eval_ms = 50.0
 max_batch_size = 32
-max_queue_size = 64
+
 max_batches_per_tick = 8
 max_insert_bundle_size = 8
 max_concurrent_insert_tasks = 2
@@ -3492,8 +3492,8 @@ completed_batch_fetch_limit = 64
                         return Ok(false);
                     };
                     Ok(
-                        diag["runner"]["bulk_sample_generation"].as_bool() == Some(false)
-                            && diag["runner"]["queue_buffer"].as_f64() == Some(1.0),
+                        diag["runner"]["queue_config"]["target_batch_eval_ms"].as_f64()
+                            == Some(50.0),
                     )
                 }
             },
@@ -3505,10 +3505,10 @@ completed_batch_fetch_limit = 64
         &format!("/api/runs/{run_id}/tasks/{task_id}/queue-tuning"),
         json!({
             "queue_tuning": {
-                "bulk_sample_generation": true,
-                "queue_buffer": 0.0,
-                "max_batches_per_tick": 1,
-                "completed_batch_fetch_limit": 7
+
+                "target_batch_eval_ms": 500.0,
+                "fixed_batch_size": 24,
+                "max_batch_size": 256
             }
         }),
         Some(&cookie),
@@ -3531,11 +3531,8 @@ completed_batch_fetch_limit = 64
                     .fetch_one(&pool)
                     .await?;
                     Ok(
-                        task["queue_tuning"]["bulk_sample_generation"].as_bool() == Some(true)
-                            && task["queue_tuning"]["queue_buffer"].as_f64() == Some(0.0)
-                            && task["queue_tuning"]["max_batches_per_tick"].as_u64() == Some(1)
-                            && task["queue_tuning"]["completed_batch_fetch_limit"].as_u64()
-                                == Some(7),
+                        task["queue_tuning"]["fixed_batch_size"].as_u64() == Some(24)
+                            && task["queue_tuning"]["target_batch_eval_ms"].as_f64() == Some(500.0),
                     )
                 }
             },
@@ -3563,9 +3560,10 @@ completed_batch_fetch_limit = 64
                         return Ok(false);
                     };
                     Ok(
-                        diag["runner"]["bulk_sample_generation"].as_bool() == Some(true)
-                            && diag["runner"]["queue_buffer"].as_f64() == Some(0.0)
-                            && diag["runner"]["target_pending_batches"].as_u64() == Some(0),
+                        diag["runner"]["queue_config"]["target_batch_eval_ms"].as_f64()
+                            == Some(500.0)
+                            && diag["runner"]["queue_config"]["fixed_batch_size"].as_u64()
+                                == Some(24),
                     )
                 }
             },
@@ -4372,10 +4370,10 @@ performance_snapshot_interval_ms = 200
 min_tick_time_ms = 10
 frontend_sync_interval_ms = 1000
 target_batch_eval_ms = 250.0
-queue_buffer = 1.0
+
 max_batch_size = 16
 max_batches_per_tick = 4
-max_queue_size = 32
+
 completed_batch_fetch_limit = 64
 strict_batch_ordering = true
 "#,
@@ -5017,8 +5015,7 @@ frontend_sync_interval_ms = 20
 performance_snapshot_interval_ms = 20
 
 [sampler_aggregator_runner_params.queue]
-queue_buffer = 64.0
-max_queue_size = 64
+
 max_batch_size = 16
 target_batch_eval_ms = 50.0
 
@@ -5048,8 +5045,7 @@ frontend_sync_interval_ms = 20
 performance_snapshot_interval_ms = 20
 
 [sampler_aggregator_runner_params.queue]
-queue_buffer = 64.0
-max_queue_size = 64
+
 max_batch_size = 16
 target_batch_eval_ms = 50.0
 
@@ -6720,9 +6716,9 @@ async fn full_stack_synthetic_training_windows_and_inference() -> anyhow::Result
     for node in ["synthetic-s", "synthetic-e1", "synthetic-e2"] {
         harness.start_node(node).await?;
     }
-    for (training, bulk) in [(true, false), (false, false), (true, true), (false, true)] {
+    for (training, generation_size) in [(true, 32), (false, 32), (true, 512), (false, 512)] {
         let name = format!(
-            "synthetic-{}-{bulk}",
+            "synthetic-{}-{generation_size}",
             if training { "training" } else { "inference" }
         );
         let config = temp_config(&format!(
@@ -6736,7 +6732,7 @@ name = "sample"
 kind = "sample"
 stop_condition = {{ max_samples = 1024 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 42, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 42, generation_batch_size = {generation_size}, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 20
 [sampler_aggregator_runner_params]
@@ -6744,12 +6740,12 @@ performance_snapshot_interval_ms = 20
 frontend_sync_interval_ms = 20
 min_tick_time_ms = 1
 [sampler_aggregator_runner_params.queue]
-bulk_sample_generation = {bulk}
+
 max_batch_size = 128
 fixed_batch_size = 16
-max_queue_size = 3
+
 max_batches_per_tick = 2
-queue_buffer = 1.0
+
 target_batch_eval_ms = 1.0
 "#,
             window = if training { 128 } else { 0 }
@@ -6774,14 +6770,17 @@ target_batch_eval_ms = 1.0
             if training { 8 } else { 0 }
         );
         assert_eq!(diagnostics["pending_training_samples"], 0);
-        if bulk {
-            assert_eq!(diagnostics["generation_timing"]["calls"], 8);
-            if training {
-                assert_eq!(diagnostics["ingest_timing"]["calls"], 8);
-            }
-        } else {
-            assert_eq!(diagnostics["generation_timing"]["calls"], 64);
-        }
+        let expected_draws = 1024
+            / if training {
+                generation_size.min(128)
+            } else {
+                generation_size
+            };
+        assert_eq!(diagnostics["generation_timing"]["calls"], expected_draws);
+        assert_eq!(
+            diagnostics["ingest_timing"]["calls"],
+            if training { expected_draws } else { 0 }
+        );
         harness.wait_for("synthetic evaluator diagnostics flush", Duration::from_secs(10), || async {
             let count: i64 = sqlx::query_scalar("SELECT count(*) FROM evaluator_performance_latest WHERE run_id=$1 AND metrics->'engine_diagnostics'->>'synthetic'='true'")
                 .bind(run_id).fetch_one(&harness.pool).await?;
@@ -6894,8 +6893,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 42, trainin
 frontend_sync_interval_ms = 20
 performance_snapshot_interval_ms = 20
 [sampler_aggregator_runner_params.queue]
-queue_buffer = 64.0
-max_queue_size = 64
+
 max_batch_size = 16
 target_batch_eval_ms = 32.0
 "#,
@@ -8117,13 +8115,13 @@ async fn worker_pool_operations_resolve_children_and_preserve_operator_intent() 
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
-async fn full_stack_bulk_generation_recovers_buffer_and_partial_training_results()
--> anyhow::Result<()> {
+async fn full_stack_generation_recovers_buffer_and_partial_training_results() -> anyhow::Result<()>
+{
     let mut harness = FullStackHarness::new().await?;
-    let name = "bulk-recovery";
+    let name = "generation-recovery";
     let config = temp_config(
         r#"
-name = "bulk-recovery"
+name = "generation-recovery"
 [evaluator]
 kind = "unit"
 timing = { per_sample_seconds = 0.002 }
@@ -8133,35 +8131,41 @@ stop_condition = { max_samples = 4096 }
 accumulator = { config = "scalar" }
 sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 42, training_window_samples = 1024 } }
 [sampler_aggregator_runner_params]
+min_tick_time_ms = 100
 frontend_sync_interval_ms = 20
 performance_snapshot_interval_ms = 20
 [sampler_aggregator_runner_params.queue]
-bulk_sample_generation = true
+
 max_batch_size = 1024
 fixed_batch_size = 16
-queue_buffer = 1.0
-max_queue_size = 3
-max_batches_per_tick = 2
+
+max_batches_per_tick = 1
 completed_batch_fetch_limit = 2
 "#,
     );
     harness.add_run(&config);
     let run_id = harness.run_id(name).await?;
-    harness.start_nodes(&["bulk-s", "bulk-e"]).await?;
-    harness.assign_node("bulk-e", "evaluator", name);
-    harness.assign_node("bulk-s", "sampler_aggregator", name);
     harness
-        .wait_for("partial bulk results", Duration::from_secs(20), || async {
-            let (_, completed) = harness.run_sample_progress(run_id).await?;
-            Ok(completed >= 128)
-        })
+        .start_nodes(&["generation-s", "generation-e"])
+        .await?;
+    harness.assign_node("generation-e", "evaluator", name);
+    harness.assign_node("generation-s", "sampler_aggregator", name);
+    harness
+        .wait_for(
+            "partial generation results",
+            Duration::from_secs(20),
+            || async {
+                let (_, completed) = harness.run_sample_progress(run_id).await?;
+                Ok(completed >= 128)
+            },
+        )
         .await?;
     let saved;
     {
         let mut program = SamplerCheckpointProgram::new(&mut harness, run_id, name);
         program.pause_run().await?;
         program
-            .wait_nodes_down(&["bulk-s", "bulk-e"], Duration::from_secs(15))
+            .wait_nodes_down(&["generation-s", "generation-e"], Duration::from_secs(15))
             .await?;
         program
             .capture_paused_state(Duration::from_secs(15))
@@ -8181,28 +8185,30 @@ completed_batch_fetch_limit = 2
         "checkpoint must retain partial weights"
     );
     let saved_completed = saved["completed_samples"].as_i64().unwrap();
-    harness.assign_node("bulk-e", "evaluator", name);
-    harness.assign_node("bulk-s", "sampler_aggregator", name);
+    harness.assign_node("generation-e", "evaluator", name);
+    harness.assign_node("generation-s", "sampler_aggregator", name);
     harness
         .wait_for(
-            "bulk progress beyond checkpoint",
+            "generation progress beyond checkpoint",
             Duration::from_secs(30),
             || async { Ok(harness.run_sample_progress(run_id).await?.1 >= saved_completed + 512) },
         )
         .await?;
-    harness.kill_child("bulk-s").await?;
+    harness.kill_child("generation-s").await?;
     assert_eq!(
         harness.run_sampler_checkpoint(run_id).await?.unwrap(),
         saved
     );
-    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name='bulk-s'")
-        .execute(&harness.pool)
-        .await?;
-    harness.start_node("bulk-s").await?;
-    harness.assign_node("bulk-s", "sampler_aggregator", name);
+    sqlx::query(
+        "UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name='generation-s'",
+    )
+    .execute(&harness.pool)
+    .await?;
+    harness.start_node("generation-s").await?;
+    harness.assign_node("generation-s", "sampler_aggregator", name);
     harness
         .wait_for(
-            "bulk recovery completes",
+            "generation recovery completes",
             Duration::from_secs(60),
             || async {
                 let complete: bool = sqlx::query_scalar(
@@ -8274,7 +8280,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_inference", source = "latest_
 [sampler_aggregator_runner_params.queue]
 max_batch_size = 64
 fixed_batch_size = 64
-max_queue_size = 4
+
 "#
     ));
     harness.add_run(&config);

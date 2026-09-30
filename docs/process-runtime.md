@@ -4,14 +4,14 @@ GammaBoard can run evaluators, samplers, batch transforms, and materializers as 
 
 ## Contract
 
-The extension protocol is `gammaboard-jsonrpc-v2`.
+The extension protocol is `gammaboard-jsonrpc-v3`.
 
 - Transport: JSON-RPC 2.0 messages framed with `Content-Length` headers, plus an
   optional raw binary block (see "Binary payloads" below).
 - Direction: GammaBoard sends requests on process stdin; the process writes responses on stdout.
 - Logging: stderr is for logs (stdout is reserved for framed responses; GammaBoard tolerates only limited accidental line-oriented stdout before a frame). Worker stderr is recorded as runtime logs with `source = "worker"`. A line of the form `@gblog\t<level>\t<message>` (level ∈ trace,debug,info,warn,error) is emitted at that level; any other stderr line is recorded at `warn`. Both are then filtered by runtime config `tracing.db_gammaboard_level` (default `info`).
 - Concurrency: requests are synchronous. GammaBoard sends one request at a time per process and waits for the matching response id before sending the next.
-- Batching: evaluator `eval_batch`, sampler `produce_latent_batch`, sampler `ingest_training_values`, sampler `pdf`, batch transform `transform_batch`, and materializer `materialize_batch` are batched.
+- Batching: evaluator `eval_batch`, sampler `generate`, sampler `feedback`, sampler `pdf`, batch transform `transform_batch`, and materializer `materialize_batch` are batched.
 - Arguments: run TOML `args = { ... }` is passed unchanged in `initialize`.
 - Stability: adding optional fields is allowed; changing/removing fields or changing method semantics requires a new protocol string.
 
@@ -49,9 +49,9 @@ layout; the receiver splits the block accordingly.
   `xs_continuous_row_major` (lengths from the JSON offsets or fixed domain
   widths). Response: the `f64` `values_row_major` block (length `nr_samples *
   len(components)`).
-- `produce_latent_batch` response: `i64` discrete, `f64` continuous, `f64`
+- `generate` response: `i64` discrete, `f64` continuous, `f64`
   weights (lengths from the JSON offsets or fixed domain widths).
-- `ingest_training_values` request: the `f64` training-values block (`nr_values`
+- `feedback` request: the `f64` training-values block (`nr_values`
   in the JSON envelope).
 
 Other batched methods (`pdf`, `transform_batch`, `materialize_batch`) currently
@@ -85,7 +85,7 @@ GammaBoard requires exactly one of `result` or `error`.
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v2",
+  "protocol": "gammaboard-jsonrpc-v3",
   "role": "evaluator",
   "domain": { "continuous": { "dims": 2 } },
   "components": ["value"],
@@ -135,7 +135,7 @@ Process evaluators should use a `kind = "vector"` accumulator with matching `com
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v2",
+  "protocol": "gammaboard-jsonrpc-v3",
   "role": "sampler",
   "domain": { "continuous": { "dims": 2 } },
   "args": {},
@@ -150,51 +150,28 @@ Return:
 { "ok": true }
 ```
 
-`sample_plan` returns the sampler planning state:
+`generate` receives `{ "remaining_sample_budget": 8192 }` (`null` for no task
+sample limit). The sampler chooses its draw size, at most this budget. It returns:
 
 ```json
-{ "plan": { "kind": "produce", "nr_samples": 8192 } }
+{ "kind": "batch", "nr_samples": 2048, "training_remaining": 10000 }
 ```
 
-Use `{ "plan": { "kind": "pause" } }` when the sampler cannot produce work yet.
+The frame's binary payload contains `i64` discrete coordinates, `f64` continuous
+coordinates, then `f64` positive finite weights. Offset metadata follows the same
+fixed/ragged layout rules as other batched operations. Set `training_remaining`
+to `null` for no feedback, or a positive count at least as large as this draw.
 
-`training_samples_remaining` returns either a non-negative integer or `null`:
+`{ "kind": "waiting" }` waits for outstanding feedback and
+`{ "kind": "finished" }` ends generation. Neither carries a binary payload.
 
-```json
-{ "remaining": 10000 }
-```
+`feedback` receives `{ "nr_values": 2048 }` with a binary `f64` array: one already
+weighted training scalar per sample of exactly one generated draw, in generation
+and sample order. It returns `{ "ok": true }`. Model updates remain sampler-owned
+and may combine multiple generation draws. Snapshots must retain private pending
+training state. See [the complete sampler contract](sampling.md).
 
-`produce_latent_batch` returns row-major samples and positive finite weights:
-
-```json
-{ "nr_samples": 2 }
-```
-
-```json
-{
-  "xs_discrete_row_major": [],
-  "xs_discrete_offsets": [0, 0, 0],
-  "xs_continuous_row_major": [0.1, 0.2, 0.3, 0.4],
-  "xs_continuous_offsets": [0, 2, 4],
-  "weights": [1.0, 1.0]
-}
-```
-
-The response may omit either offset array when its width is fixed across the
-initialized domain. For a ragged dimension, the corresponding explicit offset
-array is required.
-
-`ingest_training_values` receives one projected training value per sample:
-
-```json
-{ "training_values": [0.7, 1.2] }
-```
-
-Return:
-
-```json
-{ "ok": true }
-```
+This is protocol v3; v2 sampler planning/generation methods are removed.
 
 `pdf` probes the sampler PDF for many points at once:
 
@@ -248,7 +225,7 @@ Return either an array of `f64 | null` values or `null` when unsupported:
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v2",
+  "protocol": "gammaboard-jsonrpc-v3",
   "role": "batch_transform",
   "domain": { "continuous": { "dims": 2 } },
   "args": {}
@@ -298,7 +275,7 @@ evaluation.
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v2",
+  "protocol": "gammaboard-jsonrpc-v3",
   "role": "materializer",
   "domain": { "continuous": { "dims": 2 } },
   "args": {}
@@ -315,7 +292,9 @@ Return:
 points. `latent_batch` is the JSON form stored by GammaBoard; for current
 samplers this is usually an `indexed_batch` payload containing discrete
 signatures, per-sample discrete-map entries, continuous layouts/values, and
-weights.
+weights. Native Havana inference instead uses `havana_inference_indexed`
+(RNG checkpoints plus a sample offset); its built-in materializer also accepts
+legacy `havana_inference` single-seed payloads. See [sampling.md](sampling.md).
 
 ```json
 {
@@ -412,10 +391,15 @@ and working examples are documented in
 
 ## Benchmark
 
-Run the ignored protocol benchmark with:
+Run the targeted process API tests and overhead measurements with:
 
 ```bash
-cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
+just benchmark process --python /path/to/venv/bin/python --output results/process
+just benchmark plot results/process
 ```
 
-The benchmark uses a tiny Python echo evaluator and measures real `eval_batch` framing overhead for small, medium, and large batches.
+The production Rust adapters and Python SDK are measured together for evaluator
+calls, sampler generation, feedback ingestion and control calls. Three batch sizes
+and two callback work levels separate callback time from adapter/runtime overhead.
+See [benchmarking.md](benchmarking.md#targeted-process-api-measurements) for scope,
+requirements and the separate functional assertions.

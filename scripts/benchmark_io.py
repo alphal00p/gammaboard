@@ -9,50 +9,72 @@ import random
 import statistics
 import subprocess
 import time
+from benchmark_common import activity, payload_throughput
+import benchmark_common as bench
 
 
-def activity(measurement):
-    first, last = measurement['snapshots'][0], measurement['snapshots'][-1]
-    result = {}
-    for collection, field, role in [('evaluators','metrics','evaluator'),('samplers','runtime_metrics','sampler')]:
-        start = {r['worker_id']: r[field] for r in first[collection]}
-        total = dict(elapsed_seconds=0., compute_seconds=0., io_seconds=0.)
-        for row in last[collection]:
-            a, b = start[row['worker_id']], row[field]
-            epoch = 'epoch' if role == 'evaluator' else 'runner_epoch'
-            if any(a.get(k) != b.get(k) for k in [epoch,'node_uuid','task_id']):
-                raise ValueError('worker identity changed')
-            delta = {k: b['busy'][k]-a['busy'][k] for k in total}
-            elapsed = delta['elapsed_seconds']
-            if elapsed <= 0 or any(not math.isfinite(v) or v < 0 or v > elapsed+1e-9 for v in delta.values()):
-                raise ValueError('invalid busy interval')
-            for k, v in delta.items(): total[k] += v
-        for lane in ['compute','io']:
-            result[f'{role}_{lane}'] = 100*total[f'{lane}_seconds']/total['elapsed_seconds']
-    return result
+def report(directory, plots=False):
+    """The same summary/plot entry points also accept focused I/O experiments."""
+    manifest = json.loads((directory/'manifest.json').read_text())
+    records = bench.load_results(directory)
+    rows = summarize(records)
+    bench.write_json(directory/'summary.json', rows)
+    lines = ['# GammaBoard insert / payload experiment', '',
+             f"Status: `{manifest['status']}`; {sum(r['valid'] for r in records)}/{manifest['planned_cases']} valid planned trials.", '',
+             manifest['scope'], '', manifest['payload_scope'], '',
+             '| Evaluators | Batch | Inserts | Valid trials | Samples/s | Input MiB/s |',
+             '| ---: | ---: | ---: | ---: | ---: | ---: |']
+    for row in rows:
+        rate, volume = row['rate'], row['accepted_input_mib_per_second']
+        lines.append(f"| {row['workers']} | {row['batch_size']} | {row['inserts']} | {row['valid_trials']} | "
+                     f"{round(rate['median']) if rate else 'invalid'} | {round(volume['median'], 1) if volume else 'unknown'} |")
+    lines += ['', 'Trial ranges are not confidence intervals. Missing/invalid trials are not zero throughput.', '']
+    (directory/'report.md').write_text('\n'.join(lines))
+    if plots:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        batches = sorted({r['batch_size'] for r in rows})
+        fig, axes = plt.subplots(1, len(batches), figsize=(6*len(batches), 4), squeeze=False)
+        for ax, batch in zip(axes.flat, batches):
+            for inserts in sorted({r['inserts'] for r in rows}):
+                data = [r for r in rows if r['batch_size'] == batch and r['inserts'] == inserts and r['rate']]
+                if not data:
+                    continue
+                x = [r['workers'] for r in data]
+                y = [r['rate']['median'] for r in data]
+                line, = ax.plot(x, y, label=f'{inserts} inserts')
+                for r, xx, yy in zip(data, x, y):
+                    ax.errorbar(xx, yy, yerr=[[yy-r['rate']['minimum']], [r['rate']['maximum']-yy]], fmt='o',
+                                color=line.get_color(), capsize=3,
+                                markerfacecolor=line.get_color() if r['valid_trials'] >= manifest['repetitions'] else 'white')
+            ax.set(title=f'Batch {batch:,}', xlabel='Evaluators', ylabel='Accepted samples/s')
+            ax.set_xscale('log', base=2); ax.set_xticks(manifest['workers'], labels=manifest['workers'])
+            ax.grid(alpha=.2); ax.legend()
+        fig.suptitle(f"{len(manifest['cpus'])} shared cores; {sum(r['valid'] for r in records)}/{manifest['planned_cases']} valid trials — coordination, not strong scaling")
+        fig.tight_layout()
+        for extension in ['png', 'svg']:
+            fig.savefig(directory/f'io.{extension}', dpi=160, bbox_inches='tight')
+        plt.close(fig)
+    return directory/'report.md'
 
 
-def payload_throughput(measurement, batch_size):
-    """Accepted fixed-batch input volume, not wire traffic or physical disk I/O."""
-    windows = {}
-    for snapshot in measurement['snapshots']:
-        for row in snapshot['samplers']:
-            metric = row['runtime_metrics']['queue']['rolling']['insert_bundle_payload_bytes_per_batch']
-            if metric['count']:
-                windows[row['worker_id'],row['id']] = metric
-    batches_per_second = measurement['samples_per_second']/batch_size
-    values = list(windows.values())
-    # Fixed sample count, dimension and accumulator must yield a constant encoded
-    # payload. A mixed/startup window cannot support this conversion reliably.
-    if not values or any(v['mean'] is None or not math.isfinite(v['mean']) or v['mean'] <= 0
-                         or not math.isfinite(v['std_dev']) or v['std_dev'] > 1e-6 for v in values):
-        raise ValueError('missing or variable fixed-batch payload size')
-    sizes = [v['mean'] for v in values]
-    if max(sizes)-min(sizes) > 1e-6:
-        raise ValueError('fixed-batch payload size changed during measurement')
-    payload = statistics.mean(sizes)
-    return dict(batches_per_second=batches_per_second,input_payload_bytes_per_batch=payload,
-                accepted_input_mib_per_second=batches_per_second*payload/1024**2)
+def compare(before, after):
+    manifests = [json.loads((directory/'manifest.json').read_text()) for directory in [before, after]]
+    for key in ['cpu_iterations_per_sample', 'min_tick_ms', 'insert_bundle_size', 'input_storage']:
+        if manifests[0][key] != manifests[1][key]:
+            raise ValueError(f'{key} differs; not a matched configuration')
+    if len(manifests[0]['cpus']) != len(manifests[1]['cpus']):
+        raise ValueError('CPU budgets differ')
+    groups = [{(r['workers'], r['batch_size'], r['inserts']): r for r in summarize(bench.load_results(directory)) if r['rate']}
+              for directory in [before, after]]
+    overlap = groups[0].keys() & groups[1].keys()
+    if not overlap:
+        raise ValueError('no overlapping valid cases')
+    for key in sorted(overlap):
+        a, b = [g[key] for g in groups]
+        print(f'N={key[0]} batch={key[1]} inserts={key[2]}: {b["rate"]["median"]/a["rate"]["median"]:.3f}x; '
+              f'valid repetitions {a["valid_trials"]}/{b["valid_trials"]}')
 
 
 def summarize(records):
@@ -61,6 +83,8 @@ def summarize(records):
         groups.setdefault((row['workers'],row['batch_size'],row['inserts']),[]).append(row)
     result = []
     for (workers,batch,inserts), rows in sorted(groups.items()):
+        if len({r['repeat'] for r in rows}) != len(rows):
+            raise ValueError('duplicate repetitions cannot count as independent trials')
         valid = [r for r in rows if r['valid']]
         stats = {}
         for field in ['rate','batches_per_second','input_payload_bytes_per_batch',
@@ -74,7 +98,6 @@ def summarize(records):
 
 
 def execute(args):
-    import benchmark as bench
     if not (1 <= args.port_offset <= 57000 and 1 <= args.cpu_limit <= 8 and 1 <= args.repetitions <= 5
             and math.isfinite(args.duration) and math.isfinite(args.warmup)
             and args.duration >= 4 and args.warmup >= 1 and args.iterations >= 0 and args.min_tick_ms >= 0):
@@ -97,9 +120,11 @@ def execute(args):
         os.environ[k]='1'
     binary=args.binary.resolve(strict=True)
     args.output.mkdir(parents=True,exist_ok=False); out=args.output.resolve()
+    binary,harness_hashes=bench.preserve_inputs(out,binary)
     with binary.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
     migrations=Path(os.environ.get('GAMMABOARD_MIGRATIONS_DIR',bench.ROOT/'migrations'))
-    manifest=dict(cpus=cpus,binary=str(binary),binary_sha256=digest,workers=args.workers,
+    manifest=dict(experiment='io',cpus=cpus,binary=str(binary),binary_sha256=digest,workers=args.workers,
+        harness_files=harness_hashes,
         batch_sizes=args.batch_sizes,repetitions=args.repetitions,duration=args.duration,
         warmup=args.warmup,cpu_iterations_per_sample=args.iterations,min_tick_ms=args.min_tick_ms,planned_cases=len(cases),
         insert_limits=args.inserts,insert_bundle_size=args.insert_bundle_size,input_storage=args.input_storage,
@@ -132,13 +157,11 @@ def execute(args):
                 card.write_text(text.replace('[sampler_aggregator_runner_params.queue]',
                     f'[sampler_aggregator_runner_params.queue]\nmax_concurrent_insert_tasks = {inserts}\n'
                     f'max_insert_bundle_size = {args.insert_bundle_size}'))
-                run=session.cli('run','create',card)['run_id']
-                session.cli('run','resume',run,'--max-evaluators',workers)
-                session.cli('run','wait',run,'--until','ready','--evaluators',workers,'--max-age','5s')
-                for name,seconds in [('warmup',args.warmup),('measurement',args.duration)]:
-                    measured=session.cli('run','performance',run,'--duration',f'{seconds}s',
-                                         '--interval','500ms','--max-age','5s')
-                    bench.write_json(directory/f'{name}.json',measured)
+                with bench.active_run(session, card, workers, '5s') as run:
+                    for name,seconds in [('warmup',args.warmup),('measurement',args.duration)]:
+                        measured=session.cli('run','performance',run,'--duration',f'{seconds}s',
+                                             '--interval','500ms','--max-age','5s')
+                        bench.write_json(directory/f'{name}.json',measured)
                 record=dict(case=index,workers=workers,batch_size=batch,inserts=inserts,repeat=repeat,
                     valid=measured['valid'],issues=measured['issues'],rate=measured['samples_per_second'])
                 try:
@@ -157,8 +180,6 @@ def execute(args):
                     (f'{record["rate"]:,.0f} samples/s; {record["batches_per_second"]:,.1f} batches/s; '
                      f'{record["accepted_input_mib_per_second"]:,.1f} input MiB/s'
                      if record['valid'] else f'INVALID {record["issues"]}'),flush=True)
-                session.cli('run','pause',run); session.cli('run','wait',run,'--until','idle')
-                session.cli('run','remove','--yes',run)
         manifest['status']='completed' if all(r['valid'] for r in records) else 'completed_with_invalid_cases'
     except BaseException as exc:
         manifest.update(status='incomplete',error=str(exc) or type(exc).__name__); raise

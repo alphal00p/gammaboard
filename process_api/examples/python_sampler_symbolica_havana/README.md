@@ -55,7 +55,7 @@ sampler_aggregator.config = { kind = "process_sampler", command = [ ... ], cwd =
 ```
 
 `save_path`/`grid_path` are relative to the sampler's `cwd`. In inference mode
-`sample_plan` keeps producing (the task's `stop_condition` ends it),
-`produce_latent_batch` does not retain samples, and `ingest_training_values` is
+`generate` keeps producing until the task budget ends, does not retain inference
+samples, and `feedback` is
 a no-op. A snapshot-restored sampler with `inference = true` in its `args` works
 the same way, loading the grid from the snapshot instead of a file.

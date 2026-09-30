@@ -13,7 +13,7 @@ pub enum BenchmarkCommand {
     /// Calibrate fixed CPU work once, then reuse the iterations across the sweep
     Calibrate {
         #[arg(long)]
-        eval_us: u64,
+        eval_us: f64,
     },
     /// Direct uniform-sampling/scalar-accumulation baseline using a production evaluator
     Evaluator {
@@ -33,7 +33,7 @@ pub enum BenchmarkCommand {
 pub fn run(args: BenchmarkArgs) -> Result<()> {
     match args.command {
         BenchmarkCommand::Calibrate { eval_us } => print_json(&gammaboard::benchmark::calibrate(
-            Duration::from_micros(eval_us),
+            Duration::try_from_secs_f64(eval_us / 1_000_000.0)?,
         )?),
         BenchmarkCommand::Evaluator {
             config,

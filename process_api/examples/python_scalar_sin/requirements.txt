@@ -1,2 +1,3 @@
+# Install from this example directory to use the matching local SDK.
 numpy
-gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@58486ade43bf7aeb7e8c402e4021f4b99d774796#subdirectory=process_api/python
+-e ../../python

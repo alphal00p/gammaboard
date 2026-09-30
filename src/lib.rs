@@ -54,7 +54,7 @@ pub use evaluation::{
     extract_accumulator_metric, extract_accumulator_metric_with_runtime, ingest_scalar_values,
 };
 pub use sampling::{
-    LatentBatch, LatentBatchPayload, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
+    Generation, LatentBatch, LatentBatchPayload, LatentBatchSpec, PdfPoint, SamplerAggregator,
     SamplerAggregatorSnapshot, StageHandoff,
 };
 pub use stores::PgStore;

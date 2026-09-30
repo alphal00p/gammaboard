@@ -18,23 +18,6 @@
         "type": "github"
       }
     },
-    "gammaboard-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1788867648,
-        "narHash": "sha256-+1+aC+wlpQWwwZ4rqPHqmec8cq1VGZ6BnTdLNwmo3go=",
-        "owner": "alphal00p",
-        "repo": "gammaboard",
-        "rev": "58486ade43bf7aeb7e8c402e4021f4b99d774796",
-        "type": "github"
-      },
-      "original": {
-        "owner": "alphal00p",
-        "repo": "gammaboard",
-        "rev": "58486ade43bf7aeb7e8c402e4021f4b99d774796",
-        "type": "github"
-      }
-    },
     "madnis-src": {
       "flake": false,
       "locked": {
@@ -71,7 +54,6 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "gammaboard-src": "gammaboard-src",
         "madnis-src": "madnis-src",
         "nixpkgs": "nixpkgs"
       }

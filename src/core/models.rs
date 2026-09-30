@@ -441,6 +441,8 @@ pub struct SamplerAggregatorPerformanceSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RunSampleProgress {
+    #[serde(default)]
+    pub active_task_id: Option<i64>,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
     pub sampler_runner_uptime_ms: f64,

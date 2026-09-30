@@ -1,10 +1,11 @@
 from .abc import BatchTransform, Evaluator, Materializer, Sampler
-from .batches import MaterializedBatch, SampleBatch, TransformedBatch
+from .batches import GenerationStatus, MaterializedBatch, SampleBatch, TransformedBatch
 from .gammaloop import GammaLoopBatchResult
 from .log import log
 from .runners import run_batch_transform, run_evaluator, run_materializer, run_sampler
 
 __all__ = [
+    "GenerationStatus",
     "BatchTransform",
     "Evaluator",
     "GammaLoopBatchResult",

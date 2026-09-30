@@ -10,6 +10,8 @@ pub(crate) struct GenerationBuffer {
     pending: Option<BufferedDraw>,
     training_groups: VecDeque<TrainingGroup>,
     legacy_pending_samples: usize,
+    #[serde(default)]
+    pub finished: bool,
 }
 
 #[cfg(test)]
@@ -43,6 +45,66 @@ mod tests {
     }
 
     #[test]
+    fn ragged_draw_restores_its_split_cursor_and_legacy_feedback_metadata() {
+        use crate::evaluation::{Batch, Point};
+        use crate::sampling::LatentBatchSpec;
+        let original = Batch::new(
+            (0..9)
+                .map(|i| Point::new(vec![i as f64; i % 3 + 1], vec![(i % 2) as i64], 1.0))
+                .collect(),
+        )
+        .unwrap();
+        let mut state = GenerationBuffer::default();
+        state
+            .buffer_draw(LatentBatchSpec::from_batch(&original).build(), Some(12))
+            .unwrap();
+        state.record_draw(9);
+        let mut chunks = state.take_batches(2, 2).unwrap();
+        assert!(state.accept_training_values(&[0.0, 1.0]).unwrap().is_none());
+        let mut snapshot = serde_json::to_value(state).unwrap();
+        snapshot["pending"]
+            .as_object_mut()
+            .unwrap()
+            .remove("requires_feedback");
+        let mut restored: GenerationBuffer = serde_json::from_value(snapshot).unwrap();
+        restored.restore_legacy_samples(2);
+        assert!(restored.requires_feedback());
+        assert_eq!(restored.training_remaining(), Some(8));
+        chunks.extend(restored.take_batches(10, 3).unwrap());
+        let recovered: Vec<_> = chunks
+            .into_iter()
+            .flat_map(|chunk| chunk.payload.into_batch().unwrap().points().to_vec())
+            .collect();
+        assert_eq!(recovered, original.points());
+        assert!(
+            restored
+                .accept_training_values(&[2.0, 3.0])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            restored
+                .accept_training_values(&[4.0, 5.0, 6.0])
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            restored.accept_training_values(&[7.0, 8.0]).unwrap(),
+            Some((0..9).map(|i| i as f64).collect())
+        );
+        assert!(!restored.has_outstanding());
+        restored.finished = true;
+        assert!(
+            !restored.is_empty(),
+            "the finished marker must survive serialization"
+        );
+        let restored: GenerationBuffer =
+            serde_json::from_value(serde_json::to_value(restored).unwrap()).unwrap();
+        assert!(restored.finished);
+        assert!(!restored.has_outstanding());
+    }
+
+    #[test]
     fn old_checkpoint_progress_keeps_its_serialized_shape() {
         let old = serde_json::json!({
             "produced_batches_total": 3, "produced_samples_total": 48,
@@ -59,7 +121,11 @@ mod tests {
 struct BufferedDraw {
     batch: LatentBatch,
     next_sample: usize,
+    #[serde(skip)]
+    next_coordinate: Option<usize>,
     training_remaining: Option<usize>,
+    #[serde(default)]
+    requires_feedback: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,10 +139,18 @@ impl GenerationBuffer {
         self.pending.is_some()
     }
 
-    pub fn training_remaining_at_draw(&self) -> Option<usize> {
-        self.pending
-            .as_ref()
-            .and_then(|draw| draw.training_remaining)
+    pub fn training_remaining(&self) -> Option<usize> {
+        self.pending.as_ref().and_then(|draw| {
+            draw.training_remaining
+                .map(|remaining| remaining.saturating_sub(draw.next_sample))
+        })
+    }
+
+    pub fn requires_feedback(&self) -> bool {
+        self.pending.as_ref().is_some_and(|draw| {
+            draw.requires_feedback
+                .unwrap_or(draw.training_remaining.is_some())
+        })
     }
 
     pub fn buffer_draw(
@@ -84,13 +158,18 @@ impl GenerationBuffer {
         batch: LatentBatch,
         training_remaining: Option<usize>,
     ) -> Result<(), EngineError> {
+        if self.pending.is_some() {
+            return Err(EngineError::engine("cannot overwrite an undispatched draw"));
+        }
         batch
             .validate_nr_samples()
             .map_err(|err| EngineError::engine(err.to_string()))?;
         self.pending = Some(BufferedDraw {
             batch,
             next_sample: 0,
+            next_coordinate: Some(0),
             training_remaining,
+            requires_feedback: Some(training_remaining.is_some()),
         });
         Ok(())
     }
@@ -106,9 +185,25 @@ impl GenerationBuffer {
         let Some(draw) = self.pending.as_mut() else {
             return Ok(Vec::new());
         };
-        draw.batch
-            .validate_nr_samples()
-            .map_err(|err| EngineError::engine(err.to_string()))?;
+        // Validate restored buffers once; newly generated buffers are already checked.
+        if draw.next_coordinate.is_none() {
+            draw.batch
+                .validate_nr_samples()
+                .map_err(|err| EngineError::engine(err.to_string()))?;
+            draw.next_coordinate = Some(match &draw.batch.payload {
+                crate::sampling::LatentBatchPayload::IndexedBatch {
+                    continuous_layouts, ..
+                } => continuous_layouts
+                    .get(..draw.next_sample)
+                    .ok_or_else(|| EngineError::engine("invalid buffered generation cursor"))?
+                    .iter()
+                    .sum(),
+                _ => 0,
+            });
+        }
+        if slots > 0 && draw.next_sample == 0 && chunk_size >= draw.batch.nr_samples {
+            return Ok(vec![self.pending.take().unwrap().batch]);
+        }
         if draw.next_sample >= draw.batch.nr_samples {
             return Err(EngineError::engine("invalid buffered generation cursor"));
         }
@@ -120,8 +215,14 @@ impl GenerationBuffer {
             }
             let batch = draw
                 .batch
-                .slice(draw.next_sample, size)
+                .slice_at(draw.next_sample, size, draw.next_coordinate.unwrap())
                 .map_err(|err| EngineError::engine(err.to_string()))?;
+            if let crate::sampling::LatentBatchPayload::IndexedBatch {
+                continuous_values, ..
+            } = &batch.payload
+            {
+                *draw.next_coordinate.as_mut().unwrap() += continuous_values.len();
+            }
             draw.next_sample += size;
             batches.push(batch);
         }
@@ -137,14 +238,24 @@ impl GenerationBuffer {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.pending.is_none()
+        !self.finished && !self.has_outstanding()
+    }
+
+    pub fn has_outstanding(&self) -> bool {
+        !(self.pending.is_none()
             && self.training_groups.is_empty()
-            && self.legacy_pending_samples == 0
+            && self.legacy_pending_samples == 0)
     }
 
     /// Old checkpoints have no generation metadata. Their already queued work
     /// still has one sampler call per evaluator batch and must be ingested first.
     pub fn restore_legacy_samples(&mut self, queued_samples: usize) {
+        // Older bulk checkpoints had no explicit feedback bit. A buffered
+        // training draw is the last recorded group, even after its final window.
+        if let Some(draw) = &mut self.pending {
+            draw.requires_feedback
+                .get_or_insert(!self.training_groups.is_empty());
+        }
         let grouped_samples: usize = self
             .training_groups
             .iter()

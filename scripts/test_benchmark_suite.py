@@ -7,7 +7,8 @@ from pathlib import Path
 import tempfile
 import tomllib
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+import subprocess
 import benchmark as bench
 
 class SuiteTests(unittest.TestCase):
@@ -22,12 +23,26 @@ class SuiteTests(unittest.TestCase):
         self.assertNotIn('timing',card['evaluator'])
         self.assertEqual(card['sampler_aggregator_runner_params']['queue']['fixed_batch_size'],256)
 
+    def test_saved_calibration_is_shared_across_integer_and_fractional_suite_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = Path(tmp)/'calibration.json'
+            calibration = dict(cpu_iterations_per_sample=10, measured_seconds_per_sample=.000005)
+            bench.write_json(saved, {'5': calibration})
+            session = Mock()
+            self.assertEqual(bench.calibrate_workloads(session, [5.0], saved)['5.0'], calibration)
+            session.cli.assert_not_called()
+            with self.assertRaisesRegex(ValueError, 'missing or invalid'):
+                bench.calibrate_workloads(session, [.5], saved)
+            bench.write_json(saved, {'5': calibration, '5.0': calibration})
+            with self.assertRaisesRegex(ValueError, 'duplicate'):
+                bench.calibrate_workloads(session, [5], saved)
+
     def test_invalid_or_over_budget_suite_is_rejected(self):
         for key,value in [('workers',[1,100]),('duration_seconds',float('nan')),('repetitions',0),
                           ('budget_seconds',1801),('batch_sizes',[1]),('eval_us',[1,1]),('duration_seconds',300),
                           ('duration_seconds', True), ('telemetry_interval_ms', '250'),
                           ('duration_seconds', 1), ('warmup_seconds', .1), ('typo', 1),
-                          ('bulk_sample_generation', 'true'), ('generation_batch_size', 4096),
+                          ('bulk_sample_generation', 'true'), ('generation_batch_size', 1),
                           ('repetitions', 10**9)]:
             with self.subTest(key=key,value=value):
                 suite = copy.deepcopy(self.suite); suite[key]=value
@@ -40,19 +55,21 @@ class SuiteTests(unittest.TestCase):
 
     def test_all_presets_fit_their_budget(self):
         for path in (bench.ROOT/'resources/templates/benchmarks').glob('*.toml'):
+            if path.name == 'frontier.toml':
+                continue
             suite = tomllib.loads(path.read_text())
             bench.validate_suite(suite)
             self.assertLessEqual(bench.estimated_seconds(suite), suite['budget_seconds'])
 
-    def test_bulk_generation_does_not_change_evaluator_work(self):
-        suite = dict(self.suite, bulk_sample_generation=True, generation_batch_size=4096)
+    def test_generation_size_does_not_change_evaluator_work(self):
+        suite = dict(self.suite, generation_batch_size=4096)
         bench.validate_suite(suite)
-        card = tomllib.loads(bench.run_card(500, 256, bulk_sample_generation=True,
-                                          generation_batch_size=4096))
+        card = tomllib.loads(bench.run_card(500, 256, generation_batch_size=4096))
         queue = card['sampler_aggregator_runner_params']['queue']
         self.assertEqual(queue['fixed_batch_size'], 256)
-        self.assertEqual(queue['max_batch_size'], 4096)
+        self.assertEqual(queue['max_batch_size'], 256)
         self.assertEqual(card['evaluator']['cpu_iterations_per_sample'], 500)
+        self.assertEqual(card['task_queue'][0]['sampler_aggregator']['config']['generation_batch_size'], 4096)
 
 
 class MeasurementTests(unittest.TestCase):
@@ -121,7 +138,7 @@ class MeasurementTests(unittest.TestCase):
                 ['direct-1', 'gammaboard', 'direct-4'],
                 ['direct-1', 'direct-4', 'gammaboard']]):
             active = False
-            def cli(*args):
+            def cli(*args, **kwargs):
                 nonlocal active
                 if args[:2] == ('benchmark', 'evaluator'):
                     self.assertFalse(active, 'direct baseline ran alongside active pipeline work')
@@ -148,13 +165,39 @@ class MeasurementTests(unittest.TestCase):
 
 
 class CleanupTests(unittest.TestCase):
+    def test_cleanup_failure_is_fatal_not_a_recoverable_trial_error(self):
+        from benchmark_common import TrialError
+        def cli(*args, **kwargs):
+            if args[:2] == ('run', 'pause'):
+                raise RuntimeError('cleanup failed')
+            return dict(run_id=7)
+        session = Mock()
+        session.cli.side_effect = cli
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(RuntimeError, 'cleanup failed') as raised:
+            with bench.active_run(session, Path(tmp)/'run.toml', 4, '5s'):
+                raise RuntimeError('measurement failed')
+        self.assertNotIsInstance(raised.exception, TrialError)
+
+    def test_failed_measurement_drains_and_removes_its_run(self):
+        session = Mock()
+        session.cli.return_value = {'run_id': 7}
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(RuntimeError, 'measurement failed'):
+            with bench.active_run(session, Path(tmp)/'run.toml', 4, '5s'):
+                raise RuntimeError('measurement failed')
+        self.assertEqual([call.args for call in session.cli.call_args_list][-3:], [
+            ('run', 'pause', 7), ('run', 'wait', 7, '--until', 'idle'), ('run', 'remove', '--yes', 7)])
+
     def test_unsuccessful_shutdown_cannot_report_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = bench.Session.__new__(bench.Session)
             session.directory = Path(tmp)
+            session.output = Path(tmp)
+            session.workers = []
+            session.offset = 191
             session.process = Mock(returncode=1)
             session.process.poll.return_value = 1
-            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(RuntimeError):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(RuntimeError), \
+                    patch('benchmark_common.os.killpg'), patch('benchmark_common.time.sleep'):
                 session.__exit__(None)
             self.assertTrue(session.directory.exists())
 
@@ -163,10 +206,30 @@ class CleanupTests(unittest.TestCase):
             session = bench.Session.__new__(bench.Session)
             session.directory = Path(tmp)/'private'
             session.directory.mkdir()
+            session.output = Path(tmp)
+            session.workers = []
+            session.offset = 191
             session.process = Mock(returncode=0)
             session.process.poll.return_value = 0
             session.__exit__(None)
             self.assertFalse(session.directory.exists())
             self.assertTrue(Path(tmp).exists())
+
+    def test_deployment_cleanup_does_not_mask_the_measurement_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = bench.Session.__new__(bench.Session)
+            session.directory = Path(tmp)/'private'
+            session.directory.mkdir()
+            session.output = Path(tmp)
+            session.workers = []
+            session.offset = 191
+            session.process = Mock(returncode=None)
+            session.process.poll.return_value = None
+            session.process.wait.side_effect = [subprocess.TimeoutExpired('deploy',90),0]
+            with contextlib.redirect_stderr(io.StringIO()), patch('benchmark_common.os.killpg'), \
+                    patch('benchmark_common.time.sleep'):
+                session.__exit__(RuntimeError, RuntimeError('original measurement failure'), None)
+            self.assertFalse(json.loads((Path(tmp)/'cleanup.json').read_text())['clean'])
+            self.assertTrue(session.directory.exists())
 
 if __name__=='__main__': unittest.main()

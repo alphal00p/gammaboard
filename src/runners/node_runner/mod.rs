@@ -255,10 +255,13 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             let mut announce_failures = 0u32;
             let mut announce_failed_at: Option<Instant> = None;
             loop {
-                match store
-                    .announce_node(&node_name, &node_uuid, &capabilities)
-                    .await
-                {
+                let announced = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    store.announce_node(&node_name, &node_uuid, &capabilities),
+                )
+                .await
+                .unwrap_or_else(|_| Err(StoreError::Database("heartbeat exceeded 5s".into())));
+                match announced {
                     Ok(()) => {
                         if let Some(handle) = &activity {
                             let snapshot = crate::runners::activity::snapshot(handle);
@@ -492,43 +495,64 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         return Ok(());
                     }
 
+                    let mut next_control_poll = Instant::now();
                     loop {
+                        // Check signals even when every tick exceeds min_tick_time
+                        // and the usual sleep/select branch is never reached.
+                        #[cfg(unix)]
+                        tokio::select! {
+                            biased;
+                            _ = &mut shutdown => break,
+                            _ = sigterm.recv() => break,
+                            _ = std::future::ready(()) => {}
+                        }
+                        #[cfg(not(unix))]
+                        tokio::select! {
+                            biased;
+                            _ = &mut shutdown => break,
+                            _ = std::future::ready(()) => {}
+                        }
                         let tick_started = Instant::now();
                         if Self::poll_lease_failure(&mut lease_renewal.events).await? {
                             break;
                         }
 
-                        let shutdown_requested = match self
-                            .store
-                            .consume_node_shutdown_request(&self.node_uuid)
-                            .await
-                        {
-                            Ok(value) => value,
-                            Err(err) if err.is_database_error() => {
-                                self.sleep_after_database_error(&err).await;
-                                continue;
+                        // Assignment changes and shutdown requests need a bounded
+                        // response time, not a database round trip per batch tick.
+                        if Instant::now() >= next_control_poll {
+                            let shutdown_requested = match self
+                                .store
+                                .consume_node_shutdown_request(&self.node_uuid)
+                                .await
+                            {
+                                Ok(value) => value,
+                                Err(err) if err.is_database_error() => {
+                                    self.sleep_after_database_error(&err).await;
+                                    continue;
+                                }
+                                Err(err) => return Err(err),
+                            };
+                            if shutdown_requested {
+                                info!("node shutdown requested by control-plane");
+                                break;
                             }
-                            Err(err) => return Err(err),
-                        };
-                        if shutdown_requested {
-                            info!("node shutdown requested by control-plane");
-                            break;
-                        }
 
-                        let desired_target = match self.resolve_desired_target().await {
-                            Ok(value) => value,
-                            Err(err) if err.is_database_error() => {
-                                self.sleep_after_database_error(&err).await;
-                                continue;
+                            let desired_target = match self.resolve_desired_target().await {
+                                Ok(value) => value,
+                                Err(err) if err.is_database_error() => {
+                                    self.sleep_after_database_error(&err).await;
+                                    continue;
+                                }
+                                Err(err) => return Err(err),
+                            };
+                            if let Err(err) = self.reconcile(desired_target).await {
+                                if err.is_database_error() {
+                                    self.sleep_after_database_error(&err).await;
+                                    continue;
+                                }
+                                return Err(err);
                             }
-                            Err(err) => return Err(err),
-                        };
-                        if let Err(err) = self.reconcile(desired_target).await {
-                            if err.is_database_error() {
-                                self.sleep_after_database_error(&err).await;
-                                continue;
-                            }
-                            return Err(err);
+                            next_control_poll = Instant::now() + Duration::from_millis(250);
                         }
 
                         if self.active_runner.is_some() {
@@ -560,10 +584,12 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                             if done {
                                 self.finish_current_assignment().await?;
                                 self.reset_reconcile_backoff();
+                                next_control_poll = Instant::now();
                                 continue;
                             }
                             if self.active_runner.is_none() {
                                 self.reset_reconcile_backoff();
+                                next_control_poll = Instant::now();
                                 continue;
                             }
                             let elapsed = tick_started.elapsed();

@@ -155,42 +155,80 @@ fn validate_rectangular_havana_grid(
     validate_havana_grid_domain(grid, &Domain::continuous(continuous_dims), context)
 }
 
-pub(crate) fn sample_to_point(sample: &Sample<f64>) -> Result<Point, EngineError> {
+/// Borrow coordinates while reusing storage for the discrete path.
+pub(crate) fn sample_components<'a>(
+    sample: &'a Sample<f64>,
+    discrete: &mut Vec<i64>,
+) -> Result<(&'a [f64], f64), EngineError> {
     fn discrete_index(index: usize) -> Result<i64, EngineError> {
         i64::try_from(index)
             .map_err(|_| EngineError::engine(format!("discrete index {index} does not fit in i64")))
     }
 
-    fn recurse(
-        sample: &Sample<f64>,
-        discrete: &mut Vec<i64>,
-    ) -> Result<(Vec<f64>, f64), EngineError> {
+    let weight = sample.get_weight();
+    let mut sample = sample;
+    discrete.clear();
+    loop {
         match sample {
-            Sample::Continuous(weight, continuous) => Ok((continuous.clone(), *weight)),
-            Sample::Discrete(weight, index, maybe_child) => {
+            Sample::Continuous(_, continuous) => return Ok((continuous, weight)),
+            Sample::Discrete(_, index, maybe_child) => {
                 discrete.push(discrete_index(*index)?);
                 let Some(child) = maybe_child.as_ref() else {
                     return Err(EngineError::engine(
                         "havana sampler expected nested continuous samples",
                     ));
                 };
-                let (continuous, _) = recurse(child, discrete)?;
-                Ok((continuous, *weight))
+                sample = child;
             }
-            Sample::Uniform(weight, bin_indices, continuous) => {
-                discrete.extend(
-                    bin_indices
-                        .iter()
-                        .copied()
-                        .map(discrete_index)
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
-                Ok((continuous.clone(), *weight))
+            Sample::Uniform(_, bin_indices, continuous) => {
+                for &index in bin_indices {
+                    discrete.push(discrete_index(index)?);
+                }
+                return Ok((continuous, weight));
             }
         }
     }
+}
 
+pub(crate) fn sample_to_point(sample: &Sample<f64>) -> Result<Point, EngineError> {
     let mut discrete = Vec::new();
-    let (continuous, weight) = recurse(sample, &mut discrete)?;
-    Ok(Point::new(continuous, discrete, weight))
+    let (continuous, weight) = sample_components(sample, &mut discrete)?;
+    Ok(Point::new(continuous.to_vec(), discrete, weight))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_components_preserve_outer_weight_and_clear_reused_paths() {
+        let mut discrete = vec![99];
+        for (sample, path, coordinates, weight) in [
+            (
+                Sample::Discrete(
+                    3.0,
+                    1,
+                    Some(Box::new(Sample::Uniform(6.0, vec![2, 4], vec![0.1, 0.2]))),
+                ),
+                vec![1, 2, 4],
+                vec![0.1, 0.2],
+                3.0,
+            ),
+            (Sample::Continuous(2.0, vec![0.3]), vec![], vec![0.3], 2.0),
+            (Sample::Uniform(4.0, vec![5], vec![]), vec![5], vec![], 4.0),
+        ] {
+            let (actual, actual_weight) = sample_components(&sample, &mut discrete).unwrap();
+            assert_eq!(actual, coordinates);
+            assert_eq!(actual_weight, weight);
+            assert_eq!(discrete, path);
+        }
+        assert!(sample_components(&Sample::Discrete(1.0, 0, None), &mut discrete).is_err());
+        assert!(
+            sample_components(
+                &Sample::Uniform(1.0, vec![usize::MAX], vec![]),
+                &mut discrete
+            )
+            .is_err()
+        );
+    }
 }

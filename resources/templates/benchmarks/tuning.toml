@@ -11,6 +11,6 @@ cpu_limit = 6
 seed = 1234
 min_tick_time_ms = 10
 telemetry_interval_ms = 250
-bulk_sample_generation = false
-# With bulk generation enabled, set generation_batch_size = 4096 to separate
+
+# Set generation_batch_size = 4096 to adjust
 # sampler draws from evaluator chunks without changing evaluator work.

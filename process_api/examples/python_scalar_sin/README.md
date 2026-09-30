@@ -10,7 +10,8 @@ pip install -r requirements.txt --force-reinstall
 ```
 
 `requirements.txt` installs the GammaBoard Python process wrapper from the
-repository, the same way an external user runtime can depend on it.
+current checkout so its protocol matches the Rust binary. External runtimes should
+install the SDK from the same GammaBoard revision.
 
 The worker entrypoint is:
 

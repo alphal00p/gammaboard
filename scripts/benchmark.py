@@ -10,34 +10,30 @@ from pathlib import Path
 import random
 import shutil
 import signal
-import socket
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 import tomllib
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def write_json(path, value):
-    path.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n')
+from benchmark_common import (ROOT, Session, active_run, calibrate_workloads, idle_cpus, load_results, physical_cpus,
+                              preserve_inputs, run_card, workload, write_json)
 
 
 def validate_suite(s):
     allowed = {'eval_us', 'workers', 'batch_sizes', 'repetitions', 'cpu_limit',
                'duration_seconds', 'warmup_seconds', 'budget_seconds', 'seed',
-               'min_tick_time_ms', 'telemetry_interval_ms', 'bulk_sample_generation',
+               'min_tick_time_ms', 'telemetry_interval_ms',
                'generation_batch_size'}
     if unknown := s.keys() - allowed:
         raise ValueError(f'unknown suite settings: {sorted(unknown)}')
     for key in ('eval_us', 'workers', 'batch_sizes'):
         values = s.get(key)
-        if not isinstance(values, list) or not values or any(type(v) is not int or v <= 0 for v in values) or len(set(values)) != len(values):
-            raise ValueError(f'{key} must contain unique positive integers')
-    if min(s['eval_us']) < 1 or max(s['eval_us']) > 100000:
-        raise ValueError('eval_us must be between 1 and 100000')
+        types = (int, float) if key == 'eval_us' else (int,)
+        if not isinstance(values, list) or not values or any(type(v) not in types or not math.isfinite(v) or v <= 0 for v in values) or len(set(values)) != len(values):
+            raise ValueError(f'{key} must contain unique positive finite values')
+    if min(s['eval_us']) < .1 or max(s['eval_us']) > 100000:
+        raise ValueError('eval_us must be between 0.1 and 100000')
     if min(s['batch_sizes']) < 16 or max(s['batch_sizes']) > 1000000:
         raise ValueError('batch_sizes must be between 16 and 1000000')
     for key in ('repetitions', 'cpu_limit'):
@@ -58,13 +54,9 @@ def validate_suite(s):
         raise ValueError('duration must cover at least eight telemetry publication intervals')
     if s['warmup_seconds'] < 2*s.get('telemetry_interval_ms',250)/1000:
         raise ValueError('warmup must cover at least two telemetry publication intervals')
-    if type(s.get('bulk_sample_generation', False)) is not bool:
-        raise ValueError('bulk_sample_generation must be boolean')
     generation_size = s.get('generation_batch_size', max(s['batch_sizes']))
     if type(generation_size) is not int or not max(s['batch_sizes']) <= generation_size <= 1000000:
         raise ValueError('generation_batch_size must cover all evaluator batches and be at most 1000000')
-    if 'generation_batch_size' in s and not s.get('bulk_sample_generation', False):
-        raise ValueError('generation_batch_size requires bulk_sample_generation')
     if max(s['workers']) > s['cpu_limit']:
         raise ValueError('worker count exceeds the CPU budget')
     # Long batches make bounded measurements and shutdown uninformative.
@@ -83,133 +75,12 @@ def estimated_seconds(suite):
     return phases * (suite['duration_seconds'] + suite['warmup_seconds']) + 5 * configurations * len(suite['workers']) + 60
 
 
-def physical_cpus():
-    """One logical CPU per physical core, restricted to our existing affinity."""
-    allowed = sorted(os.sched_getaffinity(0))
-    seen, result = set(), []
-    for cpu in allowed:
-        base = Path(f'/sys/devices/system/cpu/cpu{cpu}/topology')
-        key = (base.joinpath('physical_package_id').read_text().strip(), base.joinpath('core_id').read_text().strip())
-        if key not in seen:
-            seen.add(key)
-            result.append(cpu)
-    return result
-
-
-def idle_cpus(candidates, count):
-    def counters():
-        result = {}
-        for line in Path('/proc/stat').read_text().splitlines():
-            label, *values = line.split()
-            if label.startswith('cpu') and label[3:].isdigit():
-                v = list(map(int, values))
-                result[int(label[3:])] = (sum(v[:8]), v[3]+v[4])
-        return result
-    before = counters()
-    time.sleep(0.25)
-    after = counters()
-    def load(cpu):
-        total = after[cpu][0]-before[cpu][0]
-        idle = after[cpu][1]-before[cpu][1]
-        return (1-idle/total if total else 1, cpu)
-    return sorted(sorted(candidates, key=load)[:count])
-
-
-class Session:
-    def __init__(self, binary, output, budget, offset, max_connections=128):
-        self.binary, self.output, self.offset = binary, output, offset
-        self.deadline = time.monotonic()+budget-30  # Reserve cleanup time.
-        self.directory = Path(tempfile.mkdtemp(prefix='gmb-scale-', dir='/tmp'))
-        self.runtime = self.directory/'runtime.toml'
-        self.runtime.write_text(f'[resources]\nroots = [{json.dumps(str(self.directory/"resources"))}]\n'
-                                f'[local_postgres]\nsocket_dir = {json.dumps(str(self.directory/"socket"))}\nmax_connections = {max_connections}\n')
-        self.process = None
-
-    def argv(self, *args):
-        return [str(self.binary), '--runtime-config', str(self.runtime), '--port-offset', str(self.offset), '--json', *map(str, args)]
-
-    def cli(self, *args, timeout=90):
-        remaining = self.deadline-time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError('suite time budget exhausted; partial results were retained')
-        result = subprocess.run(self.argv(*args), cwd=ROOT, capture_output=True, text=True,
-                                timeout=min(timeout, remaining))
-        if result.returncode:
-            raise RuntimeError(f'GammaBoard {args}: {result.stdout}\n{result.stderr}')
-        return json.loads(result.stdout)
-
-    def __enter__(self):
-        try:
-            for port in (8080+self.offset, 4000+self.offset, 5400+self.offset):
-                with socket.socket() as sock:
-                    if sock.connect_ex(('127.0.0.1', port)) == 0:
-                        raise RuntimeError(f'port {port} is occupied; choose another --port-offset')
-            with (self.output/'deploy.log').open('w') as log:
-                self.process = subprocess.Popen(self.argv('deploy'), cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
-            deadline = min(self.deadline, time.monotonic()+60)
-            while time.monotonic() < deadline:
-                if self.process.poll() is not None:
-                    raise RuntimeError('deployment exited; inspect deploy.log')
-                try:
-                    self.cli('node', 'list', timeout=3)
-                    return self
-                except (RuntimeError, subprocess.TimeoutExpired):
-                    time.sleep(.25)
-            raise TimeoutError('deployment readiness timed out')
-        except BaseException:
-            self.__exit__(*sys.exc_info())
-            raise
-
-    def __exit__(self, exc_type, *_):
-        if self.process is not None and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                print(f'Deployment still running (pid={self.process.pid}); retained {self.directory}', file=sys.stderr)
-                raise
-        if exc_type is None and (self.process is None or self.process.returncode == 0):
-            shutil.rmtree(self.directory)
-        else:
-            print(f'Deployment diagnostics retained in {self.directory}', file=sys.stderr)
-            if exc_type is None:
-                raise RuntimeError(f'deployment did not shut down cleanly (exit {self.process.returncode})')
-
-
-def workload(iterations):
-    return f'[evaluator]\nkind = "unit"\ncontinuous_dims = 6\ncpu_iterations_per_sample = {iterations}\n'
-
-
-def run_card(iterations, batch_size, min_tick_time_ms=10, telemetry_interval_ms=250,
-             bulk_sample_generation=False, generation_batch_size=None):
-    return 'name = "scaling-benchmark"\n'+workload(iterations)+f'''
-[evaluator_runner_params]
-min_tick_time_ms = {min_tick_time_ms}
-performance_snapshot_interval_ms = {telemetry_interval_ms}
-[sampler_aggregator_runner_params]
-min_tick_time_ms = {min_tick_time_ms}
-frontend_sync_interval_ms = {telemetry_interval_ms}
-performance_snapshot_interval_ms = {telemetry_interval_ms}
-[sampler_aggregator_runner_params.queue]
-fixed_batch_size = {batch_size}
-max_batch_size = {generation_batch_size or batch_size}
-bulk_sample_generation = {str(bulk_sample_generation).lower()}
-[[task_queue]]
-name = "measure"
-kind = "sample"
-stop_condition = {{ max_samples = 1000000000000 }}
-accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 1234 }} }}
-'''
-
-
 def measure_case(session, directory, suite, cost, workers, batch_size, repeat, iterations):
     evaluator_card = directory/'evaluator.toml'
     evaluator_card.write_text(workload(iterations))
     card = directory/'run.toml'
     card.write_text(run_card(iterations, batch_size, suite.get('min_tick_time_ms', 10),
                              suite.get('telemetry_interval_ms', 250),
-                             suite.get('bulk_sample_generation', False),
                              suite.get('generation_batch_size')))
     direct, measurement = {}, None
     # Rotate the pipeline's position between repetitions to avoid always measuring
@@ -227,22 +98,16 @@ def measure_case(session, directory, suite, cost, workers, batch_size, repeat, i
                                     '--duration', f'{suite["duration_seconds"]}s')
             write_json(directory/f'{backend}.json', direct[n])
             continue
-        run_id = session.cli('run', 'create', card)['run_id']
-        session.cli('run', 'resume', run_id, '--max-evaluators', workers)
-        session.cli('run', 'wait', run_id, '--until', 'ready', '--evaluators', workers,
-                    '--max-age', max_age)
-        # Readiness and discarded warmup are distinct. Save both the warmup and
-        # measurement so startup effects can be inspected without repeating work.
-        for name, duration in [('warmup', suite['warmup_seconds']),
-                               ('gammaboard', suite['duration_seconds'])]:
-            observation = session.cli('run', 'performance', run_id, '--duration', f'{duration}s',
-                                       '--interval', interval, '--max-age', max_age)
-            write_json(directory/f'{name}.json', observation)
-            if name == 'gammaboard':
-                measurement = observation
-        session.cli('run', 'pause', run_id)
-        session.cli('run', 'wait', run_id, '--until', 'idle')
-        session.cli('run', 'remove', '--yes', run_id)
+        with active_run(session, card, workers, max_age) as run_id:
+            # Readiness and discarded warmup are distinct. Save both the warmup and
+            # measurement so startup effects can be inspected without repeating work.
+            for name, duration in [('warmup', suite['warmup_seconds']),
+                                   ('gammaboard', suite['duration_seconds'])]:
+                observation = session.cli('run', 'performance', run_id, '--duration', f'{duration}s',
+                                           '--interval', interval, '--max-age', max_age)
+                write_json(directory/f'{name}.json', observation)
+                if name == 'gammaboard':
+                    measurement = observation
     return measurement_record(measurement, direct, eval_us=cost, workers=workers,
                               batch_size=batch_size, repeat=repeat,
                               cpu_iterations_per_sample=iterations, measurement_order=order)
@@ -273,7 +138,6 @@ def execute(args):
     suite = tomllib.loads(args.suite.read_text())
     suite.setdefault('min_tick_time_ms', 10)
     suite.setdefault('telemetry_interval_ms', 250)
-    suite.setdefault('bulk_sample_generation', False)
     cases = validate_suite(suite)
     if not hasattr(os, 'sched_setaffinity'):
         raise RuntimeError('CPU-bounded runs currently require Linux affinity support')
@@ -290,11 +154,13 @@ def execute(args):
     args.output.mkdir(parents=True, exist_ok=False)
     output = args.output.resolve()
     shutil.copyfile(args.suite, output/'suite.toml')
+    binary, harness_hashes = preserve_inputs(output, binary)
     with binary.open('rb') as binary_file:
         binary_hash = hashlib.file_digest(binary_file,'sha256').hexdigest()
-    metadata = dict(schema_version=1, suite=suite, cpus=cpus, physical_core_budget=len(cpus),
+    metadata = dict(schema_version=1, experiment='matrix', suite=suite, cpus=cpus, physical_core_budget=len(cpus),
                     cpu_model=next((line.split(':',1)[1].strip() for line in Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('model name')), None),
                     load_average=os.getloadavg(), binary=str(binary), binary_sha256=binary_hash,
+                    harness_files=harness_hashes,
                     started_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                     scope='CPU synthetic, fixed batches, warm inference; direct baseline includes per-worker uniform generation/materialization/scalar accumulation',
                     status='running')
@@ -308,20 +174,13 @@ def execute(args):
     records = []
     try:
         with Session(binary, output, suite['budget_seconds'], args.port_offset) as session:
-            if args.calibration:
-                calibrations = json.loads(args.calibration.read_text())
-                for cost in suite['eval_us']:
-                    iterations = calibrations[str(cost)]['cpu_iterations_per_sample']
-                    if type(iterations) is not int or iterations <= 0:
-                        raise ValueError('invalid saved calibration')
-            else:
-                calibrations = {str(cost): session.cli('benchmark','calibrate','--eval-us',cost) for cost in suite['eval_us']}
+            calibrations = calibrate_workloads(session, suite['eval_us'], args.calibration)
             write_json(output/'calibration.json', calibrations)
             session.cli('node','start-local',max(suite['workers'])+1)
             for index, (cost, workers, batch_size, repeat) in enumerate(cases):
                 directory = output/f'case-{index:03d}'
                 directory.mkdir()
-                iterations = calibrations[str(cost)]['cpu_iterations_per_sample']
+                iterations = calibrations[str(float(cost))]['cpu_iterations_per_sample']
                 record = measure_case(session, directory, suite, cost, workers, batch_size, repeat, iterations)
                 record['case'] = index
                 records.append(record)
@@ -341,11 +200,6 @@ def execute(args):
     if metadata.get('invalid_cases'):
         raise RuntimeError(f"{metadata['invalid_cases']} invalid cases; inspect saved issues before plotting")
     return output
-
-
-def load_results(directory):
-    path = directory/'results.jsonl'
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
 def grouped(records, metric):
@@ -490,6 +344,18 @@ def main():
     run.add_argument('--output',type=Path,required=True)
     run.add_argument('--port-offset',type=int,default=50)
     run.add_argument('--calibration',type=Path,help='reuse fixed work from a previous calibration.json for revision comparisons')
+    frontier = commands.add_parser('frontier', help='sparse throughput curves for RNG, materialized and feedback data paths')
+    frontier.add_argument('suite', type=Path, nargs='?', default=ROOT/'resources/templates/benchmarks/frontier.toml')
+    frontier.add_argument('--binary', type=Path, default=ROOT/'target/dev-optim/gammaboard')
+    frontier.add_argument('--output', type=Path, required=True)
+    frontier.add_argument('--port-offset', type=int, default=150)
+    frontier.add_argument('--budget', type=int, help='override the suite time limit; incomplete coverage remains visible')
+    design = frontier.add_mutually_exclusive_group()
+    design.add_argument('--points', type=Path, help='JSON list of explicit points to validate in fresh runs')
+    design.add_argument('--search', action='store_true', help='opt in to adaptive evaluator-batch and worker-count exploration')
+    process = commands.add_parser('process', help='targeted Rust/Python process API correctness and overhead tests')
+    process.add_argument('--output', type=Path, required=True)
+    process.add_argument('--python', type=Path, help='Python interpreter with NumPy')
     io = commands.add_parser('io', help='compare 1/2/8 inserts with fast integrands and large fleets')
     io.add_argument('--binary',type=Path,default=ROOT/'target/release/gammaboard')
     io.add_argument('--output',type=Path,required=True)
@@ -513,22 +379,68 @@ def main():
     try:
         if args.command=='plan':
             suite = tomllib.loads(args.suite.read_text())
-            cases = validate_suite(suite)
-            print(f'{len(cases)} trials; estimated {estimated_seconds(suite)/60:.1f} min; '
-                  f'hard budget {suite["budget_seconds"]/60:.1f} min; {suite["cpu_limit"]} physical cores')
+            if 'modes' in suite:
+                import benchmark_frontier
+                benchmark_frontier.validate(suite)
+                points = benchmark_frontier.sparse_points(suite)
+                measured = sum(benchmark_frontier.measurement_seconds(suite,p,'confirm') for p in points)
+                print(f'{len(points)} sparse fresh-run measurements; {measured/60:.1f} min of measurement windows '
+                      f'plus startup/warmup/drain; {suite["budget_seconds"]/60:.1f} min time limit; '
+                      f'up to {max(suite["workers"])} evaluators. Adaptive tuning requires --search.')
+            else:
+                cases = validate_suite(suite)
+                print(f'{len(cases)} trials; estimated {estimated_seconds(suite)/60:.1f} min; '
+                      f'hard budget {suite["budget_seconds"]/60:.1f} min; {suite["cpu_limit"]} physical cores')
         elif args.command=='run':
             if not 1 <= args.port_offset <= 57000: raise ValueError('invalid port offset')
             print(execute(args))
         elif args.command=='io':
             import benchmark_io
             print(benchmark_io.execute(args))
-        elif args.command=='plot': print(plot(args.directory))
-        elif args.command=='summary': summary(args.directory)
-        else: compare(args.before,args.after)
+        elif args.command=='frontier':
+            import benchmark_frontier
+            if not 1 <= args.port_offset <= 57000: raise ValueError('invalid port offset')
+            print(benchmark_frontier.execute(args))
+        elif args.command=='process':
+            import benchmark_process
+            print(benchmark_process.execute(args))
+        elif args.command in ('plot', 'summary'):
+            kind = artifact_kind(args.directory)
+            if kind == 'process_api':
+                import benchmark_process
+                print(benchmark_process.report(args.directory, plots=args.command == 'plot'))
+            elif kind == 'frontier':
+                import benchmark_frontier_plots
+                print(benchmark_frontier_plots.report(args.directory, plots=args.command == 'plot'))
+            elif kind == 'io':
+                import benchmark_io
+                print(benchmark_io.report(args.directory, plots=args.command == 'plot'))
+            elif args.command == 'plot':
+                print(plot(args.directory))
+            else:
+                summary(args.directory)
+        else:
+            kind = artifact_kind(args.before)
+            if kind != artifact_kind(args.after):
+                raise ValueError('cannot compare different benchmark families')
+            if kind == 'frontier':
+                import benchmark_frontier
+                benchmark_frontier.compare(args.before, args.after)
+            elif kind == 'io':
+                import benchmark_io
+                benchmark_io.compare(args.before, args.after)
+            else:
+                compare(args.before,args.after)
     except (ValueError, RuntimeError, TimeoutError, OSError, subprocess.SubprocessError, KeyboardInterrupt) as exc:
-        print(f'Benchmark stopped: {exc}',file=sys.stderr)
+        print(f'Benchmark stopped: {str(exc) or type(exc).__name__}',file=sys.stderr)
         return 1
     return 0
+
+
+def artifact_kind(directory):
+    manifest = json.loads((directory/'manifest.json').read_text())
+    return manifest.get('experiment') or ('frontier' if manifest.get('schema_version') == 2
+                                         else 'io' if 'insert_limits' in manifest else 'matrix')
 
 
 def interrupted(*_):

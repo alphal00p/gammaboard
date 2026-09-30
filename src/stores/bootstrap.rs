@@ -18,6 +18,16 @@ pub async fn get_pg_pool(
             .max_connections(max_connections)
             .min_connections(0)
             .idle_timeout(Duration::from_secs(30))
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    // Bound blocked operations as well as pool acquisition. CPU
+                    // evaluation and process callbacks run outside these queries.
+                    sqlx::query("SELECT set_config('statement_timeout','30s',false), set_config('lock_timeout','5s',false)")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect(database_url)
             .await
         {

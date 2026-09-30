@@ -92,3 +92,33 @@ BEGIN
 END $$;
 
 \ir ../migrations/202609240002_input_compression.sql
+
+CREATE TEMP TABLE upgrade_cpu_before AS SELECT id, cpu_seconds FROM run_tasks;
+DO $$
+DECLARE telemetry_table TEXT;
+BEGIN
+    FOREACH telemetry_table IN ARRAY ARRAY[
+        'evaluator_performance_history', 'evaluator_performance_latest',
+        'sampler_aggregator_performance_history', 'sampler_aggregator_performance_latest'
+    ] LOOP
+        EXECUTE format('INSERT INTO %I (id,run_id,worker_id)
+                        SELECT 0,id,''upgrade-worker'' FROM runs WHERE name=''upgrade-survivor''', telemetry_table);
+    END LOOP;
+END $$;
+\ir ../migrations/202609290001_worker_accounting.sql
+\ir ../migrations/202609290002_telemetry_ownership.sql
+UPDATE nodes SET lease_expires_at=now()+interval '1 hour' WHERE name='upgrade-worker';
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM run_tasks t JOIN upgrade_cpu_before b USING(id)
+               WHERE t.cpu_seconds<>b.cpu_seconds OR task_cpu_seconds(t.id,t.cpu_seconds)<b.cpu_seconds) THEN
+        RAISE EXCEPTION 'worker accounting migration lost existing task totals';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM task_worker_cpu_time WHERE cpu_seconds>0) THEN
+        RAISE EXCEPTION 'upgraded worker did not write independent accounting';
+    END IF;
+    IF EXISTS (SELECT run_id,worker_id FROM evaluator_performance_history
+               EXCEPT SELECT run_id,worker_id FROM run_telemetry_workers) THEN
+        RAISE EXCEPTION 'telemetry migration lost run ownership';
+    END IF;
+END $$;

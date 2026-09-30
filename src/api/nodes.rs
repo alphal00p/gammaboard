@@ -243,9 +243,12 @@ pub async fn stop_all_nodes_gracefully(
     store: &impl ControlPlaneStore,
     params: GracefulNodeShutdownParams,
 ) -> Result<GracefulNodeShutdownResult, ApiError> {
-    let assignments_cleared = store.clear_all_desired_assignments().await?;
-    let rows_updated = store.request_all_nodes_shutdown().await?;
-    wait_for_graceful_node_shutdown(store, params, assignments_cleared, rows_updated).await
+    bounded_shutdown(params.clone(), async {
+        let assignments_cleared = store.clear_all_desired_assignments().await?;
+        let rows_updated = store.request_all_nodes_shutdown().await?;
+        wait_for_graceful_node_shutdown(store, params, assignments_cleared, rows_updated).await
+    })
+    .await
 }
 
 /// Deployment shutdown preserves launch intent and assignments for explicit resume.
@@ -253,11 +256,31 @@ pub async fn suspend_nodes_gracefully(
     store: &crate::stores::PgStore,
     params: GracefulNodeShutdownParams,
 ) -> Result<GracefulNodeShutdownResult, ApiError> {
-    let rows_updated = store
-        .suspend_workers()
+    bounded_shutdown(params.clone(), async {
+        let rows_updated = store
+            .suspend_workers()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        wait_for_graceful_node_shutdown(store, params, 0, rows_updated).await
+    })
+    .await
+}
+
+async fn bounded_shutdown(
+    params: GracefulNodeShutdownParams,
+    shutdown: impl std::future::Future<Output = Result<GracefulNodeShutdownResult, ApiError>>,
+) -> Result<GracefulNodeShutdownResult, ApiError> {
+    let seconds = params
+        .sampler_drain_timeout_seconds
+        .saturating_add(params.node_stop_timeout_seconds)
+        .max(1);
+    tokio::time::timeout(Duration::from_secs(seconds), shutdown)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    wait_for_graceful_node_shutdown(store, params, 0, rows_updated).await
+        .map_err(|_| {
+            ApiError::Internal(format!(
+                "worker shutdown exceeded {seconds}s while requesting or draining workers"
+            ))
+        })?
 }
 
 async fn wait_for_graceful_node_shutdown(

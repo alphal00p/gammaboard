@@ -897,65 +897,34 @@ impl SampleStopCondition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct SamplerQueueTuning {
-    pub bulk_sample_generation: Option<bool>,
-    pub queue_buffer: Option<f64>,
+    pub fixed_batch_size: Option<usize>,
     pub target_batch_eval_ms: Option<f64>,
-    pub batch_size_deadband_ratio: Option<f64>,
-    pub batch_size_cooldown_ticks: Option<u32>,
     pub max_batch_size: Option<usize>,
-    pub max_queue_size: Option<usize>,
-    pub max_batches_per_tick: Option<usize>,
-    pub max_insert_bundle_size: Option<usize>,
-    pub max_concurrent_insert_tasks: Option<usize>,
-    pub completed_batch_fetch_limit: Option<usize>,
 }
 
 impl SamplerQueueTuning {
     pub fn validate(&self) -> Result<(), String> {
-        fn validate_non_negative_finite(value: Option<f64>, label: &str) -> Result<(), String> {
-            if let Some(value) = value
-                && (!value.is_finite() || value < 0.0)
-            {
-                return Err(format!("{label} must be finite and >= 0"));
-            }
-            Ok(())
-        }
-
-        fn validate_positive(value: Option<usize>, label: &str) -> Result<(), String> {
-            if value.is_some_and(|value| value == 0) {
-                return Err(format!("{label} must be > 0"));
-            }
-            Ok(())
-        }
-
-        validate_non_negative_finite(self.queue_buffer, "queue_tuning.queue_buffer")?;
-        if let Some(value) = self.target_batch_eval_ms
-            && (!value.is_finite() || value <= 0.0)
+        if self
+            .target_batch_eval_ms
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
         {
-            return Err("queue_tuning.target_batch_eval_ms must be finite and > 0".to_string());
+            return Err("target_batch_eval_ms must be finite and positive".into());
         }
-        validate_non_negative_finite(
-            self.batch_size_deadband_ratio,
-            "queue_tuning.batch_size_deadband_ratio",
-        )?;
-        validate_positive(self.max_batch_size, "queue_tuning.max_batch_size")?;
-        validate_positive(self.max_queue_size, "queue_tuning.max_queue_size")?;
-        validate_positive(
-            self.max_batches_per_tick,
-            "queue_tuning.max_batches_per_tick",
-        )?;
-        validate_positive(
-            self.max_insert_bundle_size,
-            "queue_tuning.max_insert_bundle_size",
-        )?;
-        validate_positive(
-            self.max_concurrent_insert_tasks,
-            "queue_tuning.max_concurrent_insert_tasks",
-        )?;
-        validate_positive(
-            self.completed_batch_fetch_limit,
-            "queue_tuning.completed_batch_fetch_limit",
-        )?;
+        for (name, value) in [
+            ("max_batch_size", self.max_batch_size),
+            ("fixed_batch_size", self.fixed_batch_size),
+        ] {
+            if value.is_some_and(|n| n == 0) {
+                return Err(format!("{name} must be positive"));
+            }
+        }
+        if self
+            .fixed_batch_size
+            .zip(self.max_batch_size)
+            .is_some_and(|(fixed, max)| fixed > max)
+        {
+            return Err("fixed_batch_size exceeds max_batch_size".into());
+        }
         Ok(())
     }
 }

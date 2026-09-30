@@ -81,6 +81,12 @@ pub enum TaskCommand {
         task_id: i64,
         task_file: PathBuf,
     },
+    /// Replace live queue overrides from a TOML file; an empty file restores run defaults
+    Tune {
+        run: String,
+        task_id: i64,
+        tuning_file: PathBuf,
+    },
     /// List queued and historical tasks for a run
     List { run: String },
     /// Remove a pending task
@@ -345,6 +351,19 @@ async fn remove_runs(store: &PgStore, selection: RunRemovalSelection) -> Result<
 
 async fn run_task_command(store: &PgStore, command: TaskCommand) -> Result<()> {
     match command {
+        TaskCommand::Tune {
+            run,
+            task_id,
+            tuning_file,
+        } => {
+            let run = resolve_run_ref(store, &run).await?;
+            let tuning = toml::from_str(&std::fs::read_to_string(tuning_file)?)?;
+            let updated =
+                run_api::update_task_queue_tuning(store, run.run_id, task_id, Some(tuning))
+                    .await
+                    .map_err(api_to_anyhow)?;
+            print_json(&serde_json::json!({ "run_id": updated.run_id, "task": updated.task }));
+        }
         TaskCommand::Export { run, task_id } => {
             let run = resolve_run_ref(store, &run).await?;
             print_definition(

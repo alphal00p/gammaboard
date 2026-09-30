@@ -7,9 +7,10 @@ use tracing::info;
 
 use crate::utils::domain::Domain;
 use crate::{
-    Batch, EngineError, LatentBatchSpec, Point, SamplePlan,
-    core::BuildError,
-    sampling::havana_grid::{build_havana_grid, sample_to_point, validate_havana_grid_domain},
+    EngineError, Generation, LatentBatchSpec,
+    core::{AccumulatorConfig, BuildError},
+    sampling::havana_grid::{build_havana_grid, sample_components, validate_havana_grid_domain},
+    sampling::latent_batch::IndexedBatchBuilder,
     sampling::{
         DiscreteSubspace, LatentBatchPayload, PdfPoint, SamplerAggregator,
         SamplerAggregatorSnapshot,
@@ -21,6 +22,7 @@ use crate::{
 #[serde(default, deny_unknown_fields)]
 pub struct HavanaSamplerParams {
     pub seed: u64,
+    pub generation_batch_size: usize,
     pub bins: usize,
     pub samples_for_update: usize,
     pub initial_training_rate: f64,
@@ -41,11 +43,14 @@ pub enum HavanaInferenceSource {
 #[serde(default, deny_unknown_fields)]
 pub struct HavanaInferenceSamplerParams {
     pub seed: Option<u64>,
+    pub generation_batch_size: usize,
     pub source: HavanaInferenceSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HavanaSamplerSnapshot {
+    #[serde(default = "super::super::sampler::default_generation_batch_size")]
+    generation_batch_size: usize,
     batches_produced: usize,
     samples_produced: usize,
     batches_ingested: usize,
@@ -61,6 +66,8 @@ pub struct HavanaSamplerSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HavanaInferenceSamplerSnapshot {
+    #[serde(default = "super::super::sampler::default_generation_batch_size")]
+    generation_batch_size: usize,
     batches_produced: usize,
     samples_produced: usize,
     grid: Grid<f64>,
@@ -71,6 +78,7 @@ impl Default for HavanaSamplerParams {
     fn default() -> Self {
         Self {
             seed: 0,
+            generation_batch_size: super::super::sampler::default_generation_batch_size(),
             bins: 64,
             samples_for_update: 10_240,
             initial_training_rate: 0.1,
@@ -83,6 +91,7 @@ impl Default for HavanaInferenceSamplerParams {
     fn default() -> Self {
         Self {
             seed: None,
+            generation_batch_size: super::super::sampler::default_generation_batch_size(),
             source: HavanaInferenceSource::LatestTrainingSamplerAggregator,
         }
     }
@@ -92,6 +101,9 @@ fn validate_havana_sampler_params(
     parsed: &HavanaSamplerParams,
     _domain: &Domain,
 ) -> Result<(), BuildError> {
+    if parsed.generation_batch_size == 0 {
+        return Err(BuildError::build("generation_batch_size must be positive"));
+    }
     if parsed.bins == 0 {
         return Err(BuildError::build("havana sampler requires bins > 0"));
     }
@@ -115,6 +127,8 @@ fn validate_havana_sampler_params(
 }
 
 pub struct HavanaSampler {
+    reusable_samples: Vec<Sample<f64>>,
+    generation_batch_size: usize,
     batches_produced: usize,
     samples_produced: usize,
     batches_ingested: usize,
@@ -129,6 +143,7 @@ pub struct HavanaSampler {
 }
 
 pub struct HavanaInferenceSampler {
+    generation_batch_size: usize,
     batches_produced: usize,
     samples_produced: usize,
     grid: Grid<f64>,
@@ -145,6 +160,8 @@ impl HavanaSampler {
         final_training_rate: f64,
     ) -> Self {
         Self {
+            generation_batch_size: super::super::sampler::default_generation_batch_size(),
+            reusable_samples: Vec::new(),
             batches_produced: 0,
             samples_produced: 0,
             batches_ingested: 0,
@@ -207,6 +224,7 @@ impl HavanaSampler {
 
     fn to_snapshot(&self) -> HavanaSamplerSnapshot {
         HavanaSamplerSnapshot {
+            generation_batch_size: self.generation_batch_size,
             batches_produced: self.batches_produced,
             samples_produced: self.samples_produced,
             batches_ingested: self.batches_ingested,
@@ -228,8 +246,13 @@ impl HavanaSampler {
         crate::activate_symbolica_oem_license()
             .map_err(|err| BuildError::build(err.to_string()))?;
         validate_havana_grid_domain(&snapshot.grid, domain, "havana snapshot")?;
+        if snapshot.generation_batch_size == 0 {
+            return Err(BuildError::build("generation_batch_size must be positive"));
+        }
 
         Ok(Self {
+            generation_batch_size: snapshot.generation_batch_size,
+            reusable_samples: Vec::new(),
             batches_produced: snapshot.batches_produced,
             samples_produced: snapshot.samples_produced,
             batches_ingested: snapshot.batches_ingested,
@@ -261,14 +284,16 @@ impl HavanaSampler {
         let rng = SerializableMonteCarloRng::new(params.seed, 0);
         let grid = build_havana_grid(domain, &params)?;
 
-        Ok(HavanaSampler::new(
+        let mut sampler = HavanaSampler::new(
             grid,
             rng,
             params.samples_for_update,
             stop_training_after_n_samples,
             params.initial_training_rate,
             params.final_training_rate,
-        ))
+        );
+        sampler.generation_batch_size = params.generation_batch_size;
+        Ok(sampler)
     }
 
     pub(crate) fn into_inference(
@@ -276,6 +301,7 @@ impl HavanaSampler {
         params: HavanaInferenceSamplerParams,
     ) -> HavanaInferenceSampler {
         HavanaInferenceSampler {
+            generation_batch_size: params.generation_batch_size,
             batches_produced: 0,
             samples_produced: 0,
             grid: self.grid,
@@ -293,6 +319,9 @@ impl HavanaInferenceSampler {
         snapshot: SamplerAggregatorSnapshot,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
+        if params.generation_batch_size == 0 {
+            return Err(BuildError::build("generation_batch_size must be positive"));
+        }
         match snapshot {
             SamplerAggregatorSnapshot::HavanaTraining { raw } => {
                 let snapshot: HavanaSamplerSnapshot =
@@ -326,7 +355,11 @@ impl HavanaInferenceSampler {
         crate::activate_symbolica_oem_license()
             .map_err(|err| BuildError::build(err.to_string()))?;
         validate_havana_grid_domain(&snapshot.grid, domain, "havana inference snapshot")?;
+        if snapshot.generation_batch_size == 0 {
+            return Err(BuildError::build("generation_batch_size must be positive"));
+        }
         Ok(Self {
+            generation_batch_size: snapshot.generation_batch_size,
             batches_produced: snapshot.batches_produced,
             samples_produced: snapshot.samples_produced,
             grid: snapshot.grid,
@@ -336,6 +369,7 @@ impl HavanaInferenceSampler {
 
     fn to_snapshot(&self) -> HavanaInferenceSamplerSnapshot {
         HavanaInferenceSamplerSnapshot {
+            generation_batch_size: self.generation_batch_size,
             batches_produced: self.batches_produced,
             samples_produced: self.samples_produced,
             grid: self.grid.clone(),
@@ -573,24 +607,6 @@ impl SamplerAggregator for HavanaSampler {
         validate_havana_grid_domain(&self.grid, domain, "havana sampler")
     }
 
-    fn training_samples_remaining(&self) -> Option<usize> {
-        let remaining = self.remaining_training_samples_to_produce();
-        if remaining == 0 {
-            None
-        } else {
-            Some(remaining)
-        }
-    }
-
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        let nr_samples = self.training_window_samples_remaining();
-        if nr_samples == 0 {
-            Ok(SamplePlan::Pause)
-        } else {
-            Ok(SamplePlan::Produce { nr_samples })
-        }
-    }
-
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
         let raw = serde_json::to_value(self.to_snapshot()).map_err(|err| {
             EngineError::engine(format!("failed to serialize havana snapshot: {err}"))
@@ -598,34 +614,46 @@ impl SamplerAggregator for HavanaSampler {
         Ok(SamplerAggregatorSnapshot::HavanaTraining { raw })
     }
 
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let mut points: Vec<Point> = Vec::with_capacity(nr_samples);
-
-        if self.remaining_training_samples_to_produce() > 0 {
-            let mut samples = Vec::with_capacity(nr_samples);
-            for _ in 0..nr_samples {
-                let mut sample = Sample::new();
-                self.grid.sample(&mut self.rng, &mut sample);
-                points.push(sample_to_point(&sample)?);
-                samples.push(sample);
-            }
-            self.pending_training_samples.push_back(samples);
-        } else {
-            for _ in 0..nr_samples {
-                let mut sample = Sample::new();
-                self.grid.sample(&mut self.rng, &mut sample);
-                points.push(sample_to_point(&sample)?);
-            }
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        if remaining_sample_budget == Some(0)
+            || self.samples_produced >= self.stop_training_after_n_samples
+        {
+            return Ok(Generation::Finished);
         }
-
-        let batch = Batch::new(points).engine_err()?;
+        let remaining = self.training_window_samples_remaining();
+        if remaining == 0 {
+            return Ok(Generation::Waiting);
+        }
+        let nr_samples = remaining
+            .min(self.generation_batch_size)
+            .min(remaining_sample_budget.unwrap_or(usize::MAX));
+        let mut samples = std::mem::take(&mut self.reusable_samples);
+        samples.resize_with(nr_samples, Sample::new);
+        let mut builder = IndexedBatchBuilder::new(nr_samples);
+        let mut discrete = Vec::new();
+        for sample in &mut samples {
+            self.grid.sample(&mut self.rng, sample);
+            let (continuous, weight) = sample_components(sample, &mut discrete)?;
+            builder.push(&discrete, continuous, weight);
+        }
+        self.pending_training_samples.push_back(samples);
         self.batches_produced += 1;
-        self.samples_produced = self.samples_produced.saturating_add(nr_samples);
-        Ok(LatentBatchSpec::from_batch(&batch))
+        self.samples_produced += nr_samples;
+        Ok(Generation::batch(
+            LatentBatchSpec {
+                nr_samples,
+                accumulator: AccumulatorConfig::scalar(),
+                payload: builder.finish(),
+            },
+            Some(remaining),
+        ))
     }
 
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let Some(samples) = self.pending_training_samples.pop_front() else {
+    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+        let Some(samples) = self.pending_training_samples.front() else {
             return Err(EngineError::engine(format!(
                 "havana sampler received {} training weights with no pending training batch",
                 training_values.len()
@@ -648,6 +676,7 @@ impl SamplerAggregator for HavanaSampler {
                 .add_training_sample(sample, *eval / sample.get_weight()) // the evaluator return the weighted eval, so it needs to be divided by the sample weight
                 .engine_err()?;
         }
+        self.reusable_samples = self.pending_training_samples.pop_front().unwrap();
         self.batches_ingested += 1;
         self.samples_ingested = self.samples_ingested.saturating_add(train_len);
 
@@ -714,37 +743,42 @@ impl SamplerAggregator for HavanaInferenceSampler {
         validate_havana_grid_domain(&self.grid, domain, "havana inference sampler")
     }
 
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let batch_rng_state = self.rng.clone();
-        for _ in 0..nr_samples {
-            let mut sample = Sample::new();
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        if remaining_sample_budget == Some(0) {
+            return Ok(Generation::Finished);
+        }
+        let nr_samples = self
+            .generation_batch_size
+            .min(remaining_sample_budget.unwrap_or(usize::MAX));
+        let mut rng_states = Vec::with_capacity(
+            nr_samples.div_ceil(crate::sampling::latent_batch::RNG_CHECKPOINT_STRIDE),
+        );
+        let mut sample = Sample::new();
+        for index in 0..nr_samples {
+            if index % crate::sampling::latent_batch::RNG_CHECKPOINT_STRIDE == 0 {
+                rng_states.push(self.rng.clone());
+            }
             self.grid.sample(&mut self.rng, &mut sample);
         }
         self.batches_produced += 1;
-        self.samples_produced = self.samples_produced.saturating_add(nr_samples);
-        Ok(LatentBatchSpec {
-            nr_samples,
-            accumulator: crate::core::AccumulatorConfig::scalar(),
-            payload: LatentBatchPayload::HavanaInference {
-                rng_state: batch_rng_state,
+        self.samples_produced += nr_samples;
+        Ok(Generation::batch(
+            LatentBatchSpec {
+                nr_samples,
+                accumulator: AccumulatorConfig::scalar(),
+                payload: LatentBatchPayload::HavanaInferenceIndexed {
+                    rng_states,
+                    offset: 0,
+                },
             },
-        })
+            None,
+        ))
     }
 
-    fn produce_bulk_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        let mut points = Vec::with_capacity(nr_samples);
-        for _ in 0..nr_samples {
-            let mut sample = Sample::new();
-            self.grid.sample(&mut self.rng, &mut sample);
-            points.push(sample_to_point(&sample)?);
-        }
-        let batch = Batch::new(points).engine_err()?;
-        self.batches_produced += 1;
-        self.samples_produced = self.samples_produced.saturating_add(nr_samples);
-        Ok(LatentBatchSpec::from_batch(&batch))
-    }
-
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         if !training_values.is_empty() {
             return Err(EngineError::engine(
                 "havana inference sampler does not accept training weights",
@@ -794,15 +828,73 @@ mod tests {
     use super::*;
     use crate::core::AccumulatorConfig;
     use crate::evaluation::Materializer;
+    use crate::sampling::havana_grid::sample_to_point;
     use crate::sampling::materializer::HavanaInferenceMaterializer;
     use crate::sampling::{DiscreteSubspace, LatentBatch, StageHandoffOwned};
+    use crate::{Batch, Point};
     use rand::RngCore;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn flat_generation_preserves_grid_samples_rng_and_pending_training() {
+        for domain in [
+            Domain::continuous(3),
+            Domain::rectangular_with_cardinalities(2, [2, 3]),
+            Domain::discrete(
+                None,
+                [
+                    crate::DomainBranch::new(0, Domain::continuous(1)),
+                    crate::DomainBranch::new(1, Domain::continuous(3)),
+                ],
+            ),
+        ] {
+            for training in [false, true] {
+                let mut sampler = HavanaSampler::from_params_and_domain(
+                    HavanaSamplerParams {
+                        seed: 42,
+                        samples_for_update: 256,
+                        ..Default::default()
+                    },
+                    &domain,
+                    256,
+                )
+                .unwrap();
+                let mut grid = sampler.grid.clone();
+                let mut rng = sampler.rng.clone();
+                for _ in 0..2 {
+                    let mut samples = Vec::new();
+                    let expected = Batch::from_points((0..128).map(|_| {
+                        let mut sample = Sample::new();
+                        grid.sample(&mut rng, &mut sample);
+                        let point = sample_to_point(&sample).unwrap();
+                        samples.push(sample);
+                        point
+                    }))
+                    .unwrap();
+                    let actual = sampler
+                        .generate(Some(128))
+                        .and_then(|generated| generated.into_batch())
+                        .unwrap();
+                    assert_eq!(actual.payload.as_batch().unwrap(), expected);
+                    assert_eq!(sampler.rng, rng);
+                    assert_eq!(
+                        serde_json::to_value(sampler.pending_training_samples.back().unwrap())
+                            .unwrap(),
+                        serde_json::to_value(samples).unwrap(),
+                    );
+                    if !training {
+                        sampler.feedback(&vec![1.0; 128]).unwrap();
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn snapshot_roundtrip_restores_havana_runtime_state() {
         let domain = Domain::rectangular(2, 0);
         let params = HavanaSamplerParams {
+            generation_batch_size: 1_048_576,
             seed: 7,
             bins: 8,
             samples_for_update: 16,
@@ -811,12 +903,16 @@ mod tests {
         };
         let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 32)
             .expect("build havana sampler");
-        let _ = sampler.produce_latent_batch(5).expect("produce");
+        let _ = sampler
+            .generate(Some(5))
+            .and_then(|generated| generated.into_batch())
+            .expect("produce");
         sampler
-            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .feedback(&[1.0, 2.0, 3.0, 4.0, 5.0])
             .expect("ingest");
         let _ = sampler
-            .produce_latent_batch(3)
+            .generate(Some(3))
+            .and_then(|generated| generated.into_batch())
             .expect("produce pending batch");
 
         let snapshot = sampler.snapshot().expect("snapshot");
@@ -842,111 +938,54 @@ mod tests {
     }
 
     #[test]
-    fn havana_limits_training_production_by_pending_samples() {
-        let domain = Domain::rectangular(2, 0);
+    fn havana_training_draws_are_independent_of_windows_and_reuse_storage() {
         let params = HavanaSamplerParams {
-            seed: 7,
-            bins: 8,
+            generation_batch_size: 5,
             samples_for_update: 16,
-            initial_training_rate: 0.1,
-            final_training_rate: 0.01,
+            ..Default::default()
         };
-        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 8)
-            .expect("build havana sampler");
-
-        assert_eq!(sampler.training_samples_remaining(), Some(8));
-        let _ = sampler
-            .produce_latent_batch(5)
-            .expect("produce first training batch");
-        assert_eq!(sampler.training_samples_remaining(), Some(3));
-        let _ = sampler
-            .produce_latent_batch(3)
-            .expect("produce second training batch");
-        assert_eq!(sampler.training_samples_remaining(), None);
-
-        sampler
-            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0, 5.0])
-            .expect("ingest first batch");
-        assert_eq!(sampler.training_samples_remaining(), None);
-
-        sampler
-            .ingest_training_values(&[1.0, 2.0, 3.0])
-            .expect("ingest second batch");
-        assert_eq!(sampler.training_samples_remaining(), None);
-    }
-
-    #[test]
-    fn havana_training_runs_in_lockstep_windows() {
-        let domain = Domain::rectangular(2, 0);
-        let params = HavanaSamplerParams {
-            seed: 7,
-            bins: 8,
-            samples_for_update: 16,
-            initial_training_rate: 0.1,
-            final_training_rate: 0.01,
-        };
-        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 40)
-            .expect("build havana sampler");
-
-        assert_eq!(
-            sampler.sample_plan().expect("initial sample plan"),
-            SamplePlan::Produce { nr_samples: 16 }
-        );
-
-        let _ = sampler
-            .produce_latent_batch(5)
-            .expect("produce first batch");
-        assert_eq!(
-            sampler
-                .sample_plan()
-                .expect("emit remaining capacity in the current training window"),
-            SamplePlan::Produce { nr_samples: 11 }
-        );
-
-        sampler
-            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0, 5.0])
-            .expect("ingest first batch");
-        assert_eq!(
-            sampler
-                .sample_plan()
-                .expect("emit remainder of the current training window after partial ingest"),
-            SamplePlan::Produce { nr_samples: 11 }
-        );
-
-        let _ = sampler
-            .produce_latent_batch(11)
-            .expect("produce remainder of first window");
-        assert_eq!(
-            sampler
-                .sample_plan()
-                .expect("pause after filling one full training window"),
-            SamplePlan::Pause
-        );
-
-        sampler
-            .ingest_training_values(&[1.0; 11])
-            .expect("ingest remainder of first window");
-        assert_eq!(
-            sampler.sample_plan().expect("next full training window"),
-            SamplePlan::Produce { nr_samples: 16 }
-        );
-
-        let _ = sampler
-            .produce_latent_batch(16)
-            .expect("produce second training window");
-        sampler
-            .ingest_training_values(&[1.0; 16])
-            .expect("ingest second training window");
-        assert_eq!(
-            sampler.sample_plan().expect("final partial window"),
-            SamplePlan::Produce { nr_samples: 8 }
-        );
+        let mut sampler =
+            HavanaSampler::from_params_and_domain(params, &Domain::continuous(2), 40).unwrap();
+        for window in [16, 16, 8] {
+            let mut draws = Vec::new();
+            let mut total = 0;
+            while total < window {
+                let Generation::Batch {
+                    batch,
+                    training_remaining,
+                } = sampler.generate(None).unwrap()
+                else {
+                    panic!("expected draw")
+                };
+                assert_eq!(training_remaining, Some(window - total));
+                assert!(batch.nr_samples <= 5);
+                total += batch.nr_samples;
+                draws.push(batch.nr_samples);
+            }
+            assert!(matches!(
+                sampler.generate(None).unwrap(),
+                Generation::Waiting | Generation::Finished
+            ));
+            for size in draws {
+                let values: Vec<_> = (0..size).map(|i| 1.0 + i as f64).collect();
+                assert!(sampler.feedback(&values[..size - 1]).is_err());
+                sampler.feedback(&values).unwrap();
+                assert_eq!(sampler.reusable_samples.len(), size);
+            }
+        }
+        assert_eq!(sampler.samples_ingested, 40);
+        assert!(matches!(
+            sampler.generate(None).unwrap(),
+            Generation::Finished
+        ));
+        assert!(sampler.pending_training_samples.is_empty());
     }
 
     #[test]
     fn havana_inference_handoff_emits_compact_rng_payloads() {
         let domain = Domain::rectangular(2, 0);
         let params = HavanaSamplerParams {
+            generation_batch_size: 1_048_576,
             seed: 7,
             bins: 8,
             samples_for_update: 16,
@@ -956,10 +995,11 @@ mod tests {
         let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 8)
             .expect("build havana sampler");
         let _ = sampler
-            .produce_latent_batch(4)
+            .generate(Some(4))
+            .and_then(|generated| generated.into_batch())
             .expect("produce training batch");
         sampler
-            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0])
+            .feedback(&[1.0, 2.0, 3.0, 4.0])
             .expect("ingest training batch");
 
         let snapshot = sampler.snapshot().expect("snapshot");
@@ -970,14 +1010,14 @@ mod tests {
         )
         .expect("build inference sampler");
         let batch = inference
-            .produce_latent_batch(5)
+            .generate(Some(5))
+            .and_then(|generated| generated.into_batch())
             .expect("produce inference");
         assert_eq!(batch.nr_samples, 5);
         match batch.payload {
-            LatentBatchPayload::HavanaInference { .. } => {}
+            LatentBatchPayload::HavanaInferenceIndexed { .. } => {}
             other => panic!("expected havana_inference payload, got {other:?}"),
         }
-        assert_eq!(inference.training_samples_remaining(), None);
     }
 
     #[test]
@@ -999,16 +1039,20 @@ mod tests {
             ],
         );
         let params = HavanaSamplerParams {
+            generation_batch_size: 1_048_576,
             seed: 7,
             bins: 8,
             samples_for_update: 16,
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
         };
-        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 8)
+        let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 16)
             .expect("build havana sampler");
 
-        let batch = sampler.produce_latent_batch(16).expect("produce batch");
+        let batch = sampler
+            .generate(Some(16))
+            .and_then(|generated| generated.into_batch())
+            .expect("produce batch");
         let batch = batch.payload.into_batch().expect("batch payload");
 
         assert_eq!(batch.size(), 16);
@@ -1048,6 +1092,7 @@ mod tests {
             ],
         );
         let params = HavanaSamplerParams {
+            generation_batch_size: 1_048_576,
             seed: 7,
             bins: 8,
             samples_for_update: 16,
@@ -1091,6 +1136,7 @@ mod tests {
             ],
         );
         let params = HavanaSamplerParams {
+            generation_batch_size: 1_048_576,
             seed: 7,
             bins: 8,
             samples_for_update: 16,
@@ -1124,6 +1170,7 @@ mod tests {
     fn havana_inference_snapshot_restores_discrete_grid_topology() {
         let domain = Domain::rectangular(2, 1);
         let params = HavanaSamplerParams {
+            generation_batch_size: 1_048_576,
             seed: 7,
             bins: 8,
             samples_for_update: 16,
@@ -1133,10 +1180,11 @@ mod tests {
         let mut sampler = HavanaSampler::from_params_and_domain(params, &domain, 8)
             .expect("build havana sampler");
         let _ = sampler
-            .produce_latent_batch(4)
+            .generate(Some(4))
+            .and_then(|generated| generated.into_batch())
             .expect("produce training batch");
         sampler
-            .ingest_training_values(&[1.0, 2.0, 3.0, 4.0])
+            .feedback(&[1.0, 2.0, 3.0, 4.0])
             .expect("ingest training batch");
 
         let snapshot = sampler.snapshot().expect("snapshot");
@@ -1160,86 +1208,108 @@ mod tests {
 
     #[test]
     fn havana_inference_is_expected_to_be_batch_partition_invariant() {
-        let domain = Domain::rectangular(2, 0);
-        let params = HavanaSamplerParams {
-            seed: 7,
-            bins: 8,
-            samples_for_update: 16,
-            initial_training_rate: 0.1,
-            final_training_rate: 0.01,
-        };
+        for domain in [
+            Domain::continuous(6),
+            Domain::discrete(
+                None,
+                [
+                    crate::DomainBranch::new(0, Domain::continuous(1)),
+                    crate::DomainBranch::new(1, Domain::continuous(3)),
+                ],
+            ),
+        ] {
+            let params = HavanaSamplerParams {
+                generation_batch_size: 1_048_576,
+                seed: 7,
+                bins: 8,
+                samples_for_update: 16,
+                initial_training_rate: 0.1,
+                final_training_rate: 0.01,
+            };
 
-        let mut training = HavanaSampler::from_params_and_domain(params, &domain, 32)
-            .expect("build havana sampler");
-        let _ = training
-            .produce_latent_batch(16)
-            .expect("produce training batch");
-        training
-            .ingest_training_values(&[1.0; 16])
-            .expect("ingest training weights");
+            let mut training = HavanaSampler::from_params_and_domain(params, &domain, 32)
+                .expect("build havana sampler");
+            let _ = training
+                .generate(Some(16))
+                .and_then(|generated| generated.into_batch())
+                .expect("produce training batch");
+            training
+                .feedback(&[1.0; 16])
+                .expect("ingest training weights");
 
-        let training_snapshot = training.snapshot().expect("training snapshot");
+            let training_snapshot = training.snapshot().expect("training snapshot");
 
-        let collect_points = |batch_plan: &[usize]| -> Vec<Point> {
-            let mut inference = HavanaInferenceSampler::from_params_and_snapshot(
+            let collect_points = |batch_plan: &[usize]| -> Vec<Point> {
+                let mut inference = HavanaInferenceSampler::from_params_and_snapshot(
+                    HavanaInferenceSamplerParams::default(),
+                    training_snapshot.clone(),
+                    &domain,
+                )
+                .expect("build inference sampler");
+
+                let mut points = Vec::new();
+                for &nr_samples in batch_plan {
+                    let latent = inference
+                        .generate(Some(nr_samples))
+                        .and_then(|generated| generated.into_batch())
+                        .expect("produce inference batch");
+                    let handoff = StageHandoffOwned {
+                        sampler_snapshot: Some(inference.snapshot().expect("inference snapshot")),
+                        observable_state: None,
+                    };
+                    let mut materializer = HavanaInferenceMaterializer::new(Some(handoff.as_ref()))
+                        .expect("build inference materializer");
+                    let batch = materializer
+                        .materialize_batch(&LatentBatch {
+                            nr_samples: latent.nr_samples,
+                            accumulator: AccumulatorConfig::scalar(),
+                            payload: latent.payload,
+                        })
+                        .expect("materialize inference batch");
+                    points.extend(batch.points().iter().cloned());
+                }
+                points
+            };
+
+            let one_batch = collect_points(&[4099]);
+            let two_batches = collect_points(&[1023, 3, 2048, 1025]);
+            let mut bulk = HavanaInferenceSampler::from_params_and_snapshot(
                 HavanaInferenceSamplerParams::default(),
-                training_snapshot.clone(),
+                training_snapshot,
                 &domain,
             )
-            .expect("build inference sampler");
-
-            let mut points = Vec::new();
-            for &nr_samples in batch_plan {
-                let latent = inference
-                    .produce_latent_batch(nr_samples)
-                    .expect("produce inference batch");
-                let handoff = StageHandoffOwned {
-                    sampler_snapshot: Some(inference.snapshot().expect("inference snapshot")),
-                    observable_state: None,
-                };
-                let mut materializer = HavanaInferenceMaterializer::new(Some(handoff.as_ref()))
-                    .expect("build inference materializer");
-                let batch = materializer
-                    .materialize_batch(&LatentBatch {
-                        nr_samples: latent.nr_samples,
-                        accumulator: AccumulatorConfig::scalar(),
-                        payload: latent.payload,
-                    })
-                    .expect("materialize inference batch");
-                points.extend(batch.points().iter().cloned());
-            }
-            points
-        };
-
-        let one_batch = collect_points(&[16]);
-        let two_batches = collect_points(&[8, 8]);
-        let mut bulk = HavanaInferenceSampler::from_params_and_snapshot(
-            HavanaInferenceSamplerParams::default(),
-            training_snapshot,
-            &domain,
-        )
-        .unwrap();
-        let batch = bulk.produce_bulk_batch(16).unwrap().build();
-        let bulk_points: Vec<_> = (0..16)
-            .step_by(5)
-            .flat_map(|start| {
-                batch
-                    .slice(start, 5.min(16 - start))
-                    .unwrap()
-                    .payload
-                    .into_batch()
-                    .unwrap()
-                    .points()
-                    .to_vec()
-            })
-            .collect();
-        assert_eq!(
-            bulk_points, one_batch,
-            "bulk splitting must preserve the RNG stream"
-        );
-        assert_eq!(
-            one_batch, two_batches,
-            "havana inference should be independent of batch partitioning"
-        );
+            .unwrap();
+            let batch = bulk
+                .generate(Some(4099))
+                .unwrap()
+                .into_batch()
+                .unwrap()
+                .build();
+            let handoff = StageHandoffOwned {
+                sampler_snapshot: Some(bulk.snapshot().unwrap()),
+                observable_state: None,
+            };
+            let mut materializer =
+                HavanaInferenceMaterializer::new(Some(handoff.as_ref())).unwrap();
+            let batch = LatentBatch::from_bytes(&batch.to_bytes().unwrap()).unwrap();
+            let bulk_points: Vec<_> = (0..4099)
+                .step_by(333)
+                .flat_map(|start| {
+                    materializer
+                        .materialize_batch(&batch.slice(start, 333.min(4099 - start)).unwrap())
+                        .unwrap()
+                        .points()
+                        .to_vec()
+                })
+                .collect();
+            assert_eq!(
+                bulk_points, one_batch,
+                "bulk splitting must preserve the RNG stream"
+            );
+            assert_eq!(
+                one_batch, two_batches,
+                "havana inference should be independent of batch partitioning"
+            );
+        }
     }
 }

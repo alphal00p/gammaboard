@@ -1,8 +1,7 @@
-use crate::core::EngineResultExt;
-use crate::core::{BuildError, EngineError};
-use crate::evaluation::{Batch, Point};
+use crate::core::{AccumulatorConfig, BuildError, EngineError};
+use crate::sampling::latent_batch::IndexedBatchBuilder;
 use crate::sampling::{
-    DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
+    DiscreteSubspace, Generation, LatentBatchSpec, PdfPoint, SamplerAggregator,
     SamplerAggregatorSnapshot,
 };
 use crate::utils::domain::Domain;
@@ -30,10 +29,11 @@ pub struct NaiveMonteCarloSamplerAggregator {
     barrier_since: Option<std::time::Instant>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct NaiveMonteCarloSamplerParams {
     pub seed: u64,
+    pub generation_batch_size: usize,
     /// Zero means inference; otherwise updates repeat after each complete window.
     pub training_window_samples: usize,
     pub generation_timing: TimingModel,
@@ -43,11 +43,29 @@ pub struct NaiveMonteCarloSamplerParams {
     pub fail_on_materialize_batch_nr: Option<usize>,
 }
 
+impl Default for NaiveMonteCarloSamplerParams {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            generation_batch_size: super::super::sampler::default_generation_batch_size(),
+            training_window_samples: 0,
+            generation_timing: Default::default(),
+            ingest_timing: Default::default(),
+            update_timing: Default::default(),
+            fail_on_produce_batch_nr: None,
+            fail_on_materialize_batch_nr: None,
+        }
+    }
+}
+
 impl NaiveMonteCarloSamplerAggregator {
     pub(crate) fn from_params_and_domain(
         params: NaiveMonteCarloSamplerParams,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
+        if params.generation_batch_size == 0 {
+            return Err(BuildError::build("generation_batch_size must be positive"));
+        }
         params.generation_timing.validate()?;
         params.ingest_timing.validate()?;
         params.update_timing.validate()?;
@@ -71,6 +89,9 @@ impl NaiveMonteCarloSamplerAggregator {
 
     pub(crate) fn from_snapshot(mut snapshot: Self, domain: &Domain) -> Result<Self, BuildError> {
         snapshot.validate_domain(domain)?;
+        if snapshot.params.generation_batch_size == 0 {
+            return Err(BuildError::build("generation_batch_size must be positive"));
+        }
         snapshot.params.generation_timing.validate()?;
         snapshot.params.ingest_timing.validate()?;
         snapshot.params.update_timing.validate()?;
@@ -87,6 +108,11 @@ impl NaiveMonteCarloSamplerAggregator {
             snapshot.barrier_since = Some(std::time::Instant::now());
         }
         Ok(snapshot)
+    }
+
+    fn training_samples_remaining(&self) -> Option<usize> {
+        let window = self.params.training_window_samples;
+        (window > 0).then(|| window - self.window_returned - self.pending_training_samples)
     }
 
     fn flush_barrier_time(&mut self) {
@@ -107,21 +133,6 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         Ok(())
     }
 
-    fn training_samples_remaining(&self) -> Option<usize> {
-        let window = self.params.training_window_samples;
-        (window > 0).then(|| window - self.window_returned - self.pending_training_samples)
-    }
-
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        Ok(match self.training_samples_remaining() {
-            Some(0) => SamplePlan::Pause,
-            Some(nr_samples) => SamplePlan::Produce { nr_samples },
-            None => SamplePlan::Produce {
-                nr_samples: usize::MAX,
-            },
-        })
-    }
-
     fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
         if self.barrier_since.is_some() {
             self.flush_barrier_time();
@@ -132,16 +143,22 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         })
     }
 
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        if nr_samples == 0
-            || self
-                .training_samples_remaining()
-                .is_some_and(|remaining| nr_samples > remaining)
-        {
-            return Err(EngineError::engine(
-                "synthetic sample request is empty or exceeds the training window",
-            ));
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        if remaining_sample_budget == Some(0) {
+            return Ok(Generation::Finished);
         }
+        let training_remaining = self.training_samples_remaining();
+        if training_remaining == Some(0) {
+            return Ok(Generation::Waiting);
+        }
+        let nr_samples = self
+            .params
+            .generation_batch_size
+            .min(remaining_sample_budget.unwrap_or(usize::MAX))
+            .min(training_remaining.unwrap_or(usize::MAX));
         self.produced_batches_total += 1;
         if self
             .params
@@ -158,12 +175,15 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             self.produced_samples ^ 0x67656e,
             &mut self.generation_stats,
         )?;
-        let mut points = Vec::with_capacity(nr_samples);
+        let mut builder = IndexedBatchBuilder::new(nr_samples);
+        let mut discrete = Vec::new();
+        let mut continuous = Vec::new();
         for _ in 0..nr_samples {
-            let (discrete, continuous) = sample_domain_point(&self.domain, &mut self.rng)?;
-            points.push(Point::new(continuous, discrete, 1.0));
+            discrete.clear();
+            continuous.clear();
+            sample_domain_point(&self.domain, &mut self.rng, &mut discrete, &mut continuous)?;
+            builder.push(&discrete, &continuous, 1.0);
         }
-        let batch = Batch::new(points).engine_err()?;
         self.produced_samples += nr_samples as u64;
         if self.params.training_window_samples > 0 {
             self.pending_training_samples += nr_samples;
@@ -171,10 +191,17 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
                 self.barrier_since = Some(std::time::Instant::now());
             }
         }
-        Ok(LatentBatchSpec::from_batch(&batch))
+        Ok(Generation::batch(
+            LatentBatchSpec {
+                nr_samples,
+                accumulator: AccumulatorConfig::scalar(),
+                payload: builder.finish(),
+            },
+            training_remaining,
+        ))
     }
 
-    fn ingest_training_values(&mut self, values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, values: &[f64]) -> Result<(), EngineError> {
         if values.is_empty() {
             return Ok(());
         }
@@ -313,12 +340,13 @@ fn discrete_subspace_probability(
 fn sample_domain_point(
     domain: &Domain,
     rng: &mut impl Rng,
-) -> Result<(Vec<i64>, Vec<f64>), EngineError> {
+    discrete: &mut Vec<i64>,
+    continuous: &mut Vec<f64>,
+) -> Result<(), EngineError> {
     match domain {
-        Domain::Continuous { dims } => Ok((
-            Vec::new(),
-            (0..*dims).map(|_| rng.random::<f64>()).collect(),
-        )),
+        Domain::Continuous { dims } => {
+            continuous.extend((0..*dims).map(|_| rng.random::<f64>()));
+        }
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,
@@ -328,13 +356,12 @@ fn sample_domain_point(
                     "naive_monte_carlo cannot sample rectangular domains with zero-cardinality discrete axes",
                 ));
             }
-            Ok((
+            discrete.extend(
                 discrete_cardinalities
                     .iter()
-                    .map(|cardinality| rng.random_range(0..*cardinality) as i64)
-                    .collect(),
-                (0..*continuous_dims).map(|_| rng.random::<f64>()).collect(),
-            ))
+                    .map(|cardinality| rng.random_range(0..*cardinality) as i64),
+            );
+            continuous.extend((0..*continuous_dims).map(|_| rng.random::<f64>()));
         }
         Domain::Discrete { branches, .. } => {
             if branches.is_empty() {
@@ -343,16 +370,84 @@ fn sample_domain_point(
                 ));
             }
             let branch = &branches[rng.random_range(0..branches.len())];
-            let (mut discrete, continuous) = sample_domain_point(&branch.domain, rng)?;
-            discrete.insert(0, branch.index as i64);
-            Ok((discrete, continuous))
+            discrete.push(branch.index as i64);
+            sample_domain_point(&branch.domain, rng, discrete, continuous)?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Batch, DomainBranch, Point};
+
+    #[test]
+    fn flat_generation_preserves_seeded_points_and_rng_across_domain_shapes() {
+        // The original recursive, allocating algorithm is the compatibility reference.
+        fn reference(domain: &Domain, rng: &mut impl Rng) -> (Vec<i64>, Vec<f64>) {
+            match domain {
+                Domain::Continuous { dims } => (vec![], (0..*dims).map(|_| rng.random()).collect()),
+                Domain::Rectangular {
+                    discrete_cardinalities,
+                    continuous_dims,
+                } => (
+                    discrete_cardinalities
+                        .iter()
+                        .map(|n| rng.random_range(0..*n) as i64)
+                        .collect(),
+                    (0..*continuous_dims).map(|_| rng.random()).collect(),
+                ),
+                Domain::Discrete { branches, .. } => {
+                    let branch = &branches[rng.random_range(0..branches.len())];
+                    let (mut discrete, continuous) = reference(&branch.domain, rng);
+                    discrete.insert(0, branch.index as i64);
+                    (discrete, continuous)
+                }
+            }
+        }
+        for domain in [
+            Domain::continuous(0),
+            Domain::continuous(6),
+            Domain::rectangular_with_cardinalities(2, [2, 3]),
+            Domain::discrete(
+                None,
+                [
+                    DomainBranch::new(7, Domain::continuous(0)),
+                    DomainBranch::new(42, Domain::rectangular_with_cardinalities(3, [2, 3])),
+                    DomainBranch::new(
+                        9,
+                        Domain::discrete(None, [DomainBranch::new(11, Domain::continuous(2))]),
+                    ),
+                ],
+            ),
+        ] {
+            let mut sampler = NaiveMonteCarloSamplerAggregator::from_params_and_domain(
+                NaiveMonteCarloSamplerParams {
+                    seed: 42,
+                    ..Default::default()
+                },
+                &domain,
+            )
+            .unwrap();
+            let mut rng = sampler.rng.clone();
+            for count in [3, 51, 74] {
+                let expected = Batch::from_points((0..count).map(|_| {
+                    let (discrete, continuous) = reference(&domain, &mut rng);
+                    Point::new(continuous, discrete, 1.0)
+                }))
+                .unwrap();
+                let actual = sampler
+                    .generate(Some(count))
+                    .and_then(|generated| generated.into_batch())
+                    .unwrap();
+                assert_eq!(actual.payload.as_batch().unwrap(), expected);
+                assert_eq!(actual, LatentBatchSpec::from_batch(&expected));
+                assert_eq!(sampler.rng, rng);
+            }
+        }
+    }
+
     fn sampler(window: usize) -> NaiveMonteCarloSamplerAggregator {
         NaiveMonteCarloSamplerAggregator::from_params_and_domain(
             NaiveMonteCarloSamplerParams {
@@ -367,11 +462,19 @@ mod tests {
     #[test]
     fn repeating_barrier_waits_for_all_returns_and_survives_restore() {
         let mut s = sampler(10);
-        s.produce_latent_batch(6).unwrap();
-        s.produce_latent_batch(4).unwrap();
-        assert!(matches!(s.sample_plan().unwrap(), SamplePlan::Pause));
-        assert!(s.produce_latent_batch(1).is_err());
-        s.ingest_training_values(&[1.0; 4]).unwrap();
+        s.generate(Some(6))
+            .and_then(|generated| generated.into_batch())
+            .unwrap();
+        s.generate(Some(4))
+            .and_then(|generated| generated.into_batch())
+            .unwrap();
+        assert!(matches!(s.generate(None).unwrap(), Generation::Waiting));
+        assert!(
+            s.generate(Some(1))
+                .and_then(|generated| generated.into_batch())
+                .is_err()
+        );
+        s.feedback(&[1.0; 4]).unwrap();
         assert_eq!(s.updates, 0);
         let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = s.snapshot().unwrap() else {
             unreachable!()
@@ -382,23 +485,30 @@ mod tests {
         )
         .unwrap();
         for runtime in [&mut s, &mut restored] {
-            runtime.ingest_training_values(&[1.0; 6]).unwrap();
+            runtime.feedback(&[1.0; 6]).unwrap();
             assert_eq!(runtime.training_samples_remaining(), Some(10));
             assert_eq!(runtime.updates, 1);
         }
         assert_eq!(
-            s.produce_latent_batch(10).unwrap(),
-            restored.produce_latent_batch(10).unwrap()
+            s.generate(Some(10))
+                .and_then(|generated| generated.into_batch())
+                .unwrap(),
+            restored
+                .generate(Some(10))
+                .and_then(|generated| generated.into_batch())
+                .unwrap()
         );
-        restored.ingest_training_values(&[1.0; 10]).unwrap();
+        restored.feedback(&[1.0; 10]).unwrap();
         assert_eq!(restored.updates, 2);
         assert_eq!(restored.update_stats.calls, 2);
-        assert!(restored.ingest_training_values(&[1.0]).is_err());
+        assert!(restored.feedback(&[1.0]).is_err());
     }
     #[test]
     fn barrier_checkpoint_preserves_elapsed_time_without_serializing_clock() {
         let mut s = sampler(10);
-        s.produce_latent_batch(10).unwrap();
+        s.generate(Some(10))
+            .and_then(|generated| generated.into_batch())
+            .unwrap();
         s.training_barrier_seconds = 3.0;
         let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = s.snapshot().unwrap() else {
             unreachable!()
@@ -413,7 +523,7 @@ mod tests {
         .unwrap();
         assert_eq!(restored.training_barrier_seconds, saved);
         assert!(restored.barrier_since.is_some());
-        restored.ingest_training_values(&[1.0; 10]).unwrap();
+        restored.feedback(&[1.0; 10]).unwrap();
         assert!(restored.barrier_since.is_none());
         assert!(restored.training_barrier_seconds >= saved);
     }
@@ -423,9 +533,18 @@ mod tests {
         let mut whole = sampler(0);
         let mut split = sampler(0);
         assert_eq!(whole.training_samples_remaining(), None);
-        let a = whole.produce_latent_batch(10).unwrap();
-        let b = split.produce_latent_batch(4).unwrap();
-        let c = split.produce_latent_batch(6).unwrap();
+        let a = whole
+            .generate(Some(10))
+            .and_then(|generated| generated.into_batch())
+            .unwrap();
+        let b = split
+            .generate(Some(4))
+            .and_then(|generated| generated.into_batch())
+            .unwrap();
+        let c = split
+            .generate(Some(6))
+            .and_then(|generated| generated.into_batch())
+            .unwrap();
         // RNG state after the same number of samples is independent of grouping.
         assert_eq!(whole.rng, split.rng);
         assert_eq!(a.nr_samples, b.nr_samples + c.nr_samples);

@@ -33,7 +33,7 @@ pub async fn snapshot(store: &PgStore, run_id: i32) -> Result<PerformanceSnapsho
             'run_id', r.id, 'run_name', r.name,
             'task_id', (SELECT id::text FROM run_tasks WHERE run_id=r.id AND state='active' LIMIT 1),
             'completed_samples', r.nr_completed_samples,
-            'allocated_core_seconds', (SELECT COALESCE(SUM(cpu_seconds),0) FROM run_tasks WHERE run_id=r.id),
+            'allocated_core_seconds', (SELECT COALESCE(SUM(task_cpu_seconds(id,cpu_seconds)),0) FROM run_tasks WHERE run_id=r.id),
             'failed_tasks', (SELECT count(*) FROM run_tasks WHERE run_id=r.id AND state='failed'),
             'unfinished_tasks', (SELECT count(*) FROM run_tasks WHERE run_id=r.id AND state NOT IN ('completed','failed')),
             'queue', COALESCE((SELECT to_jsonb(q)-'run_id' FROM run_batch_queue_counters q WHERE q.run_id=r.id),'{}'),

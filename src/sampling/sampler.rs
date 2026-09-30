@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::collections::BTreeMap;
 
-use super::{LatentBatchSpec, SamplePlan};
+use super::LatentBatchSpec;
 
 pub type PdfPoint = (Vec<i64>, Vec<f64>);
 
@@ -69,21 +69,15 @@ impl SamplerAggregatorSnapshot {
 
 pub trait SamplerAggregator: Send {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError>;
-    fn training_samples_remaining(&self) -> Option<usize> {
-        None
-    }
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        Ok(SamplePlan::Produce {
-            nr_samples: usize::MAX,
-        })
-    }
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError>;
-    /// Generate a concrete payload that can be partitioned into evaluator batches.
-    /// Seed-only samplers override this to avoid duplicating random streams.
-    fn produce_bulk_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
-        self.produce_latent_batch(nr_samples)
-    }
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError>;
+    /// Generate a sampler-sized draw, bounded only by the remaining task budget.
+    /// `None` means the task has no sample-count limit. Never return an empty draw.
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError>;
+    /// One weighted scalar per sample of the oldest feedback-bearing draw.
+    /// Calls preserve generation order and never split or combine draws.
+    fn feedback(&mut self, values: &[f64]) -> Result<(), EngineError>;
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         Ok(vec![None; points.len()])
     }
@@ -103,4 +97,38 @@ pub trait SamplerAggregator: Send {
     fn get_diagnostics(&mut self) -> JsonValue {
         json!({})
     }
+}
+
+/// Generation and evaluator batch sizes are independent. A finite training
+/// window is reported before this draw, allowing fair evaluator partitioning.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Generation {
+    Batch {
+        batch: LatentBatchSpec,
+        training_remaining: Option<usize>,
+    },
+    Waiting,
+    Finished,
+}
+
+impl Generation {
+    pub fn batch(batch: LatentBatchSpec, training_remaining: Option<usize>) -> Self {
+        Self::Batch {
+            batch,
+            training_remaining,
+        }
+    }
+
+    /// Extract concrete work for direct sampler users.
+    pub fn into_batch(self) -> Result<LatentBatchSpec, EngineError> {
+        match self {
+            Self::Batch { batch, .. } => Ok(batch),
+            Self::Waiting => Err(EngineError::engine("sampler is waiting for feedback")),
+            Self::Finished => Err(EngineError::engine("sampler has finished")),
+        }
+    }
+}
+
+pub(crate) const fn default_generation_batch_size() -> usize {
+    1_048_576
 }

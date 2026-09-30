@@ -115,6 +115,8 @@ struct LatentPrefetchBuffer<S> {
     // Retained across a failed/ambiguous claim request; retries recover the same row.
     claim_token: Option<String>,
     pending_prefetch: Option<JoinHandle<Result<Option<BatchClaim>, StoreError>>>,
+    empty_poll_delay: Duration,
+    next_poll: Instant,
     _marker: std::marker::PhantomData<S>,
 }
 
@@ -138,12 +140,20 @@ where
             ready_batch: None,
             claim_token: None,
             pending_prefetch: None,
+            empty_poll_delay: Duration::ZERO,
+            next_poll: Instant::now(),
             _marker: std::marker::PhantomData,
         }
     }
 
     fn has_pending_work(&self) -> bool {
         self.ready_batch.is_some() || self.claim_token.is_some()
+    }
+
+    fn waiting_to_poll(&self) -> bool {
+        !self.has_pending_work()
+            && self.pending_prefetch.is_none()
+            && Instant::now() < self.next_poll
     }
 
     async fn pop(&mut self, store: &S, draining: bool) -> Result<PopOutcome, EvaluatorRunnerError> {
@@ -182,6 +192,7 @@ where
         if self.ready_batch.is_some()
             || self.pending_prefetch.is_some()
             || (draining && self.claim_token.is_none())
+            || self.waiting_to_poll()
         {
             return;
         }
@@ -208,6 +219,17 @@ where
         self.pending_prefetch = None;
         match outcome {
             Ok(Ok(claimed)) => {
+                if claimed.is_some() {
+                    self.empty_poll_delay = Duration::ZERO;
+                    self.next_poll = Instant::now();
+                } else {
+                    // Idle fleets must not hammer the queue. Successful claims
+                    // reset the delay; retries of ambiguous claims bypass it.
+                    self.empty_poll_delay = (self.empty_poll_delay * 2)
+                        .clamp(Duration::from_millis(2), Duration::from_millis(100));
+                    self.next_poll = Instant::now()
+                        + self.empty_poll_delay.mul_f64(rand::random_range(0.5..=1.0));
+                }
                 self.ready_batch = claimed;
                 self.claim_token = None;
                 Ok(())
@@ -679,6 +701,10 @@ where
         self.consume_finished_submit().await?;
 
         if self.active_batch.is_none() {
+            if self.prefetch_buffer.waiting_to_poll() {
+                self.flush_performance_snapshot_if_due(false).await?;
+                return Ok(());
+            }
             self.counters.fetch_attempts += 1;
             let started = Instant::now();
             let pop = self.prefetch_buffer.pop(&self.store, self.draining).await?;
@@ -919,10 +945,6 @@ where
         &mut self,
         force: bool,
     ) -> Result<(), EvaluatorRunnerError> {
-        if self.current_task_id.is_none() {
-            return Ok(());
-        }
-
         let due = if self.performance_snapshot_interval.is_zero() {
             true
         } else {
@@ -932,13 +954,26 @@ where
             return Ok(());
         }
 
-        let completed_samples_total = self
+        let progress = self
             .store
             .load_run_sample_progress(self.run_id)
             .await
-            .map_err(EvaluatorRunnerError::Store)?
+            .map_err(EvaluatorRunnerError::Store)?;
+        let completed_samples_total = progress
+            .as_ref()
             .map(|progress| progress.nr_completed_samples)
             .unwrap_or(self.samples_evaluated_total);
+        // Idle workers are observable before winning a batch, including after
+        // a task transition. An in-flight batch retains its own task identity.
+        let task_id = self
+            .active_batch
+            .as_ref()
+            .map(|batch| batch.claim.task_id)
+            .or_else(|| {
+                progress
+                    .as_ref()
+                    .and_then(|progress| progress.active_task_id)
+            });
 
         let snapshot = EvaluatorPerformanceSnapshot {
             run_id: self.run_id,
@@ -946,7 +981,7 @@ where
             metrics: EvaluatorPerformanceMetrics {
                 epoch: Some(self.epoch.clone()),
                 node_uuid: Some(self.prefetch_buffer.node_uuid.clone()),
-                task_id: self.current_task_id.map(|id| id.to_string()),
+                task_id: task_id.map(|id| id.to_string()),
                 cumulative: Some(self.cumulative.clone()),
                 busy: Some(self.busy.snapshot()),
                 engine_diagnostics: self.evaluator.diagnostics(),

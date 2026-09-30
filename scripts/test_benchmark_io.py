@@ -1,4 +1,5 @@
 import unittest
+import copy
 import benchmark_io as io
 
 class ActivityTests(unittest.TestCase):
@@ -15,15 +16,22 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(rates['evaluator_io'],80)
         self.assertEqual(rates['sampler_compute'],50)
         self.assertEqual(rates['sampler_io'],80)
+        for collection in ['evaluators', 'samplers']:
+            missing = copy.deepcopy(measure)
+            missing['snapshots'][-1][collection].pop()
+            with self.assertRaisesRegex(ValueError, 'coverage'):
+                io.activity(missing)
         measure['snapshots'][-1]['samplers'][0]['runtime_metrics']['busy']['io_seconds']=11
         with self.assertRaises(ValueError): io.activity(measure)
 
     def test_invalid_trials_are_retained_without_biasing_medians(self):
-        row=dict(workers=64,batch_size=16,inserts=1,valid=True,rate=100,
+        row=dict(workers=64,batch_size=16,inserts=1,valid=True,rate=100,repeat=0,
                  evaluator_compute=10,evaluator_io=80,sampler_compute=10,sampler_io=80)
-        result=io.summarize([row,dict(row,valid=False,rate=0)])[0]
+        result=io.summarize([row,dict(row,valid=False,rate=0,repeat=1)])[0]
         self.assertEqual(result['rate']['median'],100)
         self.assertEqual(result['invalid_trials'],1)
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            io.summarize([row, row])
 
     def test_payload_rate_uses_fixed_batch_size_and_actual_encoded_bytes(self):
         metric=dict(count=2,mean=1024**2,std_dev=0.)

@@ -39,7 +39,7 @@ const RUN_TASK_COLUMNS: &str = r#"
     state,
     nr_produced_samples,
     nr_completed_samples,
-    cpu_seconds,
+    task_cpu_seconds(id, cpu_seconds) AS cpu_seconds,
     failure_reason,
     started_at,
     completed_at,
@@ -214,7 +214,7 @@ async fn apply_child_task_totals(
             descendants.parent_task_id,
             COALESCE(SUM(run_tasks.nr_produced_samples), 0)::BIGINT AS nr_produced_samples,
             COALESCE(SUM(run_tasks.nr_completed_samples), 0)::BIGINT AS nr_completed_samples,
-            COALESCE(SUM(run_tasks.cpu_seconds), 0.0)::DOUBLE PRECISION AS cpu_seconds
+            COALESCE(SUM(task_cpu_seconds(run_tasks.id, run_tasks.cpu_seconds)), 0.0)::DOUBLE PRECISION AS cpu_seconds
         FROM descendants
         JOIN run_tasks ON run_tasks.run_id = descendants.run_id
         GROUP BY descendants.parent_task_id

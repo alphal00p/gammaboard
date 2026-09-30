@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::BatchQueueCounts;
-use crate::runners::queue::tests::RecordingStore;
+use crate::runners::test_support::RecordingStore;
 use crate::utils::domain::Domain;
 
 fn runner(
@@ -14,12 +14,10 @@ fn runner(
         .clone()
         .try_into()
         .unwrap();
-    params.queue.bulk_sample_generation = true;
     params.queue.max_batch_size = max_batch;
-    params.queue.queue_buffer = 1.0;
     params.queue.max_batches_per_tick = 20;
     let config: SamplerAggregatorConfig = serde_json::from_value(json!({
-        "kind": "naive_monte_carlo", "seed": 42, "training_window_samples": training_window,
+        "kind": "naive_monte_carlo", "seed": 42, "training_window_samples": training_window, "generation_batch_size": max_batch,
     }))
     .unwrap();
     let sampler = config
@@ -80,7 +78,7 @@ async fn persistence_reports_execution_time_returned_by_the_operation() {
 use crate::sampling::SamplerAggregatorSnapshot;
 
 #[tokio::test]
-async fn bulk_training_draws_one_window_and_dispatches_under_queue_limits() {
+async fn training_draws_survive_soft_queue_overshoot() {
     let mut runner = runner(20_000, 20_000, 40_000);
     runner.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
     assert_eq!(
@@ -90,23 +88,21 @@ async fn bulk_training_draws_one_window_and_dispatches_under_queue_limits() {
     assert_eq!(draw_count(&mut runner), 1);
     assert_eq!(runner.task.nr_produced_samples, 5000);
     assert_eq!(runner.runtime_state.generation.pending_samples(), 15_000);
-    assert_eq!(runner.sampler.training_samples_remaining(), Some(0));
+    assert!(matches!(
+        runner.sampler.generate(None).unwrap(),
+        Generation::Waiting
+    ));
 
-    // Backpressure leaves the generated remainder untouched, even after a live toggle.
-    runner.params.queue.bulk_sample_generation = false;
-    assert_eq!(
-        runner
-            .produce(BatchQueueCounts {
-                pending: 20,
-                ..Default::default()
-            })
-            .await
-            .unwrap(),
-        (0, true)
-    );
+    // A draw already started continues dispatching above the refill threshold.
     for _ in 0..3 {
         assert_eq!(
-            runner.produce(BatchQueueCounts::default()).await.unwrap(),
+            runner
+                .produce(BatchQueueCounts {
+                    pending: 80,
+                    ..Default::default()
+                })
+                .await
+                .unwrap(),
             (20, true)
         );
     }
@@ -122,18 +118,21 @@ async fn bulk_training_draws_one_window_and_dispatches_under_queue_limits() {
         if batch == 79 {
             let values = result.unwrap();
             assert_eq!(values.len(), 20_000);
-            runner.sampler.ingest_training_values(&values).unwrap();
+            runner.sampler.feedback(&values).unwrap();
         } else {
             assert!(result.is_none());
         }
     }
     assert!(runner.runtime_state.generation.is_empty());
-    assert_eq!(runner.sampler.training_samples_remaining(), Some(20_000));
+    assert_eq!(
+        runner.sampler.get_diagnostics()["pending_training_samples"],
+        0
+    );
     runner.queue.flush().await.unwrap();
 }
 
 #[tokio::test]
-async fn bulk_generation_preserves_initial_probe_and_checkpointed_remainder() {
+async fn generation_preserves_initial_probe_and_checkpointed_remainder() {
     let mut runner = runner(20_000, 20_000, 40_000);
     assert_eq!(
         runner.produce(BatchQueueCounts::default()).await.unwrap(),
@@ -168,7 +167,7 @@ async fn bulk_generation_preserves_initial_probe_and_checkpointed_remainder() {
 }
 
 #[tokio::test]
-async fn bulk_draw_respects_maximum_and_task_budget_and_works_after_training() {
+async fn draw_respects_sampler_size_and_task_budget_and_works_after_training() {
     for (window, maximum, budget, expected) in [
         (20_000, 8000, 40_000, 8000),
         (20_000, 20_000, 777, 777),
@@ -188,21 +187,6 @@ async fn bulk_draw_respects_maximum_and_task_budget_and_works_after_training() {
 }
 
 #[tokio::test]
-async fn legacy_mode_keeps_one_generation_call_per_evaluator_batch() {
-    let mut runner = runner(20_000, 20_000, 40_000);
-    runner.params.queue.bulk_sample_generation = false;
-    runner.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
-    assert_eq!(
-        runner.produce(BatchQueueCounts::default()).await.unwrap(),
-        (20, true)
-    );
-    assert_eq!(draw_count(&mut runner), 20);
-    assert!(!runner.runtime_state.generation.has_pending());
-    assert_eq!(runner.task.nr_produced_samples, 5000);
-    runner.queue.flush().await.unwrap();
-}
-
-#[tokio::test]
 async fn inference_chunks_adapt_after_probe_without_another_generation_call() {
     let mut runner = runner(0, 20_000, 40_000);
     assert_eq!(
@@ -218,6 +202,49 @@ async fn inference_chunks_adapt_after_probe_without_another_generation_call() {
     );
     assert_eq!(runner.task.nr_produced_samples, 4016);
     assert_eq!(runner.runtime_state.generation.pending_samples(), 15_984);
+    assert_eq!(draw_count(&mut runner), 1);
+    runner.queue.flush().await.unwrap();
+}
+
+#[tokio::test]
+async fn generation_size_is_independent_of_evaluator_limit_and_queue_target() {
+    let mut runner = runner(0, 20_000, 40_000);
+    runner.params.queue.max_batch_size = 100;
+    let mut config = runner.queue.config().clone();
+    config.max_batch_size = 100;
+    config.fixed_batch_size = Some(100);
+    runner.queue.apply_config(config);
+    runner.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
+    for _ in 0..10 {
+        assert_eq!(
+            runner
+                .produce(BatchQueueCounts {
+                    pending: if runner.runtime_state.generation.has_pending() {
+                        200
+                    } else {
+                        0
+                    },
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .0,
+            20
+        );
+    }
+    assert_eq!(draw_count(&mut runner), 1);
+    assert_eq!(runner.task.nr_produced_samples, 20_000);
+    assert_eq!(
+        runner
+            .produce(BatchQueueCounts {
+                pending: 200,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .0,
+        0
+    );
     assert_eq!(draw_count(&mut runner), 1);
     runner.queue.flush().await.unwrap();
 }

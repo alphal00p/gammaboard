@@ -74,15 +74,20 @@ JSON-safe evaluator metadata. The default is `{}`.
 Sampler classes implement:
 
 ```python
-sample_plan()
-produce_latent_batch(nr_samples)
-ingest_training_values(training_values)
+generate(remaining_sample_budget)
+feedback(training_values)
 snapshot()
 ```
 
-Samplers may also implement `training_samples_remaining()`,
-`pdf(xs_discrete, xs_continuous)`, `discrete_pdf(subspaces)`, and
+Samplers may also implement `pdf(xs_discrete, xs_continuous)`, `discrete_pdf(subspaces)`, and
 `get_diagnostics()`.
+
+`generate` chooses its own size and returns `SampleBatch`, `GenerationStatus.WAITING`,
+or `GenerationStatus.FINISHED`. Set `SampleBatch.training_remaining` to the
+ungenerated training-window size (including this draw) to request feedback;
+leave it `None` for inference. The runtime splits the draw for evaluation and
+returns one ordered scalar array per complete draw. Snapshot all private state
+needed by pending feedback. See [the sampler contract](../docs/sampling.md).
 
 Batch transform classes implement:
 

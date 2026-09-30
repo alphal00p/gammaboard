@@ -1,286 +1,291 @@
-# Measuring overhead and scaling
+# Benchmarking GammaBoard
 
-Use the CLI for runtime data and execution. The Python driver defines experiments,
-invokes the CLI, saves raw JSON, and plots it; it does not query PostgreSQL or parse
-dashboard panels. `just benchmark` is the only experiment runner. Sleep-based
-synthetic workloads remain useful in functional tests, but are not CPU scaling
-baselines. Database retention is an operations concern, measured on the intended
-deployment rather than through a second benchmark framework.
+Use `just benchmark` for all experiments. The default sparse frontier measures
+coordination and transport with sleeping evaluators. Process-API measurements
+isolate adapter overhead; CPU and I/O suites answer targeted questions.
+[Current results](performance-development.md) summarize the latest measurements.
+[Sampling](sampling.md) defines generation, evaluator batches and feedback.
 
-These are development experiments. Run the smallest relevant comparison while
-changing code; release freezing and publication packaging come later. Each run
-still keeps its inputs and raw measurements so a comparison remains interpretable.
+## Choose a measurement
 
-## Inspection
+| Question | Command | Scope |
+| --- | --- | --- |
+| Capability and scaling | `frontier` | Three data paths, four delays, 1–512 evaluator processes |
+| External process overhead | `process` | Production Rust adapters and Python SDK, without the database |
+| Insert/bundle/storage tuning | `io` | Repeated fixed-configuration comparisons |
+| Fixed CPU-work efficiency | `run PRESET` | Pipeline versus direct serial/parallel evaluation |
+| An existing run | `gammaboard run performance` | Current deployment and workload |
+
+Run from the development shell with Python 3.11+ and an optimized binary.
+Plotting also needs matplotlib; process tests need a Python interpreter with
+NumPy. Compilation and plotting are outside suite budgets.
 
 ```sh
-gammaboard --json run performance RUN
-gammaboard --json run wait RUN --until ready --evaluators 4 --timeout 60s
-gammaboard --json run performance RUN --duration 30s --interval 1s
-gammaboard --json run performance RUN --since 2026-09-17T00:00:00Z --until 2026-09-18T00:00:00Z
-gammaboard --json run wait RUN --until idle
+cargo build --locked --profile dev-optim --bin gammaboard
+just benchmark plan resources/templates/benchmarks/frontier.toml
+just benchmark frontier --binary target/dev-optim/gammaboard --output results/frontier
+just benchmark plot results/frontier
+just benchmark summary results/frontier
 ```
 
-`ready` requires a live sampler, the requested evaluator count, settled assignments,
-and recent telemetry from initialized runtimes. Warmup is a separate step. `idle`
-means no live desired or active assignments to this run; `completed` waits for all
-its tasks to finish and fails if any failed. These commands concern the selected
-run, not recursively its children.
+Outputs must be new directories. Deployment suites use private resources, check
+ports, preserve diagnostics and shut down their own workers and database.
+Use `--port-offset` to avoid other instances. CPU affinity limits placement;
+it does not reserve cores on a shared host.
 
-The authenticated `GET /api/runs/:id/metrics` endpoint returns the same snapshot
-as the CLI. The `/performance` dashboard endpoint accepts a shared
-`window_seconds` parameter (15–300, default 60); it returns the usage overview
-and diagnostics with explicit reporting coverage and observed intervals.
+## Default sparse frontier
 
-JSON has `schema_version = 1`. Names ending in `_seconds` are seconds; rates are
-samples per second. `completed_samples` is accepted progress, not attempted work.
-`allocated_core_seconds` is allocated worker time from heartbeat accounting, not
-OS CPU consumption, and excludes the database/server. OS CPU consumption is not
-currently measured. Evaluator cumulative timings cover successfully submitted
-batches in one runner epoch; they are wall durations, not CPU durations. Fetch
-wait totals cover successful batches, not all empty queue polls. Use the rolling
-starvation diagnostic for the latter.
+The [preset](../resources/templates/benchmarks/frontier.toml) defines **87 fresh-run
+measurements**. The registered pool remains at 512 processes; each point selects
+its active evaluators.
 
-A snapshot is one consistent database read, but worker publications are
-asynchronous. Every telemetry row includes its publication time. Intervals use
-counter differences and a monotonic observation clock. They return all sampled
-snapshots plus evaluator counter deltas with their own publication boundaries.
-Do not sum asynchronous phase durations into elapsed time, average rolling means
-into interval totals, or interpret publication boundaries as synchronized worker
-barriers. The default maximum telemetry age is 10 seconds (`--max-age`).
+| Mode | Input | Result |
+| --- | --- | --- |
+| `rng` | Compact RNG checkpoints from a frozen uniform Havana grid | Compact accumulation |
+| `materialized` | Six-dimensional materialized samples | Compact accumulation |
+| `training` | Six-dimensional materialized samples | Accumulation and per-sample feedback |
 
-Intervals containing observed task/assignment changes, incarnation changes,
-missing/stale telemetry, or counter regressions have `valid = false`, explicit
-`issues`, and a null throughput. Assignment-change counts describe sampled
-transitions; they are not a complete event audit. Evaluator and sampler epochs
-also detect restarts between polls once the new incarnation publishes telemetry. Short publication intervals and
-longer trials reduce boundary error; old binaries without epochs are marked as
-missing coverage. Historical export has a default 1,000-row limit and an explicit
-`truncated` flag, with a maximum of 10,000 rows. Narrow the time range if truncated.
+All modes evaluate `f(x) = x[0]`, so feedback varies with seeded input; arbitrary
+distributions may still produce compressible values. The evaluator performs no
+artificial arithmetic: it sleeps once per batch for `batch_size × eval_us`,
+with seeded Gaussian jitter of 10% per batch. Zero delay has no sleep or jitter.
+Generation, materialization, transport and accumulation still perform real work.
 
-## Direct baseline and fixed CPU work
+| Delay/sample | Evaluators | RNG samples/batch | Materialized/training samples/batch |
+| --- | --- | ---: | ---: |
+| 0 | Every doubling from 1 through 512 | 524,288 | 131,072 |
+| 5 µs | 1, 4, 16, 64, 256, 512; also 128 for RNG and 8 for the other modes | 65,536 | 65,536 |
+| 200 µs | 1, 4, 16, 64, 256, 512 | 4,096 | 4,096 |
+| 5 ms | 1, 4, 16, 64, 256, 512 | 256 | 256 |
 
-An evaluator card contains the ordinary evaluator definition:
+These are selected settings replayed for scaling, not a new optimization at every
+point. Zero delay is an empirical reference, not a guaranteed upper bound for
+other batch sizes. The ideal delay-limited rate is `evaluators / delay`.
 
-```toml
-[evaluator]
-kind = "unit"
-continuous_dims = 6
-cpu_iterations_per_sample = 10000
+The sampler owns its generation size. The preset fixes it per delay context,
+bounded by the maximum batch size, sample allowance and 30 seconds of nominal
+single-evaluator work. Runtime splitting uses a soft refill threshold of one
+pending batch per evaluator; the threshold does not truncate draws.
+Training uses a 10¹²-sample window, measuring feedback transport without optimizer
+barriers. Finite training windows and real optimizers need separate tests.
+
+The preset uses one sampler core, fifteen database/server cores, a 10 ms tick,
+250 ms telemetry, two concurrent inserts and five batches per insert bundle.
+Evaluator processes share the remaining physical cores when necessary. It needs
+at least 17 physical cores. The allowance is 2,147,483,648 **samples**, not bytes:
+the 512-worker RNG measurement used roughly 70 GiB of worker RSS, excluding
+PostgreSQL and page cache. Reduce the fleet and `sample_memory_budget` on smaller
+hosts; actual batch caps are recorded.
+
+The default time limit is **60 minutes**, including deployment and cleanup.
+`plan` reports minimum measurement time; warmup, draining and deployment add to
+it. `--budget` changes the limit, never the validity rules.
+
+### Measurement contract
+
+- Readiness requires the assigned fleet and recent telemetry. RNG initializes
+  its small Havana grid with one evaluator before attaching the full fleet.
+- Warmup accepts all previously generated work, including buffered draw remainders,
+  then two new batches per evaluator in aggregate. Its five-minute timeout is
+  also bounded by the remaining suite budget.
+- A confirmation spans at least 12 seconds, six nominal batch durations and ten
+  batch durations divided by worker count. Training also spans two nominal
+  generation cycles divided by worker count, because feedback arrives per draw.
+- Adequacy requires eight accepted batches and eight evaluator completions in
+  aggregate. Training must deliver feedback during the measured interval.
+- Accepted progress and feedback use the same sampler telemetry endpoints and
+  monotonic clock. Separately checkpointed run totals remain available.
+- Assignment/task/epoch changes, stale or missing coverage, regressing counters,
+  failed readiness and cleanup remain explicit failures. Missing data is not zero.
+
+Reports show accepted samples/s, evaluator batches/s, batch sizes, four busy
+fractions and worker RSS. Busy fractions are occupied wall time, including
+simulated waiting and database waits; they are not CPU utilization. Compute and
+I/O overlap. Short windows and jitter can put rates slightly above the ideal.
+
+Selection prefers fewer evaluators and then shorter batches within 5% of the best
+observed rate. Repeated confirmations use their median. This preference is not a
+5% confidence guarantee. Use repeated matched A/B trials for deployment defaults
+or causal speedup claims, especially at high evaluator counts.
+
+### Targeted checks and exploration
+
+`--points` accepts explicit configurations. Repeated entries produce independent
+fresh-run confirmations:
+
+```json
+[
+  {"mode": "training", "eval_us": 0, "workers": 16, "batch": 131072},
+  {"mode": "training", "eval_us": 0, "workers": 16, "batch": 131072}
+]
 ```
+
+```sh
+just benchmark frontier --points points.json --budget 600 --binary target/dev-optim/gammaboard --output results/check
+```
+
+Use this to rerun failed or unmeasured configurations without repeating the suite.
+Retain original failures and provenance when combining studies.
+
+`--search` is optional adaptive evaluator-batch and worker-count exploration.
+It tunes live, drains pre-change work, checks larger/smaller batches, prunes
+clearly dominated delayed-worker counts and confirms selected settings in fresh
+runs. Zero delay retains every worker count. Queue refill depth remains fixed.
+`--points` and `--search` are mutually exclusive; custom delays require one of them.
+
+## Targeted process API measurements
+
+```sh
+just benchmark process --python /path/to/venv/bin/python --output results/process
+just benchmark plot results/process
+```
+
+The driver builds optimized Rust integration tests using the production adapters,
+Python SDK and v3 framed protocol. Parent and child occupy two physical cores.
+Correctness checks cover weighted feedback, continuous/discrete dimensions,
+feedback on/off, variable sizes, rejected requests and worker reuse.
+
+The overhead sweep uses six continuous coordinates and one output component:
+
+- Nine batch sizes: 16, 64, 256, 1,024, 4,096, 16,384, 65,536, 262,144, 1,048,576.
+- Evaluator calls with feedback on/off; sampler generation and feedback separately.
+- Zero or 64 in-place NumPy sine passes inside the callback, giving 72 cases.
+- Three discarded warmups; 128 repetitions at small sizes, falling to four at 1M.
+
+Each observation subtracts callback wall time from its matching adapter wall
+time. The residual includes validation, packing, IPC, native conversion/
+accumulation, deallocation and scheduling. Startup, fixture input construction,
+the database and worker fleet are excluded. This is process-API overhead, not
+wire-only IPC latency or a universal constant across domains and components.
+
+Plots show mean overhead per call and per sample against batch size in PNG,
+SVG and PDF. Raw paired timings, medians, startup times, affinity and source
+hashes remain in the output. Shared-host noise is not a performance threshold.
+
+## Focused I/O experiments
+
+The default stress matrix compares 1/2/8 concurrent inserts, 1/8/32/64 evaluators,
+16/256-sample batches and three repetitions. It uses 1 ms polling and at most
+eight physical cores, exposing coordination pressure rather than CPU scaling.
+
+```sh
+just benchmark io --binary target/dev-optim/gammaboard --output results/io
+just benchmark io --binary target/dev-optim/gammaboard --output results/payloads --workers 8 --batch-sizes 65536 262144 --inserts 1 2 8 --min-tick-ms 10 --duration 12 --repetitions 3
+just benchmark plot results/payloads
+```
+
+Use a small matrix around the configuration under investigation. `--iterations`
+adds fixed CPU work; `--insert-bundle-size` changes batches per transaction.
+`--input-storage pglz|lz4|external` requires `psql` and changes only the private
+database's input column. This is a deployment experiment, not live task tuning.
+
+The workload sends materialized six-dimensional inputs and compact results,
+without training barriers. Reports include samples/s, batches/s and logical input
+MiB/s derived from measured payload bytes. Logical volume excludes results,
+retries, framing, WAL and physical disk traffic. Local PostgreSQL uses
+`synchronous_commit = false`; this is not a durability benchmark. Missing/changing
+payload sizes and invalid busy counters invalidate the relevant measurement.
+
+Insert concurrency counts in-flight tasks, not simultaneous database connections:
+the sampler's role pool is currently capped at two. Raising the insert limit
+alone does not raise that connection limit. See [concurrency](concurrency.md).
+
+## Fixed CPU-work comparisons
+
+Optional CPU presets compare the pipeline with direct serial/parallel execution.
+Calibration chooses a fixed arithmetic iteration count; reuse it across worker
+counts and revisions. A delay is not a CPU-work baseline.
+
+```sh
+just benchmark plan resources/templates/benchmarks/smoke.toml
+just benchmark run resources/templates/benchmarks/smoke.toml --binary target/dev-optim/gammaboard --output results/smoke
+just benchmark run resources/templates/benchmarks/tuning.toml --binary target/dev-optim/gammaboard --output results/tuning
+just benchmark compare results/before results/after
+```
+
+| Preset | Trials | Measurement | Budget | Purpose |
+| --- | ---: | ---: | ---: | --- |
+| `smoke.toml` | 4 | 4 s | 5 min | Runner, cleanup and artifacts |
+| `tuning.toml` | 24 | 6 s | 15 min | Repeated batch-size comparisons at normal polling |
+| `scaling.toml` | 48 | 6 s | 25 min | Fixed-batch CPU efficiency with the polling floor disabled |
+
+All descendants share at most eight physical cores and at most a quarter of the
+available cores. Direct workers bind individually; the pipeline also spends this
+budget on the sampler/database. Repetitions randomize configuration order and
+rotate direct/pipeline measurement order. Use
+`--calibration previous/calibration.json` to keep arithmetic work fixed.
+
+Direct evaluation also accepts a normal evaluator card:
 
 ```sh
 gammaboard --json benchmark calibrate --eval-us 100
 gammaboard --json benchmark evaluator evaluator.toml --workers 4 --batch-size 256 --warmup 2s --duration 5s
-gammaboard --json benchmark evaluator evaluator.toml --workers 4 --batch-size 256 --samples 100000
 ```
 
-Calibration returns a fixed iteration count. Reuse it across all worker counts;
-never recalibrate work as concurrency changes. Unlike sleep or spinning until a
-wall-clock deadline, fixed arithmetic work exposes contention. The unit evaluator
-still returns one, so scientific results remain checkable. Zero iterations
-preserves the existing evaluator's behavior.
+It uses production sampling/materialization/evaluation/accumulation with uniform
+inputs and a scalar accumulator; it does not simulate a central adaptive sampler.
+`speedup` compares against direct serial execution; `retained_efficiency` compares
+against direct parallel execution within the same CPU budget. Trial ranges are
+not confidence intervals from independent telemetry samples.
 
-The direct baseline uses production factories and code for the evaluator,
-uniform sample generation, identity materialization, and scalar accumulation.
-Each worker generates and accumulates locally. This is a simple local parallel
-baseline, not a simulation of the central sampler. It does not implement adaptive
-training or arbitrary controller run cards. Evaluators must support uniform-domain
-sampling and a scalar accumulator. Initialization and total command-internal time
-are reported separately. `--samples` executes an exact finite sample count;
-without warmup its total includes initialization, but excludes process launch.
-
-`sampler_aggregator_runner_params.queue.fixed_batch_size` disables automatic
-batch adaptation. It is clamped to the existing minimum of 16 and to
-`max_batch_size`; remaining sample budgets and training boundaries may shorten a
-batch. Omitting it preserves automatic adaptation.
-
-## Running the suite
-
-Use an optimized, prebuilt binary inside the development shell:
+## Inspecting a live run
 
 ```sh
-just benchmark run resources/templates/benchmarks/smoke.toml --binary target/dev-optim/gammaboard --output results/smoke
-just benchmark plan resources/templates/benchmarks/tuning.toml
-just benchmark run resources/templates/benchmarks/tuning.toml --binary target/dev-optim/gammaboard --output results/tuning
-just benchmark run resources/templates/benchmarks/scaling.toml --binary target/release/gammaboard --output results/scaling
-just benchmark summary results/scaling
-just benchmark plot results/scaling
-just benchmark compare results/before results/after
+gammaboard --json run wait RUN --until ready --evaluators 4 --timeout 60s
+gammaboard --json run performance RUN --duration 30s --interval 1s
+gammaboard --json run performance RUN --since 2026-09-29T00:00:00Z --until 2026-09-29T01:00:00Z
+gammaboard --json run wait RUN --until idle
 ```
 
-Python 3.11+ is needed for running. Plotting additionally needs matplotlib; it is
-separate so results can be plotted on another machine. No Python database driver
-or `psql` is required by this suite.
+Performance JSON has schema 1. Publications are asynchronous; intervals retain
+snapshots, per-worker endpoints, coverage and issues. Default maximum telemetry
+age is 10 seconds. Never sum overlapping busy times or average rolling means into
+interval totals. Allocated core-time is worker allocation, excluding the
+database/server, not measured CPU consumption. Historical exports have a
+`truncated` flag; narrow the range when set. See [concurrency](concurrency.md)
+for the four busy-rate definitions.
 
-Choose a preset before expanding the experiment:
+## Artifacts and comparisons
 
-| Preset | Trials | Measurement window | Estimated runtime / hard budget | Scope |
-| --- | ---: | ---: | --- | --- |
-| `smoke.toml` | 4 | 4 seconds | 2.2 / 5 minutes | Runner, cleanup, and artifact check; one repetition |
-| `tuning.toml` | 24 | 6 seconds | 10 / 15 minutes | Two costs, two worker counts, two batch sizes, three repetitions |
-| `scaling.toml` | 48 | 6 seconds | 20.4 / 25 minutes | Four costs, four worker counts, batch 256, three repetitions |
+Deployment suites retain the binary, migrations, harness, cards, planned cases,
+CPU placement, host metadata, raw intervals and cleanup evidence. Results append
+after each trial. Offline `summary` and `plot` expose invalid and unmeasured
+cases; a zero exit code alone does not establish complete coverage. Frontier
+crosses mark unavailable planned points, never valid low rates.
 
-`plan` validates the matrix and prints the runtime estimate without starting
-services. The estimate includes readiness/cleanup headroom and counts a single
-direct baseline when the evaluator count is one. Compilation and plotting are
-outside these budgets. Every preset uses a one-second discarded warmup.
+Frontier outputs include throughput, batch-size, ideal-rate fraction and selected
+configuration plots, plus `selected-*.toml` live batch overrides. Copy the matching
+run card as well: a batch override alone does not reproduce sampler settings.
 
-Each repetition visits every configuration in seeded random order before the
-next repetition starts. The pipeline's position relative to the direct baselines
-rotates across repetitions, reducing systematic ordering bias. All backends use
-the same fixed work and evaluator batch size; direct work runs only after the
-pipeline is idle. Readiness is checked before warmup. Both warmup and measurement
-intervals are saved, sampled at the telemetry interval with a freshness limit.
-
-Smoke and tuning use the ordinary `min_tick_time_ms = 10`. Scaling uses `0` to
-measure pipeline overhead without the polling floor. All use
-`telemetry_interval_ms = 250`. Copy a preset and change one setting at a time;
-reuse `--calibration` for comparisons. To study bulk generation, set
-`bulk_sample_generation = true` and `generation_batch_size = 4096`; evaluator
-batch sizes stay fixed while sampler draws grow. This CPU inference comparison
-does not establish benefits for adaptive/GPU training.
-
-Settings are saved in run cards and plots identify the tick floor and core budget.
-Calibration targets are labels, not claims of exact
-service time; raw measured calibration and direct throughput are saved.
-
-The suite rejects plans estimated to exceed its budget, enforces a deadline on
-CLI calls, and reserves 30 seconds for deployment cleanup. Its maximum budget is
-30 minutes, excluding compilation and plotting. It uses a private deployment,
-checks ports first (`--port-offset`), and uses GammaBoard's own shutdown protocol.
-Raw results survive successful cleanup; failures retain deployment diagnostics.
-Invalid cases are saved with their issues and make the driver exit unsuccessfully.
-Use `--calibration previous/calibration.json` to keep work identical across code
-revisions. `compare` rejects overlapping cases with different work counts.
-
-On Linux the runner selects relatively idle, distinct physical cores from its
-existing affinity. All descendants, including PostgreSQL and the server, inherit
-the same restricted set. It caps usage to eight physical cores and at most a
-quarter of available physical cores, lowers scheduling priority, and limits
-common thread pools to one thread per worker. This limits consumption; it does
-not reserve cores from other users. Background load is part of the uncertainty.
-The entire local comparison shares that core budget; eight evaluator workers
-therefore compete with sampler/database work within the same eight cores.
-
-Results contain the suite, calibration, exact cards, binary hash, CPU affinity,
-host metadata, raw direct measurements, and complete GammaBoard intervals.
-`results.jsonl` is appended after every case so interruption retains completed
-work. `summary.json` counts valid, invalid, and missing repetitions for every
-planned configuration, including configurations with no measurements. An
-interrupted suite records the exception type even when it has no error message.
-`summary` can also inspect older artifacts. Plot commands operate entirely offline
-and write PNG and SVG files; incomplete coverage is labelled and heatmaps show
-trial counts. Sparse points are not converted into automatic crossover claims.
-
-## Interpretation and scope
-
-- `speedup` is GammaBoard throughput divided by direct serial throughput.
-- `retained_efficiency` is GammaBoard throughput divided by direct parallel
-  throughput with the same evaluator count and enclosing CPU budget.
-- Error bars show the range of independent trial results around their median,
-  not confidence intervals computed from correlated telemetry snapshots.
-- A missing/invalid case is not zero throughput.
-
-The first suite measures warm, fixed-batch CPU inference. It does not establish
-cold-job crossover sizes, GPU efficiency, multi-host networking, or time to a
-physics uncertainty target. Those should be additional experiment types using
-the same measurement contract. Sample-level synthetic costs alone do not predict
-memory-bound or vectorized physics behavior. Keep batch size, calibrated work,
-resource budget, and telemetry frequency visible when comparing results.
-
-## Insert concurrency and fast-integrand stress
-
-```bash
-python scripts/benchmark.py io --binary target/dev-optim/gammaboard \
-  --output /tmp/gammaboard-io --port-offset 130
-```
-
-The default matrix compares 1/2/8 insert tasks at 1/8/32/64 evaluators, batches of
-16/256, and three repetitions of a unit integrand with no artificial work.
-Trials use a 1 ms tick to stress polling, rotate in seeded random order, discard
-warmup, and measure accepted progress. `--min-tick-ms 10` tests the normal pacing. Worker CPU affinity stays within eight physical cores; therefore the
-large-fleet cases measure coordination pressure, not strong scaling. PostgreSQL
-connection admission grows with the planned fleet. The existing private Session
-owns startup, shutdown, and cleanup. Raw cards, warmups, measurements, four
-activity rates, binary hash, CPU list, and per-setting median/ranges are retained.
-Results also include accepted batches/s for these fixed-batch runs and the
-serialized input bytes per batch reported by the actual insert operation.
-Accepted input MiB/s multiplies those two values. It is logical input volume;
-it excludes protocol overhead, retries, result traffic, WAL and physical disk I/O.
-Missing or changing payload sizes invalidate that conversion instead of becoming
-zero bandwidth.
-Use `--iterations`, `--workers`, `--batch-sizes`, and `--repetitions` for focused
-follow-ups. Missing or invalid activity counters invalidate a trial; they do not
-become zeros. `manifest.json` records planned/completed cases and failures.
-
-Use `--inserts 2` to hold concurrency fixed while comparing code changes and
-`--insert-bundle-size 1` to test smaller transactions. The optional
-`--input-storage pglz|lz4|external` comparison requires `psql` and changes only
-the input column in the new private benchmark database. `default` uses the
-schema's current setting. Measurements still use the CLI contract. A build
-without PostgreSQL LZ4 support rejects that experiment instead of substituting
-another method. Manifests record these settings and migration-file hashes.
-Set `GAMMABOARD_MIGRATIONS_DIR` to a saved migration directory when comparing
-revisions: preserving only the executable does not preserve the schema.
-
-To stress large database payloads rather than small-batch scheduling:
-
-```bash
-python scripts/benchmark.py io --binary target/dev-optim/gammaboard \
-  --output /tmp/gammaboard-payload --workers 8 --batch-sizes 65536 262144 \
-  --min-tick-ms 10 --port-offset 130
-```
-
-This runs 18 trials with full six-dimensional indexed sample arrays, about
-3.6/14.5 MiB per input batch, a zero-cost unit integrand, and compact scalar
-results. Inputs are persisted and fetched through PostgreSQL; they are not
-regenerated from a compact RNG-state payload. There are no training barriers.
-It exercises large input transfers, not large result vectors or multi-host
-networking. The deployment uses the local PostgreSQL defaults, including
-`synchronous_commit = false`; do not interpret it as a durability benchmark.
+Current frontier artifacts use **schema 5**, with sampler-owned generation and
+fixed refill depth. Use saved harnesses for older schemas. `compare` checks
+workload, jitter/seed, feedback contents, resource/telemetry settings and matching
+queue configurations; CPU suites also require matching calibrated work. Record
+build profile and host conditions even when these checks pass. Process and
+frontier measurements answer different questions and should not be pooled.
 
 ## Sampling correctness
 
-The GammaLoop migration adds a small acceptance suite independent of throughput:
+Physics acceptance is separate from throughput:
 
 ```sh
-cargo test --locked --lib evaluation::evaluator::gammaloop::acceptance -- --nocapture
+GAMMABOARD_TEST_STATE_OUTPUT=/tmp/gammaboard-reference-state cargo test --locked --lib evaluation::evaluator::gammaloop::acceptance -- --nocapture
+GAMMABOARD_TEST_REFERENCE_STATE=/tmp/gammaboard-reference-state cargo test --locked --test full_stack_cli full_stack_gammaloop_reference_training_and_inference -- --ignored --nocapture
 ```
 
-To retain the generated fixture and test the PostgreSQL training/inference path:
+The fixture output must be new. These checks generate/reload a version-10 scalar
+cut-bubble state and test ordinary/cut-focused maps, summed/discrete channels,
+normalization, moments, weighted histograms, feedback modes and recovery.
+The pipeline uses a private database. Symbolica licensing is required; debug
+timings are not a production baseline.
 
-```sh
-GAMMABOARD_TEST_STATE_OUTPUT=/tmp/gammaboard-reference-state \
-  cargo test --locked --lib evaluation::evaluator::gammaloop::acceptance -- --nocapture
-GAMMABOARD_TEST_REFERENCE_STATE=/tmp/gammaboard-reference-state \
-  cargo test --locked --test full_stack_cli full_stack_gammaloop_reference_training_and_inference -- --ignored --nocapture
-```
+[The reference run](../resources/templates/runs/gammaloop-reference.toml) uses a
+generated state without physical observables/selectors. Keep the map width
+consistent with its momentum scale; check estimates, uncertainty and invalid
+counts. Rebuild states and repeat acceptance after GammaLoop changes. Stability
+retries and summed channels may perform several target evaluations per accepted
+outer sample. Preparation timings remain subsets of evaluator compute.
 
-The output directory must not already exist. The pipeline check uses a fresh
-test database on the configured local PostgreSQL server and cleans up afterward.
-
-It generates a fresh version-10 scalar cut-bubble state, reloads it, and checks
-ordinary and cut-focused maps with both summed and discrete channels. A shifted
-Gaussian tests normalization and a nonconstant second moment against one.
-Deterministic Halton quadrature uses fixed tolerances, not IID confidence claims.
-The physical test checks nonunit outer weights in native histograms, squared
-histogram weights, all training-feedback modes, merged batches and recovery.
-It prints reference throughput for development feedback; debug-build timings
-are not a production scaling baseline. Symbolica 3 licensing is required.
-
-`resources/templates/runs/gammaloop-reference.toml` runs the same known targets
-through the normal training/inference pipeline on a supplied generated state.
-The state must have no observables or active physical selectors. Remove them
-with upstream `set process remove observable NAME` / `remove selector NAME`
-commands in preprocessing, or generate a separate acceptance state without them.
-Choose a width comparable to the map's momentum scale. Check both real and
-imaginary estimates, uncertainty and invalid-point counts; agreement within an
-uninformatively large error bar is not acceptance.
-
-Regenerate physics states and repeat real-physics baselines after the GammaLoop
-upgrade. Record sampling choices and retry counts: summed channels and stability
-retries can perform several target evaluations per accepted outer sample.
-The four worker busy fractions keep their existing meaning. Native map/partition
-work is part of evaluator compute; GammaLoop's preparation timings are inclusive
-subsets in diagnostics, not additional concurrent workers or additive busy rates.
+The sparse suite does not establish GPU efficiency, multi-host scaling, optimizer
+convergence or time to a physics uncertainty target. Use real-adapter,
+finite-training-window and recovery tests for those claims.

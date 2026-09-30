@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .batches import GenerationStatus
+
 from typing import Any
 
 import numpy as np
@@ -179,19 +181,17 @@ class _SamplerWorker:
             return {"ok": True}
         if self.sampler is None:
             raise RuntimeError("worker not initialized")
-        if method == "sample_plan":
-            return {"plan": self.sampler.sample_plan()}
-        if method == "training_samples_remaining":
-            remaining = _call_optional(self.sampler, "training_samples_remaining", None)
-            return {"remaining": None if remaining is None else int(remaining)}
-        if method == "produce_latent_batch":
-            return self._produce_latent_batch(int(params["nr_samples"]))
-        if method == "ingest_training_values":
+        if method == "generate":
+            budget = params.get("remaining_sample_budget")
+            if budget is not None and (not isinstance(budget, int) or isinstance(budget, bool) or budget < 0):
+                raise ValueError("remaining_sample_budget must be a non-negative integer or null")
+            return self._generate(budget)
+        if method == "feedback":
             nr_values = int(params["nr_values"])
-            training_values = np.array(
-                np.frombuffer(req_binary, dtype="<f8", count=nr_values)
-            )
-            self.sampler.ingest_training_values(training_values)
+            if nr_values < 0 or len(req_binary) != nr_values * 8:
+                raise ValueError("invalid feedback length")
+            values = np.frombuffer(req_binary, dtype="<f8", count=nr_values).copy()
+            self.sampler.feedback(values)
             return {"ok": True}
         if method == "pdf":
             return self._pdf(params)
@@ -207,17 +207,25 @@ class _SamplerWorker:
             return {"diagnostics": diagnostics if diagnostics is not None else {}}
         raise ValueError(f"unknown method: {method}")
 
-    def _produce_latent_batch(self, nr_samples: int) -> dict[str, Any]:
-        batch = _normalize_sample_batch(self.sampler.produce_latent_batch(nr_samples))
+    def _generate(self, budget: int | None) -> dict[str, Any]:
+        generated = self.sampler.generate(budget)
+        if isinstance(generated, GenerationStatus):
+            return {"kind": generated.value}
+        batch = _normalize_sample_batch(generated)
+        weights = np.asarray(batch.weights, dtype=np.float64)
+        if weights.ndim != 1 or len(weights) == 0 or (budget is not None and len(weights) > budget):
+            raise ValueError("generated sample count is empty or exceeds the task budget")
+        nr_samples = len(weights)
+        remaining = batch.training_remaining
+        if remaining is not None and (not isinstance(remaining, int) or isinstance(remaining, bool) or remaining < nr_samples):
+            raise ValueError("training_remaining must cover the generated samples")
         discrete_dims = len(self.discrete_cardinalities or [])
         continuous_dims = int(self.continuous_dims or 0)
         xs_discrete = np.asarray(batch.xs_discrete, dtype=np.int64).reshape((nr_samples, discrete_dims))
         xs_continuous = np.asarray(batch.xs_continuous, dtype=np.float64).reshape((nr_samples, continuous_dims))
-        weights = np.asarray(batch.weights, dtype=np.float64).reshape((nr_samples,))
         self._validate_sample_batch(xs_discrete, xs_continuous, weights)
-        return {
-            "__binary__": _encode_batch_binary(xs_discrete, xs_continuous, weights),
-        }
+        return {"kind": "batch", "nr_samples": nr_samples, "training_remaining": remaining,
+                "__binary__": _encode_batch_binary(xs_discrete, xs_continuous, weights)}
 
     def _pdf(self, params: dict[str, Any]) -> dict[str, Any]:
         if self.discrete_cardinalities is None or self.continuous_dims is None:
@@ -246,16 +254,16 @@ class _SamplerWorker:
 
     def _validate_sample_batch(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray, weights: np.ndarray) -> None:
         if not np.isfinite(xs_continuous).all():
-            raise ValueError("produce_latent_batch returned non-finite continuous values")
+            raise ValueError("generate returned non-finite continuous values")
         if not np.isfinite(weights).all():
-            raise ValueError("produce_latent_batch returned non-finite weights")
+            raise ValueError("generate returned non-finite weights")
         if (weights <= 0.0).any():
-            raise ValueError("produce_latent_batch returned non-positive weights")
+            raise ValueError("generate returned non-positive weights")
         for axis, cardinality in enumerate(self.discrete_cardinalities or []):
             axis_values = xs_discrete[:, axis]
             if ((axis_values < 0) | (axis_values >= cardinality)).any():
                 raise ValueError(
-                    f"produce_latent_batch returned discrete values outside [0, {cardinality}) on axis {axis}"
+                    f"generate returned discrete values outside [0, {cardinality}) on axis {axis}"
                 )
 
 
@@ -429,7 +437,7 @@ def _encode_batch_binary(
     xs_discrete: np.ndarray, xs_continuous: np.ndarray, weights: np.ndarray
 ) -> bytes:
     """Pack a produced batch into the response binary block: little-endian i64
-    discrete, then f64 continuous, then f64 weights (see produce_latent_batch in
+    discrete, then f64 continuous, then f64 weights (see generate in
     src/sampling/sampler_aggregator/process.rs)."""
     return (
         np.ascontiguousarray(xs_discrete.reshape(-1), dtype="<i8").tobytes()
@@ -470,10 +478,10 @@ def _normalize_sample_batch(batch: Any) -> SampleBatch:
     if isinstance(batch, SampleBatch):
         return batch
     if isinstance(batch, dict):
-        return SampleBatch(batch["xs_discrete"], batch["xs_continuous"], batch["weights"])
+        return SampleBatch(batch["xs_discrete"], batch["xs_continuous"], batch["weights"], batch.get("training_remaining"))
     if isinstance(batch, tuple) and len(batch) == 3:
         return SampleBatch(batch[0], batch[1], batch[2])
-    return SampleBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
+    return SampleBatch(batch.xs_discrete, batch.xs_continuous, batch.weights, getattr(batch, "training_remaining", None))
 
 
 def _normalize_materialized_batch(batch: Any) -> MaterializedBatch:

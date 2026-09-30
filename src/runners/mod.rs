@@ -24,3 +24,6 @@ pub use task_control::{TaskControlLoop, TaskControlLoopConfig};
 
 /// Maximum role connections per worker; launch admission reserves two more for control.
 pub const MAX_ROLE_DB_CONNECTIONS_PER_NODE: u32 = 2;
+
+#[cfg(test)]
+pub(crate) mod test_support;

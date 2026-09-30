@@ -28,32 +28,35 @@ fn encode_json<T: Serialize>(label: &str, value: &T) -> Result<JsonValue, sqlx::
 
 const PG_COPY_BINARY_HEADER: &[u8] = b"PGCOPY\n\xff\r\n\0";
 
-fn encode_batch_inputs_copy_binary(serialized_inputs: &[(i64, Vec<u8>)]) -> Vec<u8> {
-    let estimated_capacity = PG_COPY_BINARY_HEADER.len()
-        + 4
-        + 4
-        + serialized_inputs
-            .iter()
-            .map(|(_, payload)| 2 + 4 + 8 + 4 + payload.len())
-            .sum::<usize>()
-        + 2;
-    let mut out = Vec::with_capacity(estimated_capacity);
+fn encode_batch_inputs_copy_binary(
+    batch_ids: &[i64],
+    batches: &[LatentBatch],
+) -> Result<(Vec<u8>, usize), sqlx::Error> {
+    let mut out = Vec::new();
+    let mut payload_bytes = 0;
     out.extend_from_slice(PG_COPY_BINARY_HEADER);
     out.extend_from_slice(&0_i32.to_be_bytes());
     out.extend_from_slice(&0_i32.to_be_bytes());
 
-    for (batch_id, payload) in serialized_inputs {
+    for (batch_id, batch) in batch_ids.iter().zip(batches) {
         out.extend_from_slice(&2_i16.to_be_bytes());
 
         out.extend_from_slice(&8_i32.to_be_bytes());
         out.extend_from_slice(&batch_id.to_be_bytes());
 
-        out.extend_from_slice(&(payload.len() as i32).to_be_bytes());
-        out.extend_from_slice(payload);
+        let length_offset = out.len();
+        out.extend_from_slice(&0_i32.to_be_bytes());
+        let length = batch
+            .write_bytes(&mut out)
+            .map_err(|err| sqlx::Error::Protocol(format!("invalid latent batch: {err}")))?;
+        let field_length = i32::try_from(length)
+            .map_err(|_| sqlx::Error::Protocol("latent batch exceeds COPY field size".into()))?;
+        out[length_offset..length_offset + 4].copy_from_slice(&field_length.to_be_bytes());
+        payload_bytes += length;
     }
 
     out.extend_from_slice(&(-1_i16).to_be_bytes());
-    out
+    Ok((out, payload_bytes))
 }
 
 pub(crate) async fn insert_batches(
@@ -78,24 +81,8 @@ pub(crate) async fn insert_batches(
     let started = Instant::now();
     // Prepare bytes before acquiring a connection or any database locks.
     let serialize_started = Instant::now();
-    let serialized_inputs = batch_ids
-        .iter()
-        .zip(batches.iter())
-        .map(|(batch_id, batch)| {
-            batch
-                .to_bytes()
-                .map(|payload| (*batch_id, payload))
-                .map_err(|err| sqlx::Error::Protocol(format!("invalid latent batch: {err}")))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let (copy_payload, payload_bytes) = encode_batch_inputs_copy_binary(batch_ids, batches)?;
     let serialize_ms = serialize_started.elapsed().as_secs_f64() * 1000.0;
-    let payload_bytes = serialized_inputs
-        .iter()
-        .map(|(_, payload)| payload.len())
-        .sum::<usize>();
-
-    let copy_payload = encode_batch_inputs_copy_binary(&serialized_inputs);
-    drop(serialized_inputs);
 
     let mut tx = pool.begin().await?;
     let mut builder = QueryBuilder::<Postgres>::new(
@@ -457,6 +444,10 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
     let metrics = encode_json("evaluator performance metrics", &snapshot.metrics)?;
     let row = sqlx::query_scalar::<_, i64>(
         r#"
+        WITH owner AS (
+            INSERT INTO run_telemetry_workers (run_id, worker_id) VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+        )
         INSERT INTO evaluator_performance_history (
             run_id,
             worker_id,
@@ -513,6 +504,10 @@ pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
     let runtime_metrics = encode_json("sampler runtime metrics", &snapshot.runtime_metrics)?;
     let row = sqlx::query_scalar::<_, i64>(
         r#"
+        WITH owner AS (
+            INSERT INTO run_telemetry_workers (run_id, worker_id) VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+        )
         INSERT INTO sampler_aggregator_performance_history (
             run_id,
             worker_id,

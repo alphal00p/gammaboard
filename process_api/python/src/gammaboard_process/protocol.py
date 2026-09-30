@@ -7,7 +7,7 @@ import sys
 import traceback
 from typing import Any
 
-PROTOCOL = "gammaboard-jsonrpc-v2"
+PROTOCOL = "gammaboard-jsonrpc-v3"
 JSON_RPC_VERSION = "2.0"
 
 

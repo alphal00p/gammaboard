@@ -233,10 +233,11 @@ pinned GammaLoop revision and is separate:
 just test-e2e-madnis
 ```
 
-The process protocol benchmark is ignored by default:
+Process API tests are opt-in and require a Python environment containing NumPy:
 
 ```bash
-cargo test -q process_evaluator_eval_batch_protocol_benchmark -- --ignored --nocapture
+just benchmark process --python /path/to/venv/bin/python --output results/process
+just benchmark plot results/process
 ```
 
 ## GammaLoop Feature

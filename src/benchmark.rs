@@ -46,7 +46,8 @@ impl Worker {
     fn batch(&mut self, size: usize) -> Result<()> {
         let latent = self
             .sampler
-            .produce_latent_batch(size)?
+            .generate(Some(size))
+            .and_then(|generated| generated.into_batch())?
             .with_accumulator_config(AccumulatorConfig::scalar())
             .build();
         let batch = self.materializer.materialize_batch(&latent)?;
@@ -67,6 +68,8 @@ pub struct DirectMeasurement {
     pub schema_version: u32,
     pub backend: &'static str,
     pub workers: usize,
+    /// Linux worker-to-CPU bindings from the enclosing affinity mask.
+    pub worker_cpus: Option<Vec<usize>>,
     pub batch_size: usize,
     pub completed_samples: usize,
     pub elapsed_seconds: f64,
@@ -75,6 +78,47 @@ pub struct DirectMeasurement {
     pub total_seconds: f64,
     pub workload: Workload,
     pub provenance: crate::provenance::RunProvenance,
+}
+
+#[cfg(target_os = "linux")]
+fn allowed_cpus() -> Result<Vec<usize>> {
+    // SAFETY: the initialized CPU set has the size expected by libc; pid 0 reads
+    // the calling thread's mask and cannot change another process.
+    let mut mask: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sched_getaffinity(0, std::mem::size_of_val(&mask), &mut mask) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok((0..libc::CPU_SETSIZE as usize)
+        .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &mask) })
+        .collect())
+}
+
+fn worker_cpu_assignments(workers: usize) -> Result<Option<Vec<usize>>> {
+    #[cfg(target_os = "linux")]
+    {
+        let cpus = allowed_cpus()?;
+        ensure!(!cpus.is_empty(), "benchmark CPU affinity is empty");
+        Ok(Some((0..workers).map(|i| cpus[i % cpus.len()]).collect()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = workers;
+        Ok(None)
+    }
+}
+
+fn pin_worker(_cpu: Option<usize>) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if let Some(cpu) = _cpu {
+        // SAFETY: cpu comes from allowed_cpus(), and pid 0 changes only this
+        // worker thread. A shared mask alone can leave short trials on one CPU.
+        let mut mask: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        unsafe { libc::CPU_SET(cpu, &mut mask) };
+        if unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&mask), &mask) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
 }
 
 pub fn direct(
@@ -91,6 +135,7 @@ pub fn direct(
     );
     ensure!(samples.is_none_or(|n| n > 0), "samples must be positive");
     let total_start = Instant::now();
+    let worker_cpus = worker_cpu_assignments(workers)?;
     let runtimes = (0..workers)
         .map(|i| Worker::new(&workload.evaluator, 1234 + i as u64))
         .collect::<Result<Vec<_>>>()?;
@@ -99,13 +144,15 @@ pub fn direct(
     let remaining = AtomicUsize::new(samples.unwrap_or(0));
     let (completed_samples, elapsed_seconds) = std::thread::scope(|scope| -> Result<_> {
         let mut handles = Vec::new();
-        for mut worker in runtimes {
+        for (index, mut worker) in runtimes.into_iter().enumerate() {
+            let cpu = worker_cpus.as_ref().map(|cpus| cpus[index]);
             let barrier = barrier.clone();
             let remaining = &remaining;
             handles.push(scope.spawn(move || -> Result<(usize, Instant, Instant)> {
-                let warmup_start = Instant::now();
                 let warmed =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
+                        pin_worker(cpu)?;
+                        let warmup_start = Instant::now();
                         while warmup_start.elapsed() < warmup {
                             worker.batch(batch_size)?;
                         }
@@ -161,6 +208,7 @@ pub fn direct(
         schema_version: 1,
         backend: "direct_uniform_scalar",
         workers,
+        worker_cpus,
         batch_size,
         completed_samples,
         elapsed_seconds,
@@ -175,8 +223,8 @@ pub fn direct(
 /// Calibrate once; callers must reuse the returned iteration count at every core count.
 pub fn calibrate(target: Duration) -> Result<serde_json::Value> {
     ensure!(
-        target >= Duration::from_micros(1) && target <= Duration::from_millis(100),
-        "calibration target must be 1us..100ms"
+        target >= Duration::from_nanos(100) && target <= Duration::from_millis(100),
+        "calibration target must be 0.1us..100ms"
     );
     let mut iterations = 1000_u64;
     let mut per_iteration = 0.0;
@@ -192,17 +240,57 @@ pub fn calibrate(target: Duration) -> Result<serde_json::Value> {
     }
     ensure!(per_iteration > 0.0, "CPU calibration failed");
     let fixed = (target.as_secs_f64() / per_iteration).round().max(1.0) as u64;
-    let start = Instant::now();
-    crate::evaluation::evaluator::unit::cpu_work(fixed, 64);
+    // Amortize the clock for cheap work without spending seconds on slow targets.
+    let samples = (0.02 / target.as_secs_f64()).ceil().clamp(1.0, 262144.0) as usize;
+    let mut observations = (0..3)
+        .map(|_| {
+            let start = Instant::now();
+            crate::evaluation::evaluator::unit::cpu_work(fixed, samples);
+            start.elapsed().as_secs_f64() / samples as f64
+        })
+        .collect::<Vec<_>>();
+    observations.sort_by(f64::total_cmp);
     Ok(
         json!({"schema_version":1,"requested_seconds_per_sample":target.as_secs_f64(),
-        "cpu_iterations_per_sample":fixed,"measured_seconds_per_sample":start.elapsed().as_secs_f64()/64.0}),
+        "cpu_iterations_per_sample":fixed,"measured_seconds_per_sample":observations[1],
+        "observations_seconds_per_sample":observations}),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn direct_workers_have_distinct_bindings_without_restricting_the_caller() {
+        let original = allowed_cpus().unwrap();
+        let count = original.len().min(4);
+        let assignments = worker_cpu_assignments(count).unwrap().unwrap();
+        assert_eq!(assignments, original[..count]);
+        std::thread::scope(|scope| {
+            for cpu in assignments {
+                scope.spawn(move || {
+                    pin_worker(Some(cpu)).unwrap();
+                    assert_eq!(allowed_cpus().unwrap(), vec![cpu]);
+                });
+            }
+        });
+        assert_eq!(allowed_cpus().unwrap(), original);
+    }
+    #[test]
+    fn fractional_microsecond_calibration_keeps_bounded_finite_observations() {
+        let result = calibrate(Duration::from_nanos(500)).unwrap();
+        assert!(result["cpu_iterations_per_sample"].as_u64().unwrap() > 0);
+        assert_eq!(
+            result["observations_seconds_per_sample"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(result["measured_seconds_per_sample"].as_f64().unwrap() > 0.0);
+        assert!(calibrate(Duration::ZERO).is_err());
+    }
     #[test]
     fn direct_counts_partial_batches_across_workers() {
         let workload = Workload {

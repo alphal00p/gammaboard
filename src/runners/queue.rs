@@ -22,19 +22,11 @@ const DEFAULT_MAX_BATCH_RETRIES: i32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerQueueConfig {
-    #[serde(default)]
-    pub bulk_sample_generation: bool,
-    pub queue_buffer: f64,
     pub target_batch_eval_ms: f64,
-    #[serde(default = "default_batch_size_deadband_ratio")]
-    pub batch_size_deadband_ratio: f64,
-    #[serde(default = "default_batch_size_cooldown_ticks")]
-    pub batch_size_cooldown_ticks: u32,
     pub max_batch_size: usize,
     /// Disable adaptation; training boundaries and remaining budgets still cap batches.
     #[serde(default)]
     pub fixed_batch_size: Option<usize>,
-    pub max_queue_size: usize,
     pub max_batches_per_tick: usize,
     pub max_insert_bundle_size: usize,
     pub max_concurrent_insert_tasks: usize,
@@ -46,34 +38,11 @@ pub struct SamplerQueueConfig {
 impl SamplerQueueConfig {
     pub fn apply_tuning(&mut self, tuning: &SamplerQueueTuning) {
         apply_option(
-            &mut self.bulk_sample_generation,
-            tuning.bulk_sample_generation,
+            &mut self.fixed_batch_size,
+            tuning.fixed_batch_size.map(Some),
         );
-        apply_option(&mut self.queue_buffer, tuning.queue_buffer);
         apply_option(&mut self.target_batch_eval_ms, tuning.target_batch_eval_ms);
-        apply_option(
-            &mut self.batch_size_deadband_ratio,
-            tuning.batch_size_deadband_ratio,
-        );
-        apply_option(
-            &mut self.batch_size_cooldown_ticks,
-            tuning.batch_size_cooldown_ticks,
-        );
         apply_option(&mut self.max_batch_size, tuning.max_batch_size);
-        apply_option(&mut self.max_queue_size, tuning.max_queue_size);
-        apply_option(&mut self.max_batches_per_tick, tuning.max_batches_per_tick);
-        apply_option(
-            &mut self.max_insert_bundle_size,
-            tuning.max_insert_bundle_size,
-        );
-        apply_option(
-            &mut self.max_concurrent_insert_tasks,
-            tuning.max_concurrent_insert_tasks,
-        );
-        apply_option(
-            &mut self.completed_batch_fetch_limit,
-            tuning.completed_batch_fetch_limit,
-        );
     }
 }
 
@@ -86,11 +55,10 @@ fn apply_option<T>(destination: &mut T, value: Option<T>) {
 pub struct SamplerQueue<S> {
     run_id: i32,
     task_id: i64,
-    requires_training_values: bool,
     store: S,
     config: SamplerQueueConfig,
     checkpoint: SamplerQueueCheckpoint,
-    pending_insert: VecDeque<LatentBatch>,
+    pending_insert: VecDeque<(LatentBatch, bool)>,
     ready_processed: VecDeque<CompletedBatch>,
     pending_insert_tasks: Vec<PendingInsertTask>,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
@@ -113,6 +81,7 @@ pub struct SamplerQueue<S> {
 #[derive(Default)]
 struct TrainingBatchSizing {
     previous_remaining: Option<usize>,
+    evaluators: usize,
     cap: Option<usize>,
 }
 
@@ -123,6 +92,7 @@ impl TrainingBatchSizing {
                 if self
                     .previous_remaining
                     .is_none_or(|previous| remaining > previous)
+                    || self.evaluators != evaluators
                 {
                     self.cap = Some(
                         remaining
@@ -131,6 +101,7 @@ impl TrainingBatchSizing {
                     );
                 }
                 self.previous_remaining = Some(remaining);
+                self.evaluators = evaluators;
                 target.min(self.cap.unwrap_or(target))
             }
             _ => {
@@ -140,14 +111,6 @@ impl TrainingBatchSizing {
             }
         }
     }
-}
-
-const fn default_batch_size_deadband_ratio() -> f64 {
-    DEFAULT_BATCH_SIZE_DEADBAND_RATIO
-}
-
-const fn default_batch_size_cooldown_ticks() -> u32 {
-    DEFAULT_BATCH_SIZE_COOLDOWN_TICKS
 }
 
 const fn default_max_batch_retries() -> i32 {
@@ -206,7 +169,6 @@ where
         store: S,
         run_id: i32,
         task_id: i64,
-        requires_training_values: bool,
         config: SamplerQueueConfig,
         mut checkpoint: SamplerQueueCheckpoint,
     ) -> Self {
@@ -219,7 +181,6 @@ where
         Self {
             run_id,
             task_id,
-            requires_training_values,
             store,
             config,
             checkpoint,
@@ -410,23 +371,6 @@ where
         Ok(Some(cleanup_started.elapsed()))
     }
 
-    pub async fn plan_production(
-        &mut self,
-        max_producable: Option<usize>,
-        training_remaining: Option<usize>,
-        queue_counts: BatchQueueCounts,
-    ) -> Result<Vec<usize>, StoreError> {
-        self.available_batch_slots(queue_counts).await?;
-        let batch_size = self.production_batch_size(training_remaining);
-        self.cached_tick_queue_counts = Some(queue_counts);
-        Ok(self.get_sample(
-            max_producable,
-            queue_counts,
-            self.cached_active_evaluator_count.unwrap_or(0),
-            batch_size,
-        ))
-    }
-
     pub(crate) fn production_batch_size(&mut self, training_remaining: Option<usize>) -> usize {
         self.training_batch_sizing.batch_size(
             self.checkpoint.batch_size_current,
@@ -435,10 +379,10 @@ where
         )
     }
 
-    pub(crate) async fn available_batch_slots(
+    pub(crate) async fn needs_generation(
         &mut self,
         counts: BatchQueueCounts,
-    ) -> Result<usize, StoreError> {
+    ) -> Result<bool, StoreError> {
         let _io = self.busy.io();
         let evaluators = self
             .store
@@ -447,39 +391,7 @@ where
             .max(0) as usize;
         self.cached_active_evaluator_count = Some(evaluators);
         self.cached_tick_queue_counts = Some(counts);
-        Ok(self.production_capacity(counts, evaluators))
-    }
-
-    fn production_capacity(&self, counts: BatchQueueCounts, evaluators: usize) -> usize {
-        self.config
-            .max_queue_size
-            .saturating_sub(counts.open().max(0) as usize)
-            .min(self.config.max_batches_per_tick)
-            .min(
-                self.target_pending_batches(evaluators)
-                    .unwrap_or(0)
-                    .saturating_sub(counts.pending.max(0) as usize),
-            )
-    }
-
-    pub fn validate_batch_plan(&self, batch_plan: &[usize]) -> Result<(), StoreError> {
-        if batch_plan.len() > self.config.max_batches_per_tick {
-            return Err(StoreError::store(format!(
-                "batch plan exceeded max_batches_per_tick: planned={} max_batches_per_tick={}",
-                batch_plan.len(),
-                self.config.max_batches_per_tick
-            )));
-        }
-        if let Some(max_planned_batch_size) = batch_plan.iter().copied().max()
-            && max_planned_batch_size > self.effective_max_batch_size()
-        {
-            return Err(StoreError::store(format!(
-                "batch plan exceeded max_batch_size: planned={} max_batch_size={}",
-                max_planned_batch_size,
-                self.effective_max_batch_size()
-            )));
-        }
-        Ok(())
+        Ok(evaluators > 0 && (counts.pending.max(0) as usize) < evaluators)
     }
 
     pub fn diagnostics_snapshot(&self) -> Option<QueueDiagnosticsSnapshot> {
@@ -491,18 +403,16 @@ where
     }
 
     pub fn target_pending_batches(&self, active_evaluator_count: usize) -> Option<usize> {
-        if !self.config.queue_buffer.is_finite() || self.config.queue_buffer < 0.0 {
-            return None;
-        }
-        Some(((active_evaluator_count as f64) * self.config.queue_buffer).ceil() as usize)
+        Some(active_evaluator_count)
     }
 
-    pub fn ingest(&mut self, batches: Vec<LatentBatch>) {
-        if batches.is_empty() {
-            return;
+    pub fn ingest(&mut self, batches: Vec<LatentBatch>, requires_feedback: bool) {
+        if let Some(remaining) = &mut self.training_batch_sizing.previous_remaining {
+            *remaining =
+                remaining.saturating_sub(batches.iter().map(|batch| batch.nr_samples).sum());
         }
-
-        self.pending_insert.extend(batches);
+        self.pending_insert
+            .extend(batches.into_iter().map(|batch| (batch, requires_feedback)));
         self.ensure_insert_pump();
     }
 
@@ -560,46 +470,6 @@ where
         }
         if let Some(task) = self.pending_completed_cleanup.take() {
             task.abort();
-        }
-    }
-
-    pub fn get_sample(
-        &self,
-        max_producable: Option<usize>,
-        queue_counts: BatchQueueCounts,
-        active_evaluator_count: usize,
-        batch_size_current: usize,
-    ) -> Vec<usize> {
-        // queue_counts includes local and in-flight inserts. One pending target
-        // therefore bounds both the database queue and unpersisted production.
-        let batch_limit = self.production_capacity(queue_counts, active_evaluator_count);
-        if batch_limit == 0 {
-            return Vec::new();
-        }
-
-        match max_producable {
-            None => vec![batch_size_current; batch_limit],
-            Some(max_samples) => {
-                let base_total_samples = batch_limit.saturating_mul(batch_size_current);
-                if base_total_samples <= max_samples {
-                    vec![batch_size_current; batch_limit]
-                } else if max_samples == 0 || batch_size_current == 0 {
-                    Vec::new()
-                } else {
-                    let nr_batches = max_samples.div_ceil(batch_size_current);
-                    let base_size = max_samples / nr_batches;
-                    let remainder = max_samples % nr_batches;
-                    let mut plan = Vec::with_capacity(nr_batches);
-                    for i in 0..nr_batches {
-                        plan.push(if i < remainder {
-                            base_size + 1
-                        } else {
-                            base_size
-                        });
-                    }
-                    plan
-                }
-            }
         }
     }
 
@@ -755,15 +625,24 @@ where
                 self.snapshot_insert_bundle_start_state();
 
             let bundle_size = self.config.max_insert_bundle_size.max(1);
-            let batch_count = self.pending_insert.len().min(bundle_size);
-            let batches = self.pending_insert.drain(..batch_count).collect::<Vec<_>>();
+            let requires_training_values = self.pending_insert.front().unwrap().1;
+            let batch_count = self
+                .pending_insert
+                .iter()
+                .take(bundle_size)
+                .take_while(|(_, feedback)| *feedback == requires_training_values)
+                .count();
+            let batches = self
+                .pending_insert
+                .drain(..batch_count)
+                .map(|(batch, _)| batch)
+                .collect::<Vec<_>>();
             let batch_ids = next_batch_ids(batch_count);
             self.checkpoint.last_produced_batch_id = batch_ids.last().copied();
             let busy = self.busy.clone();
             let store = self.store.clone();
             let run_id = self.run_id;
             let task_id = self.task_id;
-            let requires_training_values = self.requires_training_values;
             self.pending_insert_tasks.push(PendingInsertTask {
                 first_batch_id: batch_ids[0],
                 batch_count,
@@ -912,7 +791,7 @@ where
         if !ratio.is_finite() || ratio <= 0.0 {
             return;
         }
-        let deadband = self.sanitized_batch_size_deadband_ratio();
+        let deadband = DEFAULT_BATCH_SIZE_DEADBAND_RATIO;
         let lower = 1.0 - deadband;
         let upper = 1.0 + deadband;
         if ratio >= lower && ratio <= upper {
@@ -924,7 +803,7 @@ where
             return;
         }
         self.checkpoint.batch_size_current = next;
-        self.batch_size_tune_cooldown_remaining = self.config.batch_size_cooldown_ticks;
+        self.batch_size_tune_cooldown_remaining = DEFAULT_BATCH_SIZE_COOLDOWN_TICKS;
     }
 
     fn take_ready_processed(&mut self) -> Vec<CompletedBatch> {
@@ -934,632 +813,14 @@ where
     fn effective_max_batch_size(&self) -> usize {
         self.config.max_batch_size.max(MIN_BATCH_SIZE)
     }
-
-    fn sanitized_batch_size_deadband_ratio(&self) -> f64 {
-        let value = self.config.batch_size_deadband_ratio;
-        if !value.is_finite() || value < 0.0 {
-            DEFAULT_BATCH_SIZE_DEADBAND_RATIO
-        } else {
-            value.min(0.95)
-        }
-    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::core::{
-        AggregationStore, BatchClaim, ControlPlaneStore, DesiredAssignment,
-        EvaluatorPerformanceSnapshot, InsertBatchesOutcome, RegisteredNode, RunReadStore,
-        RunSampleProgress, RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore,
-        SamplerAggregatorPerformanceSnapshot, WorkQueueStore,
-    };
     use crate::evaluation::{Batch, Point};
-    use crate::sampling::{LatentBatchPayload, LatentBatchSpec};
-    use crate::stores::{
-        EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
-        SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
-    };
-    use crate::utils::domain::Domain;
-    use async_trait::async_trait;
-    use serde_json::Value as JsonValue;
-    use std::sync::{Arc, Mutex};
-
-    type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
-
-    #[derive(Clone, Default)]
-    pub(crate) struct RecordingStore {
-        inserts: RecordedInserts,
-        fetch_completed_calls: Arc<Mutex<usize>>,
-        completed_ids: Arc<Mutex<Vec<i64>>>,
-    }
-
-    impl RecordingStore {
-        fn recorded_inserts(&self) -> Vec<(f64, Vec<i64>)> {
-            self.inserts.lock().expect("recording lock").clone()
-        }
-
-        fn fetch_completed_calls(&self) -> usize {
-            *self.fetch_completed_calls.lock().expect("recording lock")
-        }
-    }
-
-    #[async_trait]
-    impl WorkQueueStore for RecordingStore {
-        async fn insert_batches(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-            _requires_training_values: bool,
-            batch_ids: &[i64],
-            batches: &[LatentBatch],
-        ) -> Result<InsertBatchesOutcome, StoreError> {
-            let logical_weight = match &batches[0].payload {
-                LatentBatchPayload::IndexedBatch { weights, .. } => weights[0],
-                LatentBatchPayload::HavanaInference { .. } => 0.0,
-            };
-            if logical_weight == 1.0 {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-            self.inserts
-                .lock()
-                .expect("recording lock")
-                .push((logical_weight, batch_ids.to_vec()));
-            Ok(InsertBatchesOutcome {
-                batch_ids: batch_ids.to_vec(),
-                metrics: InsertBatchesMetrics::default(),
-            })
-        }
-
-        async fn get_batch_queue_counts(
-            &self,
-            _run_id: i32,
-            _task_id: Option<i64>,
-            _completed_after_batch_id: Option<i64>,
-        ) -> Result<BatchQueueCounts, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_queue_blocker(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-            _after_batch_id: Option<i64>,
-        ) -> Result<Option<crate::core::QueueBlocker>, StoreError> {
-            Ok(None)
-        }
-
-        async fn claim_batch(
-            &self,
-            _run_id: i32,
-            _node_uuid: &str,
-            _claim_token: &str,
-        ) -> Result<Option<BatchClaim>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn release_claimed_batches_for_worker(
-            &self,
-            _run_id: i32,
-            _node_uuid: &str,
-        ) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn release_untracked_claims(
-            &self,
-            _run_id: i32,
-            _node_uuid: &str,
-            _tracked_tokens: &[String],
-        ) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn submit_batch_results(
-            &self,
-            _batch_id: i64,
-            _node_uuid: &str,
-            _claim_token: &str,
-            _result: &crate::evaluation::BatchResult,
-            _eval_time_ms: f64,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn record_evaluator_performance_snapshot(
-            &self,
-            _snapshot: &EvaluatorPerformanceSnapshot,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn record_sampler_performance_snapshot(
-            &self,
-            _snapshot: &SamplerAggregatorPerformanceSnapshot,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn fail_batch(
-            &self,
-            _batch_id: i64,
-            _node_uuid: &str,
-            _claim_token: &str,
-            _last_error: &str,
-            _max_batch_retries: i32,
-        ) -> Result<crate::core::BatchFailOutcome, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn fetch_completed_batches(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-            _limit: usize,
-            _strict_ordering: bool,
-            _after_batch_id: Option<i64>,
-        ) -> Result<Vec<crate::core::CompletedBatch>, StoreError> {
-            *self.fetch_completed_calls.lock().expect("recording lock") += 1;
-            Ok(self
-                .completed_ids
-                .lock()
-                .unwrap()
-                .iter()
-                .copied()
-                .filter(|id| *id > _after_batch_id.unwrap_or(0))
-                .map(|batch_id| CompletedBatch {
-                    batch_id,
-                    task_id: 1,
-                    requires_training_values: true,
-                    batch_size: 1,
-                    result: crate::evaluation::BatchResult::new(
-                        None,
-                        crate::evaluation::AccumulatorState::Empty(Default::default()),
-                    ),
-                    completed_at: None,
-                    total_eval_time_ms: None,
-                })
-                .collect())
-        }
-
-        async fn cleanup_consumed_completed_batches(
-            &self,
-            _run_id: i32,
-            _up_to_batch_id: i64,
-            _limit: usize,
-        ) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn reclaim_abandoned_batches(&self, _run_id: i32) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-    }
-
-    #[async_trait]
-    impl AggregationStore for RecordingStore {
-        async fn load_current_accumulator(
-            &self,
-            _run_id: i32,
-        ) -> Result<Option<JsonValue>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn persist_task_result_snapshot(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-            _result: &JsonValue,
-        ) -> Result<i64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn load_sampler_checkpoint(
-            &self,
-            _run_id: i32,
-        ) -> Result<Option<crate::core::SamplerAggregatorCheckpoint>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn load_stage_snapshot(
-            &self,
-            _snapshot_id: i64,
-        ) -> Result<Option<RunStageSnapshot>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn load_latest_stage_snapshot_before_sequence(
-            &self,
-            _run_id: i32,
-            _sequence_nr: i32,
-        ) -> Result<Option<RunStageSnapshot>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn load_task_activation_snapshot(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-        ) -> Result<Option<RunStageSnapshot>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn load_run_sample_progress(
-            &self,
-            _run_id: i32,
-        ) -> Result<Option<RunSampleProgress>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn save_aggregation(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-            _current_accumulator: &JsonValue,
-            _persisted_observable: Option<&JsonValue>,
-            _delta_batches_completed: i32,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn save_sampler_checkpoint(
-            &self,
-            _run_id: i32,
-            _checkpoint: &crate::core::SamplerAggregatorCheckpoint,
-            _stage: Option<&crate::core::RunStageSnapshot>,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn save_run_sample_progress(
-            &self,
-            _run_id: i32,
-            _nr_produced_samples: i64,
-            _nr_completed_samples: i64,
-            _sampler_runner_uptime_ms: f64,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn save_run_stage_snapshot(
-            &self,
-            _snapshot: &RunStageSnapshot,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-    }
-
-    #[async_trait]
-    impl RunTaskStore for RecordingStore {
-        async fn append_run_tasks(
-            &self,
-            _run_id: i32,
-            _tasks: &[RunTaskInput],
-        ) -> Result<Vec<RunTask>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn list_run_tasks(&self, _run_id: i32) -> Result<Vec<RunTask>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn load_run_task(&self, _task_id: i64) -> Result<Option<RunTask>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn remove_pending_run_task(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-        ) -> Result<bool, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn update_run_task_queue_tuning(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-            _queue_tuning: Option<crate::core::SamplerQueueTuning>,
-        ) -> Result<RunTask, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn load_active_run_task(&self, _run_id: i32) -> Result<Option<RunTask>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn activate_next_run_task(
-            &self,
-            _run_id: i32,
-        ) -> Result<Option<RunTask>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn update_run_task_progress(
-            &self,
-            _task_id: i64,
-            _nr_produced_samples: i64,
-            _nr_completed_samples: i64,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn set_run_task_spawn_origin(
-            &self,
-            _task_id: i64,
-            _spawned_from_snapshot_id: Option<i64>,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn complete_run_task(&self, _task_id: i64) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn persist_task_measurement_output(
-            &self,
-            _task_id: i64,
-            _output: &crate::core::TaskMeasurementOutput,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn persist_task_controller_output(
-            &self,
-            _task_id: i64,
-            _output: &crate::core::ControllerTaskOutput,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn fail_run_task(&self, _task_id: i64, _reason: &str) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-    }
-
-    #[async_trait]
-    impl ControlPlaneStore for RecordingStore {
-        async fn try_lock_task_control(
-            &self,
-        ) -> Result<Option<Box<dyn Send>>, crate::core::StoreError> {
-            Ok(Some(Box::new(())))
-        }
-
-        async fn update_desired_assignments(
-            &self,
-            _updates: &[crate::core::NodeAssignmentUpdate],
-        ) -> Result<bool, crate::core::StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn assign_worker_pool(
-            &self,
-            _node_name: &str,
-            _role: crate::core::WorkerRole,
-            _run_id: i32,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn announce_node(
-            &self,
-            _node_name: &str,
-            _node_uuid: &str,
-            _capabilities: &crate::core::NodeCapabilities,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn set_current_assignment(
-            &self,
-            _node_uuid: &str,
-            _role: crate::core::WorkerRole,
-            _run_id: i32,
-        ) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn clear_current_assignment(&self, _node_uuid: &str) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn clear_desired_assignment(&self, _node_name: &str) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn clear_desired_assignments_for_run(&self, _run_id: i32) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn clear_desired_assignments_for_run_except_node(
-            &self,
-            _run_id: i32,
-            _keep_node_name: &str,
-        ) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn clear_all_desired_assignments(&self) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_desired_assignment(
-            &self,
-            _node_name: &str,
-        ) -> Result<Option<DesiredAssignment>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn list_desired_assignments(
-            &self,
-            _node_name: Option<&str>,
-        ) -> Result<Vec<DesiredAssignment>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn list_nodes(
-            &self,
-            _node_name: Option<&str>,
-        ) -> Result<Vec<RegisteredNode>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn create_node_launch_request(
-            &self,
-            _backend: &str,
-            _requested_count: i32,
-            _name_prefix: Option<&str>,
-            _args: &JsonValue,
-        ) -> Result<crate::core::NodeLaunchRequest, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn list_node_launch_requests(
-            &self,
-        ) -> Result<Vec<crate::core::NodeLaunchRequest>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn claim_external_node_launch_request(
-            &self,
-        ) -> Result<Option<crate::core::NodeLaunchRequest>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn update_node_launch_request_state(
-            &self,
-            _id: i64,
-            _state: &str,
-            _started_count: i32,
-            _result: &JsonValue,
-            _error: Option<&str>,
-        ) -> Result<crate::core::NodeLaunchRequest, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn count_active_evaluator_nodes(&self, _run_id: i32) -> Result<i64, StoreError> {
-            Ok(20)
-        }
-
-        async fn request_node_shutdown(&self, _node_name: &str) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn consume_node_shutdown_request(
-            &self,
-            _node_uuid: &str,
-        ) -> Result<bool, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn expire_node_lease(&self, _node_uuid: &str) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn create_run(
-            &self,
-            _name: &str,
-            _run_toml: &str,
-            _provenance: &JsonValue,
-            _integration_params: &JsonValue,
-            _target: Option<&JsonValue>,
-            _domain: &Domain,
-            _initial_stage_snapshot: &RunStageSnapshot,
-            _initial_tasks: &[RunTaskInput],
-            _parent: Option<&crate::core::traits::RunParentMetadata>,
-        ) -> Result<i32, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn remove_run(&self, _run_id: i32) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-    }
-
-    #[async_trait]
-    impl RunReadStore for RecordingStore {
-        async fn health_check(&self) -> Result<(), StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_all_runs(&self) -> Result<Vec<RunProgress>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_run_progress(&self, _run_id: i32) -> Result<Option<RunProgress>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_task_output_snapshots(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-            _after_snapshot_id: Option<i64>,
-            _limit: i64,
-        ) -> Result<Vec<TaskOutputSnapshot>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_latest_task_stage_snapshot(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-        ) -> Result<Option<TaskStageSnapshot>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_latest_task_stage_snapshot_id(
-            &self,
-            _run_id: i32,
-            _task_id: i64,
-        ) -> Result<Option<String>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_runtime_logs(
-            &self,
-            _limit: i64,
-            _source: Option<&str>,
-            _run_id: Option<i32>,
-            _include_child_runs: bool,
-            _node_name: Option<&str>,
-            _node_uuid: Option<&str>,
-            _level: Option<&str>,
-            _query: Option<&str>,
-            _before_id: Option<i64>,
-        ) -> Result<RuntimeLogPage, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_registered_workers(
-            &self,
-            _run_id: Option<i32>,
-        ) -> Result<Vec<RegisteredWorkerEntry>, StoreError> {
-            Ok(Vec::new())
-        }
-
-        async fn get_evaluator_performance_history(
-            &self,
-            _run_id: i32,
-            _limit: i64,
-            _worker_id: Option<&str>,
-        ) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, StoreError> {
-            unreachable!("unused in test")
-        }
-
-        async fn get_sampler_performance_history(
-            &self,
-            _run_id: i32,
-            _limit: i64,
-            _worker_id: Option<&str>,
-        ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError> {
-            unreachable!("unused in test")
-        }
-    }
+    use crate::runners::test_support::RecordingStore;
+    use crate::sampling::LatentBatchSpec;
 
     fn latent_batch_with_weight(weight: f64) -> LatentBatch {
         let batch = Batch::from_points([Point::new(vec![weight], vec![], weight)]).expect("batch");
@@ -1571,16 +832,12 @@ pub(crate) mod tests {
             store,
             1,
             1,
-            true,
             SamplerQueueConfig {
-                bulk_sample_generation: false,
-                queue_buffer: 1.0,
                 target_batch_eval_ms: 500.0,
-                batch_size_deadband_ratio: 0.15,
-                batch_size_cooldown_ticks: 3,
+
                 max_batch_size: 4096,
                 fixed_batch_size: None,
-                max_queue_size: 16,
+
                 max_batches_per_tick: 16,
                 max_insert_bundle_size: 1,
                 max_concurrent_insert_tasks: 2,
@@ -1592,6 +849,26 @@ pub(crate) mod tests {
                 ..SamplerQueueCheckpoint::default()
             },
         )
+    }
+
+    #[test]
+    fn live_fixed_batch_override_preserves_other_defaults() {
+        let base = recording_queue(RecordingStore::default()).config().clone();
+        let mut config = base.clone();
+        let tuning: SamplerQueueTuning = serde_json::from_value(serde_json::json!({
+            "fixed_batch_size": 512, "max_batch_size": 1024
+        }))
+        .unwrap();
+        tuning.validate().unwrap();
+        config.apply_tuning(&tuning);
+        assert_eq!(config.fixed_batch_size, Some(512));
+        assert_eq!(config.max_batch_size, 1024);
+        let mut restored = base.clone();
+        restored.apply_tuning(&SamplerQueueTuning::default());
+        assert_eq!(restored, base);
+        let invalid: SamplerQueueTuning =
+            serde_json::from_value(serde_json::json!({"fixed_batch_size": 0})).unwrap();
+        assert!(invalid.validate().is_err());
     }
 
     #[test]
@@ -1649,10 +926,10 @@ pub(crate) mod tests {
     async fn enqueue_fills_free_slots_without_exceeding_the_bound() {
         let store = RecordingStore::default();
         let mut queue = recording_queue(store.clone());
-        queue.ingest(vec![latent_batch_with_weight(1.0)]);
-        queue.ingest(vec![latent_batch_with_weight(2.0)]);
+        queue.ingest(vec![latent_batch_with_weight(1.0)], true);
+        queue.ingest(vec![latent_batch_with_weight(2.0)], true);
         assert_eq!(queue.pending_insert_tasks.len(), 2);
-        queue.ingest(vec![latent_batch_with_weight(3.0)]);
+        queue.ingest(vec![latent_batch_with_weight(3.0)], true);
         assert_eq!(queue.pending_insert_tasks.len(), 2);
         assert_eq!(queue.pending_insert.len(), 1);
         queue.flush().await.unwrap();
@@ -1680,13 +957,21 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn concurrent_insert_tasks_keep_batch_ids_in_production_order() {
-        let store = RecordingStore::default();
+        let mut store = RecordingStore::default();
+        let commit_first = store.block_first_insert();
         let mut queue = recording_queue(store.clone());
 
-        queue.ingest(vec![
-            latent_batch_with_weight(1.0),
-            latent_batch_with_weight(2.0),
-        ]);
+        queue.ingest(
+            vec![latent_batch_with_weight(1.0), latent_batch_with_weight(2.0)],
+            true,
+        );
+        store.inserted.notified().await;
+        assert_eq!(
+            store.recorded_inserts()[0].0,
+            2.0,
+            "second insert commits first"
+        );
+        commit_first.notify_one();
         queue.flush().await.expect("queue flush");
 
         let recorded = store.recorded_inserts();
@@ -1777,30 +1062,36 @@ pub(crate) mod tests {
         assert!(processed.is_empty());
         assert_eq!(store.fetch_completed_calls(), 0);
     }
-    #[test]
-    fn pending_target_counts_unpersisted_work_and_respects_capacity() {
+    #[tokio::test]
+    async fn refill_threshold_counts_local_work_and_allows_overshoot() {
         let mut queue = recording_queue(RecordingStore::default());
         queue
             .pending_insert
-            .push_back(latent_batch_with_weight(1.0));
+            .push_back((latent_batch_with_weight(1.0), false));
         let counts = queue.queue_counts_with_local_buffer(BatchQueueCounts {
-            pending: 1,
-            claimed: 2,
+            pending: 19,
             ..Default::default()
         });
-        assert_eq!(counts.pending, 2);
-        assert_eq!(queue.get_sample(None, counts, 4, 128), vec![128; 2]);
-        queue.config.max_queue_size = 5;
-        assert_eq!(queue.get_sample(None, counts, 4, 128), vec![128]);
-        queue.config.max_queue_size = 16;
-        queue.config.max_batches_per_tick = 1;
-        assert_eq!(queue.get_sample(None, counts, 4, 128), vec![128]);
-        queue.config.max_batches_per_tick = 16;
-        assert_eq!(queue.get_sample(Some(150), counts, 4, 128), vec![75; 2]);
-        assert!(queue.get_sample(Some(0), counts, 4, 128).is_empty());
-        assert!(queue.get_sample(None, counts, 0, 128).is_empty());
-        queue.config.queue_buffer = 0.0;
-        assert!(queue.get_sample(None, counts, 4, 128).is_empty());
+        assert_eq!(counts.pending, 20);
+        assert!(!queue.needs_generation(counts).await.unwrap());
+        assert!(
+            queue
+                .needs_generation(BatchQueueCounts {
+                    pending: 19,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+        );
+        assert!(
+            !queue
+                .needs_generation(BatchQueueCounts {
+                    pending: 80,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+        );
     }
 
     #[test]

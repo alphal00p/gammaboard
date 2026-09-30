@@ -424,7 +424,7 @@ fn run_progress_sql(run_where_clause: &str) -> String {
         FROM runs r
         LEFT JOIN assignment_stats a ON r.id = a.run_id
         LEFT JOIN (
-            SELECT run_id, SUM(cpu_seconds) AS cpu_seconds
+            SELECT run_id, SUM(task_cpu_seconds(id, cpu_seconds)) AS cpu_seconds
             FROM run_tasks
             GROUP BY run_id
         ) task_cpu ON r.id = task_cpu.run_id

@@ -11,12 +11,14 @@ use crate::evaluation::AccumulatorState;
 pub use batch_transform::{
     ProcessBatchTransformParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
 };
-pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec, SamplePlan};
+pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec};
 pub use materializer::{
     HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer,
     ProcessMaterializerParams,
 };
-pub use sampler::{DiscreteSubspace, PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot};
+pub use sampler::{
+    DiscreteSubspace, Generation, PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot,
+};
 pub use sampler_aggregator::{
     HavanaInferenceSamplerParams, HavanaInferenceSource, HavanaSamplerParams,
     NaiveMonteCarloSamplerParams, PdfAdaptationImagePersistedOutput,

@@ -7,9 +7,10 @@ use crate::utils::domain::Domain;
 use crate::utils::synthetic_timing::{TimingModel, TimingStats};
 use serde::{Deserialize, Serialize};
 
-/// Evaluator that returns 1.0 for every sample.
+/// Synthetic evaluator returning one, or a selected continuous coordinate.
 pub struct UnitEvaluator {
     domain: Domain,
+    value_coordinate: Option<usize>,
     fail_on_batch_nrs: Vec<usize>,
     timing: TimingModel,
     cpu_iterations_per_sample: u64,
@@ -21,6 +22,7 @@ impl UnitEvaluator {
     pub fn new(domain: Domain, fail_on_batch_nrs: Vec<usize>, timing: TimingModel) -> Self {
         Self {
             domain,
+            value_coordinate: None,
             fail_on_batch_nrs,
             timing,
             cpu_iterations_per_sample: 0,
@@ -31,6 +33,14 @@ impl UnitEvaluator {
 
     pub fn from_params(params: UnitEvaluatorParams) -> Result<Self, BuildError> {
         params.timing.validate()?;
+        if params
+            .value_coordinate
+            .is_some_and(|i| i >= params.continuous_dims)
+        {
+            return Err(BuildError::invalid_input(
+                "unit value_coordinate must be smaller than continuous_dims",
+            ));
+        }
         if params.fail_on_build {
             return Err(BuildError::build("unit evaluator injected build failure"));
         }
@@ -40,6 +50,7 @@ impl UnitEvaluator {
             params.timing,
         );
         evaluator.cpu_iterations_per_sample = params.cpu_iterations_per_sample;
+        evaluator.value_coordinate = params.value_coordinate;
         Ok(evaluator)
     }
 
@@ -67,6 +78,9 @@ impl UnitEvaluator {
 pub struct UnitEvaluatorParams {
     pub continuous_dims: usize,
     pub discrete_dims: usize,
+    /// Return x[index] instead of one; useful for varied benchmark feedback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_coordinate: Option<usize>,
     #[serde(default)]
     pub fail_on_batch_nrs: Vec<usize>,
     #[serde(default)]
@@ -82,6 +96,7 @@ impl Default for UnitEvaluatorParams {
         Self {
             continuous_dims: 1,
             discrete_dims: 0,
+            value_coordinate: None,
             fail_on_batch_nrs: Vec::new(),
             fail_on_build: false,
             timing: TimingModel::default(),
@@ -92,7 +107,7 @@ impl Default for UnitEvaluatorParams {
 
 impl Evaluator for UnitEvaluator {
     fn metadata(&self) -> serde_json::Value {
-        serde_json::json!({"synthetic":true,"kind":"unit","timing":self.timing,"cpu_iterations_per_sample":self.cpu_iterations_per_sample})
+        serde_json::json!({"synthetic":true,"kind":"unit","timing":self.timing,"cpu_iterations_per_sample":self.cpu_iterations_per_sample,"value_coordinate":self.value_coordinate})
     }
 
     fn diagnostics(&self) -> serde_json::Value {
@@ -137,7 +152,18 @@ impl Evaluator for UnitEvaluator {
         self.timing
             .wait(batch.size(), key, &mut self.timing_stats)?;
         cpu_work(self.cpu_iterations_per_sample, batch.size());
-        let values = vec![1.0; batch.size()];
+        let values = match self.value_coordinate {
+            None => vec![1.0; batch.size()],
+            Some(index) => batch
+                .points()
+                .iter()
+                .map(|point| {
+                    point.continuous.get(index).copied().ok_or_else(|| {
+                        EvalError::eval("unit value_coordinate is missing from the sample")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        };
         let weighted_values = ingest_scalar_values(
             &values,
             batch.points(),
@@ -166,6 +192,69 @@ pub(crate) fn cpu_work(iterations: u64, samples: usize) {
 mod tests {
     use super::*;
     use crate::evaluation::{Batch, Point};
+
+    #[test]
+    fn coordinate_values_are_weighted_once_with_optional_feedback() {
+        let batch = Batch::from_points([
+            Point::new(vec![0.5, 0.125], Vec::new(), 2.0),
+            Point::new(vec![0.5, 0.75], Vec::new(), 3.0),
+        ])
+        .unwrap();
+        let mut evaluator = UnitEvaluator::from_params(UnitEvaluatorParams {
+            continuous_dims: 2,
+            value_coordinate: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+        for require_training_values in [false, true] {
+            let result = evaluator
+                .eval_batch(
+                    &batch,
+                    &AccumulatorConfig::scalar(),
+                    EvalBatchOptions {
+                        require_training_values,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                result.values,
+                require_training_values.then(|| vec![0.25, 2.25])
+            );
+            let AccumulatorState::Vector(accumulator) = result.accumulator else {
+                panic!("expected vector accumulator");
+            };
+            assert_eq!(accumulator.components[0].state.count, 2);
+            assert_eq!(accumulator.components[0].state.sum_weighted_value, 2.5);
+        }
+    }
+
+    #[test]
+    fn coordinate_requires_a_matching_continuous_dimension() {
+        assert!(
+            UnitEvaluator::from_params(UnitEvaluatorParams {
+                value_coordinate: Some(1),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        let mut evaluator = UnitEvaluator::from_params(UnitEvaluatorParams {
+            value_coordinate: Some(0),
+            ..Default::default()
+        })
+        .unwrap();
+        let batch = Batch::from_points([Point::new(Vec::new(), Vec::new(), 1.0)]).unwrap();
+        assert!(
+            evaluator
+                .eval_batch(
+                    &batch,
+                    &AccumulatorConfig::scalar(),
+                    EvalBatchOptions {
+                        require_training_values: true
+                    }
+                )
+                .is_err()
+        );
+    }
 
     #[test]
     fn eval_batch_returns_weighted_ones_for_scalar_observable() {

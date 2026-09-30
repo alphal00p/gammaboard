@@ -214,6 +214,12 @@ fn decode_node_assignment(
 
 #[async_trait::async_trait]
 impl ControlPlaneStore for PgStore {
+    async fn is_task_control_leader(&self, name: &str, uuid: &str) -> Result<bool, StoreError> {
+        Ok(sqlx::query_scalar::<_, bool>(
+            "SELECT name=$1 AND uuid=$2 FROM nodes WHERE lease_expires_at>now() ORDER BY name LIMIT 1"
+        ).bind(name).bind(uuid).fetch_optional(&self.pool).await.map_err(map_sqlx)?.unwrap_or(false))
+    }
+
     async fn try_lock_task_control(&self) -> Result<Option<Box<dyn Send>>, StoreError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
         // Transaction-scoped: pool reuse cannot leak a session advisory lock.
@@ -1010,8 +1016,14 @@ impl AggregationStore for PgStore {
             .await
             .map_err(map_sqlx)?;
         Ok(row.map(
-            |(nr_produced_samples, nr_completed_samples, sampler_runner_uptime_ms)| {
+            |(
+                nr_produced_samples,
+                nr_completed_samples,
+                sampler_runner_uptime_ms,
+                active_task_id,
+            )| {
                 RunSampleProgress {
+                    active_task_id,
                     nr_produced_samples,
                     nr_completed_samples,
                     sampler_runner_uptime_ms,
@@ -1239,12 +1251,11 @@ mod tests {
                 "frontend_sync_interval_ms": 1000,
                 "db_pool_size": 4,
                 "queue": {
-                    "queue_buffer": 1.0,
+
                     "target_batch_eval_ms": 200.0,
-                    "batch_size_deadband_ratio": 0.15,
-                    "batch_size_cooldown_ticks": 3,
+
                     "max_batch_size": 64,
-                    "max_queue_size": 128,
+
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
                     "max_concurrent_insert_tasks": 1,
@@ -1293,12 +1304,11 @@ mod tests {
                 "frontend_sync_interval_ms": 1000,
                 "db_pool_size": 4,
                 "queue": {
-                    "queue_buffer": 1.0,
+
                     "target_batch_eval_ms": 200.0,
-                    "batch_size_deadband_ratio": 0.15,
-                    "batch_size_cooldown_ticks": 3,
+
                     "max_batch_size": 64,
-                    "max_queue_size": 128,
+
                     "max_batches_per_tick": 1,
                     "max_insert_bundle_size": 4,
                     "max_concurrent_insert_tasks": 1,
@@ -1342,12 +1352,11 @@ mod tests {
                     "frontend_sync_interval_ms": 1000,
                     "db_pool_size": 4,
                     "queue": {
-                        "queue_buffer": 1.0,
+
                         "target_batch_eval_ms": 200.0,
-                        "batch_size_deadband_ratio": 0.15,
-                        "batch_size_cooldown_ticks": 3,
+
                         "max_batch_size": 64,
-                        "max_queue_size": 128,
+
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,
                         "max_concurrent_insert_tasks": 1,
@@ -1381,12 +1390,11 @@ mod tests {
                     "frontend_sync_interval_ms": 1000,
                     "db_pool_size": 4,
                     "queue": {
-                        "queue_buffer": 1.0,
+
                         "target_batch_eval_ms": 200.0,
-                        "batch_size_deadband_ratio": 0.15,
-                        "batch_size_cooldown_ticks": 3,
+
                         "max_batch_size": 64,
-                        "max_queue_size": 128,
+
                         "max_batches_per_tick": 1,
                         "max_insert_bundle_size": 4,
                         "max_concurrent_insert_tasks": 1,

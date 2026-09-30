@@ -5,7 +5,7 @@ import itertools
 import math
 from typing import Any
 
-from gammaboard_process import SampleBatch, Sampler
+from gammaboard_process import GenerationStatus, SampleBatch, Sampler
 from symbolica import NumericalIntegrator, Probe, Sample
 
 
@@ -67,6 +67,7 @@ class SymbolicaHavanaSampler(Sampler):
         seed: int = 0,
         bins: int = 64,
         samples_for_update: int = 10_240,
+        generation_batch_size: int = 1_048_576,
         stop_training_after_n_samples: int = 10_240,
         initial_training_rate: float = 0.1,
         final_training_rate: float = 0.1,
@@ -82,6 +83,9 @@ class SymbolicaHavanaSampler(Sampler):
         self.seed = int(seed)
         self.bins = int(bins)
         self.samples_for_update = int(samples_for_update)
+        self.generation_batch_size = int(generation_batch_size)
+        if self.generation_batch_size <= 0:
+            raise ValueError("generation_batch_size must be positive")
         self.stop_training_after_n_samples = int(stop_training_after_n_samples)
         self.initial_training_rate = float(initial_training_rate)
         self.final_training_rate = float(final_training_rate)
@@ -144,6 +148,7 @@ class SymbolicaHavanaSampler(Sampler):
             discrete_cardinalities=discrete_cardinalities,
             continuous_dims=continuous_dims,
             seed=int(snapshot.get("seed", args.get("seed", 0))),
+            generation_batch_size=int(snapshot.get("generation_batch_size", args.get("generation_batch_size", 1_048_576))),
             bins=int(snapshot.get("bins", args.get("bins", 64))),
             samples_for_update=int(
                 snapshot.get("samples_for_update", args.get("samples_for_update", 10_240))
@@ -170,6 +175,13 @@ class SymbolicaHavanaSampler(Sampler):
         sampler.samples_produced = int(snapshot.get("samples_produced", 0))
         sampler.batches_ingested = int(snapshot.get("batches_ingested", 0))
         sampler.samples_ingested = int(snapshot.get("samples_ingested", 0))
+        if not sampler.inference:
+            sizes = snapshot.get("pending_draw_sizes", [])
+            if sum(sizes) != sampler.samples_produced - sampler.samples_ingested:
+                raise ValueError("snapshot is missing pending training draws")
+            for index, size in enumerate(sizes, start=sampler.batches_ingested):
+                rng = NumericalIntegrator.rng(sampler.seed, index)
+                sampler.pending_samples.append(list(sampler.integrator.sample(size, rng)))
         return sampler
 
     def pending_training_sample_count(self) -> int:
@@ -205,22 +217,15 @@ class SymbolicaHavanaSampler(Sampler):
             self.final_training_rate / self.initial_training_rate
         ) ** progress
 
-    def training_samples_remaining(self) -> int | None:
-        if self.inference:
-            return None
-        remaining = self.remaining_training_samples_to_produce()
-        return remaining if remaining else None
-
-    def sample_plan(self) -> dict[str, Any]:
-        if self.inference:
-            # Keep producing from the frozen grid; the run's stop_condition ends it.
-            return {"kind": "produce", "nr_samples": self.samples_for_update}
-        nr_samples = self.training_window_samples_remaining()
-        if nr_samples == 0:
-            return {"kind": "pause"}
-        return {"kind": "produce", "nr_samples": nr_samples}
-
-    def produce_latent_batch(self, nr_samples: int) -> SampleBatch:
+    def generate(self, remaining_sample_budget: int | None) -> SampleBatch | GenerationStatus:
+        if remaining_sample_budget == 0 or (not self.inference and self.remaining_training_samples_to_produce() == 0):
+            return GenerationStatus.FINISHED
+        remaining = None if self.inference else self.training_window_samples_remaining()
+        if remaining == 0:
+            return GenerationStatus.WAITING
+        nr_samples = min(self.generation_batch_size, remaining_sample_budget if remaining_sample_budget is not None else self.generation_batch_size)
+        if remaining is not None:
+            nr_samples = min(nr_samples, remaining)
         rng = NumericalIntegrator.rng(self.seed, self.batches_produced)
         samples = list(self.integrator.sample(nr_samples, rng))
         if not self.inference:
@@ -232,19 +237,21 @@ class SymbolicaHavanaSampler(Sampler):
             xs_discrete=[list(map(int, sample.d)) for sample in samples],
             xs_continuous=[list(map(float, sample.c)) for sample in samples],
             weights=[sample_weight(sample) for sample in samples],
+            training_remaining=remaining,
         )
 
-    def ingest_training_values(self, training_values: Any) -> None:
+    def feedback(self, training_values: Any) -> None:
         if self.inference:
             return
         if not self.pending_samples:
             raise ValueError("received training values with no pending training batch")
 
-        samples = self.pending_samples.pop(0)
+        samples = self.pending_samples[0]
         values = [float(value) for value in training_values]
         if len(values) != len(samples):
             raise ValueError("training value count does not match the pending sample count")
 
+        self.pending_samples.pop(0)
         before = self.samples_ingested
         train_len = min(self.stop_training_after_n_samples - self.samples_ingested, len(values))
         if train_len > 0:
@@ -258,7 +265,9 @@ class SymbolicaHavanaSampler(Sampler):
 
         previous_window = before // self.samples_for_update
         current_window = self.samples_ingested // self.samples_for_update
-        for _ in range(max(0, current_window - previous_window)):
+        final_partial_window = (self.samples_ingested == self.stop_training_after_n_samples
+                                and self.samples_ingested % self.samples_for_update != 0)
+        for _ in range(max(0, current_window - previous_window) + int(final_partial_window)):
             rate = self.current_training_rate()
             self.integrator.update(rate, rate)
 
@@ -325,6 +334,8 @@ class SymbolicaHavanaSampler(Sampler):
             _save_grid(self.save_path, self.integrator)
         return {
             "seed": self.seed,
+            "generation_batch_size": self.generation_batch_size,
+            "pending_draw_sizes": [len(samples) for samples in self.pending_samples],
             "bins": self.bins,
             "samples_for_update": self.samples_for_update,
             "stop_training_after_n_samples": self.stop_training_after_n_samples,

@@ -9,8 +9,8 @@
 //! - persist lightweight UI sync snapshots and full resume checkpoints
 
 #[cfg(test)]
-#[path = "sampler_bulk_tests.rs"]
-mod bulk_tests;
+#[path = "sampler_generation_tests.rs"]
+mod generation_tests;
 
 use crate::core::checkpoint::{AccumulatorCheckpointState, SamplerProgress};
 use crate::core::{
@@ -30,7 +30,7 @@ use crate::runners::wall_time_rate::WallTimeRate;
 use crate::runners::window_metric::WindowMetric;
 use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
 use crate::sampling::DiscreteSubspace;
-use crate::sampling::{SamplePlan, SamplerAggregator};
+use crate::sampling::{Generation, SamplerAggregator};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -74,15 +74,6 @@ struct SamplerWindowState {
 enum CheckpointKind {
     Initial,
     Stage,
-}
-
-enum ProduceDecision {
-    None,
-    InitialRoundTrip(usize),
-    PlannedByQueue {
-        max_samples: Option<usize>,
-        training_remaining: Option<usize>,
-    },
 }
 
 impl SamplerAggregatorCheckpoint {
@@ -404,7 +395,6 @@ where
             store.clone(),
             run_id,
             task_id,
-            requires_training_values,
             params.queue.clone(),
             queue_checkpoint,
         );
@@ -516,15 +506,13 @@ where
             .zip(queue_counts)
             .map(|(target, counts)| target.saturating_sub(counts.pending.max(0) as usize));
         json!({
+            "queue_config": self.params.queue,
             "active_evaluator_count": active_evaluator_count,
             "target_batch_eval_ms": self.params.queue.target_batch_eval_ms,
-            "batch_size_deadband_ratio": self.params.queue.batch_size_deadband_ratio,
-            "batch_size_cooldown_ticks": self.params.queue.batch_size_cooldown_ticks,
             "pending_batches": queue_counts.map(|counts| counts.pending),
             "claimed_batches": queue_counts.map(|counts| counts.claimed),
             "completed_batches": queue_counts.map(|counts| counts.completed),
             "open_batches": queue_counts.map(|counts| counts.open()),
-            "queue_buffer": self.params.queue.queue_buffer,
             "target_pending_batches": target_pending_batches,
             "pending_shortfall": pending_shortfall,
             "last_completed_batch_id": self.queue.last_completed_batch_id(),
@@ -535,14 +523,12 @@ where
             "local_inflight_insert_tasks": queue_runtime.local_inflight_insert_tasks,
             "local_inflight_insert_batches": queue_runtime.local_inflight_insert_batches,
             "local_ready_processed_batches": queue_runtime.local_ready_processed_batches,
-            "bulk_sample_generation": self.params.queue.bulk_sample_generation,
             "buffered_generated_samples": self.runtime_state.generation.pending_samples(),
             "accumulator_checkpoint_state": match self.runtime_state.accumulator_checkpoint_state {
                 AccumulatorCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
                 AccumulatorCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
                 AccumulatorCheckpointState::Ready => "ready",
             },
-            "training_samples_remaining": self.sampler.training_samples_remaining(),
         })
     }
 
@@ -576,24 +562,6 @@ where
         }
     }
 
-    fn max_samples_to_produce_this_tick(
-        &self,
-        engine_max_samples: Option<usize>,
-    ) -> Result<Option<usize>, RunnerError> {
-        let task_max_samples = self.active_sample_remaining_budget()?;
-        if let Some(task_remaining) = task_max_samples
-            && task_remaining == 0
-        {
-            return Ok(Some(0));
-        }
-        Ok(match (engine_max_samples, task_max_samples) {
-            (Some(engine_max), Some(task_remaining)) => Some(engine_max.min(task_remaining)),
-            (Some(engine_max), None) => Some(engine_max),
-            (None, Some(task_remaining)) => Some(task_remaining),
-            (None, None) => None,
-        })
-    }
-
     fn active_sample_remaining_budget(&self) -> Result<Option<usize>, RunnerError> {
         let Some(target) = self.task.task.sample_stop_condition().map_or_else(
             || self.task.task.nr_expected_samples(),
@@ -601,7 +569,9 @@ where
         ) else {
             return Ok(None);
         };
-        let remaining = target.saturating_sub(self.task.nr_produced_samples);
+        let remaining = target
+            .saturating_sub(self.task.nr_produced_samples)
+            .saturating_sub(self.runtime_state.generation.pending_samples() as i64);
         if remaining < 0 {
             return Err(RunnerError::Engine(EngineError::engine(format!(
                 "run {} task {} produced sample count exceeded target: produced={} target={}",
@@ -917,7 +887,7 @@ where
             .queue
             .diagnostics_snapshot()
             .and_then(|snapshot| snapshot.active_evaluator_count);
-        if self.params.queue.queue_buffer != 0.0
+        if !self.runtime_state.generation.finished
             && no_progress_is_terminal(
                 stop_status.reached,
                 open_batch_count,
@@ -940,9 +910,9 @@ where
         }
 
         Ok(
-            stop_status.reached
+            (stop_status.reached || self.runtime_state.generation.finished)
                 && open_batch_count == 0
-                && self.runtime_state.generation.is_empty(),
+                && !self.runtime_state.generation.has_outstanding(),
         )
     }
 
@@ -984,7 +954,7 @@ where
                     sequence_nr: Some(self.task.sequence_nr),
                     // Retained consumed results are recovery history, not open work.
                     queue_empty: self.queue.queue_counts().await?.open() == 0
-                        && self.runtime_state.generation.is_empty(),
+                        && !self.runtime_state.generation.has_outstanding(),
                     sampler_snapshot: Some(checkpoint.sampler_snapshot.clone()),
                     observable_state: Some(checkpoint.observable_state.clone()),
                     evaluator: Some(self.evaluator_config.clone()),
@@ -1235,16 +1205,18 @@ where
                         training_values.len()
                     ))));
                 }
-                if let Some(values) = self
-                    .runtime_state
-                    .generation
-                    .accept_training_values(training_values)?
-                {
+                let assembled = {
+                    let _compute = self.busy.compute();
+                    self.runtime_state
+                        .generation
+                        .accept_training_values(training_values)?
+                };
+                if let Some(values) = assembled {
                     let ingest_started = Instant::now();
                     {
                         let _compute = self.busy.compute();
                         self.sampler
-                            .ingest_training_values(&values)
+                            .feedback(&values)
                             .map_err(RunnerError::Engine)?;
                     }
                     let ingest_time_ms = ingest_started.elapsed().as_secs_f64() * 1000.0;
@@ -1299,131 +1271,80 @@ where
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
     ) -> Result<(usize, bool), RunnerError> {
-        // A completed bulk draw must drain even when the sampler now reports
-        // zero remaining training samples, or the option was switched off live.
-        if self.runtime_state.generation.has_pending() {
-            if self.runtime_state.accumulator_checkpoint_state
-                == AccumulatorCheckpointState::WaitingForInitialRoundTrip
-            {
+        if self.runtime_state.accumulator_checkpoint_state
+            == AccumulatorCheckpointState::WaitingForInitialRoundTrip
+        {
+            return Ok((0, true));
+        }
+        if !self.runtime_state.generation.has_pending() {
+            if self.runtime_state.generation.finished {
+                return Ok((0, false));
+            }
+            let budget = self.active_sample_remaining_budget()?;
+            if budget == Some(0) || self.stop_condition_status()?.reached {
+                return Ok((0, false));
+            }
+            if !self.queue.needs_generation(queue_before_produce).await? {
                 return Ok((0, true));
             }
-            let slots = self
-                .queue
-                .available_batch_slots(queue_before_produce)
-                .await?;
-            let chunk_size = self
-                .queue
-                .production_batch_size(self.runtime_state.generation.training_remaining_at_draw());
-            return Ok((self.enqueue_generated(slots, chunk_size)?, true));
-        }
-        let accumulator_config = self.observable_state.config();
-        let sample_plan = self.sampler.sample_plan().map_err(RunnerError::Engine)?;
-        let sampler_wants_to_produce = matches!(sample_plan, SamplePlan::Produce { .. });
-        let bulk_generation = self.params.queue.bulk_sample_generation && sampler_wants_to_produce;
-        if bulk_generation
-            && self.runtime_state.accumulator_checkpoint_state
-                == AccumulatorCheckpointState::NeedsInitialRoundTrip
-            && self
-                .queue
-                .available_batch_slots(queue_before_produce)
-                .await?
-                == 0
-        {
-            return Ok((0, sampler_wants_to_produce));
-        }
-        let bulk_remaining = if bulk_generation {
-            self.sampler.training_samples_remaining()
-        } else {
-            None
-        };
-        let bulk_samples = if bulk_generation {
-            let SamplePlan::Produce { nr_samples } = sample_plan else {
-                unreachable!()
-            };
-            let limit = nr_samples
-                .min(bulk_remaining.unwrap_or(usize::MAX))
-                .min(self.params.queue.max_batch_size.max(1));
-            self.max_samples_to_produce_this_tick(Some(limit))?
-                .unwrap_or(limit)
-        } else {
-            0
-        };
-        let open_before_produce = queue_before_produce.open().max(0) as usize;
-        let batch_plan = self
-            .resolve_batch_plan(sample_plan, queue_before_produce, open_before_produce)
-            .await?;
-        if bulk_generation && !batch_plan.is_empty() && bulk_samples > 0 {
-            let chunk_size = self.queue.production_batch_size(bulk_remaining);
-            let first_chunk = (self.runtime_state.accumulator_checkpoint_state
-                == AccumulatorCheckpointState::WaitingForInitialRoundTrip)
-                .then_some(batch_plan[0]);
             let started = Instant::now();
-            let batch = {
+            let generated = {
                 let _compute = self.busy.compute();
-                self.sampler.produce_bulk_batch(bulk_samples)?
+                self.sampler.generate(budget)?
             };
-            if batch.nr_samples == 0 || batch.nr_samples > bulk_samples {
-                return Err(
-                    EngineError::engine("bulk sampler returned an invalid sample count").into(),
-                );
-            }
-            let generated_samples = batch.nr_samples;
-            self.window_state.produce_ms_per_sample.observe_weighted(
-                started.elapsed().as_secs_f64() * 1000.0 / generated_samples as f64,
-                generated_samples,
-            );
-            self.runtime_state
-                .generation
-                .buffer_draw(batch.build(), bulk_remaining)?;
-            if self.sampler_config.requires_training() {
-                self.runtime_state.generation.record_draw(generated_samples);
-            }
-            return Ok((
-                self.enqueue_generated(batch_plan.len(), first_chunk.unwrap_or(chunk_size))?,
-                sampler_wants_to_produce,
-            ));
-        }
-        let mut produced = Vec::with_capacity(batch_plan.len());
-        let mut produced_samples_total = 0_i64;
-        for nr_samples in batch_plan {
-            let started = Instant::now();
-            let batch = {
-                let _compute = self.busy.compute();
-                self.sampler
-                    .produce_latent_batch(nr_samples)
-                    .map_err(RunnerError::Engine)?
-            };
-            let produce_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let produced_samples = batch.nr_samples;
-            produced_samples_total += produced_samples as i64;
-            if produced_samples > 0 {
-                if self.sampler_config.requires_training() {
-                    self.runtime_state.generation.record_draw(produced_samples);
+            match generated {
+                Generation::Waiting => return Ok((0, false)),
+                Generation::Finished => {
+                    self.runtime_state.generation.finished = true;
+                    return Ok((0, false));
                 }
-                self.window_state
-                    .produce_ms_per_sample
-                    .observe_weighted(produce_time_ms / produced_samples as f64, produced_samples);
+                Generation::Batch {
+                    batch,
+                    training_remaining,
+                } => {
+                    let _compute = self.busy.compute();
+                    if batch.nr_samples == 0
+                        || budget.is_some_and(|n| batch.nr_samples > n)
+                        || training_remaining.is_some_and(|n| batch.nr_samples > n)
+                    {
+                        return Err(EngineError::engine(
+                            "sampler returned a draw outside its budget or training window",
+                        )
+                        .into());
+                    }
+                    let generated_samples = batch.nr_samples;
+                    self.runtime_state
+                        .generation
+                        .buffer_draw(batch.build(), training_remaining)?;
+                    if training_remaining.is_some() {
+                        self.runtime_state.generation.record_draw(generated_samples);
+                    }
+                    self.window_state.produce_ms_per_sample.observe_weighted(
+                        started.elapsed().as_secs_f64() * 1000.0 / generated_samples as f64,
+                        generated_samples,
+                    );
+                }
             }
-            produced.push(
-                batch
-                    .with_accumulator_config(accumulator_config.clone())
-                    .build(),
-            );
         }
-        let produced_batches = produced.len();
-        if produced_batches == 0 {
-            return Ok((0, sampler_wants_to_produce));
-        }
-
-        self.runtime_state.produced_batches_total += produced_batches as i64;
-        self.runtime_state.produced_samples_total += produced_samples_total;
-        self.nr_produced_samples += produced_samples_total;
-        self.task.nr_produced_samples += produced_samples_total;
-        self.queue.ingest(produced);
-        Ok((produced_batches, sampler_wants_to_produce))
+        let (slots, chunk_size) = if self.runtime_state.accumulator_checkpoint_state
+            == AccumulatorCheckpointState::NeedsInitialRoundTrip
+        {
+            self.runtime_state.accumulator_checkpoint_state =
+                AccumulatorCheckpointState::WaitingForInitialRoundTrip;
+            (1, MIN_BATCH_SIZE)
+        } else {
+            (
+                self.params.queue.max_batches_per_tick,
+                self.queue
+                    .production_batch_size(self.runtime_state.generation.training_remaining()),
+            )
+        };
+        Ok((self.enqueue_generated(slots, chunk_size)?, true))
     }
 
     fn enqueue_generated(&mut self, slots: usize, chunk_size: usize) -> Result<usize, RunnerError> {
+        let _compute = self.busy.compute();
+        let requires_feedback = self.runtime_state.generation.requires_feedback();
         let mut batches = self
             .runtime_state
             .generation
@@ -1442,84 +1363,8 @@ where
         self.runtime_state.produced_samples_total += samples;
         self.nr_produced_samples += samples;
         self.task.nr_produced_samples += samples;
-        self.queue.ingest(batches);
+        self.queue.ingest(batches, requires_feedback);
         Ok(count)
-    }
-
-    async fn resolve_batch_plan(
-        &mut self,
-        sample_plan: SamplePlan,
-        queue_before_produce: crate::core::BatchQueueCounts,
-        open_before_produce: usize,
-    ) -> Result<Vec<usize>, RunnerError> {
-        if self.stop_condition_status()?.reached {
-            return Ok(Vec::new());
-        }
-        let decision = self.decide_produce(sample_plan, open_before_produce)?;
-        let batch_plan = match decision {
-            ProduceDecision::None => Vec::new(),
-            ProduceDecision::InitialRoundTrip(nr_samples) => vec![nr_samples],
-            ProduceDecision::PlannedByQueue {
-                max_samples,
-                training_remaining,
-            } => self
-                .queue
-                .plan_production(max_samples, training_remaining, queue_before_produce)
-                .await
-                .map_err(RunnerError::from)?,
-        };
-        self.queue.validate_batch_plan(&batch_plan)?;
-        Ok(batch_plan)
-    }
-
-    fn decide_produce(
-        &mut self,
-        sample_plan: SamplePlan,
-        open_before_produce: usize,
-    ) -> Result<ProduceDecision, RunnerError> {
-        let SamplePlan::Produce { nr_samples } = sample_plan else {
-            return Ok(ProduceDecision::None);
-        };
-        let requested = if nr_samples == usize::MAX {
-            None
-        } else {
-            Some(nr_samples)
-        };
-        let training_samples_remaining = self.sampler.training_samples_remaining();
-        let engine_max_samples = match requested {
-            Some(requested) => Some(
-                training_samples_remaining.map_or(requested, |remaining| remaining.min(requested)),
-            ),
-            None => training_samples_remaining,
-        };
-        let max_samples = self.max_samples_to_produce_this_tick(engine_max_samples)?;
-        Ok(match self.runtime_state.accumulator_checkpoint_state {
-            AccumulatorCheckpointState::NeedsInitialRoundTrip => {
-                if self.params.queue.max_queue_size <= open_before_produce {
-                    ProduceDecision::None
-                } else {
-                    let nr_samples = max_samples.unwrap_or(MIN_BATCH_SIZE);
-                    if nr_samples == 0 {
-                        ProduceDecision::None
-                    } else {
-                        self.runtime_state.accumulator_checkpoint_state =
-                            AccumulatorCheckpointState::WaitingForInitialRoundTrip;
-                        ProduceDecision::InitialRoundTrip(nr_samples.min(MIN_BATCH_SIZE))
-                    }
-                }
-            }
-            AccumulatorCheckpointState::WaitingForInitialRoundTrip => {
-                if open_before_produce == 0 {
-                    self.runtime_state.accumulator_checkpoint_state =
-                        AccumulatorCheckpointState::NeedsInitialRoundTrip;
-                }
-                ProduceDecision::None
-            }
-            AccumulatorCheckpointState::Ready => ProduceDecision::PlannedByQueue {
-                max_samples,
-                training_remaining: training_samples_remaining,
-            },
-        })
     }
 
     fn progress_sync_due(&self, force: bool) -> bool {

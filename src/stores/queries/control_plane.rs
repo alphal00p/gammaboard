@@ -205,6 +205,17 @@ pub(crate) async fn announce_node(
     node_uuid: &str,
     capabilities: &NodeCapabilities,
 ) -> Result<(), sqlx::Error> {
+    // Renewal changes no identity/assignment keys. Avoid the registration
+    // upsert's stronger row lock and foreign-key checks on every heartbeat.
+    let renewed = sqlx::query_scalar::<_, i32>(
+        "UPDATE nodes SET capabilities=$3, lease_expires_at=clock_timestamp()+interval '10 seconds',
+         last_seen=clock_timestamp(), updated_at=clock_timestamp()
+         WHERE name=$1 AND uuid=$2 RETURNING 1"
+    ).bind(node_name).bind(node_uuid).bind(serde_json::to_value(capabilities).map_err(|e| sqlx::Error::Encode(Box::new(e)))?)
+        .fetch_optional(pool).await?;
+    if renewed.is_some() {
+        return Ok(());
+    }
     let row = sqlx::query_scalar::<_, i32>(
         r#"
         INSERT INTO nodes (

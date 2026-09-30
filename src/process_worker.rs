@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-pub(crate) const PROCESS_PROTOCOL: &str = "gammaboard-jsonrpc-v2";
+pub(crate) const PROCESS_PROTOCOL: &str = "gammaboard-jsonrpc-v3";
 const JSON_RPC_VERSION: &str = "2.0";
 const MAX_STDOUT_LOG_BYTES_BEFORE_FRAME: usize = 64 * 1024;
 const MAX_STDERR_TAIL_LINES: usize = 40;

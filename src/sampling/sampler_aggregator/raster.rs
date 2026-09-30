@@ -3,7 +3,7 @@ use crate::core::{BuildError, EngineError};
 use crate::core::{LineRasterGeometry, PlaneRasterGeometry};
 use crate::evaluation::{Batch, Point};
 use crate::sampling::{
-    DiscreteSubspace, LatentBatchSpec, PdfPoint, SamplePlan, SamplerAggregator,
+    DiscreteSubspace, Generation, LatentBatchSpec, PdfPoint, SamplerAggregator,
     SamplerAggregatorSnapshot,
 };
 use crate::utils::domain::Domain;
@@ -372,13 +372,6 @@ fn ingest_pdf_adaptation_values(
     Ok(())
 }
 
-fn raster_sample_plan(next_index: usize, total_samples: usize) -> Result<SamplePlan, EngineError> {
-    match total_samples.saturating_sub(next_index) {
-        0 => Ok(SamplePlan::Pause),
-        nr_samples => Ok(SamplePlan::Produce { nr_samples }),
-    }
-}
-
 fn produce_raster_batch(
     next_index: &mut usize,
     total_samples: usize,
@@ -415,13 +408,19 @@ impl SamplerAggregator for RasterPlaneSampler {
         validate_plane_geometry(&self.params.geometry, domain)
     }
 
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
-    }
-
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
+        {
+            return Ok(Generation::Finished);
+        }
+        let nr_samples = remaining_sample_budget
+            .unwrap_or(usize::MAX)
+            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
-        produce_raster_batch(
+        let batch = produce_raster_batch(
             &mut self.next_index,
             geometry.nr_points(),
             self.stride,
@@ -429,10 +428,11 @@ impl SamplerAggregator for RasterPlaneSampler {
             |index| geometry.point_at(index),
             nr_samples,
             "raster plane sampler",
-        )
+        )?;
+        Ok(Generation::batch(batch, None))
     }
 
-    fn ingest_training_values(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
         Ok(())
     }
 
@@ -453,13 +453,19 @@ impl SamplerAggregator for RasterLineSampler {
         validate_line_geometry(&self.params.geometry, domain)
     }
 
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
-    }
-
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
+        {
+            return Ok(Generation::Finished);
+        }
+        let nr_samples = remaining_sample_budget
+            .unwrap_or(usize::MAX)
+            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
-        produce_raster_batch(
+        let batch = produce_raster_batch(
             &mut self.next_index,
             geometry.nr_points(),
             self.stride,
@@ -467,10 +473,11 @@ impl SamplerAggregator for RasterLineSampler {
             |index| geometry.point_at(index),
             nr_samples,
             "raster line sampler",
-        )
+        )?;
+        Ok(Generation::batch(batch, None))
     }
 
-    fn ingest_training_values(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
         Ok(())
     }
 
@@ -491,13 +498,19 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
         validate_plane_geometry(&self.params.geometry, domain)
     }
 
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
-    }
-
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
+        {
+            return Ok(Generation::Finished);
+        }
+        let nr_samples = remaining_sample_budget
+            .unwrap_or(usize::MAX)
+            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
-        produce_raster_batch(
+        let batch = produce_raster_batch(
             &mut self.next_index,
             geometry.nr_points(),
             self.stride,
@@ -505,10 +518,12 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
             |index| geometry.point_at(index),
             nr_samples,
             "pdf adaptation raster plane sampler",
-        )
+        )?;
+        let training_remaining = geometry.nr_points() - self.next_index + batch.nr_samples;
+        Ok(Generation::batch(batch, Some(training_remaining)))
     }
 
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         let geometry = &self.params.geometry;
         ingest_pdf_adaptation_values(
             &mut self.ingested_samples,
@@ -565,13 +580,19 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
         validate_line_geometry(&self.params.geometry, domain)
     }
 
-    fn sample_plan(&mut self) -> Result<SamplePlan, EngineError> {
-        raster_sample_plan(self.next_index, self.params.geometry.nr_points())
-    }
-
-    fn produce_latent_batch(&mut self, nr_samples: usize) -> Result<LatentBatchSpec, EngineError> {
+    fn generate(
+        &mut self,
+        remaining_sample_budget: Option<usize>,
+    ) -> Result<Generation, EngineError> {
+        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
+        {
+            return Ok(Generation::Finished);
+        }
+        let nr_samples = remaining_sample_budget
+            .unwrap_or(usize::MAX)
+            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
-        produce_raster_batch(
+        let batch = produce_raster_batch(
             &mut self.next_index,
             geometry.nr_points(),
             self.stride,
@@ -579,10 +600,12 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
             |index| geometry.point_at(index),
             nr_samples,
             "pdf adaptation raster line sampler",
-        )
+        )?;
+        let training_remaining = geometry.nr_points() - self.next_index + batch.nr_samples;
+        Ok(Generation::batch(batch, Some(training_remaining)))
     }
 
-    fn ingest_training_values(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
         let geometry = &self.params.geometry;
         ingest_pdf_adaptation_values(
             &mut self.ingested_samples,
@@ -749,7 +772,10 @@ mod tests {
         };
         let mut sampler = RasterLineSampler::from_params_and_domain(params.clone(), &domain)
             .expect("build sampler");
-        let first_batch = sampler.produce_latent_batch(2).expect("first batch");
+        let first_batch = sampler
+            .generate(Some(2))
+            .and_then(|generated| generated.into_batch())
+            .expect("first batch");
         let snapshot = sampler.snapshot().expect("snapshot");
         let restored_snapshot = match snapshot {
             crate::sampling::SamplerAggregatorSnapshot::RasterLine { raw } => {
@@ -759,7 +785,10 @@ mod tests {
         };
         let mut restored =
             RasterLineSampler::from_snapshot(restored_snapshot, &domain).expect("restore");
-        let second_batch = restored.produce_latent_batch(3).expect("second batch");
+        let second_batch = restored
+            .generate(Some(3))
+            .and_then(|generated| generated.into_batch())
+            .expect("second batch");
 
         let first_batch = first_batch.payload.as_batch().expect("decode first batch");
         let second_batch = second_batch
@@ -957,9 +986,7 @@ mod tests {
         )
         .expect("build pdf adaptation sampler");
 
-        sampler
-            .ingest_training_values(&[2.0, 4.0])
-            .expect("ingest weights");
+        sampler.feedback(&[2.0, 4.0]).expect("ingest weights");
         let output = sampler
             .persisted_output()
             .expect("persisted output")
@@ -1009,9 +1036,7 @@ mod tests {
         )
         .expect("build pdf adaptation sampler");
 
-        sampler
-            .ingest_training_values(&[f64::NAN, 4.0])
-            .expect("ingest weights");
+        sampler.feedback(&[f64::NAN, 4.0]).expect("ingest weights");
         let output = sampler
             .persisted_output()
             .expect("persisted output")
@@ -1061,7 +1086,10 @@ mod tests {
         )
         .expect("build pdf adaptation sampler");
 
-        let batch_spec = sampler.produce_latent_batch(4).expect("produce batch");
+        let batch_spec = sampler
+            .generate(Some(4))
+            .and_then(|generated| generated.into_batch())
+            .expect("produce batch");
         let batch = batch_spec.payload.as_batch().expect("decode batch");
         let mut points = batch
             .points()

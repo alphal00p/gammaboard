@@ -42,6 +42,15 @@ pub trait ControlPlaneStore: Send + Sync {
     /// Dropping the guard releases the lock, also on cancellation or failure.
     async fn try_lock_task_control(&self) -> Result<Option<Box<dyn Send>>, StoreError>;
 
+    async fn is_task_control_leader(&self, name: &str, uuid: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .list_nodes(None)
+            .await?
+            .into_iter()
+            .min_by(|a, b| a.name.cmp(&b.name))
+            .is_some_and(|node| node.name == name && node.uuid == uuid))
+    }
+
     async fn record_worker_activity(
         &self,
         _node_uuid: &str,

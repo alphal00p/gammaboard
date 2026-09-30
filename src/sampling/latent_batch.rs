@@ -9,6 +9,9 @@ use crate::core::AccumulatorConfig;
 use crate::evaluation::{Batch, BatchError, Point};
 use crate::utils::rng::SerializableMonteCarloRng;
 
+/// Bounds replay at arbitrary split points without materializing coordinates.
+pub(crate) const RNG_CHECKPOINT_STRIDE: usize = 1024;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
     pub nr_samples: usize,
@@ -36,13 +39,10 @@ pub enum LatentBatchPayload {
     HavanaInference {
         rng_state: SerializableMonteCarloRng,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SamplePlan {
-    Produce { nr_samples: usize },
-    Pause,
+    HavanaInferenceIndexed {
+        rng_states: Vec<SerializableMonteCarloRng>,
+        offset: usize,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -64,43 +64,84 @@ enum LatentBatchPayloadBinary<'a> {
     HavanaInference {
         rng_state: Cow<'a, SerializableMonteCarloRng>,
     },
+    HavanaInferenceIndexed {
+        rng_states: Cow<'a, [SerializableMonteCarloRng]>,
+        offset: usize,
+    },
+}
+
+/// Builds the queue layout without allocating evaluator-side `Point`s.
+pub(crate) struct IndexedBatchBuilder {
+    discrete_signatures: Vec<Vec<i64>>,
+    discrete_index: HashMap<Vec<i64>, usize>,
+    empty_signature: Option<usize>,
+    discrete_map: Vec<usize>,
+    continuous_layouts: Vec<usize>,
+    continuous_values: Vec<f64>,
+    weights: Vec<f64>,
+}
+
+impl IndexedBatchBuilder {
+    pub(crate) fn new(nr_samples: usize) -> Self {
+        Self {
+            discrete_signatures: Vec::new(),
+            discrete_index: HashMap::new(),
+            empty_signature: None,
+            discrete_map: Vec::with_capacity(nr_samples),
+            continuous_layouts: Vec::with_capacity(nr_samples),
+            continuous_values: Vec::new(),
+            weights: Vec::with_capacity(nr_samples),
+        }
+    }
+
+    pub(crate) fn push(&mut self, discrete: &[i64], continuous: &[f64], weight: f64) {
+        if self.weights.is_empty() {
+            // Exact for uniform layouts; ragged batches can grow as needed.
+            self.continuous_values
+                .reserve(continuous.len().saturating_mul(self.weights.capacity()));
+        }
+        // Continuous-only samples need neither hashing nor a slice comparison.
+        let signature_idx = if discrete.is_empty() {
+            *self.empty_signature.get_or_insert_with(|| {
+                let idx = self.discrete_signatures.len();
+                self.discrete_signatures.push(Vec::new());
+                idx
+            })
+        } else if let Some(&idx) = self.discrete_index.get(discrete) {
+            idx
+        } else {
+            let idx = self.discrete_signatures.len();
+            self.discrete_index.insert(discrete.to_vec(), idx);
+            self.discrete_signatures.push(discrete.to_vec());
+            idx
+        };
+        self.discrete_map.push(signature_idx);
+        self.continuous_layouts.push(continuous.len());
+        self.continuous_values.extend_from_slice(continuous);
+        self.weights.push(weight);
+    }
+
+    pub(crate) fn finish(self) -> LatentBatchPayload {
+        LatentBatchPayload::IndexedBatch {
+            discrete_signatures: self.discrete_signatures,
+            discrete_map: self.discrete_map,
+            continuous_layouts: self.continuous_layouts,
+            continuous_values: self.continuous_values,
+            weights: self.weights,
+        }
+    }
 }
 
 impl LatentBatchPayload {
     pub fn from_batch(batch: &Batch) -> Self {
-        let mut discrete_signatures = Vec::<Vec<i64>>::new();
-        let mut discrete_index = HashMap::<Vec<i64>, usize>::new();
-        let mut discrete_map = Vec::with_capacity(batch.size());
-        let mut continuous_layouts = Vec::with_capacity(batch.size());
-        let mut continuous_values = Vec::new();
-        let mut weights = Vec::with_capacity(batch.size());
-
+        let mut builder = IndexedBatchBuilder::new(batch.size());
         for point in batch.points() {
-            let signature_idx = if let Some(&idx) = discrete_index.get(&point.discrete) {
-                idx
-            } else {
-                let idx = discrete_signatures.len();
-                let signature = point.discrete.clone();
-                discrete_index.insert(signature.clone(), idx);
-                discrete_signatures.push(signature);
-                idx
-            };
-            discrete_map.push(signature_idx);
-            continuous_layouts.push(point.continuous.len());
-            continuous_values.extend_from_slice(&point.continuous);
             let sampler_weight = point
                 .factor_value("sampler_weight")
                 .expect("batch point missing sampler_weight factor");
-            weights.push(sampler_weight);
+            builder.push(&point.discrete, &point.continuous, sampler_weight);
         }
-
-        Self::IndexedBatch {
-            discrete_signatures,
-            discrete_map,
-            continuous_layouts,
-            continuous_values,
-            weights,
-        }
+        builder.finish()
     }
 
     pub fn into_batch(self) -> Result<Batch, BatchError> {
@@ -118,9 +159,11 @@ impl LatentBatchPayload {
                 &continuous_values,
                 &weights,
             ),
-            Self::HavanaInference { .. } => Err(BatchError::layout(
-                "havana_inference latent payload must be materialized by a materializer",
-            )),
+            Self::HavanaInference { .. } | Self::HavanaInferenceIndexed { .. } => {
+                Err(BatchError::layout(
+                    "havana_inference latent payload must be materialized by a materializer",
+                ))
+            }
         }
     }
 
@@ -139,9 +182,11 @@ impl LatentBatchPayload {
                 continuous_values,
                 weights,
             ),
-            Self::HavanaInference { .. } => Err(BatchError::layout(
-                "havana_inference latent payload must be materialized by a materializer",
-            )),
+            Self::HavanaInference { .. } | Self::HavanaInferenceIndexed { .. } => {
+                Err(BatchError::layout(
+                    "havana_inference latent payload must be materialized by a materializer",
+                ))
+            }
         }
     }
 }
@@ -172,13 +217,49 @@ impl LatentBatchSpec {
 impl LatentBatch {
     /// Copy a contiguous evaluator work unit from a generated batch. Only the
     /// selected coordinates and discrete signatures are copied.
+    #[cfg(test)]
     pub(crate) fn slice(&self, start: usize, samples: usize) -> Result<Self, BatchError> {
+        let coordinate_start = match &self.payload {
+            LatentBatchPayload::IndexedBatch {
+                continuous_layouts, ..
+            } => continuous_layouts
+                .get(..start)
+                .ok_or_else(|| BatchError::layout("generated batch slice out of bounds"))?
+                .iter()
+                .sum(),
+            _ => 0,
+        };
+        self.slice_at(start, samples, coordinate_start)
+    }
+
+    /// The generation cursor avoids rescanning earlier ragged coordinates.
+    pub(crate) fn slice_at(
+        &self,
+        start: usize,
+        samples: usize,
+        coordinate_start: usize,
+    ) -> Result<Self, BatchError> {
         let end = start
             .checked_add(samples)
             .filter(|end| *end <= self.nr_samples)
             .ok_or_else(|| BatchError::layout("generated batch slice out of bounds"))?;
         if samples == 0 {
             return Err(BatchError::layout("generated batch slice is empty"));
+        }
+        if let LatentBatchPayload::HavanaInferenceIndexed { rng_states, offset } = &self.payload {
+            let first = (offset + start) / RNG_CHECKPOINT_STRIDE;
+            let last = (offset + end - 1) / RNG_CHECKPOINT_STRIDE;
+            return Ok(Self {
+                nr_samples: samples,
+                accumulator: self.accumulator.clone(),
+                payload: LatentBatchPayload::HavanaInferenceIndexed {
+                    rng_states: rng_states
+                        .get(first..=last)
+                        .ok_or_else(|| BatchError::layout("missing RNG checkpoint"))?
+                        .to_vec(),
+                    offset: (offset + start) % RNG_CHECKPOINT_STRIDE,
+                },
+            });
         }
         let LatentBatchPayload::IndexedBatch {
             discrete_signatures,
@@ -189,7 +270,7 @@ impl LatentBatch {
         } = &self.payload
         else {
             return Err(BatchError::layout(
-                "bulk generation requires a splittable indexed payload",
+                "generated payload cannot be partitioned",
             ));
         };
         let mut signatures = Vec::new();
@@ -204,7 +285,6 @@ impl LatentBatch {
                 signatures.len() - 1
             }));
         }
-        let coordinate_start: usize = continuous_layouts[..start].iter().sum();
         let layouts = continuous_layouts[start..end].to_vec();
         let coordinate_end = coordinate_start + layouts.iter().sum::<usize>();
         Ok(Self {
@@ -264,6 +344,20 @@ impl LatentBatch {
                 }
             }
             LatentBatchPayload::HavanaInference { .. } => {}
+            LatentBatchPayload::HavanaInferenceIndexed { rng_states, offset } => {
+                if *offset >= RNG_CHECKPOINT_STRIDE
+                    || rng_states.len()
+                        != self
+                            .nr_samples
+                            .checked_add(*offset)
+                            .ok_or_else(|| BatchError::layout("RNG sample count overflow"))?
+                            .div_ceil(RNG_CHECKPOINT_STRIDE)
+                {
+                    return Err(BatchError::layout(
+                        "invalid RNG checkpoints or sample offset",
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -279,6 +373,13 @@ impl LatentBatch {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, BatchError> {
+        let mut bytes = Vec::new();
+        self.write_bytes(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Append the existing wire representation to a caller-owned buffer.
+    pub(crate) fn write_bytes(&self, bytes: &mut Vec<u8>) -> Result<usize, BatchError> {
         let payload = match &self.payload {
             LatentBatchPayload::IndexedBatch {
                 discrete_signatures,
@@ -298,13 +399,20 @@ impl LatentBatch {
                     rng_state: Cow::Borrowed(rng_state),
                 }
             }
+            LatentBatchPayload::HavanaInferenceIndexed { rng_states, offset } => {
+                LatentBatchPayloadBinary::HavanaInferenceIndexed {
+                    rng_states: Cow::Borrowed(rng_states),
+                    offset: *offset,
+                }
+            }
         };
-        bincode::serde::encode_to_vec(
+        bincode::serde::encode_into_std_write(
             LatentBatchBinary {
                 nr_samples: self.nr_samples,
                 accumulator: Cow::Borrowed(&self.accumulator),
                 payload,
             },
+            bytes,
             Self::binary_config(),
         )
         .map_err(|err| BatchError::layout(format!("invalid latent batch payload: {err}")))
@@ -332,6 +440,12 @@ impl LatentBatch {
             LatentBatchPayloadBinary::HavanaInference { rng_state } => {
                 LatentBatchPayload::HavanaInference {
                     rng_state: rng_state.into_owned(),
+                }
+            }
+            LatentBatchPayloadBinary::HavanaInferenceIndexed { rng_states, offset } => {
+                LatentBatchPayload::HavanaInferenceIndexed {
+                    rng_states: rng_states.into_owned(),
+                    offset,
                 }
             }
         };
@@ -485,6 +599,10 @@ mod tests {
         for (batch, bytes) in [(indexed, indexed_bytes), (inference, inference_bytes)] {
             assert_eq!(batch.to_bytes().unwrap(), bytes);
             assert_eq!(LatentBatch::from_bytes(bytes).unwrap(), batch);
+            let mut framed = vec![7, 8, 9];
+            assert_eq!(batch.write_bytes(&mut framed).unwrap(), bytes.len());
+            assert_eq!(&framed[..3], &[7, 8, 9]);
+            assert_eq!(&framed[3..], bytes);
         }
     }
 

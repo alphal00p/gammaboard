@@ -1,32 +1,23 @@
-import { Alert, Box, Button, Card, CardContent, FormControlLabel, Stack, Switch, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, CardContent, Stack, TextField, Typography } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 
 const FORM_REFRESH_HOLD_MS = 5000;
 
 const QUEUE_TUNING_FIELDS = [
-  { key: "bulk_sample_generation", label: "Bulk Sample Generation", kind: "bool" },
-  { key: "queue_buffer", label: "Queue Buffer", kind: "float" },
-  { key: "target_batch_eval_ms", label: "Target Batch Eval (ms)", kind: "float" },
-  { key: "batch_size_deadband_ratio", label: "Batch Deadband Ratio", kind: "float" },
-  { key: "batch_size_cooldown_ticks", label: "Batch Cooldown Ticks", kind: "int" },
-  { key: "max_batch_size", label: "Max Batch Size", kind: "int" },
-  { key: "max_queue_size", label: "Max Queue Size", kind: "int" },
-  { key: "max_batches_per_tick", label: "Max Batches Per Tick", kind: "int" },
-  { key: "max_insert_bundle_size", label: "Max Insert Bundle Size", kind: "int" },
-  { key: "max_concurrent_insert_tasks", label: "Max Concurrent Insert Tasks", kind: "int" },
-  { key: "completed_batch_fetch_limit", label: "Completed Batch Fetch Limit", kind: "int" },
+  { key: "target_batch_eval_ms", label: "Target Evaluation Time (ms)", kind: "float" },
+  { key: "max_batch_size", label: "Maximum Evaluator Batch Size", kind: "int" },
+  { key: "fixed_batch_size", label: "Fixed Evaluator Batch Size (optional)", kind: "int", optional: true },
 ];
 
 const valueText = (value) => (value == null ? "" : String(value));
 
 const parseFieldValue = (value, kind) => {
-  if (kind === "bool") return { ok: typeof value === "boolean", value };
   const text = String(value ?? "").trim();
   if (!text) return { ok: false, value: null };
   const parsed = Number(text);
   if (!Number.isFinite(parsed)) return { ok: false, value: null };
   if (kind === "int" && !Number.isInteger(parsed)) return { ok: false, value: null };
-  return { ok: true, value: parsed };
+  return { ok: parsed > 0, value: parsed };
 };
 
 const QueueTuningPanel = ({
@@ -48,7 +39,7 @@ const QueueTuningPanel = ({
     const next = {};
     for (const field of QUEUE_TUNING_FIELDS) {
       const value = override?.[field.key] ?? defaults?.[field.key];
-      next[field.key] = field.kind === "bool" ? value ?? false : valueText(value);
+      next[field.key] = valueText(value);
     }
     return next;
   }, [isSampleTask, run, task]);
@@ -74,6 +65,7 @@ const QueueTuningPanel = ({
     if (!onSave || disabled) return;
     const payload = {};
     for (const field of QUEUE_TUNING_FIELDS) {
+      if (field.optional && !String(form[field.key] ?? "").trim()) continue;
       const parsed = parseFieldValue(form[field.key], field.kind);
       if (!parsed.ok) {
         setError(`Invalid value for "${field.label}".`);
@@ -101,7 +93,7 @@ const QueueTuningPanel = ({
             <Box>
               <Typography variant="h6">Queue Tuning</Typography>
               <Typography variant="body2" color="text.secondary">
-                Live task-level sampler queue tuning for the selected sample task.
+                Evaluator batches adapt to the target duration. The sampler controls generation size; the queue refills below one pending batch per active evaluator.
               </Typography>
             </Box>
             {!task ? (
@@ -119,29 +111,18 @@ const QueueTuningPanel = ({
                 <Box
                   sx={{
                     display: "grid",
-                    gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" },
+                    gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
                     gap: 1.5,
                   }}
                 >
-                  {QUEUE_TUNING_FIELDS.map((field) => field.kind === "bool" ? (
-                    <FormControlLabel
-                      key={field.key}
-                      label={field.label}
-                      control={<Switch
-                        disabled={disabled}
-                        checked={form[field.key] === true}
-                        onChange={(_event, checked) => {
-                          setRefreshHoldUntilMs(Date.now() + FORM_REFRESH_HOLD_MS);
-                          setForm((previous) => ({ ...previous, [field.key]: checked }));
-                        }}
-                      />}
-                    />
-                  ) : (
+                  {QUEUE_TUNING_FIELDS.map((field) => {
+                    const input = (
                     <TextField
                       disabled={disabled}
                       key={field.key}
                       size="small"
                       label={field.label}
+                      helperText={field.optional ? "Blank uses the run default." : undefined}
                       value={form[field.key] ?? ""}
                       onChange={(event) => {
                         const raw = event.target.value;
@@ -153,7 +134,14 @@ const QueueTuningPanel = ({
                         setForm((prev) => ({ ...prev, [field.key]: nextValue }));
                       }}
                     />
-                  ))}
+                    );
+                    return field.optional ? (
+                      <Box component="details" key={field.key} sx={{ gridColumn: "1 / -1" }}>
+                        <Typography component="summary" sx={{ cursor: "pointer", mb: 1 }}>Advanced</Typography>
+                        {input}
+                      </Box>
+                    ) : input;
+                  })}
                 </Box>
                 {error ? <Alert severity="error">{error}</Alert> : null}
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
