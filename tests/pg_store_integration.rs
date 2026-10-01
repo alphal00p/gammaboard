@@ -12,6 +12,54 @@ use tokio::time::{Duration, sleep};
 static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
+#[ignore = "requires postgres"]
+async fn batch_notifications_survive_cancelled_waits_and_use_the_existing_pool() {
+    let _guard = TEST_LOCK.lock().await;
+    let url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&url)
+        .await
+        .unwrap();
+    let run_id = -rand::random_range(1..i32::MAX);
+    let store = PgStore::new(pool.clone())
+        .listen_for_batches(run_id)
+        .await
+        .unwrap();
+    // Subscription precedes the empty claim. An arrival between that query
+    // and waiting must remain visible, and sending must fit in this same pool.
+    assert!(
+        store
+            .claim_batch(run_id, "missing-node", "missing-token")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    store.notify_work_available(run_id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), store.wait_for_work(run_id))
+        .await
+        .expect("hint must not be lost between claim and wait")
+        .unwrap();
+    assert_eq!(pool.size(), 2);
+
+    // Cancelling a wait leaves the listener usable, and another run cannot
+    // wake it. Unlike the runner's safety wait, this store wait has no timer.
+    store.notify_work_available(run_id - 1).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), store.wait_for_work(run_id))
+            .await
+            .is_err()
+    );
+    store.notify_work_available(run_id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), store.wait_for_work(run_id))
+        .await
+        .expect("cancelled wait must not lose the subscription")
+        .unwrap();
+    drop(store);
+    pool.close().await;
+}
+
+#[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn copy_inputs_round_trip_mixed_payloads_and_row_lengths() {
     use gammaboard::core::AccumulatorConfig;
@@ -1409,107 +1457,42 @@ async fn sampler_aggregator_current_assignment_is_unique_per_run() {
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
-async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
+async fn prefetch_can_claim_fresh_work_while_a_peer_is_idle() {
     let (_guard, store) = locked_test_store().await;
-    let run_id: i32 = sqlx::query_scalar(
-        "INSERT INTO runs (name,integration_params,point_spec) VALUES ('fair-prefetch','{}','{\"continuous\":{\"dims\":1}}') RETURNING id"
-    ).fetch_one(store.pool()).await.unwrap();
-    let a = unique_id("fair-a");
-    let b = unique_id("fair-b");
-    for node in [&a, &b] {
-        store
-            .announce_node(node, node, &Default::default())
+    let (run, _, active, ids) = reliability_fixture(&store, 3).await;
+    let idle = unique_id("idle-peer");
+    store
+        .announce_node(&idle, &idle, &Default::default())
+        .await
+        .unwrap();
+    store
+        .set_current_assignment(&idle, WorkerRole::Evaluator, run)
+        .await
+        .unwrap();
+    // Keep rows fresh independently of test execution time.
+    sqlx::query("UPDATE batches SET created_at=now()+interval '1 hour' WHERE run_id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let mut claimed = Vec::new();
+    for node in [&active, &active, &idle] {
+        let claim = store
+            .claim_batch(run, node, &unique_id("claim"))
             .await
-            .unwrap();
-        store
-            .set_current_assignment(node, WorkerRole::Evaluator, run_id)
-            .await
-            .unwrap();
+            .unwrap()
+            .expect("available work must not wait for a peer to claim its first batch");
+        claimed.push(claim.batch_id);
     }
-    let task_id = insert_completed_pause_task(&store, run_id).await;
-    let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).unwrap();
-    let batches = vec![LatentBatchSpec::from_batch(&batch).build(); 5];
-    store
-        .insert_batches(run_id, task_id, false, &next_batch_ids(5), &batches)
-        .await
-        .unwrap();
-    // Freeze the fresh-batch condition rather than making a wall-clock-sensitive test.
-    sqlx::query("UPDATE batches SET created_at=now()+interval '1 hour' WHERE run_id=$1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .unwrap();
+    assert_eq!(claimed, ids);
     assert!(
         store
-            .claim_batch(run_id, &a, &unique_id("claim"))
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        store
-            .claim_batch(run_id, &a, &unique_id("claim"))
+            .claim_batch(run, &active, &unique_id("claim"))
             .await
             .unwrap()
             .is_none()
     );
-    assert!(
-        store
-            .claim_batch(run_id, &b, &unique_id("claim"))
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        store
-            .claim_batch(run_id, &a, &unique_id("claim"))
-            .await
-            .unwrap()
-            .is_some()
-    );
-    store
-        .release_claimed_batches_for_worker(run_id, &b)
-        .await
-        .unwrap();
-    assert!(
-        store
-            .claim_batch(run_id, &a, &unique_id("claim"))
-            .await
-            .unwrap()
-            .is_none()
-    );
-    // A live but unresponsive peer cannot indefinitely prevent prefetch.
-    sqlx::query("UPDATE batches SET created_at=now()-interval '1 second' WHERE run_id=$1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .unwrap();
-    assert!(
-        store
-            .claim_batch(run_id, &a, &unique_id("claim"))
-            .await
-            .unwrap()
-            .is_some()
-    );
-    // Expired peers should not delay even newly inserted work.
-    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE uuid=$1")
-        .bind(&b)
-        .execute(store.pool())
-        .await
-        .unwrap();
-    sqlx::query("UPDATE batches SET created_at=now()+interval '1 hour' WHERE run_id=$1")
-        .bind(run_id)
-        .execute(store.pool())
-        .await
-        .unwrap();
-    assert!(
-        store
-            .claim_batch(run_id, &a, &unique_id("claim"))
-            .await
-            .unwrap()
-            .is_some()
-    );
-    store.remove_run(run_id).await.unwrap();
+    store.remove_run(run).await.unwrap();
 }
 
 #[tokio::test]
@@ -2269,8 +2252,6 @@ async fn idle_evaluator_publishes_current_task_without_receiving_work() {
         Box::new(CountingEvaluator(calls.clone())),
         gammaboard::Domain::rectangular(1, 0),
         EvaluatorRunnerParams {
-            db_pool_size: 2,
-            min_tick_time_ms: 10,
             performance_snapshot_interval_ms: 0,
         },
         3,
@@ -2884,8 +2865,6 @@ async fn fault_test_runner(
         Box::new(CountingEvaluator(calls.clone())),
         gammaboard::Domain::rectangular(1, 0),
         gammaboard::runners::EvaluatorRunnerParams {
-            db_pool_size: 2,
-            min_tick_time_ms: 10,
             performance_snapshot_interval_ms: 60000,
         },
         3,

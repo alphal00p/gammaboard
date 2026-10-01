@@ -1,0 +1,21 @@
+{
+  "rust_toolchain": "1.99.0",
+  "checks": {
+    "cargo test --locked": "355 passed; database/explicit lifecycle tests ignored by default",
+    "cargo test --locked --test pg_store_integration -- --ignored": "37 passed",
+    "batch_notifications_survive_cancelled_waits_and_use_the_existing_pool": "Passed on real PostgreSQL; rerun successfully after moving into pg_store_integration, which CI already executes.",
+    "full_stack_server_auth_protects_pause_endpoint": "passed",
+    "full_stack_cli_installation_smoke_produces_unit_estimate": "passed",
+    "cargo fmt --check": "passed",
+    "cargo clippy --locked --all-targets --all-features -- -D warnings": "Passed with Rust 1.99; rerun after relocating the regression.",
+    "cargo check --locked --no-default-features": "passed",
+    "python -m unittest discover -s benchmarks/tests": "41 passed"
+  },
+  "performance_validation": "26 valid measurements, 26 clean shutdowns, no deadlocks or temporary-file writes",
+  "notes": [
+    "The notification PostgreSQL regression is included in CI.",
+    "The private test database shut down cleanly.",
+    "No changes made to the demo deployment.",
+    "The notification regression is in the existing PostgreSQL integration target; no workflow change is needed."
+  ]
+}

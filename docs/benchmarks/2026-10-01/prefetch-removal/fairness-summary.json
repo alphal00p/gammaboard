@@ -1,0 +1,56 @@
+{
+  "results": [
+    {
+      "workers": 1,
+      "baseline": {
+        "trials": 1,
+        "rate": 192235.38029510464,
+        "fetch_wait_ms_per_batch": 0.0,
+        "evaluate_ms_per_batch": 165.70431511965813,
+        "evaluator_compute": 99.41726047076722,
+        "sampler_io": 11.745813294600058
+      },
+      "no-fairness": {
+        "trials": 1,
+        "rate": 192287.5462361881,
+        "fetch_wait_ms_per_batch": 0.0,
+        "evaluate_ms_per_batch": 165.55009728205133,
+        "evaluator_compute": 99.37146517876852,
+        "sampler_io": 10.801412983424019
+      },
+      "paired_gain_median_percent": 0.027136493294510622,
+      "paired_gain_range_percent": [
+        0.027136493294510622,
+        0.027136493294510622
+      ]
+    },
+    {
+      "workers": 16,
+      "baseline": {
+        "trials": 3,
+        "rate": 2817759.2663888303,
+        "fetch_wait_ms_per_batch": 6.9282024842105265,
+        "evaluate_ms_per_batch": 164.7849355072464,
+        "evaluator_compute": 90.5467175427629,
+        "sampler_io": 80.10398822260501
+      },
+      "no-fairness": {
+        "trials": 3,
+        "rate": 2964642.005861452,
+        "fetch_wait_ms_per_batch": 1.023313956858407,
+        "evaluate_ms_per_batch": 165.6092943309859,
+        "evaluator_compute": 95.75039377413054,
+        "sampler_io": 96.88746259372924
+      },
+      "paired_gain_median_percent": 4.959041420691879,
+      "paired_gain_range_percent": [
+        -1.5214841950120572,
+        11.258254510193467
+      ]
+    }
+  ],
+  "valid_trials": 8,
+  "clean_shutdowns": 8,
+  "elapsed_seconds": 215.58271918492392,
+  "conclusion": "Disabling the fairness SQL clause consistently reduces fetch stalls at 16 evaluators, with noisy throughput gains. The one-evaluator control is unchanged. This tests the clause as a whole: policy denials and query execution cost are not isolated. Feedback off only; no production change retained."
+}

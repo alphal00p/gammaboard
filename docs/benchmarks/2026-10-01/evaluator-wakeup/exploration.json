@@ -1,0 +1,231 @@
+[
+  {
+    "study": "prefetch-confirm",
+    "description": "Wait inside prefetch, exponential retry",
+    "raw_data": "/common/dev/cedric/setup-logs/evaluator-idle-cadence-20261001/prefetch-confirm/results.json",
+    "pairs": [
+      {
+        "case": "short-generation",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 1257949.0529000335,
+        "candidate_rate": 1157980.8059714828,
+        "gain_percent": -7.946923343046953,
+        "baseline_transactions_per_second": 456.73873358632665,
+        "candidate_transactions_per_second": 456.6344625222352
+      },
+      {
+        "case": "short-generation",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 1331519.3008909193,
+        "candidate_rate": 1272560.916432499,
+        "gain_percent": -4.427903104293818,
+        "baseline_transactions_per_second": 463.1285515652435,
+        "candidate_transactions_per_second": 474.0226528909437
+      }
+    ]
+  },
+  {
+    "study": "demand-pilot",
+    "description": "Back off only after foreground miss",
+    "raw_data": "/common/dev/cedric/setup-logs/evaluator-idle-cadence-20261001/demand-pilot/results.json",
+    "pairs": [
+      {
+        "case": "short-generation",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 1327793.8245763264,
+        "candidate_rate": 1288547.0698586325,
+        "gain_percent": -2.955786809011318,
+        "baseline_transactions_per_second": 466.16043537706923,
+        "candidate_transactions_per_second": 466.7792896470421
+      },
+      {
+        "case": "short-generation",
+        "mode": "materialized",
+        "repeat": 1,
+        "baseline_rate": 1297649.481677188,
+        "candidate_rate": 1258249.4815095095,
+        "gain_percent": -3.036259076430625,
+        "baseline_transactions_per_second": 464.77256591918365,
+        "candidate_transactions_per_second": 475.10352532809975
+      },
+      {
+        "case": "short-generation",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 1341968.5373001369,
+        "candidate_rate": 1318916.9459952198,
+        "gain_percent": -1.7177445420064719,
+        "baseline_transactions_per_second": 461.09076699878716,
+        "candidate_transactions_per_second": 483.9341402685148
+      },
+      {
+        "case": "short-generation",
+        "mode": "training",
+        "repeat": 1,
+        "baseline_rate": 1347063.8557671779,
+        "candidate_rate": 1284607.362711807,
+        "gain_percent": -4.6364908974415915,
+        "baseline_transactions_per_second": 454.5597695846238,
+        "candidate_transactions_per_second": 477.6837622121334
+      }
+    ]
+  },
+  {
+    "study": "notification-pilot",
+    "description": "Notify per insert: short queues",
+    "raw_data": "/common/dev/cedric/setup-logs/evaluator-idle-cadence-20261001/notification-pilot/results.json",
+    "pairs": [
+      {
+        "case": "short-generation",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 1330754.4222907035,
+        "candidate_rate": 1581448.251213383,
+        "gain_percent": 18.838474231116642,
+        "baseline_transactions_per_second": 464.8204440301811,
+        "candidate_transactions_per_second": 462.88178766407793
+      },
+      {
+        "case": "short-generation",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 1394476.7863088774,
+        "candidate_rate": 1552340.656978404,
+        "gain_percent": 11.320652464024562,
+        "baseline_transactions_per_second": 463.5362851565826,
+        "candidate_transactions_per_second": 452.1784008269214
+      }
+    ]
+  },
+  {
+    "study": "validation",
+    "description": "Notify per insert: large fleet (stopped early)",
+    "raw_data": "/common/dev/cedric/setup-logs/evaluator-idle-cadence-20261001/validation/results.json",
+    "pairs": [
+      {
+        "case": "fast-fleet",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 5796619.143174129,
+        "candidate_rate": 4860936.439274121,
+        "gain_percent": -16.141869610354355,
+        "baseline_transactions_per_second": 5801.6067100184755,
+        "candidate_transactions_per_second": 10889.462918889618
+      },
+      {
+        "case": "fast-fleet",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 5345356.1354535315,
+        "candidate_rate": 4848257.539645063,
+        "gain_percent": -9.299634733622696,
+        "baseline_transactions_per_second": 5795.726805155461,
+        "candidate_transactions_per_second": 11047.226447640729
+      }
+    ]
+  },
+  {
+    "study": "edge-pilot",
+    "description": "Notify on empty-to-nonempty counter transition (stopped early)",
+    "raw_data": "/common/dev/cedric/setup-logs/evaluator-idle-cadence-20261001/edge-pilot/results.json",
+    "pairs": [
+      {
+        "case": "fast-fleet",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 5700966.870941438,
+        "candidate_rate": 5413253.479358481,
+        "gain_percent": -5.046747299119891,
+        "baseline_transactions_per_second": 5696.775198903002,
+        "candidate_transactions_per_second": 9223.173911938802
+      },
+      {
+        "case": "fast-fleet",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 5175426.114569802,
+        "candidate_rate": 4898420.805947208,
+        "gain_percent": -5.35231887173061,
+        "baseline_transactions_per_second": 5655.870047603526,
+        "candidate_transactions_per_second": 8402.02499019994
+      },
+      {
+        "case": "short-generation",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 1334876.7491719918,
+        "candidate_rate": 1558588.9169223069,
+        "gain_percent": 16.75901298671065,
+        "baseline_transactions_per_second": 446.9297775762078,
+        "candidate_transactions_per_second": 465.5616323915057
+      }
+    ]
+  },
+  {
+    "study": "refill-pilot",
+    "description": "Notify once per refill, fixed safety timeout",
+    "raw_data": "/common/dev/cedric/setup-logs/evaluator-idle-cadence-20261001/refill-pilot/results.json",
+    "pairs": [
+      {
+        "case": "fast-fleet",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 4694361.12782485,
+        "candidate_rate": 5372716.665493773,
+        "gain_percent": 14.450433598900414,
+        "baseline_transactions_per_second": 5780.200826422862,
+        "candidate_transactions_per_second": 4222.9697213165955
+      },
+      {
+        "case": "fast-fleet",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 5424122.973603189,
+        "candidate_rate": 5005320.580243567,
+        "gain_percent": -7.721108009492927,
+        "baseline_transactions_per_second": 5676.056957415123,
+        "candidate_transactions_per_second": 4267.4158005131085
+      },
+      {
+        "case": "short-generation",
+        "mode": "materialized",
+        "repeat": 0,
+        "baseline_rate": 1344373.953268309,
+        "candidate_rate": 1507360.090000536,
+        "gain_percent": 12.123571446470782,
+        "baseline_transactions_per_second": 456.8548551007163,
+        "candidate_transactions_per_second": 461.5286329254335
+      },
+      {
+        "case": "short-generation",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 1334641.6194904046,
+        "candidate_rate": 1481209.258536683,
+        "gain_percent": 10.981797428304475,
+        "baseline_transactions_per_second": 465.14878496579365,
+        "candidate_transactions_per_second": 470.7014537283137
+      }
+    ]
+  },
+  {
+    "study": "refill-confirm",
+    "description": "Jittered safety timeout; interrupted due external host contention",
+    "raw_data": "/common/dev/cedric/setup-logs/evaluator-idle-cadence-20261001/refill-confirm/results.json",
+    "pairs": [
+      {
+        "case": "fast-fleet",
+        "mode": "training",
+        "repeat": 0,
+        "baseline_rate": 3216890.6814744733,
+        "candidate_rate": 5367967.259358141,
+        "gain_percent": 66.86819015241493,
+        "baseline_transactions_per_second": 4174.810593290011,
+        "candidate_transactions_per_second": 3380.158503291919
+      }
+    ]
+  }
+]

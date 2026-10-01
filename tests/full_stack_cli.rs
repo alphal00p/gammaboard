@@ -1062,8 +1062,6 @@ args = ["x", "y", "z"]
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
-min_tick_time_ms = 50
-db_pool_size = 2
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 2000
@@ -1598,8 +1596,6 @@ db_pool_size = 2
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 100
-min_tick_time_ms = 50
-db_pool_size = 1
 
 [[task_queue]]
 name = "accumulator"
@@ -3014,8 +3010,6 @@ continuous_dims = 1
 discrete_dims = 0
 
 [evaluator_runner_params]
-min_tick_time_ms = 50
-db_pool_size = 1
 
 [sampler_aggregator_runner_params]
 min_tick_time_ms = 10
@@ -4372,7 +4366,6 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 200
-min_tick_time_ms = 50
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 200
@@ -7438,7 +7431,6 @@ kind = "unit"
 continuous_dims = 2
 cpu_iterations_per_sample = 1000
 [evaluator_runner_params]
-min_tick_time_ms = 1
 performance_snapshot_interval_ms = 100
 [sampler_aggregator_runner_params]
 min_tick_time_ms = 1

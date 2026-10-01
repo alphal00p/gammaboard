@@ -337,10 +337,9 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
         let role_store = self
-            .init_role_store(
-                target.role,
-                spec.integration_params.evaluator_runner_params.db_pool_size,
-            )
+            .init_role_store(target.role, crate::runners::MAX_EVALUATOR_DB_CONNECTIONS)
+            .await?
+            .listen_for_batches(target.run_id)
             .await?;
         let evaluator = evaluator_config
             .build()

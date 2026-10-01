@@ -32,7 +32,7 @@ impl<S: crate::core::EvaluatorWorkerStore + Clone + Send + Sync + 'static> RoleR
     }
 
     fn min_tick_time(&self) -> Duration {
-        Duration::from_millis(self.params().min_tick_time_ms)
+        Duration::ZERO
     }
 }
 

@@ -1,0 +1,51 @@
+[
+  {
+    "family": "evaluator-tick",
+    "paired_gains_percent": [
+      241.79755193628117,
+      237.91423778986882
+    ],
+    "median_paired_gain_percent": 239.85589486307498,
+    "medians": {
+      "baseline": {
+        "rate": 45948.03733234298,
+        "evaluate_ms_per_batch": 2.6116431941185194,
+        "fetch_wait_ms_per_batch": 0.0014154187810373098,
+        "evaluator_compute": 24.08930689277573,
+        "sampler_io": 8.275199023197853
+      },
+      "changed": {
+        "rate": 156153.95241882934,
+        "evaluate_ms_per_batch": 2.5852937523299855,
+        "fetch_wait_ms_per_batch": 0.018838501001258234,
+        "evaluator_compute": 80.64241409062689,
+        "sampler_io": 12.720299328713747
+      }
+    }
+  },
+  {
+    "family": "database-cores",
+    "paired_gains_percent": [
+      0.3276790842485555,
+      0.23741658178686453,
+      -0.2639725336461063
+    ],
+    "median_paired_gain_percent": 0.23741658178686453,
+    "medians": {
+      "baseline": {
+        "rate": 3062786.4969917755,
+        "evaluate_ms_per_batch": 165.68940590519549,
+        "fetch_wait_ms_per_batch": 0.0,
+        "evaluator_compute": 99.18064208298277,
+        "sampler_io": 85.78364955715695
+      },
+      "changed": {
+        "rate": 3069567.2243971387,
+        "evaluate_ms_per_batch": 165.66683675093932,
+        "fetch_wait_ms_per_batch": 0.0,
+        "evaluator_compute": 99.34157657503461,
+        "sampler_io": 81.06365338306223
+      }
+    }
+  }
+]

@@ -1,0 +1,487 @@
+[
+  {
+    "case": "default-generation",
+    "mode": "materialized",
+    "pairs": [
+      {
+        "study": "default-generation",
+        "repeat": 0,
+        "gain_percent": 5.3219733133047065
+      }
+    ],
+    "median_paired_gain_percent": 5.3219733133047065,
+    "medians": {
+      "paced": {
+        "rate": 1779516.5373969441,
+        "db_transactions_per_second": 406.0689420014459,
+        "db_wal_bytes_per_second": 97138533.19590051,
+        "fetch_wait_ms_per_batch": 0.5658294142335765,
+        "submit_wait_ms_per_batch": 0.0003407408759124087,
+        "queue_starvation_ratio_mean": 0.18986438258386867,
+        "prefetch_hit_ratio_mean": 0.6995003568879372,
+        "cleanup_seconds": 2.494874123018235,
+        "cpu_cores": {
+          "database": 0.8684019506504334,
+          "evaluators": 0.36012993013762923,
+          "sampler": 0.4199853201882047
+        }
+      },
+      "unpaced": {
+        "rate": 1874221.9326230534,
+        "db_transactions_per_second": 413.120166102531,
+        "db_wal_bytes_per_second": 99206415.53885905,
+        "fetch_wait_ms_per_batch": 4.530990764142733,
+        "submit_wait_ms_per_batch": 0.005889579634464753,
+        "queue_starvation_ratio_mean": 0.2080267558528428,
+        "prefetch_hit_ratio_mean": 0.007357859531772575,
+        "cleanup_seconds": 2.2566865971311927,
+        "cpu_cores": {
+          "database": 0.9770643551791124,
+          "evaluators": 0.3810501109529562,
+          "sampler": 0.4119730257161544
+        }
+      }
+    }
+  },
+  {
+    "case": "default-generation",
+    "mode": "training",
+    "pairs": [
+      {
+        "study": "default-generation",
+        "repeat": 0,
+        "gain_percent": 5.793532533931289
+      }
+    ],
+    "median_paired_gain_percent": 5.793532533931289,
+    "medians": {
+      "paced": {
+        "rate": 1746345.334022822,
+        "db_transactions_per_second": 399.85699186771905,
+        "db_wal_bytes_per_second": 107193686.27056783,
+        "fetch_wait_ms_per_batch": 0.49510876305970153,
+        "submit_wait_ms_per_batch": 0.0004794636194029851,
+        "queue_starvation_ratio_mean": 0.19380403458213258,
+        "prefetch_hit_ratio_mean": 0.7060518731988472,
+        "cleanup_seconds": 2.3026652419939637,
+        "cpu_cores": {
+          "database": 0.9665995387796428,
+          "evaluators": 0.355118096806556,
+          "sampler": 0.41397193869303583
+        }
+      },
+      "unpaced": {
+        "rate": 1847520.4191042252,
+        "db_transactions_per_second": 401.6615254710527,
+        "db_wal_bytes_per_second": 114533772.51772664,
+        "fetch_wait_ms_per_batch": 3.970637475468332,
+        "submit_wait_ms_per_batch": 0.024700058876003593,
+        "queue_starvation_ratio_mean": 0.21129568106312294,
+        "prefetch_hit_ratio_mean": 0.02524916943521595,
+        "cleanup_seconds": 4.299581513274461,
+        "cpu_cores": {
+          "database": 1.040809043528791,
+          "evaluators": 0.4029581730576242,
+          "sampler": 0.45931247201246533
+        }
+      }
+    }
+  },
+  {
+    "case": "fast-fleet",
+    "mode": "materialized",
+    "pairs": [
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": -0.1500317546058283
+      },
+      {
+        "study": "matrix",
+        "repeat": 1,
+        "gain_percent": 1.078034259793248
+      }
+    ],
+    "median_paired_gain_percent": 0.46400125259370983,
+    "medians": {
+      "paced": {
+        "rate": 5487017.486296132,
+        "db_transactions_per_second": 5777.246681540391,
+        "db_wal_bytes_per_second": 309588010.24193525,
+        "fetch_wait_ms_per_batch": 10.901527607610952,
+        "submit_wait_ms_per_batch": 0.00380230324491732,
+        "queue_starvation_ratio_mean": 0.9327788171594293,
+        "prefetch_hit_ratio_mean": 0.00039730117199557357,
+        "cleanup_seconds": 4.26624548365362,
+        "cpu_cores": {
+          "database": 4.128614426488956,
+          "evaluators": 2.0155673119903312,
+          "sampler": 0.7547672361752717
+        }
+      },
+      "unpaced": {
+        "rate": 5513091.459412498,
+        "db_transactions_per_second": 5575.961863237839,
+        "db_wal_bytes_per_second": 300461883.3327212,
+        "fetch_wait_ms_per_batch": 10.405177883883605,
+        "submit_wait_ms_per_batch": 0.008932099074554709,
+        "queue_starvation_ratio_mean": 0.9367584169999001,
+        "prefetch_hit_ratio_mean": 0.000524378004862832,
+        "cleanup_seconds": 3.6159477329347283,
+        "cpu_cores": {
+          "database": 3.962574339913687,
+          "evaluators": 1.8518728467064831,
+          "sampler": 0.7862730150927091
+        }
+      }
+    }
+  },
+  {
+    "case": "fast-fleet",
+    "mode": "training",
+    "pairs": [
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": -0.05136820445991175
+      },
+      {
+        "study": "matrix",
+        "repeat": 1,
+        "gain_percent": 13.155086938726157
+      }
+    ],
+    "median_paired_gain_percent": 6.5518593671331224,
+    "medians": {
+      "paced": {
+        "rate": 4836285.589155833,
+        "db_transactions_per_second": 5700.187116094975,
+        "db_wal_bytes_per_second": 317961392.86908334,
+        "fetch_wait_ms_per_batch": 11.004076444772135,
+        "submit_wait_ms_per_batch": 0.2336274203142351,
+        "queue_starvation_ratio_mean": 0.9402321349018019,
+        "prefetch_hit_ratio_mean": 0.0005183451898904488,
+        "cleanup_seconds": 23.542028575437143,
+        "cpu_cores": {
+          "database": 4.182395024368427,
+          "evaluators": 2.0348947479875266,
+          "sampler": 0.77685411995153
+        }
+      },
+      "unpaced": {
+        "rate": 5134329.083368313,
+        "db_transactions_per_second": 5493.4221903256275,
+        "db_wal_bytes_per_second": 338638473.8317914,
+        "fetch_wait_ms_per_batch": 11.185774084314533,
+        "submit_wait_ms_per_batch": 0.33305105825884684,
+        "queue_starvation_ratio_mean": 0.9393396789696159,
+        "prefetch_hit_ratio_mean": 0.00039719304969144877,
+        "cleanup_seconds": 25.067882827017456,
+        "cpu_cores": {
+          "database": 4.3745106183624785,
+          "evaluators": 1.8094911249338992,
+          "sampler": 0.8040899797855781
+        }
+      }
+    }
+  },
+  {
+    "case": "fast-single",
+    "mode": "materialized",
+    "pairs": [
+      {
+        "study": "longer-repeats",
+        "repeat": 0,
+        "gain_percent": -0.696101855960185
+      },
+      {
+        "study": "longer-repeats",
+        "repeat": 1,
+        "gain_percent": -6.742289878726804
+      },
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": -5.943050184322097
+      }
+    ],
+    "median_paired_gain_percent": -5.943050184322097,
+    "medians": {
+      "paced": {
+        "rate": 1282779.9055686982,
+        "db_transactions_per_second": 454.7621696851967,
+        "db_wal_bytes_per_second": 67388575.19407997,
+        "fetch_wait_ms_per_batch": 3.6959163888888904,
+        "submit_wait_ms_per_batch": 0.001428638888888889,
+        "queue_starvation_ratio_mean": 0.5135406218655968,
+        "prefetch_hit_ratio_mean": 0.07723169508525576,
+        "cleanup_seconds": 2.155616103671491,
+        "cpu_cores": {
+          "database": 0.647876926268228,
+          "evaluators": 0.2872812126986985,
+          "sampler": 0.20399396284261967
+        }
+      },
+      "unpaced": {
+        "rate": 1229370.2596191834,
+        "db_transactions_per_second": 460.35012149744574,
+        "db_wal_bytes_per_second": 65737201.73714423,
+        "fetch_wait_ms_per_batch": 4.54100478042328,
+        "submit_wait_ms_per_batch": 0.003273691489361702,
+        "queue_starvation_ratio_mean": 0.5741254858411994,
+        "prefetch_hit_ratio_mean": 0.002242152466367713,
+        "cleanup_seconds": 2.347029928583652,
+        "cpu_cores": {
+          "database": 0.6064082810932017,
+          "evaluators": 0.25751584539574324,
+          "sampler": 0.1968750172864231
+        }
+      }
+    }
+  },
+  {
+    "case": "fast-single",
+    "mode": "training",
+    "pairs": [
+      {
+        "study": "longer-repeats",
+        "repeat": 0,
+        "gain_percent": -4.966140710193912
+      },
+      {
+        "study": "longer-repeats",
+        "repeat": 1,
+        "gain_percent": -10.476001164710702
+      },
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": -11.744070858683198
+      }
+    ],
+    "median_paired_gain_percent": -10.476001164710702,
+    "medians": {
+      "paced": {
+        "rate": 1362981.1641946917,
+        "db_transactions_per_second": 457.6037828934121,
+        "db_wal_bytes_per_second": 82936032.48430571,
+        "fetch_wait_ms_per_batch": 2.936441990566035,
+        "submit_wait_ms_per_batch": 0.0064207451984635115,
+        "queue_starvation_ratio_mean": 0.5071496663489037,
+        "prefetch_hit_ratio_mean": 0.09138533178114086,
+        "cleanup_seconds": 2.2629505493678153,
+        "cpu_cores": {
+          "database": 0.719623877442053,
+          "evaluators": 0.2897446103907367,
+          "sampler": 0.21394223383412397
+        }
+      },
+      "unpaced": {
+        "rate": 1208644.6730971064,
+        "db_transactions_per_second": 461.15412093934464,
+        "db_wal_bytes_per_second": 74693135.54022282,
+        "fetch_wait_ms_per_batch": 4.499990926075275,
+        "submit_wait_ms_per_batch": 0.009167664447403462,
+        "queue_starvation_ratio_mean": 0.5745272525027809,
+        "prefetch_hit_ratio_mean": 0.005621135469364812,
+        "cleanup_seconds": 2.245062797795981,
+        "cpu_cores": {
+          "database": 0.6625712981826899,
+          "evaluators": 0.2651818304911981,
+          "sampler": 0.1964692080991585
+        }
+      }
+    }
+  },
+  {
+    "case": "slow-fleet",
+    "mode": "materialized",
+    "pairs": [
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": -0.6563547702285843
+      },
+      {
+        "study": "matrix",
+        "repeat": 1,
+        "gain_percent": -0.851272528019742
+      }
+    ],
+    "median_paired_gain_percent": -0.7538136491241632,
+    "medians": {
+      "paced": {
+        "rate": 5133.044226433822,
+        "db_transactions_per_second": 3082.744285162818,
+        "db_wal_bytes_per_second": 2787780.6770487316,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.0031815426147977686,
+        "queue_starvation_ratio_mean": 0.35353210567025484,
+        "prefetch_hit_ratio_mean": 0.6186691654631169,
+        "cleanup_seconds": 2.1960808094590902,
+        "cpu_cores": {
+          "database": 1.414831931493108,
+          "evaluators": 0.36086121025290635,
+          "sampler": 0.0824930021418406
+        }
+      },
+      "unpaced": {
+        "rate": 5094.342864506636,
+        "db_transactions_per_second": 3108.1243045700276,
+        "db_wal_bytes_per_second": 2816743.495750199,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.0031083262167012123,
+        "queue_starvation_ratio_mean": 0.3781583183814903,
+        "prefetch_hit_ratio_mean": 0.593915894542209,
+        "cleanup_seconds": 2.192039295565337,
+        "cpu_cores": {
+          "database": 1.4759378733350983,
+          "evaluators": 0.3761384375534357,
+          "sampler": 0.08195869118878688
+        }
+      }
+    }
+  },
+  {
+    "case": "slow-fleet",
+    "mode": "training",
+    "pairs": [
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": 0.44101967518603846
+      },
+      {
+        "study": "matrix",
+        "repeat": 1,
+        "gain_percent": -0.045272382353445106
+      }
+    ],
+    "median_paired_gain_percent": 0.19787364641629668,
+    "medians": {
+      "paced": {
+        "rate": 5112.092232794682,
+        "db_transactions_per_second": 3080.112300982734,
+        "db_wal_bytes_per_second": 2832522.733318963,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.003337851225644249,
+        "queue_starvation_ratio_mean": 0.3854747395587802,
+        "prefetch_hit_ratio_mean": 0.5865579271251384,
+        "cleanup_seconds": 2.1371074533089995,
+        "cpu_cores": {
+          "database": 1.413377497696667,
+          "evaluators": 0.3703385699472588,
+          "sampler": 0.08308592534625645
+        }
+      },
+      "unpaced": {
+        "rate": 5122.191131725089,
+        "db_transactions_per_second": 3079.189814290159,
+        "db_wal_bytes_per_second": 2835185.962017225,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.003200493325221375,
+        "queue_starvation_ratio_mean": 0.3470433975714444,
+        "prefetch_hit_ratio_mean": 0.6248970219139067,
+        "cleanup_seconds": 2.1705751260742545,
+        "cpu_cores": {
+          "database": 1.4268088417109805,
+          "evaluators": 0.38308592105948114,
+          "sampler": 0.08063786307710599
+        }
+      }
+    }
+  },
+  {
+    "case": "small-cpu",
+    "mode": "materialized",
+    "pairs": [
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": 234.90050026620617
+      },
+      {
+        "study": "matrix",
+        "repeat": 1,
+        "gain_percent": 241.58128527356246
+      }
+    ],
+    "median_paired_gain_percent": 238.2408927698843,
+    "medians": {
+      "paced": {
+        "rate": 46116.846391235755,
+        "db_transactions_per_second": 512.1533848052427,
+        "db_wal_bytes_per_second": 2754828.1955594686,
+        "fetch_wait_ms_per_batch": 0.001978903184315548,
+        "submit_wait_ms_per_batch": 4.847080630213161e-06,
+        "queue_starvation_ratio_mean": 0.011241125186269605,
+        "prefetch_hit_ratio_mean": 0.9840466793596254,
+        "cleanup_seconds": 0.5486928499303758,
+        "cpu_cores": {
+          "database": 0.17688668749371317,
+          "evaluators": 0.2736383780946423,
+          "sampler": 0.05148895992181178
+        }
+      },
+      "unpaced": {
+        "rate": 155993.94344290753,
+        "db_transactions_per_second": 975.5652261147551,
+        "db_wal_bytes_per_second": 9806753.703808991,
+        "fetch_wait_ms_per_batch": 0.01444425048306927,
+        "submit_wait_ms_per_batch": 0.5231875625302178,
+        "queue_starvation_ratio_mean": 0.013175159414028435,
+        "prefetch_hit_ratio_mean": 0.9227639304986112,
+        "cleanup_seconds": 0.5766083030030131,
+        "cpu_cores": {
+          "database": 0.3637637116334602,
+          "evaluators": 0.88200849066176,
+          "sampler": 0.07640750899445964
+        }
+      }
+    }
+  },
+  {
+    "case": "training-pauses",
+    "mode": "training",
+    "pairs": [
+      {
+        "study": "matrix",
+        "repeat": 0,
+        "gain_percent": 0.33361170479304647
+      }
+    ],
+    "median_paired_gain_percent": 0.33361170479304647,
+    "medians": {
+      "paced": {
+        "rate": 791.8302473975389,
+        "db_transactions_per_second": 4799.557186779627,
+        "db_wal_bytes_per_second": 2394623.518778634,
+        "fetch_wait_ms_per_batch": 1.1569352686567165,
+        "submit_wait_ms_per_batch": 0.05923107960199005,
+        "queue_starvation_ratio_mean": 0.9710042244809522,
+        "prefetch_hit_ratio_mean": 0.013252054890572223,
+        "cleanup_seconds": 4.56747866794467,
+        "cpu_cores": {
+          "database": 0.7891325909297727,
+          "evaluators": 0.7589104917026721,
+          "sampler": 0.005276874468223477
+        }
+      },
+      "unpaced": {
+        "rate": 794.4718857849489,
+        "db_transactions_per_second": 4598.703325454834,
+        "db_wal_bytes_per_second": 2146407.905190477,
+        "fetch_wait_ms_per_batch": 1.728900605940594,
+        "submit_wait_ms_per_batch": 0.6435837861386139,
+        "queue_starvation_ratio_mean": 0.9723184809713108,
+        "prefetch_hit_ratio_mean": 0.002453876662317854,
+        "cleanup_seconds": 4.864327953197062,
+        "cpu_cores": {
+          "database": 0.7896836242862482,
+          "evaluators": 0.5807063724934229,
+          "sampler": 0.005778172860631173
+        }
+      }
+    }
+  }
+]

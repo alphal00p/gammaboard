@@ -44,7 +44,7 @@ def validate(suite):
         "measurement_seconds",
         "max_batch_seconds",
         "generation_batch_size",
-        "min_tick_time_ms",
+        "sampler_min_tick_time_ms",
         "telemetry_interval_ms",
         "insert_concurrency",
     }
@@ -93,7 +93,7 @@ def validate(suite):
         ("infrastructure_cores", 2, 16),
         ("measurement_seconds", 6, 120),
         ("max_batch_seconds", 0.1, 30),
-        ("min_tick_time_ms", 0, 100),
+        ("sampler_min_tick_time_ms", 0, 100),
         ("telemetry_interval_ms", 100, 2000),
         ("insert_concurrency", 1, 8),
     ]:
@@ -103,7 +103,7 @@ def validate(suite):
             "generation_batch_size",
             "sample_memory_budget",
             "infrastructure_cores",
-            "min_tick_time_ms",
+            "sampler_min_tick_time_ms",
             "telemetry_interval_ms",
             "insert_concurrency",
         }
@@ -234,7 +234,7 @@ def queue_settings(point, suite):
 def card(mode, eval_us, suite, value_coordinate=VALUE_COORDINATE):
     generation_size = generation_batch_size(suite, eval_us)
     text = bench.run_card(
-        16, suite["min_tick_time_ms"], suite["telemetry_interval_ms"], generation_size
+        16, suite["sampler_min_tick_time_ms"], suite["telemetry_interval_ms"], generation_size
     )
     text = text.replace(
         "[sampler_aggregator_runner_params]\n",

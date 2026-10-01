@@ -84,10 +84,12 @@ its display-bin width.
 
 ## I/O limits and scheduling
 
-Evaluator role pools default to and are capped at two connections. Sampler role
-pools default to and are capped at six: four inserts can overlap result fetching
-and checkpoint/maintenance I/O. Smaller pools are supported; out-of-range values
-are clamped with a warning, and the config panel shows the effective size.
+Evaluator role pools use two connections: the prefetch connection also listens
+for work hints, leaving the other available for submissions and telemetry.
+Sampler role pools default to and are capped at six: four inserts can overlap
+result fetching and checkpoint/maintenance I/O. Smaller sampler pools are
+supported; out-of-range values are clamped with a warning, and the config panel
+shows the effective size.
 Control-plane connections remain separate so leases can progress during role I/O.
 Launch admission reserves four connections per worker; sampler assignment reserves
 four more under the same admission lock. Those extra connections remain reserved
@@ -97,10 +99,15 @@ Shutdown joins an existing cleanup DELETE before checkpointing or deleting more
 rows. Aborting its Rust future alone would leave PostgreSQL holding row locks.
 
 Assignment/shutdown polling runs at most every 250 ms during active work,
-independently of batch ticks. Empty evaluator fetches back off exponentially
-with jitter, capped at 100 ms; a successful claim immediately resets that delay.
-Waiting between polls contributes no I/O busy time. This bounds idle-fleet query
-pressure without adding threads or slowing a worker with buffered work.
+independently of batch ticks. Evaluators process available work without a tick
+floor. An empty prefetch waits for a PostgreSQL notification on its existing
+connection. The sampler sends one hint when its current input refill has fully
+committed, coalescing concurrent inserts. Every wakeup rechecks the durable queue;
+it never grants ownership. A staggered 50–100 ms safety deadline covers missed
+hints, requeues and reconnects, while keeping control and telemetry responsive.
+Waiting for a hint is idle time, not I/O busy. No extra thread, connection budget,
+queue table or scheduling setting is introduced. Evaluator `min_tick_time_ms`
+and `db_pool_size` are retired; old run cards remain readable.
 
 Heartbeat accounting writes one row per worker incarnation and task. Telemetry
 references an immutable owner per worker/run, so neither operation continually

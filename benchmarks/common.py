@@ -261,7 +261,7 @@ def pinned_command(cpus, command):
 
 
 def run_card(
-    batch_size, min_tick_time_ms=10, telemetry_interval_ms=250, generation_batch_size=None
+    batch_size, sampler_min_tick_time_ms=10, telemetry_interval_ms=250, generation_batch_size=None
 ):
     return f"""name = "scaling-benchmark"
 [evaluator]
@@ -269,10 +269,9 @@ kind = "unit"
 continuous_dims = 6
 cpu_iterations_per_sample = 0
 [evaluator_runner_params]
-min_tick_time_ms = {min_tick_time_ms}
 performance_snapshot_interval_ms = {telemetry_interval_ms}
 [sampler_aggregator_runner_params]
-min_tick_time_ms = {min_tick_time_ms}
+min_tick_time_ms = {sampler_min_tick_time_ms}
 frontend_sync_interval_ms = {telemetry_interval_ms}
 performance_snapshot_interval_ms = {telemetry_interval_ms}
 [sampler_aggregator_runner_params.queue]

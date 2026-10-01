@@ -25,6 +25,7 @@ pub(crate) struct RecordingStore {
     pub(crate) inserted: Arc<Notify>,
     fetch_completed_calls: Arc<Mutex<usize>>,
     pub(crate) completed_ids: Arc<Mutex<Vec<i64>>>,
+    pub(crate) work_notifications: Arc<Mutex<usize>>,
 }
 
 impl RecordingStore {
@@ -45,6 +46,11 @@ impl RecordingStore {
 
 #[async_trait]
 impl WorkQueueStore for RecordingStore {
+    async fn notify_work_available(&self, _run_id: i32) -> Result<(), StoreError> {
+        *self.work_notifications.lock().unwrap() += 1;
+        Ok(())
+    }
+
     async fn insert_batches(
         &self,
         _run_id: i32,

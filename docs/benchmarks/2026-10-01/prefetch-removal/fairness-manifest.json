@@ -1,0 +1,114 @@
+{
+  "experiment": "claim-fairness-ab",
+  "status": "completed",
+  "mode": "materialized",
+  "batch_size": 32768,
+  "cpu_iterations_per_sample": 3051,
+  "suite": {
+    "modes": [
+      "materialized",
+      "training"
+    ],
+    "eval_us": [
+      0.0,
+      5.0,
+      200.0,
+      5000.0
+    ],
+    "workers": [
+      1,
+      16
+    ],
+    "budget_seconds": 3600,
+    "max_batch_size": 32768,
+    "generation_batch_size": 131072,
+    "sample_memory_budget": 2147483648,
+    "infrastructure_cores": 16,
+    "database_shared_buffers": "1GB",
+    "measurement_seconds": 20,
+    "max_batch_seconds": 30.0,
+    "min_tick_time_ms": 10,
+    "telemetry_interval_ms": 250,
+    "sampler_io_threads": 4,
+    "sampler_db_pool_size": 6,
+    "insert_concurrency": 4
+  },
+  "sampler_cpus": [
+    2,
+    16,
+    21,
+    51,
+    118
+  ],
+  "database_cpus": [
+    126,
+    129,
+    130,
+    133
+  ],
+  "evaluator_cpus": [
+    134,
+    135,
+    137,
+    138,
+    139,
+    140,
+    141,
+    142,
+    143,
+    144,
+    146,
+    148,
+    149,
+    150,
+    151,
+    153
+  ],
+  "initial_core_loads": {
+    "2": 0.0,
+    "16": 0.0,
+    "21": 0.0,
+    "51": 0.0,
+    "118": 0.0,
+    "126": 0.0,
+    "129": 0.0,
+    "130": 0.0,
+    "133": 0.0,
+    "134": 0.0,
+    "135": 0.0,
+    "137": 0.0,
+    "138": 0.0,
+    "139": 0.0,
+    "140": 0.0,
+    "141": 0.0,
+    "142": 0.0,
+    "143": 0.0,
+    "144": 0.0,
+    "146": 0.0,
+    "148": 0.0,
+    "149": 0.0,
+    "150": 0.0,
+    "151": 0.0,
+    "153": 0.0
+  },
+  "binaries": {
+    "baseline": {
+      "path": "/common/dev/cedric/setup-logs/prefetch-fairness-ab-20261001/inputs/gammaboard-baseline",
+      "sha256": "6a4f2bfc0e3040453412a6d3f29da128e52ab12cfa05b354c5626b29a05649ff"
+    },
+    "no-fairness": {
+      "path": "/common/dev/cedric/setup-logs/prefetch-fairness-ab-20261001/inputs/gammaboard-no-fairness",
+      "sha256": "c27e94d6528460423417fd03ceef4595ad8034991ae0fba4878ab7780f41a670"
+    }
+  },
+  "scope": "Three paired 16-evaluator repeats in AB/BA/AB order and one 1-evaluator control pair. Fresh private databases, fixed physical cores, native CPU workload, feedback off. Only the fresh-batch prefetch fairness SQL clause differs.",
+  "platform": "Linux-6.18.45-x86_64-with-glibc2.42",
+  "python": "3.13.12",
+  "cpu_model": "AMD EPYC 9754 128-Core Processor",
+  "started_at": "2026-10-01T14:48:04Z",
+  "elapsed_seconds": 215.58271918492392,
+  "base_commit": "d45178ffb35e21c916089af08bf6c1ea7cd728f0",
+  "build_profile": "dev-optim (opt-level=2), Rust 1.94.0, same compiler for both variants",
+  "experimental_patch": "inputs/no-fairness.patch",
+  "source_restored": true
+}

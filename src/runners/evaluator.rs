@@ -25,13 +25,6 @@ use tracing::{info, warn};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvaluatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
-    pub min_tick_time_ms: u64,
-    #[serde(default = "default_evaluator_db_pool_size")]
-    pub db_pool_size: u32,
-}
-
-fn default_evaluator_db_pool_size() -> u32 {
-    2
 }
 
 #[derive(Debug, Error)]
@@ -50,7 +43,6 @@ pub struct EvaluatorRunner<S> {
     evaluator: Box<dyn Evaluator>,
     evaluator_config: EvaluatorConfig,
     domain: Domain,
-    params: EvaluatorRunnerParams,
     current_task_id: Option<i64>,
     materializer: Option<Box<dyn Materializer>>,
     prefetch_buffer: LatentPrefetchBuffer<S>,
@@ -115,8 +107,6 @@ struct LatentPrefetchBuffer<S> {
     // Retained across a failed/ambiguous claim request; retries recover the same row.
     claim_token: Option<String>,
     pending_prefetch: Option<JoinHandle<Result<Option<BatchClaim>, StoreError>>>,
-    empty_poll_delay: Duration,
-    next_poll: Instant,
     _marker: std::marker::PhantomData<S>,
 }
 
@@ -140,20 +130,12 @@ where
             ready_batch: None,
             claim_token: None,
             pending_prefetch: None,
-            empty_poll_delay: Duration::ZERO,
-            next_poll: Instant::now(),
             _marker: std::marker::PhantomData,
         }
     }
 
     fn has_pending_work(&self) -> bool {
         self.ready_batch.is_some() || self.claim_token.is_some()
-    }
-
-    fn waiting_to_poll(&self) -> bool {
-        !self.has_pending_work()
-            && self.pending_prefetch.is_none()
-            && Instant::now() < self.next_poll
     }
 
     async fn pop(&mut self, store: &S, draining: bool) -> Result<PopOutcome, EvaluatorRunnerError> {
@@ -192,7 +174,6 @@ where
         if self.ready_batch.is_some()
             || self.pending_prefetch.is_some()
             || (draining && self.claim_token.is_none())
-            || self.waiting_to_poll()
         {
             return;
         }
@@ -205,8 +186,22 @@ where
         let node_uuid = self.node_uuid.clone();
         let busy = self.busy.clone();
         self.pending_prefetch = Some(tokio::spawn(async move {
-            let _io = busy.io();
-            store.claim_batch(run_id, &node_uuid, &token).await
+            let claimed = {
+                let _io = busy.io();
+                store.claim_batch(run_id, &node_uuid, &token).await?
+            };
+            if claimed.is_none() {
+                // Waiting for new work is idle time, not database I/O activity.
+                // A bounded, staggered safety retry covers missed hints and
+                // keeps control/telemetry responsive through long idle periods.
+                let deadline = Duration::from_millis(rand::random_range(50..=100));
+                if let Ok(result) =
+                    tokio::time::timeout(deadline, store.wait_for_work(run_id)).await
+                {
+                    result?;
+                }
+            }
+            Ok(claimed)
         }));
     }
 
@@ -219,17 +214,6 @@ where
         self.pending_prefetch = None;
         match outcome {
             Ok(Ok(claimed)) => {
-                if claimed.is_some() {
-                    self.empty_poll_delay = Duration::ZERO;
-                    self.next_poll = Instant::now();
-                } else {
-                    // Idle fleets must not hammer the queue. Successful claims
-                    // reset the delay; retries of ambiguous claims bypass it.
-                    self.empty_poll_delay = (self.empty_poll_delay * 2)
-                        .clamp(Duration::from_millis(2), Duration::from_millis(100));
-                    self.next_poll = Instant::now()
-                        + self.empty_poll_delay.mul_f64(rand::random_range(0.5..=1.0));
-                }
                 self.ready_batch = claimed;
                 self.claim_token = None;
                 Ok(())
@@ -462,7 +446,6 @@ where
             evaluator,
             evaluator_config,
             domain,
-            params,
             current_task_id: None,
             materializer: None,
             prefetch_buffer: LatentPrefetchBuffer::new(run_id, node_uuid.clone(), busy.clone()),
@@ -483,10 +466,6 @@ where
             current_batch_transforms: Vec::new(),
             max_batch_retries,
         }
-    }
-
-    pub fn params(&self) -> &EvaluatorRunnerParams {
-        &self.params
     }
 
     fn build_batch_transforms(
@@ -701,10 +680,6 @@ where
         self.consume_finished_submit().await?;
 
         if self.active_batch.is_none() {
-            if self.prefetch_buffer.waiting_to_poll() {
-                self.flush_performance_snapshot_if_due(false).await?;
-                return Ok(());
-            }
             self.counters.fetch_attempts += 1;
             let started = Instant::now();
             let pop = self.prefetch_buffer.pop(&self.store, self.draining).await?;

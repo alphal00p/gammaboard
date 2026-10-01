@@ -149,13 +149,13 @@ def execute(args):
                             case = directory / f"batch-{size}-{mode}"
                             case.mkdir()
                             point = frontier.Point(mode, 5.0, count, size)
-                            # Small batches are tick-limited, so nominal CPU time
-                            # alone cannot guarantee full feedback-cycle coverage.
+                            # Cover complete generations; observation extends the
+                            # window further when feedback has not caught up.
                             case_suite = dict(
                                 suite,
                                 measurement_seconds=max(
                                     args.duration,
-                                    2 * GENERATION_SIZE * max(5e-6, 0.012 / size) / count,
+                                    2 * GENERATION_SIZE * 5e-6 / count,
                                 ),
                             )
                             settings = frontier.queue_settings(point, suite)

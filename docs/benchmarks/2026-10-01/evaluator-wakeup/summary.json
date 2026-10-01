@@ -1,0 +1,312 @@
+[
+  {
+    "case": "fast-fleet",
+    "mode": "materialized",
+    "paired_gains_percent": [
+      -0.784075826004027,
+      19.960996947668885
+    ],
+    "median_gain_percent": 9.588460560832429,
+    "medians": {
+      "paced": {
+        "rate": 5468373.655792499,
+        "fetch_wait_ms_per_batch": 9.623358180106457,
+        "submit_wait_ms_per_batch": 0.0013686058010409874,
+        "db_transactions_per_second": 5788.925364396628,
+        "db_wal_bytes_per_second": 292464174.237659,
+        "cpu_cores": {
+          "database": 3.8773159758085027,
+          "evaluators": 1.9896249101239014,
+          "sampler": 0.8146263971500638
+        }
+      },
+      "unpaced": {
+        "rate": 5957724.281518498,
+        "fetch_wait_ms_per_batch": 8.307866224191798,
+        "submit_wait_ms_per_batch": 0.018150102042895883,
+        "db_transactions_per_second": 4956.466445243066,
+        "db_wal_bytes_per_second": 314046379.11736214,
+        "cpu_cores": {
+          "database": 3.8959342339256695,
+          "evaluators": 1.773341014946509,
+          "sampler": 0.8775439107082441
+        }
+      }
+    }
+  },
+  {
+    "case": "fast-fleet",
+    "mode": "training",
+    "paired_gains_percent": [
+      8.41607459362339,
+      9.716264264401264
+    ],
+    "median_gain_percent": 9.066169429012326,
+    "medians": {
+      "paced": {
+        "rate": 5248871.010708891,
+        "fetch_wait_ms_per_batch": 9.806841812568555,
+        "submit_wait_ms_per_batch": 0.17354387657404483,
+        "db_transactions_per_second": 5696.917953008513,
+        "db_wal_bytes_per_second": 326398652.7186649,
+        "cpu_cores": {
+          "database": 4.327357689930919,
+          "evaluators": 2.0087649105710845,
+          "sampler": 0.8010386270799328
+        }
+      },
+      "unpaced": {
+        "rate": 5725236.235759519,
+        "fetch_wait_ms_per_batch": 9.281939928584919,
+        "submit_wait_ms_per_batch": 0.3375622996275618,
+        "db_transactions_per_second": 4983.193213525387,
+        "db_wal_bytes_per_second": 364292976.8946937,
+        "cpu_cores": {
+          "database": 4.324584040803819,
+          "evaluators": 1.7486825123246232,
+          "sampler": 0.8622887660085929
+        }
+      }
+    }
+  },
+  {
+    "case": "short-generation",
+    "mode": "materialized",
+    "paired_gains_percent": [
+      12.955572122908897,
+      8.87267747820677
+    ],
+    "median_gain_percent": 10.914124800557833,
+    "medians": {
+      "paced": {
+        "rate": 1332281.2767936862,
+        "fetch_wait_ms_per_batch": 2.879268001784623,
+        "submit_wait_ms_per_batch": 0.0013447880088008801,
+        "db_transactions_per_second": 458.57507283289544,
+        "db_wal_bytes_per_second": 69723397.8314058,
+        "cpu_cores": {
+          "database": 0.64614059542462,
+          "evaluators": 0.27698868897614104,
+          "sampler": 0.2187018512834395
+        }
+      },
+      "unpaced": {
+        "rate": 1477453.6378335138,
+        "fetch_wait_ms_per_batch": 2.2489447101547198,
+        "submit_wait_ms_per_batch": 0.003108321680376028,
+        "db_transactions_per_second": 469.2199691845376,
+        "db_wal_bytes_per_second": 78353710.94634894,
+        "cpu_cores": {
+          "database": 0.6680386000698271,
+          "evaluators": 0.3123506339387484,
+          "sampler": 0.2635240186113977
+        }
+      }
+    }
+  },
+  {
+    "case": "short-generation",
+    "mode": "training",
+    "paired_gains_percent": [
+      10.875305520326005,
+      5.45921746250142
+    ],
+    "median_gain_percent": 8.167261491413713,
+    "medians": {
+      "paced": {
+        "rate": 1358260.4566746976,
+        "fetch_wait_ms_per_batch": 2.8148059139697956,
+        "submit_wait_ms_per_batch": 0.002021743756155903,
+        "db_transactions_per_second": 464.81915086869543,
+        "db_wal_bytes_per_second": 83721431.49942292,
+        "cpu_cores": {
+          "database": 0.7108529406264401,
+          "evaluators": 0.30087936399608656,
+          "sampler": 0.22117642934081294
+        }
+      },
+      "unpaced": {
+        "rate": 1468688.7110741439,
+        "fetch_wait_ms_per_batch": 2.4620493242066392,
+        "submit_wait_ms_per_batch": 0.02176622292592629,
+        "db_transactions_per_second": 468.09479928381154,
+        "db_wal_bytes_per_second": 90855954.67793286,
+        "cpu_cores": {
+          "database": 0.7383105383852392,
+          "evaluators": 0.3417550049284736,
+          "sampler": 0.2670272244160513
+        }
+      }
+    }
+  },
+  {
+    "case": "slow-fleet",
+    "mode": "materialized",
+    "paired_gains_percent": [
+      -0.1335230107866403
+    ],
+    "median_gain_percent": -0.1335230107866403,
+    "medians": {
+      "paced": {
+        "rate": 5119.201984930317,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.003392176982400633,
+        "db_transactions_per_second": 3131.410576130201,
+        "db_wal_bytes_per_second": 2850041.463529036,
+        "cpu_cores": {
+          "database": 1.3221270496839697,
+          "evaluators": 0.39526921718332947,
+          "sampler": 0.08213386331082292
+        }
+      },
+      "unpaced": {
+        "rate": 5112.3666723117885,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.0031664047757716945,
+        "db_transactions_per_second": 3247.690904324747,
+        "db_wal_bytes_per_second": 2798859.6111412128,
+        "cpu_cores": {
+          "database": 1.2847419460480753,
+          "evaluators": 0.367476077694448,
+          "sampler": 0.0740649458919053
+        }
+      }
+    }
+  },
+  {
+    "case": "slow-fleet",
+    "mode": "training",
+    "paired_gains_percent": [
+      0.584959069967983
+    ],
+    "median_gain_percent": 0.584959069967983,
+    "medians": {
+      "paced": {
+        "rate": 5098.177344380186,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.0034647560879033854,
+        "db_transactions_per_second": 3080.0927296316127,
+        "db_wal_bytes_per_second": 2846268.4830682497,
+        "cpu_cores": {
+          "database": 1.439488008688632,
+          "evaluators": 0.3715914240061842,
+          "sampler": 0.07431828480123791
+        }
+      },
+      "unpaced": {
+        "rate": 5127.99959515919,
+        "fetch_wait_ms_per_batch": 0.0,
+        "submit_wait_ms_per_batch": 0.0033301043751226217,
+        "db_transactions_per_second": 3227.7556241267025,
+        "db_wal_bytes_per_second": 2817223.3294558646,
+        "cpu_cores": {
+          "database": 1.3647810174165527,
+          "evaluators": 0.37387351167202365,
+          "sampler": 0.07762869860671139
+        }
+      }
+    }
+  },
+  {
+    "case": "small-cpu",
+    "mode": "materialized",
+    "paired_gains_percent": [
+      232.79224085643477
+    ],
+    "median_gain_percent": 232.79224085643477,
+    "medians": {
+      "paced": {
+        "rate": 46040.5006661706,
+        "fetch_wait_ms_per_batch": 0.0017411912751677846,
+        "submit_wait_ms_per_batch": 0.0,
+        "db_transactions_per_second": 503.48093508585555,
+        "db_wal_bytes_per_second": 2750630.911705123,
+        "cpu_cores": {
+          "database": 0.1514228376198063,
+          "evaluators": 0.2669823715928161,
+          "sampler": 0.05578736122834965
+        }
+      },
+      "unpaced": {
+        "rate": 153219.21386847092,
+        "fetch_wait_ms_per_batch": 0.006358217684778937,
+        "submit_wait_ms_per_batch": 0.26293866925413395,
+        "db_transactions_per_second": 957.6936114607521,
+        "db_wal_bytes_per_second": 8753138.391162671,
+        "cpu_cores": {
+          "database": 0.33374322255211886,
+          "evaluators": 0.8567736459546934,
+          "sampler": 0.07571488034018221
+        }
+      }
+    }
+  },
+  {
+    "case": "small-cpu",
+    "mode": "training",
+    "paired_gains_percent": [
+      226.69298293791496
+    ],
+    "median_gain_percent": 226.69298293791496,
+    "medians": {
+      "paced": {
+        "rate": 46157.284678403914,
+        "fetch_wait_ms_per_batch": 0.001142796648044693,
+        "submit_wait_ms_per_batch": 0.0,
+        "db_transactions_per_second": 521.4275107298585,
+        "db_wal_bytes_per_second": 3204638.1795376353,
+        "cpu_cores": {
+          "database": 0.1554417956695165,
+          "evaluators": 0.2690338771203168,
+          "sampler": 0.051813931889838793
+        }
+      },
+      "unpaced": {
+        "rate": 150792.61015902294,
+        "fetch_wait_ms_per_batch": 0.006390317383821002,
+        "submit_wait_ms_per_batch": 0.30538141445783074,
+        "db_transactions_per_second": 957.5963067107701,
+        "db_wal_bytes_per_second": 10577351.545196136,
+        "cpu_cores": {
+          "database": 0.3547022008001602,
+          "evaluators": 0.8439122586453255,
+          "sampler": 0.08568648671015111
+        }
+      }
+    }
+  },
+  {
+    "case": "training-pauses",
+    "mode": "training",
+    "paired_gains_percent": [
+      0.21229652151510958
+    ],
+    "median_gain_percent": 0.21229652151510958,
+    "medians": {
+      "paced": {
+        "rate": 790.9874971530043,
+        "fetch_wait_ms_per_batch": 0.8655242036830356,
+        "submit_wait_ms_per_batch": 0.03327784988839286,
+        "db_transactions_per_second": 4812.4271472874125,
+        "db_wal_bytes_per_second": 2437444.8965784945,
+        "cpu_cores": {
+          "database": 0.7673283999079946,
+          "evaluators": 0.7584394985940908,
+          "sampler": 0.006246254977334561
+        }
+      },
+      "unpaced": {
+        "rate": 792.6667360950795,
+        "fetch_wait_ms_per_batch": 0.4091696099330357,
+        "submit_wait_ms_per_batch": 0.6208728889508929,
+        "db_transactions_per_second": 4553.916572466865,
+        "db_wal_bytes_per_second": 2202362.6222497546,
+        "cpu_cores": {
+          "database": 0.6440945316578152,
+          "evaluators": 0.5147949577653007,
+          "sampler": 0.006248678292202387
+        }
+      }
+    }
+  }
+]

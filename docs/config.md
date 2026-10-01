@@ -631,7 +631,10 @@ two-graph-group ttH example with native GammaLoop histograms.
 
 ## Queue Tuning
 
-Evaluators use a fixed single-slot latent prefetch and single-slot async submit pipeline. Materialization and evaluation still remain strictly one batch at a time.
+Evaluators use a fixed single-slot latent prefetch and single-slot async submit
+pipeline. Materialization and evaluation remain strictly one batch at a time.
+Evaluators claim available batches independently; an idle peer does not block
+prefetch, and equal work distribution is not guaranteed.
 
 `sampler_aggregator_runner_params` controls queue and persistence behavior:
 
@@ -646,7 +649,7 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 - Sampler I/O defaults to four concurrent inserts and six database connections;
   evaluators retain two connections. The role-specific caps and admission rules
   are described in [concurrency](concurrency.md#io-limits-and-scheduling).
-- Both runner roles default to `min_tick_time_ms = 10`.
+- The sampler defaults to `min_tick_time_ms = 10`. Evaluators process available work immediately and wait for a refill notification when empty, with a bounded safety retry. Evaluator `min_tick_time_ms` and `db_pool_size` are retired; old run cards remain readable, and evaluator pools use two connections.
 - Pause/unassign flushes local I/O before checkpointing the undispatched draw and partially assembled feedback along with sampler state.
 
 For a sampler with several allocated CPU cores, the run TOML can use:

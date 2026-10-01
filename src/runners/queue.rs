@@ -711,6 +711,11 @@ where
                 );
         }
         self.observe_insert_bundle_store_metrics(&metrics);
+        // Broadcasting per bundle repeatedly wakes the entire idle fleet.
+        if self.pending_insert.is_empty() && self.pending_insert_tasks.is_empty() {
+            let _io = self.busy.io();
+            self.store.notify_work_available(self.run_id).await?;
+        }
         Ok(())
     }
 
@@ -999,8 +1004,25 @@ pub(crate) mod tests {
             2.0,
             "second insert commits first"
         );
+        queue.drain_finished_insert().await.unwrap();
+        assert_eq!(
+            *store.work_notifications.lock().unwrap(),
+            0,
+            "an unfinished refill must not broadcast for each bundle"
+        );
         commit_first.notify_one();
         queue.flush().await.expect("queue flush");
+        assert_eq!(
+            *store.work_notifications.lock().unwrap(),
+            1,
+            "wake once after the whole refill commits, even out of order"
+        );
+        queue.flush().await.unwrap();
+        assert_eq!(
+            *store.work_notifications.lock().unwrap(),
+            1,
+            "an idle flush must not repeat the notification"
+        );
 
         let recorded = store.recorded_inserts();
         assert_eq!(recorded.len(), 2);

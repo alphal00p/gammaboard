@@ -1,0 +1,38 @@
+[
+  {
+    "workers": 1,
+    "repeat": 0,
+    "throughput_gain_percent": 0.027136493294510622,
+    "baseline_rate": 192235.38029510464,
+    "no_fairness_rate": 192287.5462361881,
+    "baseline_fetch_wait_ms": 0.0,
+    "no_fairness_fetch_wait_ms": 0.0
+  },
+  {
+    "workers": 16,
+    "repeat": 0,
+    "throughput_gain_percent": 4.959041420691879,
+    "baseline_rate": 2824570.3902522447,
+    "no_fairness_rate": 2964642.005861452,
+    "baseline_fetch_wait_ms": 6.9282024842105265,
+    "no_fairness_fetch_wait_ms": 1.023313956858407
+  },
+  {
+    "workers": 16,
+    "repeat": 1,
+    "throughput_gain_percent": -1.5214841950120572,
+    "baseline_rate": 2817759.2663888303,
+    "no_fairness_rate": 2774887.5044972366,
+    "baseline_fetch_wait_ms": 7.4208456742029,
+    "no_fairness_fetch_wait_ms": 2.403626896713615
+  },
+  {
+    "workers": 16,
+    "repeat": 2,
+    "throughput_gain_percent": 11.258254510193467,
+    "baseline_rate": 2740896.206684919,
+    "no_fairness_rate": 3049473.2774937456,
+    "baseline_fetch_wait_ms": 6.86430555707196,
+    "no_fairness_fetch_wait_ms": 0.003305504833512354
+  }
+]

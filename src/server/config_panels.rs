@@ -49,10 +49,7 @@ impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
         &self,
         ctx: &EvaluatorPanelContext<'_>,
     ) -> Result<Vec<PanelState>, EngineError> {
-        let db_pool_size = crate::runners::role_db_pool_size(
-            crate::core::WorkerRole::Evaluator,
-            ctx.runner_params.db_pool_size,
-        );
+        let db_pool_size = crate::runners::MAX_EVALUATOR_DB_CONNECTIONS;
         let summary = vec![
             key_value("implementation", "Implementation", self.kind_str()),
             key_value("effective_source", "Effective Source", ctx.provenance),
@@ -62,18 +59,12 @@ impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 "Snapshot Interval (ms)",
                 ctx.runner_params.performance_snapshot_interval_ms,
             ),
-            key_value(
-                "min_tick_time_ms",
-                "Min Tick Time (ms)",
-                ctx.runner_params.min_tick_time_ms,
-            ),
             key_value("db_pool_size", "Effective DB Pool Size", db_pool_size),
         ];
         let config_payload = json!({
             "evaluator": self,
             "runner": {
                 "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
-                "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
                 "db_pool_size": db_pool_size,
             },
         });

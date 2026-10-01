@@ -175,6 +175,17 @@ pub trait ControlPlaneStore: Send + Sync {
 /// Accesses the batch work queue.
 #[async_trait]
 pub trait WorkQueueStore: Send + Sync {
+    /// Signal that a refill is available. This is a hint; claims stay authoritative.
+    async fn notify_work_available(&self, _run_id: i32) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    /// Wait for a hint, not a claim. Callers must bound the wait and recheck the
+    /// durable queue; stores without notifications use that bounded retry.
+    async fn wait_for_work(&self, _run_id: i32) -> Result<(), StoreError> {
+        std::future::pending().await
+    }
+
     async fn insert_batches(
         &self,
         run_id: i32,

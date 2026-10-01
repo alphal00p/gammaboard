@@ -207,8 +207,8 @@ pub(crate) async fn get_batch_queue_counts(
     })
 }
 
-pub(crate) async fn claim_batch(
-    pool: &PgPool,
+pub(crate) async fn claim_batch<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     run_id: i32,
     node_uuid: &str,
     claim_token: &str,
@@ -233,30 +233,6 @@ pub(crate) async fn claim_batch(
                     AND n.active_run_id = $2
                     AND n.active_role = 'evaluator'
                     AND n.lease_expires_at > now()
-              )
-              -- Give an evaluator without work the first chance at a fresh
-              -- batch before another worker reserves a second one. The grace
-              -- period bounds the delay if an assigned peer is unresponsive.
-              AND (
-                  b.created_at <= now() - INTERVAL '250 milliseconds'
-                  OR NOT EXISTS (
-                      SELECT 1 FROM batches own
-                      WHERE own.run_id = $2 AND own.status = 'claimed'
-                        AND own.claimed_by_node_uuid = $1
-                  )
-                  OR NOT EXISTS (
-                      SELECT 1 FROM nodes peer
-                      WHERE peer.uuid <> $1
-                        AND peer.active_run_id = $2
-                        AND peer.active_role = 'evaluator'
-                        AND peer.lease_expires_at > now()
-                        AND NOT EXISTS (
-                            SELECT 1 FROM batches assigned
-                            WHERE assigned.run_id = $2
-                              AND assigned.status = 'claimed'
-                              AND assigned.claimed_by_node_uuid = peer.uuid
-                        )
-                  )
               )
             ORDER BY b.created_at, b.id
             LIMIT 1
@@ -285,7 +261,7 @@ pub(crate) async fn claim_batch(
     .bind(node_uuid)
     .bind(run_id)
     .bind(claim_token)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     if let Some((batch_id, task_id, requires_training_values, latent_bytes)) = row {

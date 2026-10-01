@@ -559,3 +559,65 @@ resource cost are outside this steady-state wall-time comparison.
 [PDF](benchmarks/2026-10-01/amortization/amortization.pdf), and
 [paired data](benchmarks/2026-10-01/amortization/results.json) are separate artifacts.
 The optional command is `python -m benchmarks amortization --output results/amortization`.
+
+### Prefetch restriction removal — 2026-10-01
+
+The peer/age fairness condition was removed from batch claims without a
+replacement. A three-pair 16-evaluator comparison at 32,768 samples/batch reduced
+median fetch wait from 6.93 to 1.02 ms/batch, with a median paired throughput gain
+of 4.96% (range −1.52% to +11.26%). A one-evaluator control changed by +0.027%.
+The [follow-up report](benchmarks/2026-10-01/prefetch-removal/README.md) retains
+settings, data and limitations. The earlier amortization plots predate this change.
+
+With the restriction removed, lowering only the evaluator tick from 10 to 1 ms
+raised small-batch native throughput from 45.95k to 156.15k samples/s (one evaluator,
+512 samples/batch, two paired repeats). Doubling PostgreSQL cores from four to
+eight at 16 evaluators and 32,768 samples/batch had no material effect: median
+paired gain +0.24%, range −0.26% to +0.33%, with evaluator compute busy near 99%.
+These configuration experiments did not change runtime defaults. The subsequent
+pacing-removal experiment below tested that candidate.
+
+Validation: 37 PostgreSQL integration tests, Rust 1.99 formatting and Clippy,
+and a valid 512-evaluator zero-delay lifecycle check with clean shutdown.
+
+### Evaluator pacing removal deferred — 2026-10-01
+
+The [pacing experiment](benchmarks/2026-10-01/evaluator-pacing/README.md) compared
+the 10 ms evaluator tick with unpaced productive work and explicit waits for
+existing empty-queue retry deadlines. All 38 measurements and shutdowns passed.
+Small CPU batches improved from 46.1k to 156.0k samples/s, but one fast evaluator
+with four batches per generation repeatedly lost throughput: median paired
+changes −5.94% without feedback and −10.48% with feedback. The default generation
+size gave positive single-pair results; that does not resolve the regression.
+
+The 128-worker zero-delay and 256-worker 50 ms/sample comparisons showed no
+database-pressure regression. Slow workers sustained approximately 5.1k samples/s
+with either scheduler. During training pauses, database CPU stayed flat and idle
+evaluator CPU decreased. The likely remaining issue is the interaction between
+short-queue refill and the effective cadence of empty-queue backoff. The candidate
+was reverted. The follow-up below resolves this with work notifications instead
+of another productive-work delay.
+
+
+### Coalesced evaluator wakeups — 2026-10-01
+
+The [follow-up report](benchmarks/2026-10-01/evaluator-wakeup/README.md) replaces
+productive pacing and exponential empty polling with one wait for a refill hint.
+The sampler signals once after its current input refill commits. Evaluators use
+the existing prefetch connection for PostgreSQL notifications and claims; a
+staggered 50–100 ms safety retry covers missed hints and recovery. This adds no
+thread, connection budget or tuning knob. Evaluator tick/pool settings are retired.
+
+All 26 final end-to-end measurements and shutdowns passed. Short generations,
+which regressed under direct pacing removal, gained a median paired 10.9% without
+feedback and 8.2% with feedback. Small CPU batches improved 3.27–3.33×. The
+128-worker fast training case gained 8.4–9.7%; materialized repeats varied from
+−0.8% to +20%, so their median should not be treated as a precise ceiling gain.
+Database transactions fell 12.5–14.4% in those fast fleets. With 256 slow workers,
+throughput stayed within 0.6% and database CPU did not increase. Training-pause
+throughput stayed unchanged while database CPU fell from 0.77 to 0.64 cores.
+
+Per-bundle notifications were rejected because they repeatedly woke the whole
+fleet. Per-refill coalescing uses existing insert bookkeeping instead. The report
+retains the rejected pilots, identifies a comparison interrupted by external
+host contention, and records raw measurements and correctness checks.
