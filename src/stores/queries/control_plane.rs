@@ -111,6 +111,15 @@ pub(crate) async fn update_desired_assignments(
         return Ok(true);
     }
     let mut tx = pool.begin().await?;
+    let admits_sampler = updates.iter().any(|update| {
+        update
+            .desired
+            .as_ref()
+            .is_some_and(|desired| desired.role == WorkerRole::SamplerAggregator)
+    });
+    if admits_sampler {
+        super::super::connection_budget::lock(&mut tx).await?;
+    }
     // Dead owners still occupy the unique sampler slot until their assignments
     // are cleared, including when a replacement registers under a new name.
     clear_expired_assignments(&mut *tx).await?;
@@ -141,6 +150,9 @@ pub(crate) async fn update_desired_assignments(
             .execute(&mut *tx)
             .await?;
     }
+    if admits_sampler {
+        super::super::connection_budget::check_worker_connection_budget(&mut tx, 0).await?;
+    }
     tx.commit().await?;
     Ok(true)
 }
@@ -158,6 +170,9 @@ pub(crate) async fn assign_worker_pool(
     run_id: i32,
 ) -> Result<PoolAssignmentOutcome, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    if role == WorkerRole::SamplerAggregator {
+        super::super::connection_budget::lock(&mut tx).await?;
+    }
     clear_expired_assignments(&mut *tx).await?;
     // Serialize admission to standalone sampler slots; controller pools have
     // unlimited membership and schedule one sampler per executable child.
@@ -191,6 +206,9 @@ pub(crate) async fn assign_worker_pool(
     .bind(role.as_str())
     .execute(&mut *tx)
     .await?;
+    if role == WorkerRole::SamplerAggregator {
+        super::super::connection_budget::check_worker_connection_budget(&mut tx, 0).await?;
+    }
     tx.commit().await?;
     Ok(if result.rows_affected() > 0 {
         PoolAssignmentOutcome::Assigned

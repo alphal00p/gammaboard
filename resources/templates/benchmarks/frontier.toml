@@ -11,9 +11,13 @@ max_batch_size = 4194304
 # This counts samples, not bytes. The measured fleet can use roughly 70 GiB RSS.
 sample_memory_budget = 2147483648
 infrastructure_cores = 16
+# The large-host payload workload outgrows the general-purpose 256MB default.
+database_shared_buffers = "4GB"
 duration_seconds = 3
 confirmation_seconds = 12
 max_batch_seconds = 30.0
 min_tick_time_ms = 10
 telemetry_interval_ms = 250
-insert_concurrency = 2
+sampler_io_threads = 1
+sampler_db_pool_size = 6
+insert_concurrency = 4

@@ -70,7 +70,12 @@ Training uses a 10¹²-sample window, measuring feedback transport without optim
 barriers. Finite training windows and real optimizers need separate tests.
 
 The preset uses one sampler core, fifteen database/server cores, a 10 ms tick,
-250 ms telemetry, two concurrent inserts and five batches per insert bundle.
+250 ms telemetry, six sampler connections, four concurrent inserts and five
+batches per insert bundle. `sampler_io_threads` (1) and `sampler_db_pool_size` (6)
+are explicit in the preset; older suites replay with one sampler I/O thread and
+two connections. The new dedicated pool leaves control-plane I/O separate, so
+replaying a suite does not recreate the historical process thread layout. The database uses 4GB of
+shared buffers; older suites without `database_shared_buffers` retain 256MB.
 Evaluator processes share the remaining physical cores when necessary. It needs
 at least 17 physical cores. The allowance is 2,147,483,648 **samples**, not bytes:
 the 512-worker RNG measurement used roughly 70 GiB of worker RSS, excluding
@@ -187,8 +192,9 @@ retries, framing, WAL and physical disk traffic. Local PostgreSQL uses
 payload sizes and invalid busy counters invalidate the relevant measurement.
 
 Insert concurrency counts in-flight tasks, not simultaneous database connections:
-the sampler's role pool is currently capped at two. Raising the insert limit
-alone does not raise that connection limit. See [concurrency](concurrency.md).
+the sampler's role pool defaults to and is capped at six. Raising the insert limit
+alone does not raise that connection limit. Leave capacity for result fetching
+and maintenance. See [concurrency](concurrency.md).
 
 ## Fixed CPU-work comparisons
 

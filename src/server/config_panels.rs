@@ -49,6 +49,10 @@ impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
         &self,
         ctx: &EvaluatorPanelContext<'_>,
     ) -> Result<Vec<PanelState>, EngineError> {
+        let db_pool_size = crate::runners::role_db_pool_size(
+            crate::core::WorkerRole::Evaluator,
+            ctx.runner_params.db_pool_size,
+        );
         let summary = vec![
             key_value("implementation", "Implementation", self.kind_str()),
             key_value("effective_source", "Effective Source", ctx.provenance),
@@ -63,20 +67,14 @@ impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
                 "Min Tick Time (ms)",
                 ctx.runner_params.min_tick_time_ms,
             ),
-            key_value(
-                "db_pool_size",
-                "Effective DB Pool Size",
-                ctx.runner_params
-                    .db_pool_size
-                    .clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
-            ),
+            key_value("db_pool_size", "Effective DB Pool Size", db_pool_size),
         ];
         let config_payload = json!({
             "evaluator": self,
             "runner": {
                 "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
                 "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
-                "db_pool_size": ctx.runner_params.db_pool_size.clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
+                "db_pool_size": db_pool_size,
             },
         });
         let mut panels = vec![key_value_panel("evaluator_summary", summary)];
@@ -111,6 +109,10 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
         &self,
         ctx: &SamplerAggregatorPanelContext<'_>,
     ) -> Result<Vec<PanelState>, EngineError> {
+        let db_pool_size = crate::runners::role_db_pool_size(
+            crate::core::WorkerRole::SamplerAggregator,
+            ctx.runner_params.db_pool_size,
+        );
         let mut panels = vec![key_value_panel(
             "sampler_summary",
             vec![
@@ -128,17 +130,16 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
                     ctx.runner_params.min_tick_time_ms,
                 ),
                 key_value(
+                    "io_threads",
+                    "I/O Threads",
+                    ctx.runner_params.io_threads.get(),
+                ),
+                key_value(
                     "frontend_sync_interval_ms",
                     "Frontend Sync Interval (ms)",
                     ctx.runner_params.frontend_sync_interval_ms,
                 ),
-                key_value(
-                    "db_pool_size",
-                    "Effective DB Pool Size",
-                    ctx.runner_params
-                        .db_pool_size
-                        .clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
-                ),
+                key_value("db_pool_size", "Effective DB Pool Size", db_pool_size),
             ],
         )];
         let config_payload = json!({
@@ -146,8 +147,9 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
             "runner": {
                 "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
                 "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
+                "io_threads": ctx.runner_params.io_threads,
                 "frontend_sync_interval_ms": ctx.runner_params.frontend_sync_interval_ms,
-                "db_pool_size": ctx.runner_params.db_pool_size.clamp(1, crate::runners::MAX_ROLE_DB_CONNECTIONS_PER_NODE),
+                "db_pool_size": db_pool_size,
                 "queue": ctx.runner_params.queue,
             },
         });

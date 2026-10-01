@@ -26,6 +26,7 @@ use crate::evaluation::{
 use crate::runners::busy_time::BusyTime;
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::queue::MIN_BATCH_SIZE;
+use crate::runners::sampler_io::SamplerIo;
 use crate::runners::wall_time_rate::WallTimeRate;
 use crate::runners::window_metric::WindowMetric;
 use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
@@ -34,6 +35,7 @@ use crate::sampling::{Generation, SamplerAggregator};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -44,13 +46,20 @@ pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
     pub min_tick_time_ms: u64,
     pub frontend_sync_interval_ms: u64,
+    /// Background sampler I/O threads, fixed for the lifetime of the runner.
+    #[serde(default = "default_sampler_io_threads")]
+    pub io_threads: NonZeroUsize,
     #[serde(default = "default_sampler_db_pool_size")]
     pub db_pool_size: u32,
     pub queue: SamplerQueueConfig,
 }
 
+fn default_sampler_io_threads() -> NonZeroUsize {
+    NonZeroUsize::MIN
+}
+
 fn default_sampler_db_pool_size() -> u32 {
-    2
+    crate::runners::MAX_SAMPLER_DB_CONNECTIONS
 }
 
 #[derive(Debug, Clone, Default)]
@@ -125,6 +134,8 @@ pub struct SamplerAggregatorRunner<S> {
     node_uuid: String,
     sampler_uptime_started_at: Instant,
     completed_rate: WallTimeRate,
+    // Drop after the queue and pending task handles.
+    io: SamplerIo,
 }
 
 struct CompletedIngestStats {
@@ -351,7 +362,8 @@ where
         initial_batch_size: usize,
         run_progress: RunSampleProgress,
         resume_snapshot: Option<SamplerAggregatorCheckpoint>,
-    ) -> Self {
+    ) -> Result<Self, StoreError> {
+        let io = SamplerIo::new(params.io_threads)?;
         let mut runtime_state;
         let queue_checkpoint;
         let max_batch_size = params.queue.max_batch_size.max(MIN_BATCH_SIZE);
@@ -397,9 +409,10 @@ where
             task_id,
             params.queue.clone(),
             queue_checkpoint,
+            io.handle().clone(),
         );
 
-        Self {
+        Ok(Self {
             run_id,
             epoch: uuid::Uuid::new_v4().to_string(),
             node_name: node_name.into(),
@@ -434,7 +447,8 @@ where
             node_uuid: node_uuid.into(),
             sampler_uptime_started_at: now,
             completed_rate: WallTimeRate::new(now),
-        }
+            io,
+        })
     }
 
     fn current_sampler_uptime_ms(&self) -> f64 {
@@ -987,7 +1001,7 @@ where
             }
             self.process_completed_batches(completed).await?;
         }
-        self.queue.cancel_nonessential_background_work();
+        self.queue.finish_background_maintenance().await?;
         Ok(())
     }
 
@@ -1052,7 +1066,7 @@ where
         let store = self.store.clone();
         let run_id = self.run_id;
         let task_id = self.task.id;
-        let handle = tokio::spawn(async move {
+        let handle = self.io.handle().spawn(async move {
             let _io = busy.io();
             let started = Instant::now();
             store

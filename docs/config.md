@@ -635,6 +635,7 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 
 `sampler_aggregator_runner_params` controls queue and persistence behavior:
 
+- `io_threads` (default 1, must be positive) sets the background I/O pool owned by each sampler runner. It is independent of `TOKIO_WORKER_THREADS` and takes effect when the runner starts, not through live queue tuning.
 - `frontend_sync_interval_ms` sets how often the sampler runner refreshes frontend-facing and persisted accumulator snapshots during sampling.
 - Sampler queue settings live under `[sampler_aggregator_runner_params.queue]`.
 - `target_batch_eval_ms` (default 2000), `max_batch_size`, and optional `fixed_batch_size` control evaluator work units. They can be overridden live in task `queue_tuning` and the dashboard. Fixed sizing is an advanced option.
@@ -642,7 +643,21 @@ Evaluators use a fixed single-slot latent prefetch and single-slot async submit 
 - One pending batch per active evaluator is the fixed soft refill threshold, including local and in-flight inserts. An existing draw can exceed it; only starting another draw waits for the queue to fall below it.
 - The adaptive controller uses a fixed 15% deadband and a three-completion cooldown.
 - `max_batches_per_tick`, `max_insert_bundle_size`, `max_concurrent_insert_tasks`, `completed_batch_fetch_limit`, and `max_batch_retries` remain deployment settings under the runner queue config, not task tuning.
+- Sampler I/O defaults to four concurrent inserts and six database connections;
+  evaluators retain two connections. The role-specific caps and admission rules
+  are described in [concurrency](concurrency.md#io-limits-and-scheduling).
 - Both runner roles default to `min_tick_time_ms = 10`.
 - Pause/unassign flushes local I/O before checkpointing the undispatched draw and partially assembled feedback along with sampler state.
+
+For a sampler with several allocated CPU cores, the run TOML can use:
+
+```toml
+[sampler_aggregator_runner_params]
+io_threads = 3
+```
+
+This is a runtime resource setting shared by all sampler implementations; it does
+not belong to the sampler algorithm config. See [deployment CPU threads](deployment.md#cpu-threads)
+for core allocation and [the measurements](performance-development.md) for scaling limits.
 
 See [the sampler contract](sampling.md) for generation, feedback, memory, and migration details.

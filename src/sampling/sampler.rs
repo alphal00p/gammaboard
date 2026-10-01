@@ -102,6 +102,9 @@ pub trait SamplerAggregator: Send {
 /// Generation and evaluator batch sizes are independent. A finite training
 /// window is reported before this draw, allowing fair evaluator partitioning.
 #[derive(Debug, Clone, PartialEq)]
+// The payload is the common case and is consumed immediately; keep it inline
+// rather than allocating a separate box for each generated batch.
+#[allow(clippy::large_enum_variant)]
 pub enum Generation {
     Batch {
         batch: LatentBatchSpec,

@@ -4,9 +4,163 @@ Use [benchmarking](benchmarking.md) for commands, settings and validity rules.
 This page records current measurements and retained mechanisms; historical
 experiments are not current deployment defaults.
 
-## Current capability study — 2026-09-29
+## Sampler CPU and I/O-thread scaling — 2026-09-30
 
-The sampler-generation implementation was measured with the default sparse
+**Extra sampler cores help when the I/O thread count also increases.** Four
+allowed physical cores with three background I/O threads gave the best result
+that completed both workloads cleanly: **5.69M/s materialized and 6.07M/s
+training**, respectively 21% and 40% above the repeated one-core/one-thread
+baseline. Giving the existing one-thread runtime a second core did not establish
+an improvement. These are deployment candidates; application defaults are unchanged.
+
+| Sampler cores | I/O threads | Materialized samples/s | Training samples/s | Successful trials, materialized / training |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 4.69M | 4.33M | 4 / 4 |
+| 1 | 3 | 4.19M | 4.59M | 1 / 2 |
+| 2 | 1 | 4.79M | 4.22M | 2 / 2 |
+| 2 | 3 | 4.62M | 5.46M | 1 / 2 |
+| 4 | 2 | 5.42M | 5.51M | 2 / 2 |
+| 4 | 3 | 5.69M | 6.07M | 2 / 2 |
+| 8 | 4 | 5.42M | Cleanup failed twice | 2 / 0 |
+
+Values are medians of successful trials. The two materialized CPU-allowance
+checks with three I/O threads have only one trial each. Compare configurations
+within a column: materialized used 16 active evaluators, training used 64.
+
+![Sampler CPU and I/O-thread comparisons](benchmarks/2026-09-30/sampler-cores.svg)
+
+The trials used one sampler/model and one private PostgreSQL database, with 64
+registered evaluators. Fixed settings were six sampler connections, four concurrent
+inserts, five batches per insert, 131,072 samples per evaluator batch, 4,194,304
+samples per generation, and 4GB PostgreSQL shared buffers. The database/server had
+15 allowed physical cores, and evaluators each had a separate core and one I/O
+thread. All core sets were on the same CPU package and remained disjoint. Affinity
+limits placement; it does not reserve cores against other host users.
+
+Each interval followed the frontier warmup contract and requested 25 seconds of
+measurement. The opening baseline was repeated after the main sweep. A further
+fixed-three-thread comparison varied only the sampler's CPU allowance, with
+reversed order for its repeated training trials. There were **28 successful
+intervals and two excluded cleanup failures**, taking 24 minutes across the
+private deployments, including warmup and shutdown. This remains a short,
+shared-host, six-dimensional `f(x) = x[0]` transport study with zero evaluator
+delay, not a sustained HPC-network or real-optimizer benchmark.
+
+Serialization executes synchronously inside spawned I/O tasks. Multiple runtime
+threads allow independent bundles to encode while other tasks handle database
+traffic. In the fixed-three-thread training comparison, mean serialization wall
+time per five-batch bundle fell from approximately **128 ms on one core**, to
+**73 ms on two**, to **46 ms on four**. Training result-fetch time was about
+4.3 ms with four cores/three threads versus 10.0 ms for the repeated baseline.
+These observations support reduced scheduling delays and better overlap; they
+do not imply parallel mutation of the sampler model. Average sampler CPU use at
+four cores/three threads was only 0.92 cores materialized and 1.11 training:
+short parallel bursts matter even when average CPU use is modest.
+
+Both attempts at eight cores/four threads completed their first materialized run,
+then failed cleanup after the training interval. The measured training rates,
+6.35M/s and 6.07M/s, are retained as excluded points. PostgreSQL logged 30-second
+statement timeouts in completed-batch deletion and subsequent run removal, both
+while cascading into `batch_inputs`. Frequent WAL checkpoints and buffer/write
+waits were also observed. The precise cause of the slow deletion is not isolated;
+the evidence does not establish that four threads themselves cause it. The retry
+kept all database limits unchanged. Both private deployments shut down cleanly,
+and the failed databases/logs were retained for investigation.
+
+For a high-throughput sampler node, **four cores with three sampler I/O threads**
+is the strongest clean candidate from this study. These experiments varied the process-wide
+`TOKIO_WORKER_THREADS`; the dedicated sampler pool added afterward exposes
+`[sampler_aggregator_runner_params] io_threads = 3` instead and leaves the control
+runtime separate. The numbers above describe the original experiment, not a
+remeasurement of the new pool. Two cores/three threads recovered much of the
+training gain. Additional cores or threads did not yield proportional scaling.
+Payload cleanup and PostgreSQL checkpoint pressure need investigation before
+raising throughput further. No production runtime code or configuration defaults
+were changed for this experiment.
+
+The [portable evidence](benchmarks/2026-09-30/sampler-cores.json) includes all
+successful trials, excluded measurements, thread-affinity verification data and
+binary/harness provenance. Reproduction scripts and raw logs are retained under
+`/common/dev/cedric/setup-logs/sampler-cores-20260930/`.
+
+## Sampler I/O tuning — 2026-09-30
+
+**Six sampler connections and four concurrent inserts** improved the targeted
+materialized/training comparisons and are now the run defaults. Evaluators remain
+capped at two connections. Sampler admission reserves its four extra connections
+without charging that overhead to every evaluator. Shutdown now joins an existing
+cleanup DELETE before checkpointing or removing the run.
+
+Matched zero-delay comparisons used `f(x) = x[0]`, six-dimensional inputs,
+131,072-sample evaluator batches, 4,194,304-sample generations, five batches per
+insert, one sampler core and fifteen PostgreSQL/server cores. Each confirmation
+used the frontier warmup contract followed by at least 20 seconds of measurement.
+The smaller studies registered 64 evaluators; the large-fleet study registered 512.
+All trials used fresh runs within their study's ageing private database.
+
+| Workload | Active evaluators | PostgreSQL shared buffers | 2 connections / 2 inserts | 6 connections / 4 inserts | Change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Materialized | 16 | 256MB | 2.70M/s | 3.77M/s | +39% |
+| Training | 64 | 256MB | 2.48M/s | 3.27M/s | +32% |
+| Materialized | 16 | 4GB | 3.54M/s | 4.74M/s | +34% |
+| Training | 64 | 4GB | 3.44M/s | 3.96M/s | +15% |
+| Materialized | 512 | 4GB | 2.55M/s | 3.35M/s | +32% |
+| Training | 512 | 4GB | 1.99M/s | 3.84M/s | +93% |
+
+The 256MB confirmation rows are medians of two trials per configuration, with
+reversed order in the second block. The smaller 4GB studies have two baseline
+trials and one candidate; the 512-worker comparisons have one trial each. These
+shared-host observations establish useful settings, not precise universal gains.
+This is a targeted follow-up, not a replacement for the full sparse curves below.
+
+![Sampler I/O comparisons](benchmarks/2026-09-30/sampler-io.svg)
+
+The mechanism is bounded publication overlap with room left for result collection.
+In one matched materialized pair, the reported mean completion-fetch time fell
+from roughly 183 ms to 3.6 ms. Individual inserts can take longer while aggregate
+throughput rises because four can run concurrently. Four connections with four
+inserts were less effective; eight connections or eight inserts did not establish
+an advantage over six/four.
+
+Larger batches or bundles and a second sampler core did not beat the selected
+settings in the screening trials. Increasing database affinity from 15 to 31 cores
+also did not help the targeted 16-evaluator comparison. PostgreSQL used roughly
+3–4 cores there. Input COPY, WAL and buffer/write waits remain useful next profiling
+targets; the I/O busy fraction alone does not identify a hardware bandwidth limit.
+
+A 4GB PostgreSQL cache reduced sampled data-file-write waits and raised the observed
+rates further. The large-host frontier preset now uses that cache size and records
+it explicitly. General deployments retain the 256MB memory default; see
+[capacity planning](operations.md#capacity-planning) for the high-throughput setting.
+Old benchmark suites without the new resource fields replay with two sampler
+connections and 256MB, and comparisons reject differing resource settings.
+
+Two independent deployments with disjoint CPU allocations achieved **7.38M/s
+aggregate** (3.63M/s + 3.76M/s), versus 4.34M/s for one deployment on its own:
+1.70× aggregate throughput using two samplers, two databases and twice the allocated
+CPU/cache resources. These were barrier-aligned 40-second materialized measurements
+with 16 evaluators and 4GB PostgreSQL shared buffers per instance, sharing the host
+and storage. Independent deployments already support this scaling; a single
+adaptive run still has one sampler and one ordered feedback stream.
+
+Regression controls found no loss: tiny 256-sample batches remained around 0.34M/s,
+and a 50-µs training workload remained around 0.316M/s (16 evaluators; ideal 0.32M/s).
+RNG inference remained around 30M/s. These checks compare the new configuration
+with the earlier benchmark settings or, for the small/delayed controls, the old
+run default of two connections and eight inserts.
+
+The initial stress study exposed the aborted-cleanup row-lock race fixed above.
+Its failed attempt is retained in the development evidence. Two initial CPU-affinity
+probes did not reach the PostgreSQL daemon and are excluded; corrected probes were
+run afterward. All subsequent studies, including an eight-insert cleanup stress
+case, shut down cleanly. The 348 Rust unit/binary tests, 37 PostgreSQL integration
+tests and 52 benchmark harness tests passed. See the
+[portable trial data and provenance](benchmarks/2026-09-30/summary.json).
+The production Rust/Python process adapters are unchanged by this tuning.
+
+## Generation baseline — 2026-09-29
+
+The sampler-generation implementation was measured with the then-current sparse
 frontier: **87 configurations**, three data paths, four delays and up to 512
 evaluator processes. Initial coverage, missing-point follow-up and targeted repeats
 took 60.1 minutes including deployment and cleanup. Of 92 attempts, 89 were valid;
@@ -124,34 +278,6 @@ consumption and checkpointed generation/feedback state: they protect correctness
 Historical CPU frontiers, constant-one feedback and process echo tests are
 superseded as current capability evidence. Use their saved harnesses only for
 older-revision investigations.
-
-## Raising sampler I/O throughput
-
-These are proposed experiments, not established speedups. Start with materialized
-and training zero-delay cases at a modest fleet and at 512 workers. Hold binary,
-batch, draw size, telemetry and placement fixed while changing one resource or
-setting. Repeat against both fresh and aged databases.
-
-| Change to scale | Potential benefit | Evidence needed |
-| --- | --- | --- |
-| Database CPU, memory/cache and storage bandwidth | Faster insertion, fetching, compression and maintenance | PostgreSQL CPU/waits, buffers, WAL/disk traffic, operation latency and accepted MiB/s |
-| Insert lanes and connection capacity together | More publication overlap when the database has headroom | Compare 2/4/8 inserts; track pool waits and completion-collection starvation |
-| Evaluator batches and insert bundles | More samples per claim/transaction | Nearby sizes at equal sample pressure; watch latency, memory and lock duration |
-| Bounded parallel encoding | Relieve a saturated I/O thread during synchronous serialization | Profile CPU and separate serialization from database waits |
-| Independent run/database partitions | Higher aggregate throughput past a shared database limit | Independent runs; a single adaptive sampler still requires ordered feedback |
-
-The frontier uses two inserts; ordinary run defaults remain eight inserts.
-Role pools are currently capped at two connections, shared by inserts, completion
-fetches and persistence. A larger sampler pool requires a sampler-specific cap
-and matching connection-admission accounting; setting a larger config value today
-is clamped. Keep evaluator pools bounded when testing sampler capacity.
-Public task tuning changes batch sizing, not insert concurrency. More encoding
-threads also need more sampler CPU allocation to provide actual parallelism.
-
-Separating large immutable payloads from PostgreSQL coordination is a larger
-architectural option after bandwidth is established as the limit. Multiple
-samplers for one adaptive run require a partitioning/training model, not simply
-more processes.
 
 Other focused follow-ups remain separate: GammaLoop entry-reset cost, finite
 training windows/MadNIS behavior, and dependency numerical stability. An earlier

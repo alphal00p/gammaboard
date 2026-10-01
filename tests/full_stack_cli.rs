@@ -684,6 +684,8 @@ async fn run_havana_training_then_inference(
     run_name: &str,
     pause_mid_training: bool,
 ) -> anyhow::Result<(JsonValue, JsonValue)> {
+    // Exercise pool recreation and checkpoint determinism with multiple I/O threads.
+    let io_threads = if pause_mid_training { 3 } else { 1 };
     let training_samples = 256usize;
     let inference_samples = 64usize;
     let config = temp_config(&format!(
@@ -698,6 +700,7 @@ discrete_dims = 0
 timing = {{ per_sample_seconds = 0.01 }}
 
 [sampler_aggregator_runner_params]
+io_threads = {io_threads}
 frontend_sync_interval_ms = 50
 
 [[task_queue]]
@@ -3867,6 +3870,12 @@ async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Resul
     sqlx::query(
         "INSERT INTO nodes (name, uuid, lease_expires_at) VALUES ('history-worker', 'history-worker', now() - interval '1 second')",
     )
+    .execute(&harness.pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO run_telemetry_workers (run_id, worker_id) VALUES ($1, 'history-worker')",
+    )
+    .bind(child_id)
     .execute(&harness.pool)
     .await?;
     sqlx::query(

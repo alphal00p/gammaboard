@@ -1,0 +1,4122 @@
+{
+  "format": "gammaboard-sampler-core-study-v1",
+  "date": "2026-09-30",
+  "scope": "One sampler, one model, one PostgreSQL database per sequential deployment. 6D f(x)=x[0], zero evaluator delay. Materialized with 16 active evaluators; training with 64. 64 evaluators registered for both.",
+  "fixed_resources": {
+    "sampler_connections": 6,
+    "concurrent_inserts": 4,
+    "batches_per_insert": 5,
+    "samples_per_batch": 131072,
+    "samples_per_generation": 4194304,
+    "postgres_shared_buffers": "4GB",
+    "postgres_allowed_physical_cores": 15,
+    "evaluator_threads": 1
+  },
+  "validity": "Production frontier warmup and accepted progress windows. Training requires feedback; counts and failures retained. Queue timings deduplicate telemetry snapshots and exclude the initial endpoint. CPU use is process CPU seconds divided by CLI measurement wall time. Backend waits are diagnostic samples, not a wall-time attribution.",
+  "cpu_model": "AMD EPYC 9754 128-Core Processor",
+  "build_profile": "dev-optim (opt-level 2)",
+  "source_base": "a182a5ca60967c3d46d8093c3dd3ee58f399e402",
+  "source_patch_sha256": "477e86727c2e1d1e7d2e2b0f0265e24560e9818f0a6378a9e1da1399a97fbb72",
+  "studies": [
+    {
+      "name": "baseline-ready",
+      "status": "completed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59",
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216",
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c"
+      },
+      "experiment_sha256": "88c728b3adcc94ed24eda1c0201a6dd916e61e7118410fbf46adcbcf5ddb90e1",
+      "sampler_cores": 1,
+      "sampler_io_threads": 1,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790788886.708281,
+      "finished_at": 1790789048.499147,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 9.593823347240686,
+        "runtime_directory": "/tmp/gmb-scale-kwpj18b4"
+      }
+    },
+    {
+      "name": "baseline-repeat",
+      "status": "completed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59",
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c",
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2"
+      },
+      "experiment_sha256": "88c728b3adcc94ed24eda1c0201a6dd916e61e7118410fbf46adcbcf5ddb90e1",
+      "sampler_cores": 1,
+      "sampler_io_threads": 1,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790789850.281844,
+      "finished_at": 1790790027.3702676,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 9.042739479802549,
+        "runtime_directory": "/tmp/gmb-scale-fu3c6h7r"
+      }
+    },
+    {
+      "name": "c2-t1",
+      "status": "completed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a",
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c",
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216"
+      },
+      "experiment_sha256": "88c728b3adcc94ed24eda1c0201a6dd916e61e7118410fbf46adcbcf5ddb90e1",
+      "sampler_cores": 2,
+      "sampler_io_threads": 1,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790789052.542514,
+      "finished_at": 1790789220.265036,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 9.341389677952975,
+        "runtime_directory": "/tmp/gmb-scale-8e35783j"
+      }
+    },
+    {
+      "name": "c4-t2",
+      "status": "completed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c",
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216",
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59"
+      },
+      "experiment_sha256": "88c728b3adcc94ed24eda1c0201a6dd916e61e7118410fbf46adcbcf5ddb90e1",
+      "sampler_cores": 4,
+      "sampler_io_threads": 2,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790789223.426554,
+      "finished_at": 1790789405.3456728,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 8.93998857634142,
+        "runtime_directory": "/tmp/gmb-scale-qwxvgrs4"
+      }
+    },
+    {
+      "name": "c4-t3",
+      "status": "completed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2",
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216",
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59",
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a"
+      },
+      "experiment_sha256": "88c728b3adcc94ed24eda1c0201a6dd916e61e7118410fbf46adcbcf5ddb90e1",
+      "sampler_cores": 4,
+      "sampler_io_threads": 3,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790789408.5115035,
+      "finished_at": 1790789631.4462857,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 9.3902347991243,
+        "runtime_directory": "/tmp/gmb-scale-pr8cu7zs"
+      }
+    },
+    {
+      "name": "c8-t4",
+      "status": "failed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c",
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216",
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59"
+      },
+      "experiment_sha256": "88c728b3adcc94ed24eda1c0201a6dd916e61e7118410fbf46adcbcf5ddb90e1",
+      "sampler_cores": 8,
+      "sampler_io_threads": 4,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790789635.1245499,
+      "finished_at": 1790789757.5240366,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 9.139262854121625,
+        "runtime_directory": "/tmp/gmb-scale-muugxl_k"
+      }
+    },
+    {
+      "name": "c8-t4-repeat",
+      "status": "failed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59",
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a",
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c"
+      },
+      "experiment_sha256": "f094b1ab5162f12a0851ca7434d06ed380c2283d43d874c960603b8a19fa0384",
+      "sampler_cores": 8,
+      "sampler_io_threads": 4,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790790298.531751,
+      "finished_at": 1790790439.5303705,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 8.738871321082115,
+        "runtime_directory": "/tmp/gmb-scale-6xfwxzh9"
+      }
+    },
+    {
+      "name": "core-check",
+      "status": "completed",
+      "binary_sha256": "a4ad547b525a666f782bd54c25c6f7c855aaf1ebab773d3b1dafc19162c47e4f",
+      "harness_files": {
+        "benchmark_common.py": "6b2a1b2d82052729e5219e8af6b74c32c0683f07cf051cd6819bd71a430e6f8a",
+        "benchmark_process.py": "436e82f03537ca7db6437ccb126e29908a348512aa784ebaf1551c870560452c",
+        "benchmark_frontier_plots.py": "eef813975411afca0c261265c8a202a91a91253dcdef62b1d02092629d7341b2",
+        "benchmark_frontier.py": "15cc1f171ec92d47aba58b0d2dce4961ea92cb2a25de5a2c72111cd2d1e23d59",
+        "benchmark.py": "7a941068d698118bc6ce21b13d605debac22c5e2c566b69e7dbaf8d566b8a216",
+        "benchmark_io.py": "5659d9e22e2c62a74548c54eee2da582b8ba74b7c251b980dfca512524aaa18c"
+      },
+      "experiment_sha256": "f094b1ab5162f12a0851ca7434d06ed380c2283d43d874c960603b8a19fa0384",
+      "sampler_cores": 2,
+      "sampler_io_threads": 3,
+      "shared_buffers": "4GB",
+      "placement": {
+        "sampler": [
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          10,
+          11
+        ],
+        "database": [
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          25,
+          26,
+          27
+        ],
+        "evaluators": [
+          28,
+          29,
+          31,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          69,
+          70,
+          72,
+          73,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          98,
+          101,
+          103,
+          105,
+          108,
+          109,
+          115,
+          117,
+          118,
+          120,
+          121,
+          124,
+          125,
+          126,
+          127,
+          65,
+          74,
+          104,
+          113
+        ],
+        "physical_package": 0
+      },
+      "started_at": 1790790031.52764,
+      "finished_at": 1790790295.3236473,
+      "cleanup": {
+        "clean": true,
+        "errors": [],
+        "elapsed_seconds": 8.73809093888849,
+        "runtime_directory": "/tmp/gmb-scale-2_p266ed"
+      }
+    }
+  ],
+  "trials": [
+    {
+      "study": "baseline-ready",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4851565.682620115,
+      "accepted_samples": 122290176,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.206332141,
+      "load_average": [
+        23.8525390625,
+        23.30517578125,
+        20.681640625
+      ],
+      "busy_percent": {
+        "sampler_compute": 36.87846606162833,
+        "sampler_io": 82.06299895316451,
+        "evaluator_compute": 5.856944854163196,
+        "evaluator_io": 6.868644486768997
+      },
+      "sampler_cpu_cores": 0.8589620672220349,
+      "database_cpu_cores": 2.804830827919201,
+      "evaluator_cpu_cores": 1.366476409297745,
+      "sampler_threads": [
+        {
+          "tid": "278054",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.3470794483365966
+        },
+        {
+          "tid": "278061",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.5118826188854383
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.7360703812316713,
+        "fetch_completed_ms": 4.425504181818182,
+        "fetch_completed_prefetch_fill_ratio": 0.002671943731671554,
+        "insert_bundle_batches": 4.581730769230769,
+        "insert_bundle_commit_ms": 4.094637836538462,
+        "insert_bundle_db_batches_ms": 2.3989956971153847,
+        "insert_bundle_db_inputs_ms": 214.18239284134617,
+        "insert_bundle_db_pending_at_start": 1.7932692307692308,
+        "insert_bundle_local_pending_at_start": 17.120192307692307,
+        "insert_bundle_ms": 278.1190453125,
+        "insert_bundle_ms_per_batch": 60.70174336306401,
+        "insert_bundle_payload_bytes": 34831343.615384616,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 38.81308523557693
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 66,
+        "Lock:extend": 6,
+        "IO:DataFileExtend": 5,
+        "Client:ClientRead": 4
+      }
+    },
+    {
+      "study": "baseline-ready",
+      "case": 1,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4560404.616698992,
+      "accepted_samples": 115343360,
+      "feedback_samples": 113246208,
+      "elapsed_seconds": 25.292352257000005,
+      "load_average": [
+        31.42822265625,
+        25.33056640625,
+        21.4462890625
+      ],
+      "busy_percent": {
+        "sampler_compute": 38.487403133118555,
+        "sampler_io": 89.25704923610655,
+        "evaluator_compute": 1.2427427197915466,
+        "evaluator_io": 2.4439896926486124
+      },
+      "sampler_cpu_cores": 0.8706895894929828,
+      "database_cpu_cores": 3.3958459978696647,
+      "evaluator_cpu_cores": 1.5922187771888319,
+      "sampler_threads": [
+        {
+          "tid": "278054",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.3492154288793799
+        },
+        {
+          "tid": "278061",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.521865657731181
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 3.5772357723577235,
+        "fetch_completed_ms": 17.48193993495935,
+        "fetch_completed_prefetch_fill_ratio": 0.0034933943089430894,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 7.670812551724136,
+        "insert_bundle_db_batches_ms": 6.050180540229884,
+        "insert_bundle_db_inputs_ms": 245.65931964367823,
+        "insert_bundle_db_pending_at_start": 0.8103448275862069,
+        "insert_bundle_local_pending_at_start": 56.666666666666664,
+        "insert_bundle_ms": 363.03293749425296,
+        "insert_bundle_ms_per_batch": 72.60658749885059,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 48.0397093908046
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 48,
+        "Client:ClientRead": 12,
+        "IO:DataFileExtend": 8,
+        "Lock:extend": 5
+      }
+    },
+    {
+      "study": "baseline-ready",
+      "case": 2,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4188426.6390720084,
+      "accepted_samples": 104857600,
+      "feedback_samples": 104857600,
+      "elapsed_seconds": 25.035080959,
+      "load_average": [
+        27.068359375,
+        25.083984375,
+        21.5654296875
+      ],
+      "busy_percent": {
+        "sampler_compute": 37.31292583114989,
+        "sampler_io": 89.13014157431071,
+        "evaluator_compute": 1.1648286534502028,
+        "evaluator_io": 3.1580871033931235
+      },
+      "sampler_cpu_cores": 0.8257601731743528,
+      "database_cpu_cores": 3.345799770548245,
+      "evaluator_cpu_cores": 1.4977445801328644,
+      "sampler_threads": [
+        {
+          "tid": "278054",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.34638775910354097
+        },
+        {
+          "tid": "278061",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.47662641824552904
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.26628895184136,
+        "fetch_completed_ms": 11.248711379603398,
+        "fetch_completed_prefetch_fill_ratio": 0.002213172804532578,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 6.254553242236024,
+        "insert_bundle_db_batches_ms": 5.376544552795029,
+        "insert_bundle_db_inputs_ms": 288.1162030807454,
+        "insert_bundle_db_pending_at_start": 0.3105590062111801,
+        "insert_bundle_local_pending_at_start": 57.05590062111801,
+        "insert_bundle_ms": 400.7651181428572,
+        "insert_bundle_ms_per_batch": 80.15302362857143,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 48.713027795031046
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 48,
+        "IO:DataFileExtend": 4,
+        "Client:ClientWrite": 3,
+        "Client:ClientRead": 10,
+        "IO:WalWrite": 2,
+        "LWLock:WALWrite": 5,
+        "IO:WalSync": 1,
+        "LWLock:BufferContent": 2,
+        "Lock:extend": 1,
+        "IO:DataFileWrite": 3
+      }
+    },
+    {
+      "study": "baseline-ready",
+      "case": 3,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4198766.027313621,
+      "accepted_samples": 104857600,
+      "feedback_samples": 0,
+      "elapsed_seconds": 24.973432508000002,
+      "load_average": [
+        24.1943359375,
+        24.5244140625,
+        21.52197265625
+      ],
+      "busy_percent": {
+        "sampler_compute": 40.740127988977044,
+        "sampler_io": 76.89505263182542,
+        "evaluator_compute": 4.9764519713702215,
+        "evaluator_io": 6.866186947574072
+      },
+      "sampler_cpu_cores": 0.8542610844518497,
+      "database_cpu_cores": 2.681187812967945,
+      "evaluator_cpu_cores": 1.2150373936063983,
+      "sampler_threads": [
+        {
+          "tid": "278054",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.39613874474348587
+        },
+        {
+          "tid": "278061",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.4609036548670442
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.5,
+        "fetch_completed_ms": 4.9964296343750005,
+        "fetch_completed_prefetch_fill_ratio": 0.00244140625,
+        "insert_bundle_batches": 4.576271186440678,
+        "insert_bundle_commit_ms": 5.920059909604518,
+        "insert_bundle_db_batches_ms": 5.342738655367232,
+        "insert_bundle_db_inputs_ms": 235.88075113559327,
+        "insert_bundle_db_pending_at_start": 2.146892655367232,
+        "insert_bundle_local_pending_at_start": 17.141242937853107,
+        "insert_bundle_ms": 311.7686156327684,
+        "insert_bundle_ms_per_batch": 68.12721600864198,
+        "insert_bundle_payload_bytes": 34789838.644067794,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 42.74891977401129
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 49,
+        "Timeout:VacuumDelay": 22,
+        "IO:DataFileExtend": 7,
+        "Lock:extend": 4,
+        "IO:WalWrite": 1,
+        "LWLock:BufferContent": 1,
+        "LWLock:WALWrite": 5,
+        "Client:ClientRead": 8,
+        "IO:DataFileWrite": 3,
+        "IO:DataFileRead": 1
+      }
+    },
+    {
+      "study": "baseline-repeat",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4537711.593182392,
+      "accepted_samples": 113246208,
+      "feedback_samples": 0,
+      "elapsed_seconds": 24.956678201000003,
+      "load_average": [
+        15.20166015625,
+        19.1396484375,
+        21.1328125
+      ],
+      "busy_percent": {
+        "sampler_compute": 37.828868585650596,
+        "sampler_io": 80.87669104613141,
+        "evaluator_compute": 5.377220432099948,
+        "evaluator_io": 6.661659830621978
+      },
+      "sampler_cpu_cores": 0.832068639612623,
+      "database_cpu_cores": 2.7039252021397315,
+      "evaluator_cpu_cores": 1.2864297487853393,
+      "sampler_threads": [
+        {
+          "tid": "417870",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.3518915583278205
+        },
+        {
+          "tid": "417877",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.4797799124830781
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.209718670076726,
+        "fetch_completed_ms": 2.6632640409207156,
+        "fetch_completed_prefetch_fill_ratio": 0.002157928388746803,
+        "insert_bundle_batches": 4.571428571428571,
+        "insert_bundle_commit_ms": 3.2733245132275135,
+        "insert_bundle_db_batches_ms": 2.864358867724867,
+        "insert_bundle_db_inputs_ms": 233.50548389947096,
+        "insert_bundle_db_pending_at_start": 2.0423280423280423,
+        "insert_bundle_local_pending_at_start": 17.0,
+        "insert_bundle_ms": 300.89429671957663,
+        "insert_bundle_ms_per_batch": 65.82062740740739,
+        "insert_bundle_payload_bytes": 34753024.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 40.844197894179885
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 52,
+        "Client:ClientRead": 9,
+        "LWLock:WALWrite": 15,
+        "LWLock:WALInsert": 2,
+        "Lock:extend": 5,
+        "LWLock:BufferContent": 1,
+        "IO:DataFileExtend": 3
+      }
+    },
+    {
+      "study": "baseline-repeat",
+      "case": 1,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4191038.4524901467,
+      "accepted_samples": 104202240,
+      "feedback_samples": 104857600,
+      "elapsed_seconds": 24.8631076,
+      "load_average": [
+        15.29296875,
+        18.8271484375,
+        20.96728515625
+      ],
+      "busy_percent": {
+        "sampler_compute": 37.410841997884454,
+        "sampler_io": 94.17870059815048,
+        "evaluator_compute": 1.1388453974662904,
+        "evaluator_io": 2.68788248775998
+      },
+      "sampler_cpu_cores": 0.7773834802233601,
+      "database_cpu_cores": 3.5131150623400433,
+      "evaluator_cpu_cores": 1.4959930078088652,
+      "sampler_threads": [
+        {
+          "tid": "417870",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.34715814691426256
+        },
+        {
+          "tid": "417877",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.43022533330909746
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.6666666666666667,
+        "fetch_completed_ms": 5.870730276729561,
+        "fetch_completed_prefetch_fill_ratio": 0.0016276041666666667,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 6.182424226993866,
+        "insert_bundle_db_batches_ms": 4.502981944785275,
+        "insert_bundle_db_inputs_ms": 338.6181599079755,
+        "insert_bundle_db_pending_at_start": 0.44171779141104295,
+        "insert_bundle_local_pending_at_start": 56.4601226993865,
+        "insert_bundle_ms": 451.20044399386506,
+        "insert_bundle_ms_per_batch": 90.240088798773,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 46.80950906748465
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 63,
+        "Client:ClientRead": 16,
+        "LWLock:WALWrite": 3,
+        "IO:DataFileExtend": 7,
+        "IO:WalWrite": 5,
+        "Lock:extend": 11,
+        "Client:ClientWrite": 1,
+        "LWLock:BufferContent": 1,
+        "IO:DataFileWrite": 1
+      }
+    },
+    {
+      "study": "baseline-repeat",
+      "case": 2,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4466974.879521296,
+      "accepted_samples": 112066560,
+      "feedback_samples": 113246208,
+      "elapsed_seconds": 25.087797228,
+      "load_average": [
+        21.16943359375,
+        20.0185546875,
+        21.25927734375
+      ],
+      "busy_percent": {
+        "sampler_compute": 39.628043808103435,
+        "sampler_io": 89.97181489815253,
+        "evaluator_compute": 1.1788150694611188,
+        "evaluator_io": 2.786529833930687
+      },
+      "sampler_cpu_cores": 0.81714441468611,
+      "database_cpu_cores": 3.516898549045115,
+      "evaluator_cpu_cores": 1.5205241244951326,
+      "sampler_threads": [
+        {
+          "tid": "417870",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.3656162239498099
+        },
+        {
+          "tid": "417877",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.44878214613581824
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.323369565217391,
+        "fetch_completed_ms": 8.761634907608695,
+        "fetch_completed_prefetch_fill_ratio": 0.0022689155910326085,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 4.9467810348837205,
+        "insert_bundle_db_batches_ms": 7.563376831395347,
+        "insert_bundle_db_inputs_ms": 283.423517133721,
+        "insert_bundle_db_pending_at_start": 0.7790697674418605,
+        "insert_bundle_local_pending_at_start": 54.94186046511628,
+        "insert_bundle_ms": 396.85796126744196,
+        "insert_bundle_ms_per_batch": 79.37159225348839,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 45.18561760465116
+      },
+      "active_backend_wait_samples": {
+        "LWLock:BufferMapping": 2,
+        "CPU/runnable:-": 53,
+        "Client:ClientRead": 26,
+        "IO:DataFileExtend": 4,
+        "IO:DataFileWrite": 2,
+        "Lock:extend": 10,
+        "LWLock:BufferContent": 16,
+        "IO:WalWrite": 1,
+        "LWLock:WALWrite": 1,
+        "Timeout:VacuumDelay": 5
+      }
+    },
+    {
+      "study": "baseline-repeat",
+      "case": 3,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 1,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4985840.230540919,
+      "accepted_samples": 126091264,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.289872553000002,
+      "load_average": [
+        24.974609375,
+        21.30126953125,
+        21.6337890625
+      ],
+      "busy_percent": {
+        "sampler_compute": 25.912229459703752,
+        "sampler_io": 96.27200271561604,
+        "evaluator_compute": 6.4067871158736,
+        "evaluator_io": 8.892810530033156
+      },
+      "sampler_cpu_cores": 0.7327154900060026,
+      "database_cpu_cores": 3.493603341779297,
+      "evaluator_cpu_cores": 1.4880677187276374,
+      "sampler_threads": [
+        {
+          "tid": "417870",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.24741558280419504
+        },
+        {
+          "tid": "417877",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.48529990720180755
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.5416666666666667,
+        "fetch_completed_ms": 2.266100865384616,
+        "fetch_completed_prefetch_fill_ratio": 0.0015055338541666667,
+        "insert_bundle_batches": 4.5754716981132075,
+        "insert_bundle_commit_ms": 4.1656383207547165,
+        "insert_bundle_db_batches_ms": 5.648097830188679,
+        "insert_bundle_db_inputs_ms": 269.2261849575473,
+        "insert_bundle_db_pending_at_start": 1.400943396226415,
+        "insert_bundle_local_pending_at_start": 17.047169811320753,
+        "insert_bundle_ms": 349.792836523585,
+        "insert_bundle_ms_per_batch": 76.44956839484537,
+        "insert_bundle_payload_bytes": 34783760.75471698,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 41.39525430660378
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 79,
+        "Timeout:VacuumDelay": 23,
+        "Lock:extend": 7,
+        "IO:DataFileExtend": 5,
+        "IO:DataFileRead": 2,
+        "Client:ClientRead": 8
+      }
+    },
+    {
+      "study": "c2-t1",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 2,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4483168.812435256,
+      "accepted_samples": 113246208,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.260304204,
+      "load_average": [
+        23.244140625,
+        24.4443359375,
+        21.6484375
+      ],
+      "busy_percent": {
+        "sampler_compute": 32.466273520575214,
+        "sampler_io": 85.03690629584153,
+        "evaluator_compute": 5.419660226793155,
+        "evaluator_io": 6.626827274696427
+      },
+      "sampler_cpu_cores": 0.7780708940788329,
+      "database_cpu_cores": 2.680815109058568,
+      "evaluator_cpu_cores": 1.280922012168517,
+      "sampler_threads": [
+        {
+          "tid": "297298",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.3287567641138392
+        },
+        {
+          "tid": "297305",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.4497107002473989
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.4974003466204506,
+        "fetch_completed_ms": 2.728436220103987,
+        "fetch_completed_prefetch_fill_ratio": 0.0014623050259965338,
+        "insert_bundle_batches": 4.571428571428571,
+        "insert_bundle_commit_ms": 4.789460671957672,
+        "insert_bundle_db_batches_ms": 3.6565292910052896,
+        "insert_bundle_db_inputs_ms": 272.82477348677253,
+        "insert_bundle_db_pending_at_start": 1.343915343915344,
+        "insert_bundle_local_pending_at_start": 17.0,
+        "insert_bundle_ms": 343.4801859841269,
+        "insert_bundle_ms_per_batch": 75.13629068402774,
+        "insert_bundle_payload_bytes": 34753024.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 39.811901158730144
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 46,
+        "Client:ClientRead": 5,
+        "Lock:extend": 4,
+        "LWLock:WALWrite": 3,
+        "IO:DataFileExtend": 6
+      }
+    },
+    {
+      "study": "c2-t1",
+      "case": 1,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 2,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4293119.289314959,
+      "accepted_samples": 108134400,
+      "feedback_samples": 109051904,
+      "elapsed_seconds": 25.187839590000003,
+      "load_average": [
+        21.1396484375,
+        23.76220703125,
+        21.50634765625
+      ],
+      "busy_percent": {
+        "sampler_compute": 33.47804494255952,
+        "sampler_io": 91.66838363210331,
+        "evaluator_compute": 1.1188074233851213,
+        "evaluator_io": 2.5410374122869355
+      },
+      "sampler_cpu_cores": 0.8448874051083838,
+      "database_cpu_cores": 3.3685821436866488,
+      "evaluator_cpu_cores": 1.4727754488676512,
+      "sampler_threads": [
+        {
+          "tid": "297298",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.3443004307326238
+        },
+        {
+          "tid": "297305",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.49980358317955387
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.330508474576271,
+        "fetch_completed_ms": 15.568851943502827,
+        "fetch_completed_prefetch_fill_ratio": 0.00227588718220339,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 7.093883759036147,
+        "insert_bundle_db_batches_ms": 8.666517132530123,
+        "insert_bundle_db_inputs_ms": 284.9642956445782,
+        "insert_bundle_db_pending_at_start": 0.15060240963855423,
+        "insert_bundle_local_pending_at_start": 57.39156626506024,
+        "insert_bundle_ms": 403.40044538554224,
+        "insert_bundle_ms_per_batch": 80.68008907710845,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 48.444371120481904
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 73,
+        "IO:WalWrite": 3,
+        "Client:ClientRead": 22,
+        "Lock:extend": 16,
+        "Client:ClientWrite": 1,
+        "IO:DataFileExtend": 5,
+        "Lock:transactionid": 1,
+        "IO:DataFileWrite": 1,
+        "LWLock:BufferContent": 75,
+        "LWLock:WALWrite": 4
+      }
+    },
+    {
+      "study": "c2-t1",
+      "case": 2,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 2,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4137953.6745440857,
+      "accepted_samples": 103546880,
+      "feedback_samples": 100663296,
+      "elapsed_seconds": 25.023692420000003,
+      "load_average": [
+        23.37353515625,
+        23.91455078125,
+        21.669921875
+      ],
+      "busy_percent": {
+        "sampler_compute": 33.00144189911681,
+        "sampler_io": 91.25227319270253,
+        "evaluator_compute": 1.1416323147988143,
+        "evaluator_io": 3.7370141176947067
+      },
+      "sampler_cpu_cores": 0.8260745554804664,
+      "database_cpu_cores": 3.3776138089531185,
+      "evaluator_cpu_cores": 1.490619582314539,
+      "sampler_threads": [
+        {
+          "tid": "297298",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.3407018456158166
+        },
+        {
+          "tid": "297305",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.4869409577155857
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.2507122507122506,
+        "fetch_completed_ms": 14.882181897435895,
+        "fetch_completed_prefetch_fill_ratio": 0.002197961182336182,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 5.624283273291926,
+        "insert_bundle_db_batches_ms": 11.461958645962737,
+        "insert_bundle_db_inputs_ms": 300.451326,
+        "insert_bundle_db_pending_at_start": 0.2795031055900621,
+        "insert_bundle_local_pending_at_start": 56.98757763975155,
+        "insert_bundle_ms": 421.27448822360253,
+        "insert_bundle_ms_per_batch": 84.25489764472051,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 49.22537819875778
+      },
+      "active_backend_wait_samples": {
+        "Lock:extend": 6,
+        "CPU/runnable:-": 56,
+        "LWLock:LockManager": 2,
+        "LWLock:BufferContent": 61,
+        "LWLock:WALWrite": 15,
+        "LWLock:WALInsert": 7,
+        "IO:WalWrite": 3,
+        "IO:DataFileExtend": 2,
+        "Client:ClientRead": 16,
+        "Client:ClientWrite": 3
+      }
+    },
+    {
+      "study": "c2-t1",
+      "case": 3,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 2,
+        "sampler_io_threads": 1,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5097207.691659635,
+      "accepted_samples": 125829120,
+      "feedback_samples": 0,
+      "elapsed_seconds": 24.685892279,
+      "load_average": [
+        25.396484375,
+        24.43798828125,
+        21.95751953125
+      ],
+      "busy_percent": {
+        "sampler_compute": 28.53153325550084,
+        "sampler_io": 90.4551481657221,
+        "evaluator_compute": 6.19461029800858,
+        "evaluator_io": 7.8650236196617875
+      },
+      "sampler_cpu_cores": 0.8183139368418535,
+      "database_cpu_cores": 3.2044664805677834,
+      "evaluator_cpu_cores": 1.4362244605795798,
+      "sampler_threads": [
+        {
+          "tid": "297298",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.28827871924700865
+        },
+        {
+          "tid": "297305",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.5324209725127509
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 2.3940149625935163,
+        "fetch_completed_ms": 3.17601362094763,
+        "fetch_completed_prefetch_fill_ratio": 0.0023379052369077308,
+        "insert_bundle_batches": 4.57345971563981,
+        "insert_bundle_commit_ms": 4.530978289099526,
+        "insert_bundle_db_batches_ms": 3.6377579999999994,
+        "insert_bundle_db_inputs_ms": 240.0620508056872,
+        "insert_bundle_db_pending_at_start": 1.3744075829383886,
+        "insert_bundle_local_pending_at_start": 17.071090047393366,
+        "insert_bundle_ms": 314.25137424644555,
+        "insert_bundle_ms_per_batch": 68.71195851398964,
+        "insert_bundle_payload_bytes": 34768465.21327014,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 41.13581935545023
+      },
+      "active_backend_wait_samples": {
+        "IO:DataFileExtend": 8,
+        "Lock:extend": 5,
+        "LWLock:BufferContent": 10,
+        "CPU/runnable:-": 56,
+        "Timeout:VacuumDelay": 23,
+        "Client:ClientRead": 10,
+        "IO:DataFileWrite": 2,
+        "LWLock:WALWrite": 6,
+        "LWLock:WALInsert": 1
+      }
+    },
+    {
+      "study": "c4-t2",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 4,
+        "sampler_io_threads": 2,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4826428.872377127,
+      "accepted_samples": 121634816,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.201825038000003,
+      "load_average": [
+        26.3984375,
+        24.99951171875,
+        22.2861328125
+      ],
+      "busy_percent": {
+        "sampler_compute": 41.81510260114202,
+        "sampler_io": 82.5962224942576,
+        "evaluator_compute": 6.773823395913529,
+        "evaluator_io": 7.729620803941036
+      },
+      "sampler_cpu_cores": 0.9456237181676455,
+      "database_cpu_cores": 2.9612325930686816,
+      "evaluator_cpu_cores": 1.5086274192783822,
+      "sampler_threads": [
+        {
+          "tid": "325714",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.41718693448572597
+        },
+        {
+          "tid": "325721",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.26262910828101416
+        },
+        {
+          "tid": "325722",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.2662049962908918
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.0956316410861866,
+        "fetch_completed_ms": 2.131964676505313,
+        "fetch_completed_prefetch_fill_ratio": 0.001069952774498229,
+        "insert_bundle_batches": 4.579710144927536,
+        "insert_bundle_commit_ms": 2.1550270676328505,
+        "insert_bundle_db_batches_ms": 2.565028371980677,
+        "insert_bundle_db_inputs_ms": 254.3126874444444,
+        "insert_bundle_db_pending_at_start": 1.816425120772947,
+        "insert_bundle_local_pending_at_start": 17.144927536231883,
+        "insert_bundle_ms": 316.3072443236715,
+        "insert_bundle_ms_per_batch": 69.06708815928272,
+        "insert_bundle_payload_bytes": 34815982.376811594,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 40.77041212560386
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 44,
+        "Lock:extend": 3,
+        "Client:ClientWrite": 1,
+        "LWLock:WALWrite": 14,
+        "LWLock:BufferContent": 3,
+        "LWLock:WALInsert": 1,
+        "Client:ClientRead": 4,
+        "IO:WalInitWrite": 1,
+        "IO:WalWrite": 1,
+        "IO:DataFileExtend": 2
+      }
+    },
+    {
+      "study": "c4-t2",
+      "case": 1,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 4,
+        "sampler_io_threads": 2,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5661589.485132562,
+      "accepted_samples": 142868480,
+      "feedback_samples": 142606336,
+      "elapsed_seconds": 25.234694315999995,
+      "load_average": [
+        23.8193359375,
+        24.5439453125,
+        22.22216796875
+      ],
+      "busy_percent": {
+        "sampler_compute": 40.05630013750946,
+        "sampler_io": 95.21433693676927,
+        "evaluator_compute": 1.5312042303877376,
+        "evaluator_io": 3.353911861462099
+      },
+      "sampler_cpu_cores": 1.06032886923313,
+      "database_cpu_cores": 4.423388196354016,
+      "evaluator_cpu_cores": 1.8500937618635678,
+      "sampler_threads": [
+        {
+          "tid": "325714",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.4052586335510673
+        },
+        {
+          "tid": "325721",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.3265562322527441
+        },
+        {
+          "tid": "325722",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.3308633288412095
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.6196136701337296,
+        "fetch_completed_ms": 6.694632869242196,
+        "fetch_completed_prefetch_fill_ratio": 0.0015816539747399703,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 2.6220689770642203,
+        "insert_bundle_db_batches_ms": 2.63991276146789,
+        "insert_bundle_db_inputs_ms": 290.42274046788987,
+        "insert_bundle_db_pending_at_start": 1.518348623853211,
+        "insert_bundle_local_pending_at_start": 55.38990825688074,
+        "insert_bundle_ms": 359.983414876147,
+        "insert_bundle_ms_per_batch": 71.9966829752294,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 47.53508124770644
+      },
+      "active_backend_wait_samples": {
+        "Lock:extend": 20,
+        "CPU/runnable:-": 57,
+        "LWLock:BufferContent": 40,
+        "LWLock:WALWrite": 17,
+        "Lock:transactionid": 1,
+        "Client:ClientRead": 9,
+        "LWLock:WALInsert": 4,
+        "IO:DataFileWrite": 1,
+        "IO:DataFileExtend": 5,
+        "IO:WalWrite": 2,
+        "Client:ClientWrite": 1
+      }
+    },
+    {
+      "study": "c4-t2",
+      "case": 2,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 4,
+        "sampler_io_threads": 2,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5365221.855857139,
+      "accepted_samples": 134348800,
+      "feedback_samples": 134217728,
+      "elapsed_seconds": 25.040679325,
+      "load_average": [
+        30.32763671875,
+        26.38427734375,
+        22.97900390625
+      ],
+      "busy_percent": {
+        "sampler_compute": 42.8184275427999,
+        "sampler_io": 94.38757265823499,
+        "evaluator_compute": 1.5278179656318345,
+        "evaluator_io": 3.422877973666379
+      },
+      "sampler_cpu_cores": 1.0206308133942192,
+      "database_cpu_cores": 4.224299291354584,
+      "evaluator_cpu_cores": 1.8321223887406588,
+      "sampler_threads": [
+        {
+          "tid": "325714",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.4366858622158688
+        },
+        {
+          "tid": "325721",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.29295159187217035
+        },
+        {
+          "tid": "325722",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.2902100662797837
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.5185185185185186,
+        "fetch_completed_ms": 5.773851804444444,
+        "fetch_completed_prefetch_fill_ratio": 0.0014829282407407408,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 2.573544302439024,
+        "insert_bundle_db_batches_ms": 2.446441839024391,
+        "insert_bundle_db_inputs_ms": 316.2721124341464,
+        "insert_bundle_db_pending_at_start": 1.6292682926829267,
+        "insert_bundle_local_pending_at_start": 54.770731707317076,
+        "insert_bundle_ms": 386.7499353707316,
+        "insert_bundle_ms_per_batch": 77.34998707414631,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 47.422740131707315
+      },
+      "active_backend_wait_samples": {
+        "LWLock:BufferContent": 16,
+        "CPU/runnable:-": 87,
+        "Client:ClientWrite": 2,
+        "Client:ClientRead": 9,
+        "IO:DataFileExtend": 4,
+        "Lock:extend": 4,
+        "LWLock:LockManager": 1,
+        "IO:WalWrite": 1,
+        "LWLock:WALWrite": 13,
+        "IO:DataFileWrite": 2,
+        "LWLock:WALInsert": 3
+      }
+    },
+    {
+      "study": "c4-t2",
+      "case": 3,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 4,
+        "sampler_io_threads": 2,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 6014066.37019114,
+      "accepted_samples": 151781376,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.237728794,
+      "load_average": [
+        26.236328125,
+        26.17333984375,
+        23.11865234375
+      ],
+      "busy_percent": {
+        "sampler_compute": 29.45027878565292,
+        "sampler_io": 97.15998934432483,
+        "evaluator_compute": 8.474640475438333,
+        "evaluator_io": 10.127414391003276
+      },
+      "sampler_cpu_cores": 0.8544757756198496,
+      "database_cpu_cores": 3.8912429391134635,
+      "evaluator_cpu_cores": 1.8361293410993977,
+      "sampler_threads": [
+        {
+          "tid": "325714",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.3020472509167841
+        },
+        {
+          "tid": "325721",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.27541940116490976
+        },
+        {
+          "tid": "325722",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.27820141531809056
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.046070460704607,
+        "fetch_completed_ms": 1.817177963866305,
+        "fetch_completed_prefetch_fill_ratio": 0.0010215531842818427,
+        "insert_bundle_batches": 4.578125,
+        "insert_bundle_commit_ms": 2.4931708437500006,
+        "insert_bundle_db_batches_ms": 2.60274531640625,
+        "insert_bundle_db_inputs_ms": 261.9749853359375,
+        "insert_bundle_db_pending_at_start": 2.1953125,
+        "insert_bundle_local_pending_at_start": 17.1171875,
+        "insert_bundle_ms": 314.37590420312495,
+        "insert_bundle_ms_per_batch": 68.66913948464163,
+        "insert_bundle_payload_bytes": 34803931.75,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 35.845230839843744
+      },
+      "active_backend_wait_samples": {
+        "IO:DataFileExtend": 8,
+        "Lock:extend": 13,
+        "Timeout:VacuumDelay": 24,
+        "CPU/runnable:-": 70,
+        "IO:DataFileWrite": 1,
+        "LWLock:WALWrite": 5,
+        "Client:ClientRead": 4,
+        "IO:WalWrite": 1
+      }
+    },
+    {
+      "study": "c4-t3",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 4,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4969811.580987261,
+      "accepted_samples": 125829120,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.318690246000003,
+      "load_average": [
+        22.296875,
+        25.33544921875,
+        22.98974609375
+      ],
+      "busy_percent": {
+        "sampler_compute": 40.915716592554105,
+        "sampler_io": 84.89270095002527,
+        "evaluator_compute": 7.946088992816996,
+        "evaluator_io": 8.10227892589753
+      },
+      "sampler_cpu_cores": 0.9192649196718687,
+      "database_cpu_cores": 3.011029223070292,
+      "evaluator_cpu_cores": 1.7178663956562386,
+      "sampler_threads": [
+        {
+          "tid": "356580",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.41914669912499714
+        },
+        {
+          "tid": "356588",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.18059824630859259
+        },
+        {
+          "tid": "356589",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.1583707698398427
+        },
+        {
+          "tid": "356590",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.16233996206640516
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 0.8556149732620321,
+        "fetch_completed_ms": 0.9509189500891263,
+        "fetch_completed_prefetch_fill_ratio": 0.0008355614973262032,
+        "insert_bundle_batches": 4.571428571428571,
+        "insert_bundle_commit_ms": 1.220058671428572,
+        "insert_bundle_db_batches_ms": 0.7453014571428571,
+        "insert_bundle_db_inputs_ms": 281.38363281904765,
+        "insert_bundle_db_pending_at_start": 1.9285714285714286,
+        "insert_bundle_local_pending_at_start": 17.0,
+        "insert_bundle_ms": 327.9680986666667,
+        "insert_bundle_ms_per_batch": 71.74302158333334,
+        "insert_bundle_payload_bytes": 34753024.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 41.76533189523813
+      },
+      "active_backend_wait_samples": {
+        "IO:WalInitSync": 1,
+        "LWLock:WALWrite": 9,
+        "Client:ClientRead": 8,
+        "CPU/runnable:-": 50,
+        "IO:WalWrite": 1,
+        "LWLock:BufferContent": 1,
+        "IO:DataFileExtend": 7,
+        "Lock:extend": 11,
+        "LWLock:WALInsert": 1,
+        "LWLock:LockManager": 1
+      }
+    },
+    {
+      "study": "c4-t3",
+      "case": 1,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 4,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 6344797.953568846,
+      "accepted_samples": 159907840,
+      "feedback_samples": 159383552,
+      "elapsed_seconds": 25.202983794,
+      "load_average": [
+        23.66455078125,
+        25.4326171875,
+        23.10009765625
+      ],
+      "busy_percent": {
+        "sampler_compute": 48.05746106095361,
+        "sampler_io": 96.58902692226204,
+        "evaluator_compute": 1.9254763661944718,
+        "evaluator_io": 3.7139694792085285
+      },
+      "sampler_cpu_cores": 1.126988286183618,
+      "database_cpu_cores": 4.921221355344037,
+      "evaluator_cpu_cores": 2.1047299484409385,
+      "sampler_threads": [
+        {
+          "tid": "356580",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.4923963419300688
+        },
+        {
+          "tid": "356588",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.21192237150689516
+        },
+        {
+          "tid": "356589",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.20800513728310785
+        },
+        {
+          "tid": "356590",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.21466443546354627
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.5681233933161953,
+        "fetch_completed_ms": 4.3285827095115685,
+        "fetch_completed_prefetch_fill_ratio": 0.001531370501285347,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 1.2945380573770486,
+        "insert_bundle_db_batches_ms": 1.0516208483606553,
+        "insert_bundle_db_inputs_ms": 278.81534019262284,
+        "insert_bundle_db_pending_at_start": 2.918032786885246,
+        "insert_bundle_local_pending_at_start": 54.4344262295082,
+        "insert_bundle_ms": 328.35531933606563,
+        "insert_bundle_ms_per_batch": 65.67106386721314,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 43.623965655737706
+      },
+      "active_backend_wait_samples": {
+        "Lock:extend": 34,
+        "CPU/runnable:-": 65,
+        "IO:DataFileExtend": 8,
+        "LWLock:BufferContent": 2,
+        "Client:ClientRead": 14,
+        "IO:WalWrite": 2,
+        "LWLock:LockManager": 2,
+        "IO:DataFileWrite": 1,
+        "LWLock:WALWrite": 7,
+        "LWLock:WALInsert": 5,
+        "Client:ClientWrite": 1
+      }
+    },
+    {
+      "study": "c4-t3",
+      "case": 2,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 4,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5793429.377070094,
+      "accepted_samples": 146800640,
+      "feedback_samples": 146800640,
+      "elapsed_seconds": 25.339161046999997,
+      "load_average": [
+        16.63134765625,
+        23.2373046875,
+        22.58642578125
+      ],
+      "busy_percent": {
+        "sampler_compute": 47.578612187033556,
+        "sampler_io": 96.73916767225478,
+        "evaluator_compute": 1.8371327494202991,
+        "evaluator_io": 3.809267328626712
+      },
+      "sampler_cpu_cores": 1.0866379897806495,
+      "database_cpu_cores": 4.722846324194226,
+      "evaluator_cpu_cores": 2.0297208527616233,
+      "sampler_threads": [
+        {
+          "tid": "356580",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.4756485945188154
+        },
+        {
+          "tid": "356588",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.19792614212707288
+        },
+        {
+          "tid": "356589",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.20457583464912868
+        },
+        {
+          "tid": "356590",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.2127901607057859
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.4052697616060226,
+        "fetch_completed_ms": 4.330654501882058,
+        "fetch_completed_prefetch_fill_ratio": 0.0013723337515683814,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 1.5078587224669602,
+        "insert_bundle_db_batches_ms": 1.4011576563876647,
+        "insert_bundle_db_inputs_ms": 317.2727561894274,
+        "insert_bundle_db_pending_at_start": 3.149779735682819,
+        "insert_bundle_local_pending_at_start": 54.13215859030837,
+        "insert_bundle_ms": 373.681125339207,
+        "insert_bundle_ms_per_batch": 74.73622506784139,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 49.07068980616741
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 83,
+        "Timeout:VacuumDelay": 21,
+        "Client:ClientRead": 7,
+        "LWLock:WALWrite": 14,
+        "IO:DataFileExtend": 6,
+        "Lock:extend": 23,
+        "LWLock:BufferContent": 21,
+        "IO:DataFileWrite": 3,
+        "LWLock:WALBufMapping": 2,
+        "LWLock:WALInsert": 8,
+        "LWLock:LockManager": 4,
+        "IO:WalWrite": 1,
+        "IO:DataFileRead": 1
+      }
+    },
+    {
+      "study": "c4-t3",
+      "case": 3,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 4,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 6418973.19883042,
+      "accepted_samples": 159383552,
+      "feedback_samples": 0,
+      "elapsed_seconds": 24.830069711,
+      "load_average": [
+        18.25537109375,
+        22.52294921875,
+        22.3818359375
+      ],
+      "busy_percent": {
+        "sampler_compute": 29.81407094366897,
+        "sampler_io": 96.93512495592044,
+        "evaluator_compute": 10.111122394268977,
+        "evaluator_io": 10.857109613763928
+      },
+      "sampler_cpu_cores": 0.9217740209924103,
+      "database_cpu_cores": 4.192700462883979,
+      "evaluator_cpu_cores": 2.1730653612615383,
+      "sampler_threads": [
+        {
+          "tid": "356580",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.3128228350672819
+        },
+        {
+          "tid": "356588",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.19516647016268804
+        },
+        {
+          "tid": "356589",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.20430868770595043
+        },
+        {
+          "tid": "356590",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6
+          ],
+          "cpu_cores": 0.20669361402158404
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 0.9942763695829926,
+        "fetch_completed_ms": 1.1772759942763689,
+        "fetch_completed_prefetch_fill_ratio": 0.0009709730171708912,
+        "insert_bundle_batches": 4.564885496183206,
+        "insert_bundle_commit_ms": 1.2966361412213734,
+        "insert_bundle_db_batches_ms": 1.0332808206106872,
+        "insert_bundle_db_inputs_ms": 250.58013906488543,
+        "insert_bundle_db_pending_at_start": 2.0381679389312977,
+        "insert_bundle_local_pending_at_start": 16.885496183206108,
+        "insert_bundle_ms": 298.1308160038169,
+        "insert_bundle_ms_per_batch": 65.30959347240805,
+        "insert_bundle_payload_bytes": 34703282.07633588,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 41.97593638549618
+      },
+      "active_backend_wait_samples": {
+        "Timeout:VacuumDelay": 40,
+        "LWLock:WALWrite": 25,
+        "LWLock:WALInsert": 7,
+        "CPU/runnable:-": 59,
+        "IO:DataFileWrite": 3,
+        "Client:ClientRead": 5,
+        "IO:DataFileExtend": 4,
+        "Lock:extend": 6,
+        "LWLock:BufferContent": 7,
+        "IO:DataFileRead": 1,
+        "LWLock:WALBufMapping": 5
+      }
+    },
+    {
+      "study": "c8-t4",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 8,
+        "sampler_io_threads": 4,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5841584.1743990015,
+      "accepted_samples": 148111360,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.354656473,
+      "load_average": [
+        16.08935546875,
+        21.47265625,
+        22.03857421875
+      ],
+      "busy_percent": {
+        "sampler_compute": 33.17385016814146,
+        "sampler_io": 94.56716464501554,
+        "evaluator_compute": 8.415569324045872,
+        "evaluator_io": 10.163683438989368
+      },
+      "sampler_cpu_cores": 0.93889156504566,
+      "database_cpu_cores": 3.639943134736898,
+      "evaluator_cpu_cores": 1.8320901423722122,
+      "sampler_threads": [
+        {
+          "tid": "390016",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.33534679682544943
+        },
+        {
+          "tid": "390024",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.13707896315732232
+        },
+        {
+          "tid": "390025",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.15893213119689545
+        },
+        {
+          "tid": "390026",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.14423090906118263
+        },
+        {
+          "tid": "390027",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.16171344349284114
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 0.889763779527559,
+        "fetch_completed_ms": 0.8009816968503937,
+        "fetch_completed_prefetch_fill_ratio": 0.0008689099409448819,
+        "insert_bundle_batches": 4.578313253012048,
+        "insert_bundle_commit_ms": 0.8830768273092366,
+        "insert_bundle_db_batches_ms": 0.7555223574297187,
+        "insert_bundle_db_inputs_ms": 274.1520056827309,
+        "insert_bundle_db_pending_at_start": 2.0200803212851404,
+        "insert_bundle_local_pending_at_start": 17.120481927710845,
+        "insert_bundle_ms": 318.6733674216868,
+        "insert_bundle_ms_per_batch": 69.60497235789475,
+        "insert_bundle_payload_bytes": 34805362.89156626,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 42.01453729718876
+      },
+      "active_backend_wait_samples": {
+        "IO:DataFileExtend": 9,
+        "Lock:extend": 5,
+        "CPU/runnable:-": 52,
+        "LWLock:BufferContent": 7,
+        "LWLock:WALWrite": 20,
+        "IO:WalWrite": 2,
+        "IO:WalInitWrite": 1,
+        "Client:ClientRead": 1
+      }
+    },
+    {
+      "study": "c8-t4-repeat",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 8,
+        "sampler_io_threads": 4,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5004937.594401366,
+      "accepted_samples": 125829120,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.140996791,
+      "load_average": [
+        21.5439453125,
+        23.79931640625,
+        22.72412109375
+      ],
+      "busy_percent": {
+        "sampler_compute": 43.127460757170425,
+        "sampler_io": 82.44452915017278,
+        "evaluator_compute": 7.141031126869827,
+        "evaluator_io": 8.327160260838529
+      },
+      "sampler_cpu_cores": 0.9457804088813914,
+      "database_cpu_cores": 3.053428812713673,
+      "evaluator_cpu_cores": 1.5801404731332107,
+      "sampler_threads": [
+        {
+          "tid": "490102",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.4421056678223388
+        },
+        {
+          "tid": "490109",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.13108254302010042
+        },
+        {
+          "tid": "490110",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.11996038785475859
+        },
+        {
+          "tid": "490111",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.12830200422876498
+        },
+        {
+          "tid": "490112",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4,
+            5,
+            6,
+            7,
+            8,
+            10,
+            11
+          ],
+          "cpu_cores": 0.12631590509209678
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 0.8751139471285324,
+        "fetch_completed_ms": 0.9800768277119416,
+        "fetch_completed_prefetch_fill_ratio": 0.0008546034639927074,
+        "insert_bundle_batches": 4.571428571428571,
+        "insert_bundle_commit_ms": 1.5017980285714292,
+        "insert_bundle_db_batches_ms": 0.6525799333333332,
+        "insert_bundle_db_inputs_ms": 271.8748365619047,
+        "insert_bundle_db_pending_at_start": 2.442857142857143,
+        "insert_bundle_local_pending_at_start": 17.0,
+        "insert_bundle_ms": 318.0393950428571,
+        "insert_bundle_ms_per_batch": 69.571117665625,
+        "insert_bundle_payload_bytes": 34753024.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 43.00877587142857
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 54,
+        "Lock:extend": 7,
+        "IO:DataFileExtend": 3,
+        "Client:ClientRead": 2,
+        "Client:ClientWrite": 2,
+        "IO:WalWrite": 3,
+        "LWLock:WALWrite": 12,
+        "LWLock:WALInsert": 1,
+        "LWLock:BufferContent": 1
+      }
+    },
+    {
+      "study": "core-check",
+      "case": 0,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 1,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4189329.936844656,
+      "accepted_samples": 104857600,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.029682928,
+      "load_average": [
+        19.7705078125,
+        20.41259765625,
+        21.31494140625
+      ],
+      "busy_percent": {
+        "sampler_compute": 39.38234033309684,
+        "sampler_io": 83.44304512797463,
+        "evaluator_compute": 5.093870250282455,
+        "evaluator_io": 6.346187378508112
+      },
+      "sampler_cpu_cores": 0.787604808380351,
+      "database_cpu_cores": 2.498717979362082,
+      "evaluator_cpu_cores": 1.2235293668027754,
+      "sampler_threads": [
+        {
+          "tid": "436990",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.3687675389389333
+        },
+        {
+          "tid": "436998",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.14027472116965886
+        },
+        {
+          "tid": "436999",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.13868520591561176
+        },
+        {
+          "tid": "437000",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.14067209998317068
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.167883211678832,
+        "fetch_completed_ms": 2.932122941605838,
+        "fetch_completed_prefetch_fill_ratio": 0.0011405109489051094,
+        "insert_bundle_batches": 4.573863636363637,
+        "insert_bundle_commit_ms": 1.4847143011363633,
+        "insert_bundle_db_batches_ms": 3.612960988636364,
+        "insert_bundle_db_inputs_ms": 257.39884231249994,
+        "insert_bundle_db_pending_at_start": 1.2670454545454546,
+        "insert_bundle_local_pending_at_start": 17.02840909090909,
+        "insert_bundle_ms": 379.34115361931816,
+        "insert_bundle_ms_per_batch": 82.93669942484473,
+        "insert_bundle_payload_bytes": 34771535.90909091,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 103.68427180681819
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 52,
+        "Client:ClientRead": 7,
+        "IO:DataFileExtend": 13,
+        "Lock:extend": 7
+      }
+    },
+    {
+      "study": "core-check",
+      "case": 1,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 16,
+        "sampler_cores": 2,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "materialized"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4619310.089146436,
+      "accepted_samples": 117440512,
+      "feedback_samples": 0,
+      "elapsed_seconds": 25.423820816000003,
+      "load_average": [
+        20.46142578125,
+        20.56787109375,
+        21.34033203125
+      ],
+      "busy_percent": {
+        "sampler_compute": 42.12392220472295,
+        "sampler_io": 80.54903561195708,
+        "evaluator_compute": 6.517453628038058,
+        "evaluator_io": 7.4212432897864815
+      },
+      "sampler_cpu_cores": 0.894351835536197,
+      "database_cpu_cores": 2.847543138732974,
+      "evaluator_cpu_cores": 1.4589337805814817,
+      "sampler_threads": [
+        {
+          "tid": "436990",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.41439758527954396
+        },
+        {
+          "tid": "436998",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.15296555161325442
+        },
+        {
+          "tid": "436999",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.16567957148760287
+        },
+        {
+          "tid": "437000",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.1625010665190158
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.006741573033708,
+        "fetch_completed_ms": 2.275023185393259,
+        "fetch_completed_prefetch_fill_ratio": 0.0009831460674157304,
+        "insert_bundle_batches": 4.571428571428571,
+        "insert_bundle_commit_ms": 1.532484301020408,
+        "insert_bundle_db_batches_ms": 1.4109512602040817,
+        "insert_bundle_db_inputs_ms": 254.49200692857144,
+        "insert_bundle_db_pending_at_start": 2.010204081632653,
+        "insert_bundle_local_pending_at_start": 17.0,
+        "insert_bundle_ms": 334.7003219234694,
+        "insert_bundle_ms_per_batch": 73.21569542075893,
+        "insert_bundle_payload_bytes": 34753024.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 68.38491854591838
+      },
+      "active_backend_wait_samples": {
+        "CPU/runnable:-": 71,
+        "Client:ClientRead": 6,
+        "IO:DataFileExtend": 7,
+        "Lock:extend": 8,
+        "IO:WalWrite": 1,
+        "LWLock:WALWrite": 10,
+        "LWLock:BufferContent": 130,
+        "LWLock:WALInsert": 13
+      }
+    },
+    {
+      "study": "core-check",
+      "case": 2,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 2,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5546089.781754233,
+      "accepted_samples": 137625600,
+      "feedback_samples": 138412032,
+      "elapsed_seconds": 24.814888582000002,
+      "load_average": [
+        21.33837890625,
+        20.8017578125,
+        21.39111328125
+      ],
+      "busy_percent": {
+        "sampler_compute": 47.04014376460761,
+        "sampler_io": 93.20627080621723,
+        "evaluator_compute": 1.5230126631713325,
+        "evaluator_io": 3.418825801188433
+      },
+      "sampler_cpu_cores": 1.051000919234404,
+      "database_cpu_cores": 4.3630444422037975,
+      "evaluator_cpu_cores": 1.839153677154501,
+      "sampler_threads": [
+        {
+          "tid": "436990",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.4544021864748075
+        },
+        {
+          "tid": "436998",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.1899871210692083
+        },
+        {
+          "tid": "436999",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.19664646345720116
+        },
+        {
+          "tid": "437000",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.21466586050706424
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.674641148325359,
+        "fetch_completed_ms": 6.199595925039874,
+        "fetch_completed_prefetch_fill_ratio": 0.0016353917464114833,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 1.1687616261682243,
+        "insert_bundle_db_batches_ms": 1.463043121495328,
+        "insert_bundle_db_inputs_ms": 279.9469083037383,
+        "insert_bundle_db_pending_at_start": 2.94392523364486,
+        "insert_bundle_local_pending_at_start": 53.73364485981308,
+        "insert_bundle_ms": 365.93583792523367,
+        "insert_bundle_ms_per_batch": 73.18716758504674,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 73.89895304672896
+      },
+      "active_backend_wait_samples": {
+        "IO:DataFileExtend": 12,
+        "Lock:extend": 22,
+        "CPU/runnable:-": 75,
+        "IO:WalWrite": 2,
+        "LWLock:WALWrite": 17,
+        "LWLock:WALInsert": 2,
+        "Client:ClientRead": 6,
+        "LWLock:BufferContent": 24,
+        "LWLock:LockManager": 1
+      }
+    },
+    {
+      "study": "core-check",
+      "case": 3,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 1,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4404280.211562863,
+      "accepted_samples": 110100480,
+      "feedback_samples": 113246208,
+      "elapsed_seconds": 24.998518421,
+      "load_average": [
+        38.42041015625,
+        25.23583984375,
+        22.8564453125
+      ],
+      "busy_percent": {
+        "sampler_compute": 43.72460771042268,
+        "sampler_io": 92.71798884100755,
+        "evaluator_compute": 1.2283838045415858,
+        "evaluator_io": 2.654545029585157
+      },
+      "sampler_cpu_cores": 0.8328137927079516,
+      "database_cpu_cores": 3.594372645537843,
+      "evaluator_cpu_cores": 1.5865357254596233,
+      "sampler_threads": [
+        {
+          "tid": "436990",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.35787108910910553
+        },
+        {
+          "tid": "436998",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.1683638603029709
+        },
+        {
+          "tid": "436999",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.15035284268916468
+        },
+        {
+          "tid": "437000",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.15661754446787987
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.5849056603773586,
+        "fetch_completed_ms": 6.9969058490566045,
+        "fetch_completed_prefetch_fill_ratio": 0.0015477594339622642,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 2.0080022138728326,
+        "insert_bundle_db_batches_ms": 4.501672976878613,
+        "insert_bundle_db_inputs_ms": 257.2746733757226,
+        "insert_bundle_db_pending_at_start": 1.346820809248555,
+        "insert_bundle_local_pending_at_start": 56.70520231213873,
+        "insert_bundle_ms": 405.17373312716774,
+        "insert_bundle_ms_per_batch": 81.03474662543353,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 131.35319917919074
+      },
+      "active_backend_wait_samples": {
+        "Lock:extend": 8,
+        "CPU/runnable:-": 62,
+        "IO:DataFileExtend": 11,
+        "Client:ClientRead": 14,
+        "Timeout:VacuumDelay": 15,
+        "IO:WalSync": 1,
+        "Client:ClientWrite": 1,
+        "IO:DataFileWrite": 2,
+        "LWLock:WALWrite": 14,
+        "LWLock:WALInsert": 6
+      }
+    },
+    {
+      "study": "core-check",
+      "case": 4,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 1,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 4777370.200460106,
+      "accepted_samples": 118620160,
+      "feedback_samples": 117440512,
+      "elapsed_seconds": 24.829593483999997,
+      "load_average": [
+        33.98388671875,
+        25.689453125,
+        23.10693359375
+      ],
+      "busy_percent": {
+        "sampler_compute": 45.328755149586335,
+        "sampler_io": 89.41901407410091,
+        "evaluator_compute": 1.2124817396757037,
+        "evaluator_io": 3.5734804348065725
+      },
+      "sampler_cpu_cores": 0.8626773243488004,
+      "database_cpu_cores": 4.142889285945851,
+      "evaluator_cpu_cores": 1.5834695094816689,
+      "sampler_threads": [
+        {
+          "tid": "436990",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.3750941387559297
+        },
+        {
+          "tid": "436998",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.15795500304978036
+        },
+        {
+          "tid": "436999",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.16932149210299033
+        },
+        {
+          "tid": "437000",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2
+          ],
+          "cpu_cores": 0.15756305515139374
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.9631236442516269,
+        "fetch_completed_ms": 9.30999219956616,
+        "fetch_completed_prefetch_fill_ratio": 0.0019171129338394794,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 2.021154502793296,
+        "insert_bundle_db_batches_ms": 3.0573141620111723,
+        "insert_bundle_db_inputs_ms": 239.6498282625698,
+        "insert_bundle_db_pending_at_start": 1.9329608938547487,
+        "insert_bundle_local_pending_at_start": 56.737430167597765,
+        "insert_bundle_ms": 380.4377304636873,
+        "insert_bundle_ms_per_batch": 76.08754609273744,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 125.38895191061451
+      },
+      "active_backend_wait_samples": {
+        "IO:DataFileExtend": 8,
+        "CPU/runnable:-": 76,
+        "Timeout:VacuumDelay": 27,
+        "Client:ClientRead": 21,
+        "Lock:extend": 13,
+        "Client:ClientWrite": 1,
+        "IO:DataFileWrite": 1
+      }
+    },
+    {
+      "study": "core-check",
+      "case": 5,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 2,
+        "sampler_io_threads": 3,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "valid": true,
+      "adequate": true,
+      "issues": [],
+      "samples_per_second": 5368607.683333734,
+      "accepted_samples": 134348800,
+      "feedback_samples": 134217728,
+      "elapsed_seconds": 25.024886884,
+      "load_average": [
+        23.16845703125,
+        24.1337890625,
+        22.7255859375
+      ],
+      "busy_percent": {
+        "sampler_compute": 45.68198870584753,
+        "sampler_io": 93.00244156899822,
+        "evaluator_compute": 1.4883146758960235,
+        "evaluator_io": 4.593736315046581
+      },
+      "sampler_cpu_cores": 1.0385331289692556,
+      "database_cpu_cores": 4.904162472569482,
+      "evaluator_cpu_cores": 1.815182102913848,
+      "sampler_threads": [
+        {
+          "tid": "436990",
+          "name": "gammaboard",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.44469417056504873
+        },
+        {
+          "tid": "436998",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.19925117325493835
+        },
+        {
+          "tid": "436999",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.1886818575812971
+        },
+        {
+          "tid": "437000",
+          "name": "tokio-rt-worker",
+          "allowed_cpus": [
+            2,
+            4
+          ],
+          "cpu_cores": 0.20942903279251848
+        }
+      ],
+      "queue_window_means": {
+        "fetch_completed_batches": 1.500732064421669,
+        "fetch_completed_ms": 5.39378343191801,
+        "fetch_completed_prefetch_fill_ratio": 0.0014655586566617862,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 1.2623533684210524,
+        "insert_bundle_db_batches_ms": 3.3116066363636385,
+        "insert_bundle_db_inputs_ms": 287.1359145167463,
+        "insert_bundle_db_pending_at_start": 2.3062200956937797,
+        "insert_bundle_local_pending_at_start": 55.43540669856459,
+        "insert_bundle_ms": 371.86101851196173,
+        "insert_bundle_ms_per_batch": 74.37220370239234,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 72.00339636363636
+      },
+      "active_backend_wait_samples": {
+        "LWLock:WALWrite": 30,
+        "CPU/runnable:-": 77,
+        "Timeout:VacuumDelay": 38,
+        "Client:ClientRead": 31,
+        "IO:WalSync": 1,
+        "Lock:extend": 8,
+        "LWLock:WALInsert": 19,
+        "LWLock:BufferContent": 8,
+        "IO:DataFileExtend": 10,
+        "IO:DataFileWrite": 4,
+        "LWLock:LockManager": 1,
+        "LWLock:WALBufMapping": 2
+      }
+    }
+  ],
+  "failed_trials": [
+    {
+      "study": "c8-t4",
+      "case": 1,
+      "config": {
+        "sampler_cores": 8,
+        "sampler_io_threads": 4,
+        "mode": "training",
+        "workers": 64
+      },
+      "measurement_valid": true,
+      "issues": [],
+      "samples_per_second": 6346581.448241016,
+      "accepted_samples": 158597120,
+      "feedback_samples": 159383552,
+      "elapsed_seconds": 24.989377555999997,
+      "usable": false,
+      "error": "Completed-batch cleanup and subsequent run-removal DELETE each exceeded PostgreSQL statement_timeout (30s). Private deployment shutdown was clean.",
+      "source_measurement": "/common/dev/cedric/setup-logs/sampler-cores-20260930/c8-t4/trial-001/measurement.json",
+      "source_log": "/tmp/gmb-scale-muugxl_k/resources/db/logfile-184"
+    },
+    {
+      "study": "c8-t4-repeat",
+      "case": 1,
+      "config": {
+        "pool": 6,
+        "inserts": 4,
+        "bundle": 5,
+        "batch": 131072,
+        "workers": 64,
+        "sampler_cores": 8,
+        "sampler_io_threads": 4,
+        "database_cores": 15,
+        "mode": "training"
+      },
+      "measurement_valid": true,
+      "issues": [],
+      "samples_per_second": 6065788.270603479,
+      "accepted_samples": 152043520,
+      "feedback_samples": 150994944,
+      "elapsed_seconds": 25.065747964999996,
+      "usable": false,
+      "error": "Completed-batch cleanup and subsequent run-removal DELETE each exceeded PostgreSQL statement_timeout (30s). Private deployment shutdown was clean.",
+      "source_measurement": "/common/dev/cedric/setup-logs/sampler-cores-20260930/c8-t4-repeat/trial-001/measurement.json",
+      "source_log": "/common/dev/cedric/setup-logs/sampler-cores-20260930/c8-t4-repeat/postgres.log"
+    }
+  ],
+  "summary": [
+    {
+      "cores": 1,
+      "io_threads": 1,
+      "mode": "materialized",
+      "n": 4,
+      "rates": [
+        4851565.682620115,
+        4198766.027313621,
+        4537711.593182392,
+        4985840.230540919
+      ],
+      "median_rate": 4694638.637901254,
+      "min_rate": 4198766.027313621,
+      "max_rate": 4985840.230540919,
+      "median_sampler_cpu_cores": 0.8431648620322363,
+      "median_database_cpu_cores": 2.7543780150294666,
+      "queue_window_means": {
+        "fetch_completed_batches": 2.354859335038363,
+        "fetch_completed_ms": 3.5443841113694488,
+        "fetch_completed_prefetch_fill_ratio": 0.0022996673193734015,
+        "insert_bundle_batches": 4.575871442276943,
+        "insert_bundle_commit_ms": 4.130138078646589,
+        "insert_bundle_db_batches_ms": 4.103548761546049,
+        "insert_bundle_db_inputs_ms": 234.69311751753213,
+        "insert_bundle_db_pending_at_start": 1.9177986365486366,
+        "insert_bundle_local_pending_at_start": 17.08368105950653,
+        "insert_bundle_ms": 306.33145617617254,
+        "insert_bundle_ms_per_batch": 66.97392170802468,
+        "insert_bundle_payload_bytes": 34786799.699392386,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 41.11972610039183
+      }
+    },
+    {
+      "cores": 1,
+      "io_threads": 1,
+      "mode": "training",
+      "n": 4,
+      "rates": [
+        4560404.616698992,
+        4188426.6390720084,
+        4191038.4524901467,
+        4466974.879521296
+      ],
+      "median_rate": 4329006.666005721,
+      "min_rate": 4188426.6390720084,
+      "max_rate": 4560404.616698992,
+      "median_sampler_cpu_cores": 0.8214522939302313,
+      "median_database_cpu_cores": 3.454480530104854,
+      "queue_window_means": {
+        "fetch_completed_batches": 2.2948292585293757,
+        "fetch_completed_ms": 10.005173143606047,
+        "fetch_completed_prefetch_fill_ratio": 0.0022410441977825935,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 6.218488734614945,
+        "insert_bundle_db_batches_ms": 5.713362546512457,
+        "insert_bundle_db_inputs_ms": 285.76986010723317,
+        "insert_bundle_db_pending_at_start": 0.6103937794264518,
+        "insert_bundle_local_pending_at_start": 56.56339468302659,
+        "insert_bundle_ms": 398.8115397051496,
+        "insert_bundle_ms_per_batch": 79.76230794102992,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 47.42460922914462
+      }
+    },
+    {
+      "cores": 1,
+      "io_threads": 3,
+      "mode": "materialized",
+      "n": 1,
+      "rates": [
+        4189329.936844656
+      ],
+      "median_rate": 4189329.936844656,
+      "min_rate": 4189329.936844656,
+      "max_rate": 4189329.936844656,
+      "median_sampler_cpu_cores": 0.787604808380351,
+      "median_database_cpu_cores": 2.498717979362082,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.167883211678832,
+        "fetch_completed_ms": 2.932122941605838,
+        "fetch_completed_prefetch_fill_ratio": 0.0011405109489051094,
+        "insert_bundle_batches": 4.573863636363637,
+        "insert_bundle_commit_ms": 1.4847143011363633,
+        "insert_bundle_db_batches_ms": 3.612960988636364,
+        "insert_bundle_db_inputs_ms": 257.39884231249994,
+        "insert_bundle_db_pending_at_start": 1.2670454545454546,
+        "insert_bundle_local_pending_at_start": 17.02840909090909,
+        "insert_bundle_ms": 379.34115361931816,
+        "insert_bundle_ms_per_batch": 82.93669942484473,
+        "insert_bundle_payload_bytes": 34771535.90909091,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 103.68427180681819
+      }
+    },
+    {
+      "cores": 1,
+      "io_threads": 3,
+      "mode": "training",
+      "n": 2,
+      "rates": [
+        4404280.211562863,
+        4777370.200460106
+      ],
+      "median_rate": 4590825.206011484,
+      "min_rate": 4404280.211562863,
+      "max_rate": 4777370.200460106,
+      "median_sampler_cpu_cores": 0.847745558528376,
+      "median_database_cpu_cores": 3.868630965741847,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.7740146523144928,
+        "fetch_completed_ms": 8.153449024311382,
+        "fetch_completed_prefetch_fill_ratio": 0.001732436183900872,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 2.0145783583330643,
+        "insert_bundle_db_batches_ms": 3.7794935694448926,
+        "insert_bundle_db_inputs_ms": 248.46225081914622,
+        "insert_bundle_db_pending_at_start": 1.6398908515516517,
+        "insert_bundle_local_pending_at_start": 56.721316239868244,
+        "insert_bundle_ms": 392.8057317954275,
+        "insert_bundle_ms_per_batch": 78.56114635908548,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 128.37107554490262
+      }
+    },
+    {
+      "cores": 2,
+      "io_threads": 1,
+      "mode": "materialized",
+      "n": 2,
+      "rates": [
+        4483168.812435256,
+        5097207.691659635
+      ],
+      "median_rate": 4790188.252047446,
+      "min_rate": 4483168.812435256,
+      "max_rate": 5097207.691659635,
+      "median_sampler_cpu_cores": 0.7981924154603433,
+      "median_database_cpu_cores": 2.9426407948131756,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.9457076546069834,
+        "fetch_completed_ms": 2.9522249205258086,
+        "fetch_completed_prefetch_fill_ratio": 0.0019001051314521322,
+        "insert_bundle_batches": 4.572444143534191,
+        "insert_bundle_commit_ms": 4.660219480528599,
+        "insert_bundle_db_batches_ms": 3.6471436455026445,
+        "insert_bundle_db_inputs_ms": 256.4434121462299,
+        "insert_bundle_db_pending_at_start": 1.3591614634268663,
+        "insert_bundle_local_pending_at_start": 17.035545023696685,
+        "insert_bundle_ms": 328.8657801152862,
+        "insert_bundle_ms_per_batch": 71.92412459900869,
+        "insert_bundle_payload_bytes": 34760744.60663507,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 40.47386025709019
+      }
+    },
+    {
+      "cores": 2,
+      "io_threads": 1,
+      "mode": "training",
+      "n": 2,
+      "rates": [
+        4293119.289314959,
+        4137953.6745440857
+      ],
+      "median_rate": 4215536.481929522,
+      "min_rate": 4137953.6745440857,
+      "max_rate": 4293119.289314959,
+      "median_sampler_cpu_cores": 0.8354809802944251,
+      "median_database_cpu_cores": 3.3730979763198836,
+      "queue_window_means": {
+        "fetch_completed_batches": 2.290610362644261,
+        "fetch_completed_ms": 15.22551692046936,
+        "fetch_completed_prefetch_fill_ratio": 0.002236924182269786,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 6.359083516164036,
+        "insert_bundle_db_batches_ms": 10.06423788924643,
+        "insert_bundle_db_inputs_ms": 292.7078108222891,
+        "insert_bundle_db_pending_at_start": 0.21505275761430814,
+        "insert_bundle_local_pending_at_start": 57.1895719524059,
+        "insert_bundle_ms": 412.3374668045724,
+        "insert_bundle_ms_per_batch": 82.46749336091449,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 48.83487465961984
+      }
+    },
+    {
+      "cores": 2,
+      "io_threads": 3,
+      "mode": "materialized",
+      "n": 1,
+      "rates": [
+        4619310.089146436
+      ],
+      "median_rate": 4619310.089146436,
+      "min_rate": 4619310.089146436,
+      "max_rate": 4619310.089146436,
+      "median_sampler_cpu_cores": 0.894351835536197,
+      "median_database_cpu_cores": 2.847543138732974,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.006741573033708,
+        "fetch_completed_ms": 2.275023185393259,
+        "fetch_completed_prefetch_fill_ratio": 0.0009831460674157304,
+        "insert_bundle_batches": 4.571428571428571,
+        "insert_bundle_commit_ms": 1.532484301020408,
+        "insert_bundle_db_batches_ms": 1.4109512602040817,
+        "insert_bundle_db_inputs_ms": 254.49200692857144,
+        "insert_bundle_db_pending_at_start": 2.010204081632653,
+        "insert_bundle_local_pending_at_start": 17.0,
+        "insert_bundle_ms": 334.7003219234694,
+        "insert_bundle_ms_per_batch": 73.21569542075893,
+        "insert_bundle_payload_bytes": 34753024.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 68.38491854591838
+      }
+    },
+    {
+      "cores": 2,
+      "io_threads": 3,
+      "mode": "training",
+      "n": 2,
+      "rates": [
+        5546089.781754233,
+        5368607.683333734
+      ],
+      "median_rate": 5457348.7325439835,
+      "min_rate": 5368607.683333734,
+      "max_rate": 5546089.781754233,
+      "median_sampler_cpu_cores": 1.0447670241018299,
+      "median_database_cpu_cores": 4.63360345738664,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.587686606373514,
+        "fetch_completed_ms": 5.796689678478941,
+        "fetch_completed_prefetch_fill_ratio": 0.0015504752015366348,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 1.2155574972946384,
+        "insert_bundle_db_batches_ms": 2.3873248789294834,
+        "insert_bundle_db_inputs_ms": 283.5414114102423,
+        "insert_bundle_db_pending_at_start": 2.62507266466932,
+        "insert_bundle_local_pending_at_start": 54.58452577918884,
+        "insert_bundle_ms": 368.8984282185977,
+        "insert_bundle_ms_per_batch": 73.77968564371955,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 72.95117470518267
+      }
+    },
+    {
+      "cores": 4,
+      "io_threads": 2,
+      "mode": "materialized",
+      "n": 2,
+      "rates": [
+        4826428.872377127,
+        6014066.37019114
+      ],
+      "median_rate": 5420247.621284134,
+      "min_rate": 4826428.872377127,
+      "max_rate": 6014066.37019114,
+      "median_sampler_cpu_cores": 0.9000497468937475,
+      "median_database_cpu_cores": 3.426237766091073,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.0708510508953968,
+        "fetch_completed_ms": 1.974571320185809,
+        "fetch_completed_prefetch_fill_ratio": 0.001045752979390036,
+        "insert_bundle_batches": 4.578917572463768,
+        "insert_bundle_commit_ms": 2.3240989556914258,
+        "insert_bundle_db_batches_ms": 2.5838868441934633,
+        "insert_bundle_db_inputs_ms": 258.1438363901909,
+        "insert_bundle_db_pending_at_start": 2.0058688103864735,
+        "insert_bundle_local_pending_at_start": 17.13105751811594,
+        "insert_bundle_ms": 315.34157426339823,
+        "insert_bundle_ms_per_batch": 68.86811382196217,
+        "insert_bundle_payload_bytes": 34809957.0634058,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 38.3078214827238
+      }
+    },
+    {
+      "cores": 4,
+      "io_threads": 2,
+      "mode": "training",
+      "n": 2,
+      "rates": [
+        5661589.485132562,
+        5365221.855857139
+      ],
+      "median_rate": 5513405.670494851,
+      "min_rate": 5365221.855857139,
+      "max_rate": 5661589.485132562,
+      "median_sampler_cpu_cores": 1.0404798413136747,
+      "median_database_cpu_cores": 4.3238437438543,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.569066094326124,
+        "fetch_completed_ms": 6.2342423368433195,
+        "fetch_completed_prefetch_fill_ratio": 0.0015322911077403556,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 2.597806639751622,
+        "insert_bundle_db_batches_ms": 2.5431773002461404,
+        "insert_bundle_db_inputs_ms": 303.3474264510181,
+        "insert_bundle_db_pending_at_start": 1.573808458268069,
+        "insert_bundle_local_pending_at_start": 55.08031998209891,
+        "insert_bundle_ms": 373.3666751234393,
+        "insert_bundle_ms_per_batch": 74.67333502468786,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 47.47891068970688
+      }
+    },
+    {
+      "cores": 4,
+      "io_threads": 3,
+      "mode": "materialized",
+      "n": 2,
+      "rates": [
+        4969811.580987261,
+        6418973.19883042
+      ],
+      "median_rate": 5694392.389908841,
+      "min_rate": 4969811.580987261,
+      "max_rate": 6418973.19883042,
+      "median_sampler_cpu_cores": 0.9205194703321395,
+      "median_database_cpu_cores": 3.601864842977135,
+      "queue_window_means": {
+        "fetch_completed_batches": 0.9249456714225124,
+        "fetch_completed_ms": 1.0640974721827476,
+        "fetch_completed_prefetch_fill_ratio": 0.0009032672572485472,
+        "insert_bundle_batches": 4.568157033805889,
+        "insert_bundle_commit_ms": 1.2583474063249727,
+        "insert_bundle_db_batches_ms": 0.8892911388767721,
+        "insert_bundle_db_inputs_ms": 265.98188594196654,
+        "insert_bundle_db_pending_at_start": 1.9833696837513632,
+        "insert_bundle_local_pending_at_start": 16.942748091603054,
+        "insert_bundle_ms": 313.0494573352418,
+        "insert_bundle_ms_per_batch": 68.5263075278707,
+        "insert_bundle_payload_bytes": 34728153.03816794,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 41.87063414036716
+      }
+    },
+    {
+      "cores": 4,
+      "io_threads": 3,
+      "mode": "training",
+      "n": 2,
+      "rates": [
+        6344797.953568846,
+        5793429.377070094
+      ],
+      "median_rate": 6069113.665319471,
+      "min_rate": 5793429.377070094,
+      "max_rate": 6344797.953568846,
+      "median_sampler_cpu_cores": 1.1068131379821338,
+      "median_database_cpu_cores": 4.822033839769132,
+      "queue_window_means": {
+        "fetch_completed_batches": 1.486696577461109,
+        "fetch_completed_ms": 4.329618605696814,
+        "fetch_completed_prefetch_fill_ratio": 0.0014518521264268642,
+        "insert_bundle_batches": 5.0,
+        "insert_bundle_commit_ms": 1.4011983899220044,
+        "insert_bundle_db_batches_ms": 1.22638925237416,
+        "insert_bundle_db_inputs_ms": 298.0440481910251,
+        "insert_bundle_db_pending_at_start": 3.0339062612840326,
+        "insert_bundle_local_pending_at_start": 54.283292409908285,
+        "insert_bundle_ms": 351.0182223376363,
+        "insert_bundle_ms_per_batch": 70.20364446752725,
+        "insert_bundle_payload_bytes": 38011120.0,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 46.34732773095256
+      }
+    },
+    {
+      "cores": 8,
+      "io_threads": 4,
+      "mode": "materialized",
+      "n": 2,
+      "rates": [
+        5841584.1743990015,
+        5004937.594401366
+      ],
+      "median_rate": 5423260.884400183,
+      "min_rate": 5004937.594401366,
+      "max_rate": 5841584.1743990015,
+      "median_sampler_cpu_cores": 0.9423359869635257,
+      "median_database_cpu_cores": 3.346685973725285,
+      "queue_window_means": {
+        "fetch_completed_batches": 0.8824388633280458,
+        "fetch_completed_ms": 0.8905292622811676,
+        "fetch_completed_prefetch_fill_ratio": 0.0008617567024687947,
+        "insert_bundle_batches": 4.57487091222031,
+        "insert_bundle_commit_ms": 1.192437427940333,
+        "insert_bundle_db_batches_ms": 0.7040511453815259,
+        "insert_bundle_db_inputs_ms": 273.0134211223178,
+        "insert_bundle_db_pending_at_start": 2.231468732071142,
+        "insert_bundle_local_pending_at_start": 17.06024096385542,
+        "insert_bundle_ms": 318.35638123227193,
+        "insert_bundle_ms_per_batch": 69.58804501175987,
+        "insert_bundle_payload_bytes": 34779193.44578313,
+        "insert_bundle_payload_bytes_per_batch": 7602224.0,
+        "insert_bundle_serialize_ms": 42.51165658430867
+      }
+    }
+  ]
+}

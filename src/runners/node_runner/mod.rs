@@ -12,7 +12,7 @@ use crate::core::{
     AggregationStore, ControlPlaneStore, NodeCapabilities, RunReadStore, RunSpecStore,
     RunTaskStore, StoreError, WorkQueueStore, WorkerRole,
 };
-use crate::runners::{MAX_ROLE_DB_CONNECTIONS_PER_NODE, TaskControlLoop, TaskControlLoopConfig};
+use crate::runners::{TaskControlLoop, TaskControlLoopConfig, role_db_pool_size};
 use crate::stores::init_pg_store;
 use rand::Rng;
 use std::time::{Duration, Instant};
@@ -226,12 +226,18 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         self.active_runner.as_ref().map(|runner| runner.target)
     }
 
-    async fn init_role_store(&self, max_connections: u32) -> Result<crate::PgStore, StoreError> {
-        let effective = max_connections.clamp(1, MAX_ROLE_DB_CONNECTIONS_PER_NODE);
+    async fn init_role_store(
+        &self,
+        role: WorkerRole,
+        max_connections: u32,
+    ) -> Result<crate::PgStore, StoreError> {
+        let effective = role_db_pool_size(role, max_connections);
         if effective != max_connections {
             warn!(
                 requested = max_connections,
-                effective, "worker DB pool size capped; configure 1 or 2 connections"
+                effective,
+                ?role,
+                "worker DB pool size capped for role"
             );
         }
         init_pg_store(&self.database_url, effective)

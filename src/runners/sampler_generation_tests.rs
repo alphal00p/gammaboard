@@ -48,6 +48,7 @@ fn runner(
         RunSampleProgress::default(),
         None,
     )
+    .unwrap()
 }
 
 fn draw_count(runner: &mut SamplerAggregatorRunner<RecordingStore>) -> usize {
@@ -247,4 +248,22 @@ async fn generation_size_is_independent_of_evaluator_limit_and_queue_target() {
     );
     assert_eq!(draw_count(&mut runner), 1);
     runner.queue.flush().await.unwrap();
+}
+
+#[test]
+fn sampler_io_threads_default_to_one_and_reject_zero() {
+    let defaults: toml::Value =
+        toml::from_str(include_str!("../config_defaults/run.toml")).unwrap();
+    let mut params = defaults["sampler_aggregator_runner_params"].clone();
+    params.as_table_mut().unwrap().remove("io_threads");
+    let legacy: SamplerAggregatorRunnerParams = params.clone().try_into().unwrap();
+    assert_eq!(legacy.io_threads.get(), 1);
+    params
+        .as_table_mut()
+        .unwrap()
+        .insert("io_threads".into(), toml::Value::Integer(3));
+    let configured: SamplerAggregatorRunnerParams = params.clone().try_into().unwrap();
+    assert_eq!(configured.io_threads.get(), 3);
+    params["io_threads"] = toml::Value::Integer(0);
+    assert!(params.try_into::<SamplerAggregatorRunnerParams>().is_err());
 }

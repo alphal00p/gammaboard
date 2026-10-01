@@ -29,6 +29,27 @@ class FrontierTests(unittest.TestCase):
             self.assertGreaterEqual(config['generation_batch_size'],16)
             if mode=='rng':self.assertEqual(len(card['task_queue']),2)
 
+    def test_pool_size_is_explicit_and_old_suites_keep_their_original_capacity(self):
+        self.assertEqual(tomllib.loads(f.card('training',0,self.suite))
+                         ['sampler_aggregator_runner_params']['db_pool_size'],6)
+        legacy={k:v for k,v in self.suite.items() if k!='sampler_db_pool_size'}
+        f.validate(legacy)
+        self.assertEqual(tomllib.loads(f.card('training',0,legacy))
+                         ['sampler_aggregator_runner_params']['db_pool_size'],2)
+        for value in [0,7,True,2.5]:
+            with self.assertRaisesRegex(ValueError,'sampler_db_pool_size'):
+                f.validate(dict(self.suite,sampler_db_pool_size=value))
+
+    def test_sampler_io_threads_are_recorded_and_validated(self):
+        legacy={k:v for k,v in self.suite.items() if k!='sampler_io_threads'}
+        for suite, expected in [(legacy,1),(dict(self.suite,sampler_io_threads=3),3)]:
+            f.validate(suite)
+            self.assertEqual(tomllib.loads(f.card('training',0,suite))
+                             ['sampler_aggregator_runner_params']['io_threads'],expected)
+        for value in [0,-1,True,2.5]:
+            with self.assertRaisesRegex(ValueError,'sampler_io_threads'):
+                f.validate(dict(self.suite,sampler_io_threads=value))
+
     def test_default_sparse_curves_cover_both_ends_and_selected_knees(self):
         points=f.validate_points(f.sparse_points(self.suite),self.suite)
         self.assertEqual(len(points),87)
@@ -283,6 +304,9 @@ class FrontierTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'value_coordinate'):f.compare(before,after)
             f.bench.write_json(after/'manifest.json',dict(manifest,suite=dict(self.suite,max_batch_size=262144)))
             with self.assertRaisesRegex(ValueError,'max_batch_size'):f.compare(before,after)
+            for key,value in [('sampler_db_pool_size',2),('sampler_io_threads',3),('database_shared_buffers','256MB')]:
+                f.bench.write_json(after/'manifest.json',dict(manifest,suite=dict(self.suite,**{key:value})))
+                with self.assertRaisesRegex(ValueError,key):f.compare(before,after)
 
     def test_failed_explicit_confirmation_is_not_reported_as_completed(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1514,6 +1514,114 @@ async fn prefetch_yields_to_unserved_peers_but_never_strands_work() {
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn sampler_assignment_reserves_extra_connections_until_the_old_role_stops() {
+    use gammaboard::core::{DesiredAssignment, NodeAssignmentUpdate};
+    let (_guard, store) = locked_test_store().await;
+    let capacity: i64 = sqlx::query_scalar(
+        "SELECT (current_setting('max_connections')::bigint -
+            current_setting('superuser_reserved_connections')::bigint -
+            COALESCE(current_setting('reserved_connections',true)::bigint,0) - 16) / 4",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    let launch = store
+        .reserve_worker_launch(
+            "external",
+            vec![serde_json::json!({
+                "count": capacity, "name_prefix": unique_id("pool-budget")
+            })],
+        )
+        .await
+        .unwrap();
+    let name: String = sqlx::query_scalar(
+        "SELECT name FROM nodes WHERE launch_request_id=$1 ORDER BY name LIMIT 1",
+    )
+    .bind(launch)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    store
+        .announce_node(&name, &name, &Default::default())
+        .await
+        .unwrap();
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('pool-budget','{}','{\"continuous\":{\"dims\":0}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let sampler = DesiredAssignment {
+        node_name: name.clone(),
+        role: WorkerRole::SamplerAggregator,
+        run_id: run,
+        run_name: None,
+    };
+    // Both operator assignment and controller placement must roll back when
+    // the additional sampler connections would spend the launch reservations.
+    assert!(
+        store
+            .assign_worker_pool(&name, WorkerRole::SamplerAggregator, run)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("connection budget exceeded")
+    );
+    assert!(
+        store
+            .update_desired_assignments(&[NodeAssignmentUpdate {
+                node_uuid: name.clone(),
+                expected: None,
+                desired: Some(sampler),
+            }])
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("connection budget exceeded")
+    );
+    assert!(store.get_desired_assignment(&name).await.unwrap().is_none());
+    store
+        .assign_worker_pool(&name, WorkerRole::Evaluator, run)
+        .await
+        .unwrap();
+
+    // Releasing one four-connection reservation makes room for the sampler's
+    // four extra connections without reducing the evaluator fleet allowance.
+    sqlx::query("DELETE FROM nodes WHERE name=(SELECT name FROM nodes WHERE launch_request_id=$1 AND name<>$2 LIMIT 1)")
+        .bind(launch).bind(&name).execute(store.pool()).await.unwrap();
+    store
+        .assign_worker_pool(&name, WorkerRole::SamplerAggregator, run)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET active_run_id=$2,active_role='sampler_aggregator' WHERE name=$1")
+        .bind(&name)
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store
+        .assign_worker_pool(&name, WorkerRole::Evaluator, run)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .reserve_worker_launch("external", vec![serde_json::json!({"count":1})])
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("connection budget exceeded"),
+        "the old sampler still owns its role pool during reassignment"
+    );
+    sqlx::query("UPDATE nodes SET active_run_id=NULL,active_role=NULL WHERE name=$1")
+        .bind(&name)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store
+        .reserve_worker_launch("external", vec![serde_json::json!({"count":1})])
+        .await
+        .expect("sampler shutdown releases the extra reservation");
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn expired_launch_history_does_not_reserve_connections_or_require_simultaneous_leases() {
     let (_guard, store) = locked_test_store().await;
     let capacity: i64 = sqlx::query_scalar(

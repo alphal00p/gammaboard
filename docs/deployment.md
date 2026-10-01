@@ -17,10 +17,17 @@ documented in [config.md](config.md).
 ## CPU Threads
 
 Worker and CLI processes use one background Tokio thread by default. Worker
-computation runs on the calling thread while leases and queue I/O continue in
-the background. The API server retains Tokio's automatic pool size.
-`TOKIO_WORKER_THREADS` overrides either default. Help and version output do not
+computation runs on the calling thread while control-plane and evaluator I/O
+continue in the background. Each active sampler additionally owns an I/O pool
+configured by `[sampler_aggregator_runner_params].io_threads` (default 1). The API server retains Tokio's automatic pool size.
+`TOKIO_WORKER_THREADS` overrides the process runtime, but not the sampler pool. Help and version output do not
 start a runtime.
+
+CPU allocation remains a deployment setting: use the worker CPU allowance or
+Slurm allocation to provide physical cores. `io_threads` neither reserves nor
+pins cores. Three sampler I/O threads with four allocated cores is a useful
+starting point for large materialized/training payloads; scaling is workload
+dependent, not proportional to the thread count.
 
 The MADNIS sampler defaults to one OpenMP thread; see its
 [runtime options](../integrations/madnis/README.md#runtime-options).

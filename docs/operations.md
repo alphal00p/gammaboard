@@ -159,16 +159,18 @@ used during an upgrade. In scripts, acknowledge replacement with `--yes`.
 
 Each `node run` process uses up to two PostgreSQL connections for leases and control
 traffic, including controller exclusion during leadership changes. Its active
-evaluator or sampler role is capped at two additional connections, so plan for
-at most four database connections per live node plus
+evaluator role is capped at two additional connections; a sampler role at six.
+Budget four connections per live node, four extra per sampler, plus
 the server and occasional CLI commands. The default local PostgreSQL limit is
 128; reserve at least 16 connections for the server, maintenance, and operator
 commands before choosing a worker count.
 
 Managed launch and resume requests enforce this budget before reserving workers:
-`floor((max_connections - PostgreSQL reserved connections - 16) / 4)`.
+`floor((max_connections - PostgreSQL reserved connections - 16 - 4 × samplers) / 4)`.
 With 128 connections and the usual three superuser reservations, this allows
-27 workers. Live idle workers and pending launches count toward that limit
+27 workers without a sampler, or 26 including one sampler. Sampler assignment
+checks its additional reservation under the same lock as launch admission.
+Live idle workers and pending launches count toward that limit
 because assigning them later creates another connection pool. Stop unused
 workers to free capacity; increasing PostgreSQL's limit requires a database
 restart. Directly started `node run` processes and unrelated database clients
@@ -198,8 +200,15 @@ elsewhere and pass `./gammaboard --runtime-config /path/to/runtime.toml deploy`
 alongside your usual deployment options. Stop the deployment and restart its
 PostgreSQL instance before redeploying: starting against an already running
 database does not change this setting. `SHOW max_connections;` confirms the
-active value. With three PostgreSQL reserved connections, limits of 256, 512,
-and 1024 allow 59, 123, and 251 workers respectively.
+active value. With three PostgreSQL reserved connections and one sampler,
+limits of 256, 512, and 1024 allow 58, 122, and 250 workers respectively.
+
+For large materialized/training workloads, the measured high-throughput profile
+uses `shared_buffers = "4GB"` in `[local_postgres]`, alongside the default six
+sampler connections and four inserts. This increases PostgreSQL's cache allocation;
+the general-purpose default remains 256MB for smaller deployments. It also requires
+a PostgreSQL restart. See [the throughput experiments](performance-development.md#sampler-io-tuning--2026-09-30)
+for the measured scope and tradeoffs.
 
 ## Queue Recovery and Upgrades
 

@@ -74,6 +74,7 @@ pub struct SamplerQueue<S> {
     training_batch_sizing: TrainingBatchSizing,
     metrics: QueueMetricsState,
     pub(crate) busy: BusyTime,
+    io: tokio::runtime::Handle,
 }
 
 /// Keep a finite training window divisible across workers, without recursively
@@ -171,6 +172,7 @@ where
         task_id: i64,
         config: SamplerQueueConfig,
         mut checkpoint: SamplerQueueCheckpoint,
+        io: tokio::runtime::Handle,
     ) -> Self {
         let now = Instant::now();
         let max_batch_size = config.max_batch_size.max(MIN_BATCH_SIZE);
@@ -200,6 +202,7 @@ where
             training_batch_sizing: TrainingBatchSizing::default(),
             metrics: QueueMetricsState::default(),
             busy: BusyTime::default(),
+            io,
         }
     }
 
@@ -464,13 +467,16 @@ where
         Ok(self.take_ready_processed())
     }
 
-    pub(crate) fn cancel_nonessential_background_work(&mut self) {
+    pub(crate) async fn finish_background_maintenance(&mut self) -> Result<(), StoreError> {
         if let Some(task) = self.pending_processed_fetch.take() {
             task.abort();
         }
         if let Some(task) = self.pending_completed_cleanup.take() {
-            task.abort();
+            // Dropping the Rust future does not cancel a PostgreSQL DELETE. Join
+            // it before checkpointing or starting another cleanup on these rows.
+            self.consume_completed_cleanup_task(task).await?;
         }
+        Ok(())
     }
 
     pub async fn flush(&mut self) -> Result<(), StoreError> {
@@ -538,7 +544,7 @@ where
         let busy = self.busy.clone();
         let store = self.store.clone();
         let run_id = self.run_id;
-        self.pending_completed_cleanup = Some(tokio::spawn(async move {
+        self.pending_completed_cleanup = Some(self.io.spawn(async move {
             let _io = busy.io();
             let started = Instant::now();
             store
@@ -602,7 +608,7 @@ where
             .map(|task| task.first_batch_id)
             .min()
             .unwrap_or_else(|| next_batch_ids(1)[0]);
-        self.pending_processed_fetch = Some(tokio::spawn(async move {
+        self.pending_processed_fetch = Some(self.io.spawn(async move {
             let _io = busy.io();
             let started = Instant::now();
             let batches = store
@@ -648,7 +654,7 @@ where
                 batch_count,
                 local_pending_at_start,
                 db_pending_at_start,
-                handle: tokio::spawn(async move {
+                handle: self.io.spawn(async move {
                     let _io = busy.io();
                     let outcome = store
                         .insert_batches(
@@ -848,11 +854,12 @@ pub(crate) mod tests {
                 batch_size_current: 128,
                 ..SamplerQueueCheckpoint::default()
             },
+            tokio::runtime::Handle::current(),
         )
     }
 
-    #[test]
-    fn live_fixed_batch_override_preserves_other_defaults() {
+    #[tokio::test]
+    async fn live_fixed_batch_override_preserves_other_defaults() {
         let base = recording_queue(RecordingStore::default()).config().clone();
         let mut config = base.clone();
         let tuning: SamplerQueueTuning = serde_json::from_value(serde_json::json!({
@@ -871,8 +878,8 @@ pub(crate) mod tests {
         assert!(invalid.validate().is_err());
     }
 
-    #[test]
-    fn fixed_batches_survive_adaptation_and_config_updates() {
+    #[tokio::test]
+    async fn fixed_batches_survive_adaptation_and_config_updates() {
         let mut queue = recording_queue(RecordingStore::default());
         let mut config = queue.config().clone();
         config.fixed_batch_size = Some(256);
@@ -884,6 +891,27 @@ pub(crate) mod tests {
         config.max_batch_size = 128;
         queue.apply_config(config);
         assert_eq!(queue.current_batch_size(), 128);
+    }
+
+    #[tokio::test]
+    async fn stopping_waits_for_cleanup_before_allowing_checkpoint_or_removal() {
+        let mut queue = recording_queue(RecordingStore::default());
+        let (release, blocked) = tokio::sync::oneshot::channel();
+        queue.pending_completed_cleanup = Some(tokio::spawn(async move {
+            blocked.await.expect("cleanup was released");
+            Ok(Duration::ZERO)
+        }));
+        let finish = queue.finish_background_maintenance();
+        tokio::pin!(finish);
+        tokio::select! {
+            biased;
+            result = &mut finish => panic!("cleanup still holds database locks: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        release.send(()).unwrap();
+        finish
+            .await
+            .expect("cleanup finished before shutdown continued");
     }
 
     #[tokio::test]
@@ -1108,8 +1136,8 @@ pub(crate) mod tests {
         assert_eq!(sizing.batch_size(5000, Some(8), 4), MIN_BATCH_SIZE);
         assert_eq!(sizing.batch_size(5000, Some(8), 0), 5000);
     }
-    #[test]
-    fn timing_smoothing_preserves_history_and_is_batch_partition_invariant() {
+    #[tokio::test]
+    async fn timing_smoothing_preserves_history_and_is_batch_partition_invariant() {
         let mut whole = recording_queue(RecordingStore::default());
         let mut split = recording_queue(RecordingStore::default());
         whole.observe_completed_eval_batch(5000, 5000.0);

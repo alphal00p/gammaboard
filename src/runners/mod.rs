@@ -11,6 +11,7 @@ pub(crate) mod process_memory;
 pub mod queue;
 pub(crate) mod rolling_metric;
 pub mod sampler_aggregator;
+mod sampler_io;
 pub(crate) mod stage_context;
 pub mod task_control;
 pub(crate) mod wall_time_rate;
@@ -22,8 +23,19 @@ pub use queue::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
 pub use sampler_aggregator::{RunnerError, SamplerAggregatorRunner, SamplerAggregatorRunnerParams};
 pub use task_control::{TaskControlLoop, TaskControlLoopConfig};
 
-/// Maximum role connections per worker; launch admission reserves two more for control.
-pub const MAX_ROLE_DB_CONNECTIONS_PER_NODE: u32 = 2;
+pub(crate) const MAX_EVALUATOR_DB_CONNECTIONS: u32 = 2;
+/// Four inserts can overlap completion fetching and checkpoint/maintenance I/O.
+pub(crate) const MAX_SAMPLER_DB_CONNECTIONS: u32 = 6;
+
+pub(crate) fn role_db_pool_size(role: crate::core::WorkerRole, requested: u32) -> u32 {
+    requested.clamp(
+        1,
+        match role {
+            crate::core::WorkerRole::Evaluator => MAX_EVALUATOR_DB_CONNECTIONS,
+            crate::core::WorkerRole::SamplerAggregator => MAX_SAMPLER_DB_CONNECTIONS,
+        },
+    )
+}
 
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import time
@@ -36,8 +37,16 @@ def validate(suite):
                 'sample_memory_budget', 'infrastructure_cores', 'duration_seconds',
                 'confirmation_seconds', 'max_batch_seconds', 'min_tick_time_ms',
                 'telemetry_interval_ms', 'insert_concurrency'}
-    if suite.keys() != expected:
-        raise ValueError(f'suite keys missing={expected-suite.keys()}, unknown={suite.keys()-expected}')
+    allowed = expected | {'sampler_db_pool_size', 'sampler_io_threads', 'database_shared_buffers'}
+    if expected-suite.keys() or suite.keys()-allowed:
+        raise ValueError(f'suite keys missing={expected-suite.keys()}, unknown={suite.keys()-allowed}')
+    if type(suite.get('sampler_db_pool_size', 2)) is not int or not 1 <= suite.get('sampler_db_pool_size', 2) <= 6:
+        raise ValueError('sampler_db_pool_size must be between 1 and 6')
+    if type(suite.get('sampler_io_threads', 1)) is not int or suite.get('sampler_io_threads', 1) < 1:
+        raise ValueError('sampler_io_threads must be a positive integer')
+    buffers = suite.get('database_shared_buffers','256MB')
+    if not isinstance(buffers,str) or not re.fullmatch(r'[1-9][0-9]*(MB|GB)',buffers):
+        raise ValueError('database_shared_buffers must be a positive size in MB or GB')
     for name, low, high, integral in [('eval_us', 0, 100000, False), ('workers', 1, 512, True)]:
         values = suite[name]
         if not values or len(set(values)) != len(values) or any(
@@ -157,6 +166,11 @@ def queue_settings(point, suite):
 def card(mode, eval_us, suite, value_coordinate=VALUE_COORDINATE):
     generation_size = generation_batch_size(suite, eval_us)
     text = bench.run_card(0, 16, suite['min_tick_time_ms'], suite['telemetry_interval_ms'], generation_size)
+    # Older saved suites used two connections. Keep their replay independent of
+    # changing application defaults; current presets specify the measured pool.
+    text = text.replace('[sampler_aggregator_runner_params]\n',
+        f'[sampler_aggregator_runner_params]\ndb_pool_size = {suite.get("sampler_db_pool_size", 2)}\n'
+        f'io_threads = {suite.get("sampler_io_threads", 1)}\n')
     if value_coordinate is not None:
         text = text.replace('cpu_iterations_per_sample = 0',
                             f'value_coordinate = {value_coordinate}\ncpu_iterations_per_sample = 0')
@@ -630,7 +644,8 @@ def execute(args):
     start=time.monotonic();search=None
     try:
         with bench.Session(binary,output,suite['budget_seconds'],args.port_offset,
-                           max_connections=max(128,4*(max(workers)+1)+32),infrastructure_cpus=infrastructure[1:]) as session:
+                           max_connections=max(128,4*(max(workers)+1)+32),infrastructure_cpus=infrastructure[1:],
+                           shared_buffers=suite.get('database_shared_buffers','256MB')) as session:
             session.single_run = points is not None and len(points)==1
             session.start_pinned_workers(evaluator_cpus,infrastructure[0])
             search=Search(session,output,suite,workers)
@@ -671,6 +686,9 @@ def compare(before,after):
     if any(m.get('schema_version')!=5 for m in manifests):raise ValueError('use the saved harness for older frontier artifacts')
     for key in ['infrastructure_cores','min_tick_time_ms','telemetry_interval_ms','insert_concurrency','sample_memory_budget','max_batch_size','max_batch_seconds']:
         if manifests[0]['suite'][key]!=manifests[1]['suite'][key]:raise ValueError(f'{key} differs')
+    for key, default in [('sampler_db_pool_size',2), ('sampler_io_threads',1), ('database_shared_buffers','256MB')]:
+        if manifests[0]['suite'].get(key,default) != manifests[1]['suite'].get(key,default):
+            raise ValueError(f'{key} differs')
     jitter=[m.get('timing_jitter',dict(relative_sigma=0.,seed=0)) for m in manifests]
     if jitter[0]!=jitter[1]:raise ValueError('timing jitter or seed differs')
     for key in ['workload','rate_source','value_coordinate']:

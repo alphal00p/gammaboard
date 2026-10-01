@@ -14,7 +14,8 @@ db_pool_size = 2
 performance_snapshot_interval_ms = 2000
 min_tick_time_ms = 10
 frontend_sync_interval_ms = 2000
-db_pool_size = 2
+io_threads = 1
+db_pool_size = 6
 
 [sampler_aggregator_runner_params.queue]
 # Amortize per-batch setup while keeping interactive training responsive.
@@ -22,6 +23,6 @@ target_batch_eval_ms = 2000.0
 max_batch_size = 100_000
 max_batches_per_tick = 100
 max_insert_bundle_size = 5
-max_concurrent_insert_tasks = 8
+max_concurrent_insert_tasks = 4
 completed_batch_fetch_limit = 100
 max_batch_retries = 3

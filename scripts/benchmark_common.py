@@ -84,13 +84,17 @@ def idle_cpus(candidates, count):
     return sorted(sorted(candidates, key=load)[:count])
 
 class Session:
-    def __init__(self, binary, output, budget, offset, max_connections=128, infrastructure_cpus=None):
+    def __init__(self, binary, output, budget, offset, max_connections=128, infrastructure_cpus=None,
+                 shared_buffers=None):
         self.binary, self.output, self.offset = binary, output, offset
         self.deadline = time.monotonic()+budget-100  # Includes the deploy's 75s drain budget.
         self.directory = Path(tempfile.mkdtemp(prefix='gmb-scale-', dir='/tmp'))
         self.runtime = self.directory/'runtime.toml'
         self.runtime.write_text(f'[resources]\nroots = [{json.dumps(str(self.directory/"resources"))}]\n'
                                 f'[local_postgres]\nsocket_dir = {json.dumps(str(self.directory/"socket"))}\nmax_connections = {max_connections}\n')
+        if shared_buffers is not None:
+            with self.runtime.open('a') as stream:
+                stream.write(f'shared_buffers = {json.dumps(shared_buffers)}\n')
         self.process = None
         self.infrastructure_cpus = infrastructure_cpus
         self.workers = []

@@ -7,14 +7,20 @@ while allowing independent workers and bounded database I/O to overlap.
 | --- | --- | --- |
 | Evaluator worker | Materialize and evaluate one batch at a time using one evaluator instance. | One next-batch fetch and one previous-result submission can run alongside the current evaluation. |
 | Sampler/aggregator worker | Generate samples, ingest returned training values/update the model, and merge accumulators through one mutable sampler/accumulator owner. | Queue inserts, one completed-result fetch, one aggregation write, and one cleanup operation can run in the background. Insert concurrency is bounded by `max_concurrent_insert_tasks` and the DB connection pool. |
-| Worker process | Main calling thread drives its active role. | One Tokio background thread, by default, handles asynchronous I/O, leases, and task-control polling. Several waiting I/O tasks share that thread. |
+| Worker process | Main calling thread drives its active role. | One Tokio background thread, by default, handles control-plane I/O and evaluator I/O. Each active sampler owns a separate I/O pool. |
 | Run | One active sampler owns each sampling task. | Evaluator processes evaluate different batches concurrently. Controller runs may distribute a worker pool across child runs within their configured limits. |
 
 The API server retains its automatic Tokio thread pool. `TOKIO_WORKER_THREADS`
-overrides the worker default. Libraries and external processes may have their
+overrides this process runtime, independently of the sampler pool.
+`sampler_aggregator_runner_params.io_threads` sets the sampler pool size (default
+1). It runs insert encoding/writes, completed-result fetch/decode, aggregation
+writes, and cleanup. The pool starts with the sampling task and is released after
+the runner drains its writes. Changing its size requires a new runner; it is not
+live queue tuning. Sampler generation and model updates remain serial. Libraries and external processes may have their
 own CPU/GPU parallelism; the MADNIS launcher defaults its OpenMP threads to one.
-One I/O thread per worker does not mean all computation across the deployment
-is single-threaded.
+Increasing I/O threads permits independent payloads to encode/decode in parallel;
+it does not increase the database connection or in-flight insert limits. I/O
+activity remains the union of operation lifetimes, not an average over threads.
 
 ## Training and inference
 
@@ -78,10 +84,17 @@ its display-bin width.
 
 ## I/O limits and scheduling
 
-Both role DB pools default to two connections, matching the existing two-
-connection worker cap. A requested size of one is supported. Legacy values
-outside 1–2 are clamped with a warning; the config panel shows the effective size.
+Evaluator role pools default to and are capped at two connections. Sampler role
+pools default to and are capped at six: four inserts can overlap result fetching
+and checkpoint/maintenance I/O. Smaller pools are supported; out-of-range values
+are clamped with a warning, and the config panel shows the effective size.
 Control-plane connections remain separate so leases can progress during role I/O.
+Launch admission reserves four connections per worker; sampler assignment reserves
+four more under the same admission lock. Those extra connections remain reserved
+while an old sampler role is stopping, without inflating every evaluator's budget.
+
+Shutdown joins an existing cleanup DELETE before checkpointing or deleting more
+rows. Aborting its Rust future alone would leave PostgreSQL holding row locks.
 
 Assignment/shutdown polling runs at most every 250 ms during active work,
 independently of batch ticks. Empty evaluator fetches back off exponentially

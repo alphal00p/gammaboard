@@ -337,7 +337,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             return Ok(None);
         };
         let role_store = self
-            .init_role_store(spec.integration_params.evaluator_runner_params.db_pool_size)
+            .init_role_store(
+                target.role,
+                spec.integration_params.evaluator_runner_params.db_pool_size,
+            )
             .await?;
         let evaluator = evaluator_config
             .build()
@@ -387,6 +390,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         };
         let role_store = self
             .init_role_store(
+                target.role,
                 spec.integration_params
                     .sampler_aggregator_runner_params
                     .db_pool_size,
@@ -579,7 +583,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             initial_batch_size,
             run_progress,
             restored_snapshot,
-        );
+        )?;
 
         if needs_initial_checkpoint {
             runner
