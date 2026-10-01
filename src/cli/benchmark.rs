@@ -15,6 +15,8 @@ pub enum BenchmarkCommand {
     Io { config: PathBuf },
     /// External process adapter overhead, without PostgreSQL
     Protocol { config: PathBuf },
+    /// In-memory reference for the amortization experiment
+    Amortization { config: PathBuf },
 }
 pub async fn run(args: BenchmarkArgs, runtime: &RuntimeConfig) -> Result<()> {
     let result = match args.command {
@@ -24,6 +26,9 @@ pub async fn run(args: BenchmarkArgs, runtime: &RuntimeConfig) -> Result<()> {
                 serde_json::from_slice(&std::fs::read(config)?)?,
             )
             .await?
+        }
+        BenchmarkCommand::Amortization { config } => {
+            benchmark::amortization::measure(serde_json::from_slice(&std::fs::read(config)?)?)?
         }
         BenchmarkCommand::Protocol { config } => {
             benchmark::protocol::measure(serde_json::from_slice(&std::fs::read(config)?)?)?

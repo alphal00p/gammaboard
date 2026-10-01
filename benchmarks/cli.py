@@ -19,7 +19,7 @@ FAMILIES = ("frontier", "sampler-io", "evaluator-io", "protocol")
 
 def parser():
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("command", choices=("all", *FAMILIES, "report", "plan"))
+    cli.add_argument("command", choices=("all", *FAMILIES, "amortization", "report", "plan"))
     cli.add_argument("--output", type=Path, default=None)
     target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
     cli.add_argument(
@@ -37,13 +37,18 @@ def parser():
     cli.add_argument(
         "--max-evaluators", type=int, help="frontier count cap (default 512; quick 64)"
     )
-    cli.add_argument("--workers", type=int, nargs="+", help="explicit frontier evaluator counts")
+    cli.add_argument(
+        "--workers", type=int, nargs="+", help="explicit frontier or amortization evaluator counts"
+    )
     cli.add_argument("--points", type=Path, help="explicit frontier points in JSON")
     cli.add_argument(
         "--include-rng", action="store_true", help="also run compact RNG frontier curves"
     )
     cli.add_argument(
-        "--batch-sizes", type=int, nargs="+", help="override I/O and protocol batch sizes"
+        "--batch-sizes",
+        type=int,
+        nargs="+",
+        help="override I/O, protocol or amortization batch sizes",
     )
     cli.add_argument(
         "--io-threads",
@@ -55,10 +60,14 @@ def parser():
         "--consumers", type=int, default=16, help="lightweight consumers for sampler I/O"
     )
     cli.add_argument(
-        "--duration", type=float, help="I/O measured seconds per trial (default 4; quick 2)"
+        "--duration",
+        type=float,
+        help="measured seconds per trial (I/O 4; amortization 8; quick I/O 2)",
     )
     cli.add_argument("--warmup", type=float, help="I/O warmup seconds (default 1; quick 0.5)")
-    cli.add_argument("--repetitions", type=int, help="I/O repetitions (default 2; quick 1)")
+    cli.add_argument(
+        "--repetitions", type=int, help="repetitions (I/O 2; amortization 3; quick I/O 1)"
+    )
     cli.add_argument(
         "--memory-mib",
         type=int,
@@ -175,6 +184,8 @@ def report(directory):
         from . import frontier_plots as module
     elif kind == "io":
         from . import io as module
+    elif kind == "amortization":
+        from . import amortization as module
     elif kind == "process_api":
         from . import protocol as module
     else:
@@ -189,6 +200,8 @@ def run_family(args):
         from . import frontier as module
 
         args.effective_suite = frontier_suite(args)
+    elif args.command == "amortization":
+        from . import amortization as module
     elif args.command == "protocol":
         from . import protocol as module
     else:
@@ -221,10 +234,16 @@ def main(argv=None):
     args.output = (
         args.output or ROOT / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     ).absolute()
-    args.duration = args.duration if args.duration is not None else (2 if args.quick else 4)
+    args.duration = (
+        args.duration
+        if args.duration is not None
+        else (8 if args.command == "amortization" else (2 if args.quick else 4))
+    )
     args.warmup = args.warmup if args.warmup is not None else (0.5 if args.quick else 1)
     args.repetitions = (
-        args.repetitions if args.repetitions is not None else (1 if args.quick else 2)
+        args.repetitions
+        if args.repetitions is not None
+        else (3 if args.command == "amortization" else (1 if args.quick else 2))
     )
     try:
         if args.budget is not None and args.budget < 120:

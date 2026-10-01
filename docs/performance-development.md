@@ -534,3 +534,28 @@ The [before/after plot](benchmarks/2026-10-01/protocol-overhead/comparison.svg) 
 [paired data](benchmarks/2026-10-01/protocol-overhead/paired-trials.json) supersede
 the protocol performance results above for the current adapters. The presentation's
 protocol slide is updated; its frontier and I/O slides remain historical.
+
+
+### Native CPU amortization — 2026-10-01
+
+The [amortization study](benchmarks/2026-10-01/amortization/README.md) compares the
+same native numerical engines in a bounded in-memory pipeline and the production
+queue/runners: 1 and 16 evaluators, five batch sizes from 128 to 32,768, feedback
+off/on and three repetitions (60 paired comparisons, 23.6 minutes). Fixed CPU
+arithmetic costs approximately 5 µs/sample; there are no synthetic sleeps.
+Generation size stays at 131,072. This is not a GLNIS optimizer or process-API test.
+
+At 32,768 samples, about 164 ms of evaluator work per batch, median extra
+steady-state runtime was 1.7%/2.0% with one evaluator and 9.5%/7.9% with sixteen
+(feedback off/on). The one-evaluator 8,192-sample medians were already below 5%,
+but individual trials exceeded it; all three largest-batch trials were below 5%.
+No sixteen-evaluator setting reached 5%. The smallest-batch penalties are
+consistent with runner cadence and queue processing. Host/cache variation is visible in the
+individual repetitions, so these are configuration-specific results rather than
+universal thresholds. Startup, final draining and additional infrastructure
+resource cost are outside this steady-state wall-time comparison.
+
+[Plot](benchmarks/2026-10-01/amortization/amortization.svg),
+[PDF](benchmarks/2026-10-01/amortization/amortization.pdf), and
+[paired data](benchmarks/2026-10-01/amortization/results.json) are separate artifacts.
+The optional command is `python -m benchmarks amortization --output results/amortization`.

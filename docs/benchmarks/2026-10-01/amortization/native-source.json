@@ -1,0 +1,8 @@
+{
+  "base_revision": "3af7b14dc6acce63506423b3b2e2ccea544f7b08",
+  "files": {
+    "src/benchmark/amortization.rs": "3fdef127c4b1cc89260b1548ee8e9db25f95f9fc0eb7e54d38042cd88dbc216d",
+    "src/benchmark/mod.rs": "bd8ee85123f7619bb08f9f3259038651a721459ae70148876a37ce60c65382f4",
+    "src/cli/benchmark.rs": "7d46aca395bdc8acddeebbb1216a3c601e2f3b3f1efc9d6193b76732bd0fba86"
+  }
+}

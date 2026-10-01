@@ -1,5 +1,6 @@
 //! Measurement helpers using production storage and process adapters.
 //! Python owns deployment, suite selection and reporting.
+pub mod amortization;
 pub mod io;
 pub mod protocol;
 use anyhow::{Result, ensure};

@@ -139,7 +139,7 @@ struct Prepared {
 fn prepare(size: usize, feedback: bool, bundle: usize) -> Result<Prepared> {
     let mut rng = Xoshiro256PlusPlus::seed_from_u64(1234);
     let continuous: Vec<f64> = (0..size * 6).map(|_| rng.random()).collect();
-    let values: Vec<f64> = continuous.chunks_exact(6).map(|p| p[0]).collect();
+    let values: Vec<f64> = continuous.as_chunks::<6>().0.iter().map(|p| p[0]).collect();
     let evaluator: crate::core::EvaluatorConfig = serde_json::from_value(json!({
         "kind":"unit", "continuous_dims":6, "value_coordinate":0}))?;
     let latent = LatentBatch {

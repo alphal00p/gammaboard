@@ -120,6 +120,45 @@ and smaller batches when within 5% of the peak. Effective settings, workload car
 resource assignments and exact raw intervals are saved. Memory-dependent batch
 caps are explicit; do not compare runs with different settings as code-only changes.
 
+## Amortization
+
+`python -m benchmarks amortization --output results/amortization` runs a separate
+matched CPU-work study; it is not added to the default `all` sweep. Defaults are
+1 and 16 evaluators, five transport batch sizes (128, 512, 2,048, 8,192, 32,768),
+feedback off/on and three independently restarted repeats. `--workers`,
+`--batch-sizes`, `--duration` and `--repetitions` select smaller experiments.
+The default deployment requires 25 physical cores: five sampler, four database
+and sixteen evaluator cores. CPU affinity is fixed across the paired methods;
+the host is not reserved exclusively.
+
+One short calibration selects a fixed arithmetic iteration count targeting about
+5 µs/sample, then holds that count fixed for every case. There are no sleeps.
+Both methods use the same native six-dimensional uniform sampler, evaluator
+returning `x[0]`, scalar accumulation and optional ordered generation feedback.
+Generation size is fixed at 131,072, independent of transport batching. Feedback
+is transport and ingestion; this is not an adaptive-model or GLNIS benchmark.
+
+The direct reference uses a bounded in-memory worker pipeline with two outstanding
+batches per evaluator. It includes generation, partitioning, materialization,
+evaluation, accumulation and generation-level feedback, but no database, storage
+serialization or production runners. It reuses the numerical engines; it is not
+a comparison against a separately optimized physics implementation or a measure
+of every instruction in the GammaBoard library. The production side uses the
+normal queue and runner measurement contract, four sampler I/O threads and fixed
+queue settings. Warmup and final draining are excluded on both sides.
+
+Extra steady-state runtime is `100 × (direct_rate / gammaboard_rate − 1)` for
+equivalent accepted sample counts. The horizontal axis is measured direct
+evaluator time per batch, including local accumulation. Rates use their own
+monotonic completion windows. Small-batch runner windows are extended to cover
+feedback cycles even when the 10 ms runner tick dominates useful CPU work.
+Negative measured overhead is retained, never clipped. Lines show median paired
+results and faint dots show independent repetitions; CSV retains the full range.
+
+The command writes `amortization.png`, `.svg`, `.pdf`, CSV/JSON summaries and a
+small local HTML report. Run cards, exact windows, direct measurements, calibration,
+CPU allocations, source/binary provenance and cleanup outcomes are retained.
+
 ## I/O capacities
 
 Default batch sizes are 256, 4096, 16,384, 65,536 and 131,072 samples. Sampler I/O uses

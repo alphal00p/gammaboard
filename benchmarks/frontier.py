@@ -542,9 +542,10 @@ def measurement_row(measured, point, completed_offset=0):
 
 
 class LiveRun:
-    def __init__(self, session, output, suite, mode, cost, initial_point=None):
+    def __init__(self, session, output, suite, mode, cost, initial_point=None, card_text=None):
         self.session, self.output, self.suite = session, output, suite
         self.mode, self.cost, self.delay = mode, cost, cost / 1e6
+        self.card_text = card_text
         self.initial_point = initial_point
         self.fresh_start = initial_point is not None
         self.run = None
@@ -571,7 +572,7 @@ class LiveRun:
     def __enter__(self):
         self.output.mkdir()
         path = self.output / "run.toml"
-        text = card(self.mode, self.cost, self.suite)
+        text = self.card_text or card(self.mode, self.cost, self.suite)
         self.workers = self.initial_point.workers if self.initial_point else 1
         if self.initial_point:
             self.settings = queue_settings(self.initial_point, self.suite)
