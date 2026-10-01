@@ -63,7 +63,7 @@ pub fn format_error_json(code: &str, message: impl std::fmt::Display) -> String 
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Direct evaluator baselines and CPU workload calibration
+    /// Helpers for the Python benchmark suite
     Benchmark(benchmark::BenchmarkArgs),
     /// Run lifecycle commands
     Run(RunArgs),
@@ -112,7 +112,7 @@ async fn dispatch_async(cli: Cli) -> Result<()> {
     )?;
     let config = runtime.runtime_config();
     match cli.command {
-        Command::Benchmark(args) => benchmark::run(args),
+        Command::Benchmark(args) => benchmark::run(args, config).await,
         Command::Run(args) => run_run_commands(args.command, config, quiet).await,
         Command::Node(args) => run_node_commands(args.command, &runtime, quiet).await,
         Command::Server(args) => run_server(args, &runtime, quiet).await,

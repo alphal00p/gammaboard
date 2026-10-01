@@ -1,0 +1,384 @@
+{
+  "raw_directory": "/common/dev/cedric/setup-logs/benchmark-resources-20261001",
+  "rows": [
+    {
+      "study": "resources",
+      "name": "baseline",
+      "feedback": false,
+      "samples_per_second": 7037945.693633149,
+      "trials": [
+        7410974.653727911,
+        6664916.733538387
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.8936251315959124,
+      "serialize_fraction": 0.09307902444815559,
+      "database_activity_samples": {
+        "LWLock:CheckpointerComm": 2,
+        "IO:WalWrite": 11,
+        "IO:DataFileWrite": 30,
+        "LWLock:WALBufMapping": 3,
+        "LWLock:LockManager": 6,
+        "Lock:extend": 99,
+        "Client:ClientRead": 119,
+        "LWLock:WALWrite": 101,
+        "LWLock:BufferContent": 257,
+        "LWLock:WALInsert": 9,
+        "Timeout:SpinDelay": 1,
+        "IO:DataFileExtend": 49,
+        "IO:WalInitWrite": 1,
+        "CPU_or_runnable": 537
+      }
+    },
+    {
+      "study": "resources",
+      "name": "database_24_cores",
+      "feedback": false,
+      "samples_per_second": 7939048.605746597,
+      "trials": [
+        7980066.125124161,
+        7898031.086369034
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.8804568525415462,
+      "serialize_fraction": 0.1070840205325499,
+      "database_activity_samples": {
+        "IO:WalSync": 1,
+        "LWLock:CheckpointerComm": 1,
+        "IO:WalWrite": 7,
+        "IO:DataFileWrite": 42,
+        "LWLock:LockManager": 4,
+        "Lock:extend": 65,
+        "Client:ClientRead": 179,
+        "LWLock:WALWrite": 75,
+        "LWLock:BufferContent": 163,
+        "LWLock:WALInsert": 5,
+        "IO:DataFileExtend": 61,
+        "IO:WalInitSync": 1,
+        "IO:WalInitWrite": 5,
+        "CPU_or_runnable": 657
+      }
+    },
+    {
+      "study": "resources",
+      "name": "database_8GiB_cache",
+      "feedback": false,
+      "samples_per_second": 7689243.234232764,
+      "trials": [
+        7805368.879383182,
+        7573117.589082345
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.8835692090220597,
+      "serialize_fraction": 0.10338383073420496,
+      "database_activity_samples": {
+        "IO:WalSync": 1,
+        "IO:WalWrite": 11,
+        "LWLock:WALBufMapping": 4,
+        "LWLock:LockManager": 7,
+        "Lock:extend": 83,
+        "Client:ClientRead": 116,
+        "LWLock:WALWrite": 71,
+        "LWLock:BufferContent": 213,
+        "LWLock:WALInsert": 7,
+        "IO:DataFileExtend": 51,
+        "IO:WalInitSync": 1,
+        "CPU_or_runnable": 633
+      }
+    },
+    {
+      "study": "resources",
+      "name": "eight_inserts",
+      "feedback": false,
+      "samples_per_second": 8041550.239460045,
+      "trials": [
+        8183740.664994255,
+        7899359.813925834
+      ],
+      "io_busy_min": 0.9999999999999998,
+      "copy_fraction": 0.9389093426013995,
+      "serialize_fraction": 0.05180838895935898,
+      "database_activity_samples": {
+        "IO:WalSync": 2,
+        "IO:WalWrite": 8,
+        "IO:DataFileWrite": 101,
+        "LWLock:WALBufMapping": 10,
+        "LWLock:LockManager": 20,
+        "Lock:extend": 520,
+        "Client:ClientRead": 88,
+        "LWLock:WALWrite": 135,
+        "LWLock:BufferMapping": 2,
+        "LWLock:BufferContent": 188,
+        "LWLock:WALInsert": 26,
+        "IO:DataFileExtend": 48,
+        "IO:WalInitSync": 1,
+        "IO:WalInitWrite": 2,
+        "CPU_or_runnable": 654
+      }
+    },
+    {
+      "study": "resources",
+      "name": "queue_128",
+      "feedback": false,
+      "samples_per_second": 7443842.8251760695,
+      "trials": [
+        7317610.587895775,
+        7570075.062456364
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.8922369462218261,
+      "serialize_fraction": 0.09561673698322493,
+      "database_activity_samples": {
+        "IO:WalSync": 3,
+        "IO:WalWrite": 5,
+        "IO:DataFileWrite": 48,
+        "LWLock:LockManager": 4,
+        "Lock:extend": 113,
+        "Client:ClientRead": 102,
+        "LWLock:WALWrite": 84,
+        "LWLock:BufferContent": 264,
+        "LWLock:WALInsert": 6,
+        "IO:DataFileExtend": 48,
+        "CPU_or_runnable": 528
+      }
+    },
+    {
+      "study": "resources",
+      "name": "consumers_32",
+      "feedback": false,
+      "samples_per_second": 6908305.860695019,
+      "trials": [
+        6618303.250988442,
+        7198308.470401595
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.9000515487854972,
+      "serialize_fraction": 0.08943965009823031,
+      "database_activity_samples": {
+        "LWLock:CheckpointerComm": 1,
+        "IO:WalWrite": 4,
+        "IO:DataFileWrite": 47,
+        "LWLock:LockManager": 18,
+        "Lock:extend": 137,
+        "Client:ClientRead": 280,
+        "LWLock:WALWrite": 48,
+        "LWLock:BufferContent": 397,
+        "LWLock:WALInsert": 3,
+        "Timeout:SpinDelay": 6,
+        "IO:DataFileExtend": 40,
+        "IO:WalInitWrite": 1,
+        "CPU_or_runnable": 528
+      }
+    },
+    {
+      "study": "resources",
+      "name": "batch_128k",
+      "feedback": false,
+      "samples_per_second": 5278442.670027454,
+      "trials": [
+        5154153.831628105,
+        5402731.508426804
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.8905002223113807,
+      "serialize_fraction": 0.10129369917264432,
+      "database_activity_samples": {
+        "IO:WalSync": 7,
+        "IO:WalWrite": 18,
+        "IO:DataFileWrite": 12,
+        "LWLock:WALBufMapping": 1,
+        "LWLock:LockManager": 9,
+        "Lock:extend": 52,
+        "Client:ClientRead": 85,
+        "LWLock:WALWrite": 159,
+        "LWLock:BufferContent": 109,
+        "LWLock:WALInsert": 3,
+        "Timeout:SpinDelay": 1,
+        "IO:DataFileExtend": 34,
+        "IO:WalInitSync": 1,
+        "Client:ClientWrite": 2,
+        "IO:WalInitWrite": 6,
+        "CPU_or_runnable": 437
+      }
+    },
+    {
+      "study": "resources",
+      "name": "batch_1M_default_memory",
+      "feedback": false,
+      "samples_per_second": 5102263.66048382,
+      "trials": [
+        5234707.990698546,
+        4969819.330269094
+      ],
+      "io_busy_min": 0.9999999999999998,
+      "copy_fraction": 0.8927536104098016,
+      "serialize_fraction": 0.09728963217736472,
+      "database_activity_samples": {
+        "IO:WalSync": 12,
+        "IO:WalWrite": 13,
+        "IO:DataFileWrite": 4,
+        "LWLock:WALBufMapping": 3,
+        "LWLock:LockManager": 2,
+        "Lock:extend": 44,
+        "Client:ClientRead": 85,
+        "LWLock:WALWrite": 153,
+        "LWLock:BufferContent": 213,
+        "LWLock:WALInsert": 5,
+        "Timeout:SpinDelay": 1,
+        "IO:DataFileExtend": 46,
+        "IO:WalInitSync": 1,
+        "Client:ClientWrite": 33,
+        "IO:WalInitWrite": 1,
+        "CPU_or_runnable": 466
+      }
+    },
+    {
+      "study": "resources",
+      "name": "batch_1M_fixed_queue",
+      "feedback": false,
+      "samples_per_second": 3927070.862875133,
+      "trials": [
+        3275541.474320835,
+        4578600.25142943
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.9228096770882914,
+      "serialize_fraction": 0.07577963018620996,
+      "database_activity_samples": {
+        "IO:WalSync": 19,
+        "IO:WalWrite": 35,
+        "IO:DataFileWrite": 14,
+        "LWLock:WALBufMapping": 4,
+        "LWLock:LockManager": 2,
+        "Lock:extend": 52,
+        "Client:ClientRead": 137,
+        "LWLock:WALWrite": 194,
+        "LWLock:BufferContent": 83,
+        "IO:DataFileExtend": 30,
+        "IO:WalInitSync": 4,
+        "Client:ClientWrite": 11,
+        "IO:WalInitWrite": 2,
+        "CPU_or_runnable": 342
+      }
+    },
+    {
+      "study": "storage",
+      "name": "disk",
+      "feedback": false,
+      "samples_per_second": 7207385.847380439,
+      "trials": [
+        7207769.734853957,
+        7207001.959906922
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.8941580685940652,
+      "serialize_fraction": 0.09377545029451931,
+      "database_activity_samples": {
+        "IO:WalSync": 2,
+        "LWLock:CheckpointerComm": 3,
+        "IO:WalWrite": 9,
+        "IO:DataFileWrite": 61,
+        "LWLock:WALBufMapping": 5,
+        "LWLock:LockManager": 6,
+        "Lock:extend": 121,
+        "Client:ClientRead": 93,
+        "LWLock:WALWrite": 91,
+        "LWLock:BufferContent": 179,
+        "LWLock:WALInsert": 8,
+        "IO:DataFileExtend": 67,
+        "IO:WalInitSync": 2,
+        "IO:WalInitWrite": 1,
+        "CPU_or_runnable": 650
+      }
+    },
+    {
+      "study": "storage",
+      "name": "ram",
+      "feedback": false,
+      "samples_per_second": 9686214.448838275,
+      "trials": [
+        9945987.96260956,
+        9426440.935066989
+      ],
+      "io_busy_min": 0.9999982190297283,
+      "copy_fraction": 0.8534858615313073,
+      "serialize_fraction": 0.13143409612264237,
+      "database_activity_samples": {
+        "LWLock:CheckpointerComm": 1,
+        "IO:WalWrite": 1,
+        "IO:DataFileWrite": 23,
+        "LWLock:WALBufMapping": 3,
+        "Lock:transactionid": 2,
+        "LWLock:LockManager": 11,
+        "Lock:extend": 70,
+        "Client:ClientRead": 155,
+        "LWLock:WALWrite": 50,
+        "LWLock:BufferMapping": 1,
+        "LWLock:BufferContent": 104,
+        "LWLock:WALInsert": 3,
+        "IO:DataFileExtend": 44,
+        "IO:WalInitWrite": 8,
+        "CPU_or_runnable": 944
+      }
+    },
+    {
+      "study": "storage",
+      "name": "disk",
+      "feedback": true,
+      "samples_per_second": 6741535.5818750225,
+      "trials": [
+        6181577.180322688,
+        7301493.983427356
+      ],
+      "io_busy_min": 1.0,
+      "copy_fraction": 0.8975922527580185,
+      "serialize_fraction": 0.08997787040688128,
+      "database_activity_samples": {
+        "IO:WalSync": 1,
+        "LWLock:CheckpointerComm": 1,
+        "IO:WalWrite": 5,
+        "IO:DataFileWrite": 92,
+        "Lock:transactionid": 4,
+        "LWLock:LockManager": 11,
+        "Lock:extend": 215,
+        "Client:ClientRead": 142,
+        "LWLock:WALWrite": 95,
+        "LWLock:BufferContent": 132,
+        "LWLock:WALInsert": 11,
+        "Timeout:SpinDelay": 3,
+        "IO:DataFileExtend": 73,
+        "IO:WalInitSync": 2,
+        "CPU_or_runnable": 737
+      }
+    },
+    {
+      "study": "storage",
+      "name": "ram",
+      "feedback": true,
+      "samples_per_second": 9348916.703759957,
+      "trials": [
+        9265754.951973172,
+        9432078.45554674
+      ],
+      "io_busy_min": 0.999995651561552,
+      "copy_fraction": 0.8479046930403783,
+      "serialize_fraction": 0.13637998838705379,
+      "database_activity_samples": {
+        "LWLock:CheckpointerComm": 1,
+        "LWLock:WALBufMapping": 6,
+        "IO:DataFileWrite": 24,
+        "Lock:transactionid": 8,
+        "LWLock:LockManager": 12,
+        "Lock:extend": 106,
+        "Client:ClientRead": 142,
+        "LWLock:WALWrite": 40,
+        "LWLock:BufferMapping": 4,
+        "LWLock:BufferContent": 81,
+        "Timeout:SpinDelay": 1,
+        "IO:DataFileExtend": 51,
+        "IO:WalInitWrite": 6,
+        "CPU_or_runnable": 980
+      }
+    }
+  ]
+}

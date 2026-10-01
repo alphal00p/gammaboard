@@ -4,6 +4,50 @@ Use [benchmarking](benchmarking.md) for commands, settings and validity rules.
 This page records current measurements and retained mechanisms; historical
 experiments are not current deployment defaults.
 
+## Materialized I/O-thread scaling — 2026-10-01
+
+With 16 evaluators, the dedicated sampler pool increased median accepted
+throughput from **4.32M/s at one I/O thread to 4.93M/s at four (+14%)**.
+Three threads reached 4.84M/s, within 2% of four. One evaluator stayed around
+2.3M/s across the settings. This is the measured ceiling at the selected batch
+and queue settings, not a search over every possible deployment configuration.
+
+| Evaluators | 1 I/O thread | 2 I/O threads | 3 I/O threads | 4 I/O threads |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 2.28M/s | 2.27M/s | 2.36M/s | 2.34M/s |
+| 16 | 4.32M/s | 4.66M/s | 4.84M/s | 4.93M/s |
+
+![Materialized throughput by sampler I/O thread count](benchmarks/2026-10-01/materialized-io-threads.svg)
+
+Only materialized input with compact evaluator results was measured here:
+six-dimensional samples, `f(x) = x[0]`, zero artificial delay, 131,072 samples per
+evaluator batch, and 4,194,304 samples per generation. The only run setting varied
+was `[sampler_aggregator_runner_params].io_threads`. Queue settings were six
+sampler database connections, four concurrent inserts, five batches per bundle,
+a 10 ms tick, and 250 ms telemetry. PostgreSQL used 4GB of shared buffers.
+
+All cases allowed eight physical sampler cores, fifteen separate database/server
+cores, and one separate physical core per evaluator. Sixteen evaluators remained
+registered throughout; either one or sixteen were assigned to the measured run.
+The sampler averaged at most 0.95 CPU cores during any measurement; the largest
+per-thread runnable scheduling wait was 0.53% of its interval. The core allowance
+therefore showed ample headroom, including for the four-thread pool. The actual
+thread counts and affinities were checked for every interval.
+
+There were two fresh-run trials per configuration, each measuring 25 seconds
+after the standard frontier warmup. The second block reversed the order.
+All **16/16 trials** passed measurement and cleanup checks; the private deployment
+also shut down cleanly. Total elapsed time was **8.3 minutes**. Lines show medians
+and small dots show individual trials. These short shared-host trials show
+repeatability, not confidence bounds; the small three-versus-four-thread gap
+should not be treated as a precise ranking.
+
+Source: local commit `3f3202c`, optimized `dev-optim` build. The
+[portable results](benchmarks/2026-10-01/materialized-io-threads.json) retain both
+trials, resource probes, exact settings and binary/harness hashes. The driver,
+frozen binary and raw intervals are in
+`/common/dev/cedric/setup-logs/materialized-io-frontier-20261001/`.
+
 ## Sampler CPU and I/O-thread scaling — 2026-09-30
 
 **Extra sampler cores help when the I/O thread count also increases.** Four
@@ -283,3 +327,187 @@ Other focused follow-ups remain separate: GammaLoop entry-reset cost, finite
 training windows/MadNIS behavior, and dependency numerical stability. An earlier
 Havana fixture exposed tiny negative rounded variance for identical values of
 1/6; varying benchmark feedback avoids that fixture but is not its numerical fix.
+
+## 2026-10-01: benchmark consolidation and sampler resource limits
+
+The maintained suite is now the `benchmarks` Python package, invoked with
+`python -m benchmarks`. Shared deployment, CPU allocation, input snapshots and
+reporting live in one place; Python defines the measurement policy and Rust
+helpers exercise production storage and process adapters. The old script entry
+points, search phases and unused presets are gone. Reports link separate plots
+and data rather than embedding them in a combined HTML file.
+
+This suite used a materialized transport cap of 131,072 samples, with 65,536
+selected for the zero-delay frontier. The default was subsequently reduced to
+32,768; see the default revision below. The I/O sweep is 256, 4,096, 16,384, 65,536,
+131,072; the protocol sweep spans 16–131,072. Generation retains its independent
+4,194,304-sample cap. All default sampler I/O sizes use 64 queue slots and
+five-batch insert bundles within the 2 GiB payload budget. Larger overrides remain
+available and record any memory-induced reduction in buffering.
+
+### Controlled resource probes
+
+Six-dimensional prepared samples, `f(x)=x[0]`, four sampler I/O threads allowed on
+eight physical cores, four concurrent inserts, sixteen consumers, 65,536 samples
+per batch. Roles use fixed disjoint CPU sets. Each trial creates a fresh private
+PostgreSQL database. Two repeats reverse the order, with 2 seconds of warmup and
+8 seconds measured for resource probes, 10 seconds for the storage comparison.
+These are short shared-host comparisons, not confidence intervals or isolated
+hardware limits.
+
+| Change from baseline | Median million samples/s, feedback off |
+| --- | ---: |
+| 12 database cores, 2 GiB shared buffers | 7.04 |
+| 24 database cores | 7.94 |
+| 8 GiB shared buffers | 7.69 |
+| Eight inserts / ten connections | 8.04 |
+| 128 queue slots | 7.44 |
+| 32 consumers | 6.91 |
+| 131,072 samples/batch | 5.28 |
+| 1,048,576 samples/batch, 2 GiB payload budget | 5.10 |
+| 1,048,576 samples/batch, 16 GiB / fixed 64 slots | 3.93 |
+
+Extra database CPU, cache and inserts offered roughly 9–14% median gains. The
+baseline varied from 6.67 to 7.41 M/s, so these small differences warrant longer
+confirmation before changing production defaults. Neither extra consumers nor
+more queue depth provided a substantial improvement. Fixing the queue depth at
+million-sample batches did not recover throughput: the slowdown is not solely a
+buffer-size artifact. It also raised the insert bundle back to five huge batches,
+so this comparison does not isolate individual large-value costs from bundle size.
+
+| Database filesystem | Feedback off, M/s | Feedback on, M/s |
+| --- | ---: | ---: |
+| Disk-backed `/tmp` | 7.21 | 6.74 |
+| RAM-backed `/dev/shm` | 9.69 | 9.35 |
+
+Changing only database placement improved the medians by 34% and 39%. The
+RAM-backed database is deliberately temporary and is not a durability-equivalent
+production deployment. This is evidence of storage-path headroom; it does not
+promise the same gain from a particular disk. The CLI now accepts
+`--database-directory PATH` so this comparison is easy to repeat.
+
+About 89–90% of completed insert-operation time was in payload COPY, 9% in
+serialization, with small metadata/commit contributions. These are overlapping
+operation times, not percentages of sampler wall time. Active-backend samples
+showed buffer-content, WAL-write and relation-extension waits; eight concurrent
+inserts increased extension-lock observations substantially. Busy remained near
+100% because it includes waits. This identifies the database payload path as the
+primary measured limit, not lack of sampler runtime threads. It does not separate
+all CPU, compression, copying and storage costs inside COPY.
+
+Large `bytea` values are stored in many TOAST chunks; bigger evaluator batches
+amortize batch metadata but do not remove per-byte work or shared database
+contention. See PostgreSQL's [TOAST description](https://www.postgresql.org/docs/17/storage-toast.html)
+and [wait-event definitions](https://www.postgresql.org/docs/17/monitoring-stats.html).
+
+The most promising next resource experiment is faster durable storage for the
+database and WAL. Beyond that, independent queues/databases may reduce shared
+contention; this study did not test sharding or establish linear scaling. Raising
+sampler threads, database cores, cache or inserts is not an N-times throughput knob.
+No production storage or durability settings were changed.
+
+[Resource comparison plot](benchmarks/2026-10-01/consolidated/resources.svg),
+[CSV](benchmarks/2026-10-01/consolidated/resource-summary.csv),
+[raw-summary/provenance](benchmarks/2026-10-01/consolidated/resource-summary.json).
+Full trial data and runnable probe drivers are retained locally at
+`/common/dev/cedric/setup-logs/benchmark-resources-20261001/`.
+
+### Full consolidated suite and follow-up
+
+The complete default suite ran with the same optimized executable across all four
+families and finished in **49.2 minutes**. The frontier alone took 35.5 minutes,
+including registration, warmup, measurements and cleanup. Coverage was 58/58 valid
+frontier points through 512 evaluators in both feedback modes, 80/80 valid sampler
+I/O trials, 20/20 valid evaluator I/O trials, and 40 protocol cases across eight
+batch sizes (1,720 paired measured calls). I/O busy never fell below the warning
+threshold: minima were 93.6% for the sampler and 99.8% for the evaluator. Every
+private database and worker fleet cleaned up successfully.
+
+| Measurement | Feedback off | Feedback on |
+| --- | ---: | ---: |
+| Peak observed zero-delay full pipeline | 6.30 M/s | 5.25 M/s |
+| Best sampler I/O median | 8.22 M/s | 7.58 M/s |
+| Best evaluator I/O median | 6.52 M/s | 6.27 M/s |
+| Process sampler overhead at 65,536 samples | 9.55 ms | 10.08 ms |
+| Process evaluator overhead at 65,536 samples | 14.55 ms | 15.00 ms |
+
+Full-pipeline zero-delay peaks used 32 evaluators without feedback and 128 with
+feedback; training at 32 was within 1% of its peak, so 32 is the cheaper selected
+configuration. Sampler I/O peaked at 16,384 samples/batch in both modes, with eight
+threads without feedback and two with feedback. Nearby two/four/eight-thread
+results overlap substantially; this is not evidence that each mode requires a
+different thread count. Evaluator I/O peaked at 65,536 without feedback and
+131,072 with feedback. These are best observed configurations from a small sweep,
+not guarantees for other machines or payloads.
+
+The measured zero-delay frontier used 65,536 as its selected **full-pipeline**
+batch size: the isolated sampler's 16,384-sample optimum does not by itself
+establish the best end-to-end batch size. These results predate the 32,768 default.
+Process overhead is adapter wall time minus callback work, including native
+conversion/accumulation; sampler feedback-on sums generation and feedback calls.
+It is not pure pipe latency and should not be subtracted from the I/O capacities.
+
+A subsequent code review found that the sampler timing includes
+`Generation::into_batch()`, expanding the flat generation into individual samples.
+The production sampler runner does not require this conversion. The saved numbers
+and plots retain that cost and therefore do not establish a process-API ceiling
+for the production generation path. The measurement correction is still pending.
+
+The 5 µs, 512-evaluator materialized point was unusually slow in the full sweep:
+**0.933 M/s**. A separate same-binary follow-up with a fresh database and a
+30-second window measured **4.288 M/s**, with valid counters and clean shutdown.
+Sampler I/O busy changed from 100% to 86.7%. The follow-up also selected different
+physical cores and ran under different shared-host load. The original collapse
+therefore is not a reproducible ceiling, but this test cannot distinguish database
+history, host contention, core placement and interval length as its cause. The
+original point remains in the frontier plot and raw data, with an explicit note;
+the follow-up is saved separately. High-fleet results need repeated confirmation
+before being used as deployment limits.
+
+Run the suite with the current defaults from the repository root (the saved
+manifest records the earlier settings used for these measurements):
+
+```bash
+python -m benchmarks all --budget 7200 --output results/full
+```
+
+The budget is only a maximum allowance, not an extension of each measurement.
+The completed run is at `/common/dev/cedric/setup-logs/benchmark-full-20261001/`;
+the follow-up is at
+`/common/dev/cedric/setup-logs/benchmark-frontier-followup-20261001/`.
+Plot labels and reports were regenerated afterward without changing measurements.
+The local suite index is about 1.3 KiB and links separate family reports and files.
+
+| Family | Plot | Data |
+| --- | --- | --- |
+| Frontier | [SVG](benchmarks/2026-10-01/consolidated/frontier.svg) | [All 58 points, CSV](benchmarks/2026-10-01/consolidated/frontier-points.csv), [raw records](benchmarks/2026-10-01/consolidated/frontier-results.jsonl) |
+| Sampler I/O | [SVG](benchmarks/2026-10-01/consolidated/sampler-io.svg) | [CSV](benchmarks/2026-10-01/consolidated/sampler-io-summary.csv), [raw trials](benchmarks/2026-10-01/consolidated/sampler-io-results.jsonl) |
+| Evaluator I/O | [SVG](benchmarks/2026-10-01/consolidated/evaluator-io.svg) | [CSV](benchmarks/2026-10-01/consolidated/evaluator-io-summary.csv), [raw trials](benchmarks/2026-10-01/consolidated/evaluator-io-results.jsonl) |
+| Process API | [SVG](benchmarks/2026-10-01/consolidated/protocol.svg) | [CSV](benchmarks/2026-10-01/consolidated/protocol-summary.csv), [paired timings](benchmarks/2026-10-01/consolidated/protocol-measurements.json) |
+| 512-evaluator follow-up | Separate explicit point | [Result](benchmarks/2026-10-01/consolidated/frontier-followup-results.jsonl), [configuration](benchmarks/2026-10-01/consolidated/frontier-followup-manifest.json) |
+
+Validation: 38 Python harness tests; 342 Rust library tests passed (one unrelated
+ignored test); eight CLI tests; the explicitly enabled Python/NumPy process-adapter
+round-trip test. No production behavior changed in the final reporting pass.
+
+### Default revision after the suite
+
+The run default, training/sample template and frontier preset now cap evaluator
+batches at **32,768 samples**. Generation remains independent. The diagnostic I/O
+and protocol sweeps still include larger sizes to expose the throughput decline.
+The results above were measured before this default revision and are unchanged.
+
+At the user's requested aggregation, the arithmetic mean of all 20 original
+zero-delay points is **4.454135 M/s**: 4.574347 M/s without feedback and
+4.333923 M/s with feedback. Each evaluator count and mode has equal weight;
+low-count unsaturated points are included. This is an average reference, not an
+estimate of peak saturation throughput. The saved frontier plot includes the
+combined mean as a dashed line; [calculation data](benchmarks/2026-10-01/consolidated/frontier-ceiling.json)
+records the source points. The annotation was applied to saved artifacts without
+changing the plotting implementation.
+
+The four-slide plot-only presentation is available as
+[PDF](benchmarks/2026-10-01/consolidated/benchmark-plots.pdf) and
+[Markdown](benchmarks/2026-10-01/consolidated/benchmark-plots.md). Its sampler I/O
+slide selects the production default of one thread from the existing trials.
+The complete thread sweep and resource comparisons remain in the research data.

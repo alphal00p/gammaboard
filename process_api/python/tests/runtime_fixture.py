@@ -26,10 +26,13 @@ def timed(method):
 
 class Fixture:
     def __init__(self, *, continuous_dims, discrete_cardinalities, work=0,
-                 stats_path=None, evaluator_metadata=None):
+                 stats_path=None, evaluator_metadata=None, feedback=True, benchmark=False):
         self.dims = continuous_dims
         self.cards = discrete_cardinalities
         self.work = work
+        self.feedback_enabled = feedback
+        self.benchmark = benchmark
+        self.rng = np.random.default_rng(1234)
         self.timings = {}
         self.count = 0
         self.total = 0.
@@ -56,12 +59,12 @@ class Fixture:
         if remaining_sample_budget == 0:
             return GenerationStatus.FINISHED
         nr_samples = min(1_048_576, remaining_sample_budget if remaining_sample_budget is not None else 1_048_576)
-        values = self.transform(np.full(nr_samples, .5))
+        values = self.transform(self.rng.random(nr_samples) if self.benchmark else np.full(nr_samples, .5))
         discrete = np.empty((nr_samples, len(self.cards)), dtype=np.int64)
         for i, cardinality in enumerate(self.cards):
             discrete[:, i] = np.arange(nr_samples) % cardinality
         return SampleBatch(discrete, np.repeat(values[:, None], self.dims, axis=1),
-                           np.full(nr_samples, 2.), training_remaining=10**12 - self.count)
+                           np.full(nr_samples, 2.), training_remaining=(10**12 - self.count) if self.feedback_enabled else None)
 
     @timed
     def feedback(self, values):

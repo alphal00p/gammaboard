@@ -233,11 +233,10 @@ pinned GammaLoop revision and is separate:
 just test-e2e-madnis
 ```
 
-Process API tests are opt-in and require a Python environment containing NumPy:
+Process API benchmarks require Python with NumPy and matplotlib:
 
 ```bash
-just benchmark process --python /path/to/venv/bin/python --output results/process
-just benchmark plot results/process
+just benchmark protocol --python /path/to/venv/bin/python --output results/protocol
 ```
 
 ## GammaLoop Feature

@@ -1,0 +1,11 @@
+{
+  "experiment": "suite",
+  "status": "completed",
+  "elapsed_seconds": 2953.7038615811616,
+  "families": {
+    "frontier": "completed",
+    "sampler-io": "completed",
+    "evaluator-io": "completed",
+    "protocol": "completed"
+  }
+}

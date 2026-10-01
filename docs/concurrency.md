@@ -122,6 +122,7 @@ the counter, batch metadata, and inputs still become visible atomically.
 New input writes use LZ4 when supported by PostgreSQL. Insert bundle size and
 concurrency limits are unchanged by these storage optimizations.
 
-Use `scripts/benchmark.py io` to compare one, two, and eight concurrent inserts.
-Its evaluator fleets share an explicit CPU budget: large fleets stress scheduling
-and database contention rather than demonstrate CPU strong scaling.
+Use `python3 -m benchmarks sampler-io --io-threads 1 2 4` to compare sampler I/O capacity;
+the benchmark holds insert concurrency at four.
+The `frontier` benchmark gives evaluator fleets an explicit CPU budget: large fleets
+stress scheduling and database contention rather than demonstrate CPU strong scaling.

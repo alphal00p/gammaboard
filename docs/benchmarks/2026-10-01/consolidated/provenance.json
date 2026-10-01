@@ -1,0 +1,13 @@
+{
+  "suite": "/common/dev/cedric/setup-logs/benchmark-full-20261001",
+  "followup": "/common/dev/cedric/setup-logs/benchmark-frontier-followup-20261001",
+  "resource_probes": "/common/dev/cedric/setup-logs/benchmark-resources-20261001",
+  "presentation": "Plots regenerated from unchanged measurements after label cleanup; frontier includes a follow-up note. Original experiment source snapshots remain in each inputs directory.",
+  "reporting_files": {
+    "benchmarks/reporting.py": "9d3ff8c823a51151136490fd696766bfd64a101d94370e0954f670185b75dfe2",
+    "benchmarks/frontier_plots.py": "1094fe5329faa332659a964d9dd3597b96cc266bf43593fe9be5db08e3c37cbe",
+    "benchmarks/io.py": "a7b6d38603b03bd9928b1513b9d8150c5b6f2e534b0fa6fce3e2991b0be6e580",
+    "benchmarks/protocol.py": "86538e0c2bd8bfd89944444b282bc48d8a78ac0aaa7cc62460aab847967bdb01"
+  },
+  "frontier_annotation": "Artifact-only dashed reference added: arithmetic mean of all 20 original zero-delay measurements. Plotting source code unchanged for this annotation."
+}

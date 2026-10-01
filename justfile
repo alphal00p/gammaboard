@@ -17,6 +17,6 @@ symbolica-variable-theta:
 sync-ubelix host="ubelix" remote_folder="gammaboard":
     ops/ubelix/sync_ops.sh "{{host}}" "{{remote_folder}}"
 
-# One runner for planning, measuring, summarizing, plotting, and comparing experiments.
+# One CLI: measure and immediately produce separate plots and local reports.
 benchmark *args:
-    python3 scripts/benchmark.py {{args}}
+    python3 -m benchmarks {{args}}

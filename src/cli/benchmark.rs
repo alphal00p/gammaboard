@@ -1,7 +1,8 @@
-use super::{performance::parse_duration, shared::print_json};
+use super::shared::print_json;
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use std::{path::PathBuf, time::Duration};
+use gammaboard::{benchmark, config::RuntimeConfig};
+use std::path::PathBuf;
 
 #[derive(Debug, Args)]
 pub struct BenchmarkArgs {
@@ -10,49 +11,24 @@ pub struct BenchmarkArgs {
 }
 #[derive(Debug, Subcommand)]
 pub enum BenchmarkCommand {
-    /// Calibrate fixed CPU work once, then reuse the iterations across the sweep
-    Calibrate {
-        #[arg(long)]
-        eval_us: f64,
-    },
-    /// Direct uniform-sampling/scalar-accumulation baseline using a production evaluator
-    Evaluator {
-        config: PathBuf,
-        #[arg(long, default_value_t = 1)]
-        workers: usize,
-        #[arg(long, default_value_t = 256)]
-        batch_size: usize,
-        #[arg(long, value_parser=parse_duration, conflicts_with="samples")]
-        duration: Option<Duration>,
-        #[arg(long, value_parser=parse_duration)]
-        warmup: Option<Duration>,
-        #[arg(long)]
-        samples: Option<usize>,
-    },
+    /// Database path capacity (normally invoked by python -m benchmarks)
+    Io { config: PathBuf },
+    /// External process adapter overhead, without PostgreSQL
+    Protocol { config: PathBuf },
 }
-pub fn run(args: BenchmarkArgs) -> Result<()> {
-    match args.command {
-        BenchmarkCommand::Calibrate { eval_us } => print_json(&gammaboard::benchmark::calibrate(
-            Duration::try_from_secs_f64(eval_us / 1_000_000.0)?,
-        )?),
-        BenchmarkCommand::Evaluator {
-            config,
-            workers,
-            batch_size,
-            duration,
-            warmup,
-            samples,
-        } => {
-            let workload = toml::from_str(&std::fs::read_to_string(config)?)?;
-            print_json(&gammaboard::benchmark::direct(
-                workload,
-                workers,
-                batch_size,
-                duration.unwrap_or(Duration::from_secs(5)),
-                warmup.unwrap_or(Duration::ZERO),
-                samples,
-            )?);
+pub async fn run(args: BenchmarkArgs, runtime: &RuntimeConfig) -> Result<()> {
+    let result = match args.command {
+        BenchmarkCommand::Io { config } => {
+            benchmark::io::measure(
+                &runtime.database.url,
+                serde_json::from_slice(&std::fs::read(config)?)?,
+            )
+            .await?
         }
-    }
+        BenchmarkCommand::Protocol { config } => {
+            benchmark::protocol::measure(serde_json::from_slice(&std::fs::read(config)?)?)?
+        }
+    };
+    print_json(&result);
     Ok(())
 }

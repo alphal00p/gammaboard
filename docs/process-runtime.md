@@ -391,15 +391,14 @@ and working examples are documented in
 
 ## Benchmark
 
-Run the targeted process API tests and overhead measurements with:
+Measure process API overhead with the optimized GammaBoard executable:
 
 ```bash
-just benchmark process --python /path/to/venv/bin/python --output results/process
-just benchmark plot results/process
+just benchmark protocol --python /path/to/venv/bin/python --output results/protocol
 ```
 
-The production Rust adapters and Python SDK are measured together for evaluator
-calls, sampler generation, feedback ingestion and control calls. Three batch sizes
-and two callback work levels separate callback time from adapter/runtime overhead.
-See [benchmarking.md](benchmarking.md#targeted-process-api-measurements) for scope,
-requirements and the separate functional assertions.
+The command produces separate plots and a local HTML report automatically. It measures
+the production Rust adapters and Python SDK for evaluator calls, sampler generation
+and feedback, with feedback disabled/enabled. Paired callback timings separate
+user computation from adapter overhead. See [benchmarking.md](benchmarking.md#process-protocol)
+for measurement scope. Functional assertions remain separate in `tests/process_api.rs`.

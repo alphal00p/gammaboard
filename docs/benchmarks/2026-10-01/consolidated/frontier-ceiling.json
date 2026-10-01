@@ -1,0 +1,39 @@
+{
+  "definition": "Unweighted arithmetic mean of all 20 original zero-delay rates, across both modes and evaluator counts 1..512; includes unsaturated low-count points.",
+  "samples_per_second": 4454134.765230831,
+  "count": 20,
+  "transport_batch_size": 65536,
+  "by_mode": {
+    "materialized": {
+      "samples_per_second": 4574346.61404907,
+      "count": 10
+    },
+    "training": {
+      "samples_per_second": 4333922.916412592,
+      "count": 10
+    }
+  },
+  "source": "/common/dev/cedric/setup-logs/benchmark-full-20261001/frontier/results.jsonl",
+  "measurements": [
+    "point-000",
+    "point-001",
+    "point-002",
+    "point-003",
+    "point-004",
+    "point-005",
+    "point-006",
+    "point-007",
+    "point-008",
+    "point-009",
+    "point-010",
+    "point-011",
+    "point-012",
+    "point-013",
+    "point-014",
+    "point-015",
+    "point-016",
+    "point-017",
+    "point-018",
+    "point-019"
+  ]
+}

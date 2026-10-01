@@ -362,16 +362,14 @@ credentials and shared resource paths available as for an ordinary launch.
 
 ### Overhead and scaling measurements
 
-Use `gammaboard --json run performance RUN --duration 30s` to measure an active
-run, and `gammaboard benchmark evaluator` for a direct execution baseline. The
-default sparse frontier measures RNG, materialized and training data paths
-through 512 evaluators using zero delay and three simulated costs. Start with
-`just benchmark plan resources/templates/benchmarks/frontier.toml`, then run
-`just benchmark frontier --binary target/dev-optim/gammaboard --output results/frontier`.
-`just benchmark process` measures Rust/Python adapter overhead separately.
-See [benchmarking](docs/benchmarking.md) for prerequisites, focused CPU/I/O suites
-and measurement rules, and [performance findings](docs/performance-development.md)
-for current results and plots.
+Run `just benchmark all --quick --output results/quick` for the deployment frontier,
+separate sampler/evaluator database I/O capacities and process API overhead. Each
+family measures feedback off/on and immediately produces separate plots and local
+HTML reports. `just benchmark plan` previews the sparse frontier through 512
+evaluators; `just benchmark frontier` runs it independently. See
+[benchmarking](docs/benchmarking.md) for setup, resource limits and measurement
+boundaries, and [performance findings](docs/performance-development.md) for results.
+Use `gammaboard --json run performance RUN --duration 30s` for an existing run.
 
 ### Synthetic workloads
 
@@ -384,5 +382,5 @@ counts. These engines are available in ordinary builds.
 
 Timing models are useful for lifecycle and training-barrier regression tests.
 The default frontier uses batch sleeps to isolate coordination and transport.
-The optional `tuning.toml` and `scaling.toml` CPU presets instead keep calibrated
-arithmetic work fixed across evaluator counts for direct-baseline comparisons.
+The separate I/O and process benchmarks isolate database-path capacity and external
+process adapter overhead without adding evaluator arithmetic.

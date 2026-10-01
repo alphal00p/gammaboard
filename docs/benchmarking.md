@@ -1,297 +1,256 @@
-# Benchmarking GammaBoard
+# Benchmarks
 
-Use `just benchmark` for all experiments. The default sparse frontier measures
-coordination and transport with sleeping evaluators. Process-API measurements
-isolate adapter overhead; CPU and I/O suites answer targeted questions.
-[Current results](performance-development.md) summarize the latest measurements.
-[Sampling](sampling.md) defines generation, evaluator batches and feedback.
+One Python CLI runs the measurements and immediately writes separate PNG/SVG
+plots, CSV summaries and raw JSON, with small local HTML reports for navigation. Training feedback off/on is
+included automatically. There are no optimizer-update or end-to-end correctness
+tests in this suite.
 
-## Choose a measurement
+## Run
 
-| Question | Command | Scope |
-| --- | --- | --- |
-| Capability and scaling | `frontier` | Three data paths, four delays, 1–512 evaluator processes |
-| External process overhead | `process` | Production Rust adapters and Python SDK, without the database |
-| Insert/bundle/storage tuning | `io` | Repeated fixed-configuration comparisons |
-| Fixed CPU-work efficiency | `run PRESET` | Pipeline versus direct serial/parallel evaluation |
-| An existing run | `gammaboard run performance` | Current deployment and workload |
+On Linux, use an optimized GammaBoard binary, PostgreSQL (`initdb`, `pg_ctl`,
+`psql`), `taskset`, and Python 3.11+ with NumPy and matplotlib. The repository
+checkout supplies the harness, migrations and Python SDK fixture. Neither nginx,
+a built dashboard, a running GammaBoard instance nor a Rust test executable is
+required. The benchmark creates and removes its own local database.
 
-Run from the development shell with Python 3.11+ and an optimized binary.
-Plotting also needs matplotlib; process tests need a Python interpreter with
-NumPy. Compilation and plotting are outside suite budgets.
-
-```sh
+```bash
 cargo build --locked --profile dev-optim --bin gammaboard
-just benchmark plan resources/templates/benchmarks/frontier.toml
-just benchmark frontier --binary target/dev-optim/gammaboard --output results/frontier
-just benchmark plot results/frontier
-just benchmark summary results/frontier
+python3 -m venv .venv
+.venv/bin/pip install numpy matplotlib
+.venv/bin/python -m benchmarks all --quick --output results/quick
 ```
 
-Outputs must be new directories. Deployment suites use private resources, check
-ports, preserve diagnostics and shut down their own workers and database.
-Use `--port-offset` to avoid other instances. CPU affinity limits placement;
-it does not reserve cores on a shared host.
+`just benchmark` is an optional shorthand for `python3 -m benchmarks`.
+Use `--binary PATH` when the executable is elsewhere; `CARGO_TARGET_DIR` is
+honored. `--python PATH` selects the protocol child interpreter.
 
-## Default sparse frontier
+```bash
+just benchmark plan
+just benchmark frontier --output results/frontier
+just benchmark sampler-io --output results/sampler
+just benchmark evaluator-io --output results/evaluator
+just benchmark protocol --output results/protocol
+```
 
-The [preset](../resources/templates/benchmarks/frontier.toml) defines **87 fresh-run
-measurements**. The registered pool remains at 512 processes; each point selects
-its active evaluators.
+Open `results/quick/report.html` after an `all` run. Reports are produced even
+when measurements fail or a budget expires, with unavailable coverage explicit.
+A full frontier is the longest family; `plan` shows measured time before setup,
+warmup and cleanup. Quick mode uses frontier counts 1, 4, 16 and 64 by default (override the maximum
+with `--max-evaluators`) and uses one 2-second I/O
+trial per setting, compared with two 4-second trials normally. Large batches
+extend the measured interval to target at least sixteen completions (bounded at
+30 seconds or the requested duration for sampler I/O). It does not weaken
+frontier readiness or minimum-sample requirements. Repeats reverse case order
+in the same private database; cache state and background database work can affect
+rates. These trials are not isolated cold-database comparisons.
 
-| Mode | Input | Result |
+Useful overrides:
+
+```bash
+just benchmark all --quick --max-evaluators 16 --cpu-limit 12 --output results/laptop
+just benchmark sampler-io --io-threads 1 2 4 8 --output results/io-threads
+just benchmark sampler-io --io-threads 4 --database-cores 16 --profile --output results/profile
+just benchmark protocol --batch-sizes 16 1024 65536 131072 --output results/protocol-short
+```
+
+`--memory-mib` bounds estimated I/O payload residency (default 2048 MiB); the
+PostgreSQL cache and executable/runtime memory are additional. Largest batches
+need room for at least eight batches including transient copies. Reduce batch
+sizes on smaller machines. `--cpu-limit` bounds physical core allocation; sampler,
+evaluators and PostgreSQL use disjoint sets. Worker processes may share evaluator
+cores in delayed frontier cases. Large registered fleets also need memory for
+workers and database connections: reduce `--max-evaluators` on smaller machines.
+These tests do not reserve an otherwise idle host.
+
+## Coverage
+
+| Family | Measured path | Main output |
 | --- | --- | --- |
-| `rng` | Compact RNG checkpoints from a frozen uniform Havana grid | Compact accumulation |
-| `materialized` | Six-dimensional materialized samples | Compact accumulation |
-| `training` | Six-dimensional materialized samples | Accumulation and per-sample feedback |
+| Frontier | Actual sampler and evaluator runners, queues, bookkeeping and accumulation | Accepted samples/s against evaluator count |
+| Sampler I/O | Prepared materialized batches → production insert → lightweight consumers → production result fetch/decode and cleanup | Samples/s against batch size and I/O thread count |
+| Evaluator I/O | Prefilled queue → production claim/decode → prepared result → production submit | Samples/s against batch size, with one I/O thread |
+| Protocol | Production Rust process adapters and Python SDK; no database | Adapter overhead per batch and per sample |
 
-All modes evaluate `f(x) = x[0]`, so feedback varies with seeded input; arbitrary
-distributions may still produce compressible values. The evaluator performs no
-artificial arithmetic: it sleeps once per batch for `batch_size × eval_us`,
-with seeded Gaussian jitter of 10% per batch. Zero delay has no sleep or jitter.
-Generation, materialization, transport and accumulation still perform real work.
+All materialized cases use six continuous dimensions and scalar results.
+Input coordinates vary within each batch; returned training values are `x[0]`,
+avoiding constant-value feedback compression. Prepared I/O inputs/results are
+reused between batches. These are database-path capacities, including PostgreSQL
+and serialization, not pure network bandwidth. They exclude runner tick policy,
+checkpoint writing and sampler/evaluator arithmetic; the frontier includes those
+runtime effects.
 
-| Delay/sample | Evaluators | RNG samples/batch | Materialized/training samples/batch |
-| --- | --- | ---: | ---: |
-| 0 | Every doubling from 1 through 512 | 524,288 | 131,072 |
-| 5 µs | 1, 4, 16, 64, 256, 512; also 128 for RNG and 8 for the other modes | 65,536 | 65,536 |
-| 200 µs | 1, 4, 16, 64, 256, 512 | 4,096 | 4,096 |
-| 5 ms | 1, 4, 16, 64, 256, 512 | 256 | 256 |
+Training means transporting and ingesting per-sample feedback. Model optimization,
+GPU performance, finite-minibatch pauses, large observable states and multi-host
+network behavior are outside this suite's default scope.
 
-These are selected settings replayed for scaling, not a new optimization at every
-point. Zero delay is an empirical reference, not a guaranteed upper bound for
-other batch sizes. The ideal delay-limited rate is `evaluators / delay`.
+## Frontier
 
-The sampler owns its generation size. The preset fixes it per delay context,
-bounded by the maximum batch size, sample allowance and 30 seconds of nominal
-single-evaluator work. Runtime splitting uses a soft refill threshold of one
-pending batch per evaluator; the threshold does not truncate draws.
-Training uses a 10¹²-sample window, measuring feedback transport without optimizer
-barriers. Finite training windows and real optimizers need separate tests.
+The default sparse measurement retains evaluator doublings from 1 through 512 on
+the zero-delay curve, and sparse anchors on the 5 µs, 200 µs and 5 ms curves.
+Delays are simulated by one sleep per batch with seeded 10% Gaussian jitter;
+there is no artificial CPU arithmetic. Nominal batch time is capped at 30 seconds. The zero-delay materialized/training
+curve uses 32,768 samples per evaluator batch. The default transport cap is
+32,768, separately from the 4,194,304-sample generation cap. Delayed curves use
+32,768 / 4,096 / 256 samples at 5 µs / 200 µs / 5 ms; timing and memory bounds can
+reduce these values. Generation stays large enough to amortize draws.
 
-The preset uses one sampler core, fifteen database/server cores, a 10 ms tick,
-250 ms telemetry, six sampler connections, four concurrent inserts and five
-batches per insert bundle. `sampler_io_threads` (1) and `sampler_db_pool_size` (6)
-are explicit in the preset; older suites replay with one sampler I/O thread and
-two connections. The new dedicated pool leaves control-plane I/O separate, so
-replaying a suite does not recreate the historical process thread layout. The database uses 4GB of
-shared buffers; older suites without `database_shared_buffers` retain 256MB.
-Evaluator processes share the remaining physical cores when necessary. It needs
-at least 17 physical cores. The allowance is 2,147,483,648 **samples**, not bytes:
-the 512-worker RNG measurement used roughly 70 GiB of worker RSS, excluding
-PostgreSQL and page cache. Reduce the fleet and `sample_memory_budget` on smaller
-hosts; actual batch caps are recorded.
+Materialized inputs with feedback off/on are the default pair. Add `--include-rng`
+for compact RNG inference. The preset is
+[`frontier.toml`](../benchmarks/frontier.toml).
+`--workers 1 16` selects explicit counts; `--points FILE.json` selects exact
+`mode`, `eval_us`, `workers`, `batch` points from the effective suite. These are
+scaling curves at selected batch/queue settings, not a new optimization search at
+every point. The old adaptive search and CPU-work matrices have been removed.
 
-The default time limit is **60 minutes**, including deployment and cleanup.
-`plan` reports minimum measurement time; warmup, draining and deployment add to
-it. `--budget` changes the limit, never the validity rules.
+Warmup passes all previously generated work, including a buffered generation.
+Accepted sample deltas and elapsed time use the same sampler telemetry endpoints.
+Coverage and identities must remain stable, telemetry must be fresh, and at least
+eight accepted batches and evaluator completions must be observed. Longer delayed
+batches receive longer intervals. Every mode observes at least two nominal generation
+cycles because concurrent insert bundles and ordered collection can produce bursts
+even without feedback. Accepted and evaluated progress must agree within 10% or
+two batches. If they disagree, use the first and last observed complete generation
+boundaries when they span at least half the observation and eight batches. The
+untrimmed observation is always saved. Unresolved intervals receive one longer
+retry and remain flagged if the backlog boundary still distorts the measurement.
+Failed and unmeasured configurations never become zero-throughput observations.
 
-### Measurement contract
+The report shows the peak observed configurations, preferring fewer evaluators
+and smaller batches when within 5% of the peak. Effective settings, workload cards,
+resource assignments and exact raw intervals are saved. Memory-dependent batch
+caps are explicit; do not compare runs with different settings as code-only changes.
 
-- Readiness requires the assigned fleet and recent telemetry. RNG initializes
-  its small Havana grid with one evaluator before attaching the full fleet.
-- Warmup accepts all previously generated work, including buffered draw remainders,
-  then two new batches per evaluator in aggregate. Its five-minute timeout is
-  also bounded by the remaining suite budget.
-- A confirmation spans at least 12 seconds, six nominal batch durations and ten
-  batch durations divided by worker count. Training also spans two nominal
-  generation cycles divided by worker count, because feedback arrives per draw.
-- Adequacy requires eight accepted batches and eight evaluator completions in
-  aggregate. Training must deliver feedback during the measured interval.
-- Accepted progress and feedback use the same sampler telemetry endpoints and
-  monotonic clock. Separately checkpointed run totals remain available.
-- Assignment/task/epoch changes, stale or missing coverage, regressing counters,
-  failed readiness and cleanup remain explicit failures. Missing data is not zero.
+## I/O capacities
 
-Reports show accepted samples/s, evaluator batches/s, batch sizes, four busy
-fractions and worker RSS. Busy fractions are occupied wall time, including
-simulated waiting and database waits; they are not CPU utilization. Compute and
-I/O overlap. Short windows and jitter can put rates slightly above the ideal.
+Default batch sizes are 256, 4096, 16,384, 65,536 and 131,072 samples. Sampler I/O uses
+four concurrent insert tasks, up to five batches per bundle, and a six-connection
+pool. Sixteen lightweight consumers drain real inputs and return real results;
+`--consumers` can check partner headroom. Sampler I/O sweeps 1, 2, 4 and 8 threads
+by default, keeping two cores available for the database and consumers; smaller CPU budgets trim only the default sweep.
+Explicit `--io-threads` values must fit the CPU budget. All cases in a sweep use
+the same disjoint role CPU sets, with enough sampler cores for the largest count.
+The frontier retains the thread count in its preset unless explicitly overridden.
+Bounded outstanding work prevents backlog growth from masquerading as sustainable
+throughput. Throughput counts collected results.
 
-Selection prefers fewer evaluators and then shorter batches within 5% of the best
-observed rate. Repeated confirmations use their median. This preference is not a
-5% confidence guarantee. Use repeated matched A/B trials for deployment defaults
-or causal speedup claims, especially at high evaluator counts.
+Evaluator I/O measures one worker with one-batch lookahead and a two-connection
+pool. Each pass is fully prefilled before timing and leaves two reserve batches.
+Passes are repeated until the requested measured duration is covered. Prefill,
+cleanup and warmup are excluded. This is a warmed database/cache measurement;
+queue starvation invalidates it. Every timed pass is retained and combined by
+its actual duration.
 
-### Targeted checks and exploration
+Plots show throughput only, with separate feedback-off/on panels. Lines show
+medians and faint dots show repeated trials. Busy remains in the saved
+measurements and CSV summaries. The timer is shared with production:
+executing I/O counts, including database waits; overlapping operations count once.
+Waiting for work/channel capacity and completed operations awaiting collection do
+not count. Busy at or below 90% prints a warning and marks the trial as unsaturated;
+it does not discard an otherwise valid rate. High busy alone does not establish
+hardware utilization: check saved consumer activity, empty claims and
+publication/completion windows as well.
 
-`--points` accepts explicit configurations. Repeated entries produce independent
-fresh-run confirmations:
+Reports include batches/s and encoded input/feedback MiB/s. Byte rates do not
+include network framing, WAL or physical disk traffic. Raw windows and effective
+buffer/bundle sizes accompany each measurement and appear in the summary.
+The sampler defaults to 64 outstanding batches and five batches per insert. All
+sizes in the default sweep fit this same queue and bundle within 2048 MiB.
+Overrides beyond the default range may reduce queue/bundle sizes to respect the
+memory budget; the report records those effective limits.
 
-```json
-[
-  {"mode": "training", "eval_us": 0, "workers": 16, "batch": 131072},
-  {"mode": "training", "eval_us": 0, "workers": 16, "batch": 131072}
-]
+Optional resource probes use `--database-cores`, `--database-cache-mib`,
+`--insert-concurrency`, `--queue-batches` and `--consumers`. The insert pool has two
+connections beyond the insert concurrency. These are benchmark controls, not new
+production configuration fields. `--profile` samples PostgreSQL active-backend
+wait states every 100 ms during measured windows. Raw data also includes completed
+operation times for serialization, metadata insertion, payload COPY, commit,
+result fetch and cleanup. These times overlap across operations: their sums are
+not busy percentages. Database-state counts are sampled observations, not CPU
+utilization measurements. `--database-directory PATH` chooses the filesystem for
+the temporary private database; its default is `/tmp`. A RAM-backed directory is
+a diagnostic of storage headroom, not a durable deployment recommendation.
+
+## Process protocol
+
+The normal optimized executable runs the real adapters against the bundled Python
+SDK fixture. No Cargo invocation or test binary is needed at measurement time.
+Parent and child run on separate physical cores. Logarithmic batch sizes range
+from 16 to 131,072; three warmup calls are discarded and 4–64 calls are measured.
+
+Each adapter call is paired with its callback's elapsed time. Their difference
+includes validation, packing, pipes, native conversion/accumulation, destruction
+and scheduling. It is **adapter overhead**, not pure IPC latency. Startup and raw
+paired timings are recorded separately. Sampler training cycles combine generation
+and feedback at the same batch size.
+
+The current sampler measurement also expands each returned generation with
+`Generation::into_batch()`. The production sampler runner consumes the flat
+generation directly, so this extra conversion overstates its generation-path
+overhead. Do not interpret the sampler protocol curve as a runtime throughput
+ceiling; measuring native generations without this conversion is a follow-up.
+
+The generic evaluator returns per-sample values over IPC in both modes because
+Rust performs accumulation. Feedback-on additionally retains weighted values;
+similar protocol curves in the two modes are expected. Functional process tests
+remain in `tests/process_api.rs` and are not part of the benchmark command.
+
+## Results
+
+Every family creates `report.html`, plots, `summary.csv`, `summary.json`, a manifest
+and raw measurements. `all` creates a small index linking the separate family
+reports; images are linked files, not embedded copies. A shared `inputs/` directory
+preserves the executable, benchmark package and migrations once per suite. The
+protocol family also saves its Python SDK and fixture. Interrupted runs retain logs and failure status; successful runs stop
+workers and remove their private database. To regenerate reports after changing
+the presentation:
+
+```bash
+just benchmark report --output results/frontier
 ```
 
-```sh
-just benchmark frontier --points points.json --budget 600 --binary target/dev-optim/gammaboard --output results/check
-```
+The superseded `run`, `io`, `process`, `plot` and `summary` CLI commands and CPU
+matrix presets are removed. Historical studies retain their original saved harness.
+Use `gammaboard --json run performance RUN --duration 30s` for a live deployment.
 
-Use this to rerun failed or unmeasured configurations without repeating the suite.
-Retain original failures and provenance when combining studies.
+## Batch-size finding
 
-`--search` is optional adaptive evaluator-batch and worker-count exploration.
-It tunes live, drains pre-change work, checks larger/smaller batches, prunes
-clearly dominated delayed-worker counts and confirms selected settings in fresh
-runs. Zero delay retains every worker count. Queue refill depth remains fixed.
-`--points` and `--search` are mutually exclusive; custom delays require one of them.
+Larger transported batches eventually reduce throughput. In the October 1
+six-dimensional materialized sweep, 65,536-sample batches outperformed
+1,048,576-sample batches at every tested thread count, with and without feedback.
+The old 2 GiB memory budget also reduced queue slots from 128 to 12 and insert
+bundles from five batches to one at the largest size. That confounded batch size
+with buffering, so it was not evidence of a universal database size threshold.
 
-## Targeted process API measurements
+The diagnostic I/O sweep focuses on 256–131,072 samples and holds sampler
+buffering constant. The run and frontier defaults now cap transported batches at
+32,768; bulk generation is independent. Existing October 1 frontier results used
+65,536-sample zero-delay batches and have not been remeasured at the new default.
+These defaults can be overridden: explicit larger I/O/protocol sizes remain supported up to
+1,048,576, and a custom frontier preset can raise its cap. Bulk generation retains
+its independent 4,194,304-sample cap. Recheck the knee for different dimensions,
+feedback payloads, machines and database settings. Resource comparisons and the
+full rerun are recorded in [performance development](performance-development.md).
 
-```sh
-just benchmark process --python /path/to/venv/bin/python --output results/process
-just benchmark plot results/process
-```
+## Code organization
 
-The driver builds optimized Rust integration tests using the production adapters,
-Python SDK and v3 framed protocol. Parent and child occupy two physical cores.
-Correctness checks cover weighted feedback, continuous/discrete dimensions,
-feedback on/off, variable sizes, rejected requests and worker reuse.
+The Python package [`benchmarks/`](../benchmarks/) owns the experiment policy:
 
-The overhead sweep uses six continuous coordinates and one output component:
+| File | Responsibility |
+| --- | --- |
+| `__main__.py`, `cli.py` | Single entry point, defaults and family orchestration |
+| `common.py` | Private database lifecycle, CPU allocation, input snapshots, shared counters |
+| `frontier.py`, `frontier.toml` | Sparse workload plan and accepted-progress measurement |
+| `frontier_plots.py` | Frontier figures and selected deployment settings |
+| `io.py` | Both database-path sweeps, validity checks and throughput reports |
+| `protocol.py` | Paired process-adapter measurements and overhead reports |
+| `reporting.py` | Local HTML navigation, CSV and figure output |
+| `tests/` | Measurement, aggregation and cleanup contracts |
 
-- Nine batch sizes: 16, 64, 256, 1,024, 4,096, 16,384, 65,536, 262,144, 1,048,576.
-- Evaluator calls with feedback on/off; sampler generation and feedback separately.
-- Zero or 64 in-place NumPy sine passes inside the callback, giving 72 cases.
-- Three discarded warmups; 128 repetitions at small sizes, falling to four at 1M.
+[`src/benchmark/`](../src/benchmark/) contains only the Rust paths needed to
+exercise production stores and process adapters. It returns raw measurements;
+Python owns planning, warnings, summaries and plots. The shared Python process
+fixture remains in `process_api/python/tests/runtime_fixture.py`, beside SDK
+tests. Functional adapter tests remain in `tests/process_api.rs`; they do not
+carry benchmark matrices. No compatibility wrappers or old search presets remain.
 
-Each observation subtracts callback wall time from its matching adapter wall
-time. The residual includes validation, packing, IPC, native conversion/
-accumulation, deallocation and scheduling. Startup, fixture input construction,
-the database and worker fleet are excluded. This is process-API overhead, not
-wire-only IPC latency or a universal constant across domains and components.
-
-Plots show mean overhead per call and per sample against batch size in PNG,
-SVG and PDF. Raw paired timings, medians, startup times, affinity and source
-hashes remain in the output. Shared-host noise is not a performance threshold.
-
-## Focused I/O experiments
-
-The default stress matrix compares 1/2/8 concurrent inserts, 1/8/32/64 evaluators,
-16/256-sample batches and three repetitions. It uses 1 ms polling and at most
-eight physical cores, exposing coordination pressure rather than CPU scaling.
-
-```sh
-just benchmark io --binary target/dev-optim/gammaboard --output results/io
-just benchmark io --binary target/dev-optim/gammaboard --output results/payloads --workers 8 --batch-sizes 65536 262144 --inserts 1 2 8 --min-tick-ms 10 --duration 12 --repetitions 3
-just benchmark plot results/payloads
-```
-
-Use a small matrix around the configuration under investigation. `--iterations`
-adds fixed CPU work; `--insert-bundle-size` changes batches per transaction.
-`--input-storage pglz|lz4|external` requires `psql` and changes only the private
-database's input column. This is a deployment experiment, not live task tuning.
-
-The workload sends materialized six-dimensional inputs and compact results,
-without training barriers. Reports include samples/s, batches/s and logical input
-MiB/s derived from measured payload bytes. Logical volume excludes results,
-retries, framing, WAL and physical disk traffic. Local PostgreSQL uses
-`synchronous_commit = false`; this is not a durability benchmark. Missing/changing
-payload sizes and invalid busy counters invalidate the relevant measurement.
-
-Insert concurrency counts in-flight tasks, not simultaneous database connections:
-the sampler's role pool defaults to and is capped at six. Raising the insert limit
-alone does not raise that connection limit. Leave capacity for result fetching
-and maintenance. See [concurrency](concurrency.md).
-
-## Fixed CPU-work comparisons
-
-Optional CPU presets compare the pipeline with direct serial/parallel execution.
-Calibration chooses a fixed arithmetic iteration count; reuse it across worker
-counts and revisions. A delay is not a CPU-work baseline.
-
-```sh
-just benchmark plan resources/templates/benchmarks/smoke.toml
-just benchmark run resources/templates/benchmarks/smoke.toml --binary target/dev-optim/gammaboard --output results/smoke
-just benchmark run resources/templates/benchmarks/tuning.toml --binary target/dev-optim/gammaboard --output results/tuning
-just benchmark compare results/before results/after
-```
-
-| Preset | Trials | Measurement | Budget | Purpose |
-| --- | ---: | ---: | ---: | --- |
-| `smoke.toml` | 4 | 4 s | 5 min | Runner, cleanup and artifacts |
-| `tuning.toml` | 24 | 6 s | 15 min | Repeated batch-size comparisons at normal polling |
-| `scaling.toml` | 48 | 6 s | 25 min | Fixed-batch CPU efficiency with the polling floor disabled |
-
-All descendants share at most eight physical cores and at most a quarter of the
-available cores. Direct workers bind individually; the pipeline also spends this
-budget on the sampler/database. Repetitions randomize configuration order and
-rotate direct/pipeline measurement order. Use
-`--calibration previous/calibration.json` to keep arithmetic work fixed.
-
-Direct evaluation also accepts a normal evaluator card:
-
-```sh
-gammaboard --json benchmark calibrate --eval-us 100
-gammaboard --json benchmark evaluator evaluator.toml --workers 4 --batch-size 256 --warmup 2s --duration 5s
-```
-
-It uses production sampling/materialization/evaluation/accumulation with uniform
-inputs and a scalar accumulator; it does not simulate a central adaptive sampler.
-`speedup` compares against direct serial execution; `retained_efficiency` compares
-against direct parallel execution within the same CPU budget. Trial ranges are
-not confidence intervals from independent telemetry samples.
-
-## Inspecting a live run
-
-```sh
-gammaboard --json run wait RUN --until ready --evaluators 4 --timeout 60s
-gammaboard --json run performance RUN --duration 30s --interval 1s
-gammaboard --json run performance RUN --since 2026-09-29T00:00:00Z --until 2026-09-29T01:00:00Z
-gammaboard --json run wait RUN --until idle
-```
-
-Performance JSON has schema 1. Publications are asynchronous; intervals retain
-snapshots, per-worker endpoints, coverage and issues. Default maximum telemetry
-age is 10 seconds. Never sum overlapping busy times or average rolling means into
-interval totals. Allocated core-time is worker allocation, excluding the
-database/server, not measured CPU consumption. Historical exports have a
-`truncated` flag; narrow the range when set. See [concurrency](concurrency.md)
-for the four busy-rate definitions.
-
-## Artifacts and comparisons
-
-Deployment suites retain the binary, migrations, harness, cards, planned cases,
-CPU placement, host metadata, raw intervals and cleanup evidence. Results append
-after each trial. Offline `summary` and `plot` expose invalid and unmeasured
-cases; a zero exit code alone does not establish complete coverage. Frontier
-crosses mark unavailable planned points, never valid low rates.
-
-Frontier outputs include throughput, batch-size, ideal-rate fraction and selected
-configuration plots, plus `selected-*.toml` live batch overrides. Copy the matching
-run card as well: a batch override alone does not reproduce sampler settings.
-
-Current frontier artifacts use **schema 5**, with sampler-owned generation and
-fixed refill depth. Use saved harnesses for older schemas. `compare` checks
-workload, jitter/seed, feedback contents, resource/telemetry settings and matching
-queue configurations; CPU suites also require matching calibrated work. Record
-build profile and host conditions even when these checks pass. Process and
-frontier measurements answer different questions and should not be pooled.
-
-## Sampling correctness
-
-Physics acceptance is separate from throughput:
-
-```sh
-GAMMABOARD_TEST_STATE_OUTPUT=/tmp/gammaboard-reference-state cargo test --locked --lib evaluation::evaluator::gammaloop::acceptance -- --nocapture
-GAMMABOARD_TEST_REFERENCE_STATE=/tmp/gammaboard-reference-state cargo test --locked --test full_stack_cli full_stack_gammaloop_reference_training_and_inference -- --ignored --nocapture
-```
-
-The fixture output must be new. These checks generate/reload a version-10 scalar
-cut-bubble state and test ordinary/cut-focused maps, summed/discrete channels,
-normalization, moments, weighted histograms, feedback modes and recovery.
-The pipeline uses a private database. Symbolica licensing is required; debug
-timings are not a production baseline.
-
-[The reference run](../resources/templates/runs/gammaloop-reference.toml) uses a
-generated state without physical observables/selectors. Keep the map width
-consistent with its momentum scale; check estimates, uncertainty and invalid
-counts. Rebuild states and repeat acceptance after GammaLoop changes. Stability
-retries and summed channels may perform several target evaluations per accepted
-outer sample. Preparation timings remain subsets of evaluator compute.
-
-The sparse suite does not establish GPU efficiency, multi-host scaling, optimizer
-convergence or time to a physics uncertainty target. Use real-adapter,
-finite-training-window and recovery tests for those claims.
+Run harness tests with `python -m unittest discover -s benchmarks/tests`.
