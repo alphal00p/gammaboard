@@ -20,4 +20,4 @@ style: |
 
 ---
 
-![Process protocol overhead](protocol.png)
+![Process protocol overhead](../protocol-overhead/comparison.png)

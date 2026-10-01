@@ -439,10 +439,14 @@ def _encode_batch_binary(
     """Pack a produced batch into the response binary block: little-endian i64
     discrete, then f64 continuous, then f64 weights (see generate in
     src/sampling/sampler_aggregator/process.rs)."""
-    return (
-        np.ascontiguousarray(xs_discrete.reshape(-1), dtype="<i8").tobytes()
-        + np.ascontiguousarray(xs_continuous.reshape(-1), dtype="<f8").tobytes()
-        + np.ascontiguousarray(weights.reshape(-1), dtype="<f8").tobytes()
+    # Join contiguous buffer views into one owned frame; do not first copy each
+    # array into a separate bytes object. User arrays remain untouched.
+    return b"".join(
+        (
+            np.ascontiguousarray(xs_discrete.reshape(-1), dtype="<i8").data,
+            np.ascontiguousarray(xs_continuous.reshape(-1), dtype="<f8").data,
+            np.ascontiguousarray(weights.reshape(-1), dtype="<f8").data,
+        )
     )
 
 

@@ -1,0 +1,306 @@
+{
+  "scope": "Isolated encoder CPU cost, identical input arrays; output allocation and cleanup included; excludes IPC",
+  "cpu": 1,
+  "rows": [
+    {
+      "stage": "flat",
+      "batch_size": 16,
+      "repeat": 0,
+      "per_call_us": 1.7623053736315342
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 16,
+      "repeat": 0,
+      "per_call_us": 2.3303589387069223
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 16,
+      "repeat": 1,
+      "per_call_us": 2.324006345588714
+    },
+    {
+      "stage": "flat",
+      "batch_size": 16,
+      "repeat": 1,
+      "per_call_us": 1.7436723283026367
+    },
+    {
+      "stage": "flat",
+      "batch_size": 16,
+      "repeat": 2,
+      "per_call_us": 1.7641318663663696
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 16,
+      "repeat": 2,
+      "per_call_us": 2.299792186022387
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 16,
+      "repeat": 3,
+      "per_call_us": 2.306775058968924
+    },
+    {
+      "stage": "flat",
+      "batch_size": 16,
+      "repeat": 3,
+      "per_call_us": 1.763165073498385
+    },
+    {
+      "stage": "flat",
+      "batch_size": 16,
+      "repeat": 4,
+      "per_call_us": 1.7585894056537654
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 16,
+      "repeat": 4,
+      "per_call_us": 2.285167965965229
+    },
+    {
+      "stage": "flat",
+      "batch_size": 256,
+      "repeat": 0,
+      "per_call_us": 2.4157784537237603
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 256,
+      "repeat": 0,
+      "per_call_us": 2.699032393138623
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 256,
+      "repeat": 1,
+      "per_call_us": 2.764178589131916
+    },
+    {
+      "stage": "flat",
+      "batch_size": 256,
+      "repeat": 1,
+      "per_call_us": 2.4087771635095123
+    },
+    {
+      "stage": "flat",
+      "batch_size": 256,
+      "repeat": 2,
+      "per_call_us": 2.4037176444835495
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 256,
+      "repeat": 2,
+      "per_call_us": 2.6686698220146354
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 256,
+      "repeat": 3,
+      "per_call_us": 2.6791399250214454
+    },
+    {
+      "stage": "flat",
+      "batch_size": 256,
+      "repeat": 3,
+      "per_call_us": 2.4057881091721356
+    },
+    {
+      "stage": "flat",
+      "batch_size": 256,
+      "repeat": 4,
+      "per_call_us": 2.394695457041962
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 256,
+      "repeat": 4,
+      "per_call_us": 2.759608378255507
+    },
+    {
+      "stage": "flat",
+      "batch_size": 4096,
+      "repeat": 0,
+      "per_call_us": 164.30590221716557
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 4096,
+      "repeat": 0,
+      "per_call_us": 7.317485142266378
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 4096,
+      "repeat": 1,
+      "per_call_us": 7.317796189454384
+    },
+    {
+      "stage": "flat",
+      "batch_size": 4096,
+      "repeat": 1,
+      "per_call_us": 164.0546524868114
+    },
+    {
+      "stage": "flat",
+      "batch_size": 4096,
+      "repeat": 2,
+      "per_call_us": 164.28645358246285
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 4096,
+      "repeat": 2,
+      "per_call_us": 7.299711796804331
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 4096,
+      "repeat": 3,
+      "per_call_us": 7.334554538829252
+    },
+    {
+      "stage": "flat",
+      "batch_size": 4096,
+      "repeat": 3,
+      "per_call_us": 164.60594088130165
+    },
+    {
+      "stage": "flat",
+      "batch_size": 4096,
+      "repeat": 4,
+      "per_call_us": 164.985123774386
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 4096,
+      "repeat": 4,
+      "per_call_us": 7.680848284508102
+    },
+    {
+      "stage": "flat",
+      "batch_size": 32768,
+      "repeat": 0,
+      "per_call_us": 1599.552411789773
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 32768,
+      "repeat": 0,
+      "per_call_us": 49.07382754026912
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 32768,
+      "repeat": 1,
+      "per_call_us": 48.88695548288524
+    },
+    {
+      "stage": "flat",
+      "batch_size": 32768,
+      "repeat": 1,
+      "per_call_us": 1598.7388178473338
+    },
+    {
+      "stage": "flat",
+      "batch_size": 32768,
+      "repeat": 2,
+      "per_call_us": 1612.712298083352
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 32768,
+      "repeat": 2,
+      "per_call_us": 49.0989004902076
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 32768,
+      "repeat": 3,
+      "per_call_us": 48.93178629572503
+    },
+    {
+      "stage": "flat",
+      "batch_size": 32768,
+      "repeat": 3,
+      "per_call_us": 1593.8902797643095
+    },
+    {
+      "stage": "flat",
+      "batch_size": 32768,
+      "repeat": 4,
+      "per_call_us": 1603.297030669637
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 32768,
+      "repeat": 4,
+      "per_call_us": 48.95992242381908
+    },
+    {
+      "stage": "flat",
+      "batch_size": 131072,
+      "repeat": 0,
+      "per_call_us": 7881.549900048412
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 131072,
+      "repeat": 0,
+      "per_call_us": 272.6133825490251
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 131072,
+      "repeat": 1,
+      "per_call_us": 267.30271929409355
+    },
+    {
+      "stage": "flat",
+      "batch_size": 131072,
+      "repeat": 1,
+      "per_call_us": 7804.203720297664
+    },
+    {
+      "stage": "flat",
+      "batch_size": 131072,
+      "repeat": 2,
+      "per_call_us": 7890.323366154917
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 131072,
+      "repeat": 2,
+      "per_call_us": 277.58462238125503
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 131072,
+      "repeat": 3,
+      "per_call_us": 275.12274391483516
+    },
+    {
+      "stage": "flat",
+      "batch_size": 131072,
+      "repeat": 3,
+      "per_call_us": 7854.172945371829
+    },
+    {
+      "stage": "flat",
+      "batch_size": 131072,
+      "repeat": 4,
+      "per_call_us": 7656.636065803468
+    },
+    {
+      "stage": "python-pack",
+      "batch_size": 131072,
+      "repeat": 4,
+      "per_call_us": 270.09958284907043
+    }
+  ]
+}

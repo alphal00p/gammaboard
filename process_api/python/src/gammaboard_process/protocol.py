@@ -117,12 +117,13 @@ def fixed_domain_shape(domain: dict[str, Any]) -> tuple[list[int], int]:
 def require_homogeneous_offsets(
     params: dict[str, Any], field: str, nr_samples: int, width: int, role: str
 ) -> None:
-    expected = [index * width for index in range(nr_samples + 1)]
     raw = params.get(field)
     if raw is None:
         return
     offsets = [int(value) for value in raw]
-    if offsets != expected:
+    if len(offsets) != nr_samples + 1 or any(
+        offset != index * width for index, offset in enumerate(offsets)
+    ):
         raise ValueError(
             f"python {role} wrapper only supports homogeneous batches; "
             f"{field}={offsets} does not match fixed width {width}"

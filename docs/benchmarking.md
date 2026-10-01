@@ -50,7 +50,7 @@ Useful overrides:
 just benchmark all --quick --max-evaluators 16 --cpu-limit 12 --output results/laptop
 just benchmark sampler-io --io-threads 1 2 4 8 --output results/io-threads
 just benchmark sampler-io --io-threads 4 --database-cores 16 --profile --output results/profile
-just benchmark protocol --batch-sizes 16 1024 65536 131072 --output results/protocol-short
+just benchmark protocol --batch-sizes 16 1024 32768 131072 --output results/protocol-short
 ```
 
 `--memory-mib` bounds estimated I/O payload residency (default 2048 MiB); the
@@ -175,7 +175,9 @@ a diagnostic of storage headroom, not a durable deployment recommendation.
 The normal optimized executable runs the real adapters against the bundled Python
 SDK fixture. No Cargo invocation or test binary is needed at measurement time.
 Parent and child run on separate physical cores. Logarithmic batch sizes range
-from 16 to 131,072; three warmup calls are discarded and 4–64 calls are measured.
+from 16 to 131,072, including the 32,768 default; three warmup calls are discarded
+and 32–128 calls are measured. Larger cases retain at least 32 calls so a few
+scheduling delays do not dominate the result.
 
 Each adapter call is paired with its callback's elapsed time. Their difference
 includes validation, packing, pipes, native conversion/accumulation, destruction
@@ -183,16 +185,20 @@ and scheduling. It is **adapter overhead**, not pure IPC latency. Startup and ra
 paired timings are recorded separately. Sampler training cycles combine generation
 and feedback at the same batch size.
 
-The current sampler measurement also expands each returned generation with
-`Generation::into_batch()`. The production sampler runner consumes the flat
-generation directly, so this extra conversion overstates its generation-path
-overhead. Do not interpret the sampler protocol curve as a runtime throughput
-ceiling; measuring native generations without this conversion is a follow-up.
+Sampler calls retain their native `Generation`, including the training window;
+result cleanup is included for both roles. `Generation::into_batch()` only unwraps
+a flat `LatentBatchSpec`; it is not the per-sample expansion performed by
+`LatentBatchPayload::into_batch()`. Removing that wrapper does not eliminate a
+per-sample conversion. Earlier documentation incorrectly conflated the two.
 
 The generic evaluator returns per-sample values over IPC in both modes because
 Rust performs accumulation. Feedback-on additionally retains weighted values;
 similar protocol curves in the two modes are expected. Functional process tests
 remain in `tests/process_api.rs` and are not part of the benchmark command.
+
+The [2026-10-01 protocol comparison](benchmarks/2026-10-01/protocol-overhead/README.md)
+records the corrected baseline, individual adapter changes, before/after plots
+and a targeted end-to-end confirmation.
 
 ## Results
 

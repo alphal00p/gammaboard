@@ -509,14 +509,18 @@ def measurement_row(measured, point, completed_offset=0):
     row["ideal_samples_per_second"] = point.workers * 1e6 / point.eval_us if point.eval_us else None
     row["ideal_fraction"] = row["rate"] / row["ideal_samples_per_second"] if point.eval_us else None
     first = {
-        w["worker_id"]: w["metrics"]["engine_diagnostics"]["timing"]
+        w["worker_id"]: w["metrics"]["engine_diagnostics"].get("timing")
         for w in measured["snapshots"][0]["evaluators"]
     }
+    timings = [
+        (first.get(w["worker_id"]), w["metrics"]["engine_diagnostics"].get("timing"))
+        for w in last["evaluators"]
+    ]
     for name in ["requested_seconds", "actual_seconds"]:
-        row[f"sleep_{name}"] = sum(
-            w["metrics"]["engine_diagnostics"]["timing"][name] - first[w["worker_id"]][name]
-            for w in last["evaluators"]
-            if w["worker_id"] in first
+        row[f"sleep_{name}"] = (
+            sum(after[name] - before[name] for before, after in timings)
+            if timings and all(before and after for before, after in timings)
+            else None
         )
     try:
         row.update(bench.activity(measured))

@@ -100,6 +100,39 @@ impl IndexedBatchBuilder {
             self.continuous_values
                 .reserve(continuous.len().saturating_mul(self.weights.capacity()));
         }
+        self.push_discrete(discrete);
+        self.continuous_layouts.push(continuous.len());
+        self.continuous_values.extend_from_slice(continuous);
+        self.weights.push(weight);
+    }
+
+    /// Take ownership of validated fixed-width arrays without copying their
+    /// continuous coordinates or weights through per-sample builder calls.
+    pub(crate) fn from_homogeneous(
+        discrete: &[i64],
+        discrete_dims: usize,
+        continuous_values: Vec<f64>,
+        continuous_dims: usize,
+        weights: Vec<f64>,
+    ) -> LatentBatchPayload {
+        let nr_samples = weights.len();
+        let mut builder = Self::new(0);
+        builder.continuous_values = continuous_values;
+        builder.continuous_layouts = vec![continuous_dims; nr_samples];
+        builder.weights = weights;
+        if discrete_dims == 0 {
+            builder.discrete_signatures.push(Vec::new());
+            builder.discrete_map = vec![0; nr_samples];
+        } else {
+            builder.discrete_map.reserve(nr_samples);
+            for row in discrete.chunks_exact(discrete_dims) {
+                builder.push_discrete(row);
+            }
+        }
+        builder.finish()
+    }
+
+    fn push_discrete(&mut self, discrete: &[i64]) {
         // Continuous-only samples need neither hashing nor a slice comparison.
         let signature_idx = if discrete.is_empty() {
             *self.empty_signature.get_or_insert_with(|| {
@@ -116,9 +149,6 @@ impl IndexedBatchBuilder {
             idx
         };
         self.discrete_map.push(signature_idx);
-        self.continuous_layouts.push(continuous.len());
-        self.continuous_values.extend_from_slice(continuous);
-        self.weights.push(weight);
     }
 
     pub(crate) fn finish(self) -> LatentBatchPayload {

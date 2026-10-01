@@ -199,91 +199,7 @@ impl ProcessSamplerWorker {
                 &[],
             )
             .map_err(EngineError::engine)?;
-        match response.get("kind").and_then(Value::as_str) {
-            Some("waiting") if binary.is_empty() => return Ok(Generation::Waiting),
-            Some("finished") if binary.is_empty() => return Ok(Generation::Finished),
-            Some("batch") => {}
-            _ => return Err(EngineError::engine("invalid process generation result")),
-        }
-        let nr_samples = response
-            .get("nr_samples")
-            .and_then(Value::as_u64)
-            .and_then(|n| usize::try_from(n).ok())
-            .filter(|n| *n > 0 && remaining_sample_budget.is_none_or(|budget| *n <= budget))
-            .ok_or_else(|| {
-                EngineError::engine("process draw exceeds budget or has invalid sample count")
-            })?;
-        let training_remaining = match response.get("training_remaining") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(
-                value
-                    .as_u64()
-                    .and_then(|n| usize::try_from(n).ok())
-                    .filter(|n| *n >= nr_samples)
-                    .ok_or_else(|| EngineError::engine("invalid process training window"))?,
-            ),
-        };
-        // Binary block layout: i64 discrete, f64 continuous, f64 weights. Offsets
-        // (and thus the array lengths) come from the JSON envelope.
-        let discrete_dims = self.domain.fixed_discrete_depth().unwrap_or(0);
-        let continuous_dims = self.domain.fixed_continuous_dims().unwrap_or(0);
-        let discrete_len =
-            offsets_total_len(&response, "xs_discrete_offsets", nr_samples, discrete_dims)?;
-        let continuous_len = offsets_total_len(
-            &response,
-            "xs_continuous_offsets",
-            nr_samples,
-            continuous_dims,
-        )?;
-        let xs_discrete_offsets = parse_process_offsets(
-            &response,
-            "xs_discrete_offsets",
-            nr_samples,
-            discrete_dims,
-            discrete_len,
-            "sampler",
-        )?;
-        let xs_continuous_offsets = parse_process_offsets(
-            &response,
-            "xs_continuous_offsets",
-            nr_samples,
-            continuous_dims,
-            continuous_len,
-            "sampler",
-        )?;
-        let (xs_discrete_row_major, next) =
-            read_le_i64(&binary, 0, discrete_len).map_err(EngineError::engine)?;
-        let (xs_continuous_row_major, next) =
-            read_le_f64(&binary, next, continuous_len).map_err(EngineError::engine)?;
-        let (weights, _next) =
-            read_le_f64(&binary, next, nr_samples).map_err(EngineError::engine)?;
-        for (index, weight) in weights.iter().enumerate() {
-            if !weight.is_finite() || *weight <= 0.0 {
-                return Err(EngineError::engine(format!(
-                    "process sampler returned non-positive or non-finite value at weights[{index}]"
-                )));
-            }
-        }
-        let mut builder = IndexedBatchBuilder::new(nr_samples);
-        for index in 0..nr_samples {
-            builder.push(
-                &xs_discrete_row_major[xs_discrete_offsets[index]..xs_discrete_offsets[index + 1]],
-                &xs_continuous_row_major
-                    [xs_continuous_offsets[index]..xs_continuous_offsets[index + 1]],
-                weights[index],
-            );
-        }
-        if _next != binary.len() {
-            return Err(EngineError::engine("trailing process sample bytes"));
-        }
-        Ok(Generation::batch(
-            LatentBatchSpec {
-                nr_samples,
-                accumulator: crate::core::AccumulatorConfig::scalar(),
-                payload: builder.finish(),
-            },
-            training_remaining,
-        ))
+        decode_generation(&self.domain, remaining_sample_budget, &response, &binary)
     }
 
     fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
@@ -444,6 +360,114 @@ impl ProcessSamplerWorker {
     }
 }
 
+/// Decode one generation without changing its sampler-owned flat representation.
+fn decode_generation(
+    domain: &Domain,
+    remaining_sample_budget: Option<usize>,
+    response: &Value,
+    binary: &[u8],
+) -> Result<Generation, EngineError> {
+    match response.get("kind").and_then(Value::as_str) {
+        Some("waiting") if binary.is_empty() => return Ok(Generation::Waiting),
+        Some("finished") if binary.is_empty() => return Ok(Generation::Finished),
+        Some("batch") => {}
+        _ => return Err(EngineError::engine("invalid process generation result")),
+    }
+    let nr_samples = response
+        .get("nr_samples")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n > 0 && remaining_sample_budget.is_none_or(|budget| *n <= budget))
+        .ok_or_else(|| {
+            EngineError::engine("process draw exceeds budget or has invalid sample count")
+        })?;
+    let training_remaining = match response.get("training_remaining") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|n| *n >= nr_samples)
+                .ok_or_else(|| EngineError::engine("invalid process training window"))?,
+        ),
+    };
+    // Binary block layout: i64 discrete, f64 continuous, f64 weights. Offsets
+    // (and thus the array lengths) come from the JSON envelope.
+    let discrete_dims = domain.fixed_discrete_depth().unwrap_or(0);
+    let continuous_dims = domain.fixed_continuous_dims().unwrap_or(0);
+    let discrete_len =
+        offsets_total_len(response, "xs_discrete_offsets", nr_samples, discrete_dims)?;
+    let continuous_len = offsets_total_len(
+        response,
+        "xs_continuous_offsets",
+        nr_samples,
+        continuous_dims,
+    )?;
+    let (xs_discrete_row_major, next) =
+        read_le_i64(binary, 0, discrete_len).map_err(EngineError::engine)?;
+    let (xs_continuous_row_major, next) =
+        read_le_f64(binary, next, continuous_len).map_err(EngineError::engine)?;
+    let (weights, _next) = read_le_f64(binary, next, nr_samples).map_err(EngineError::engine)?;
+    for (index, weight) in weights.iter().enumerate() {
+        if !weight.is_finite() || *weight <= 0.0 {
+            return Err(EngineError::engine(format!(
+                "process sampler returned non-positive or non-finite value at weights[{index}]"
+            )));
+        }
+    }
+    if _next != binary.len() {
+        return Err(EngineError::engine("trailing process sample bytes"));
+    }
+    let homogeneous = domain.fixed_rectangular_dims().filter(|_| {
+        response.get("xs_discrete_offsets").is_none()
+            && response.get("xs_continuous_offsets").is_none()
+    });
+    let payload = if let Some((continuous_dims, discrete_dims)) = homogeneous {
+        IndexedBatchBuilder::from_homogeneous(
+            &xs_discrete_row_major,
+            discrete_dims,
+            xs_continuous_row_major,
+            continuous_dims,
+            weights,
+        )
+    } else {
+        let xs_discrete_offsets = parse_process_offsets(
+            response,
+            "xs_discrete_offsets",
+            nr_samples,
+            discrete_dims,
+            discrete_len,
+            "sampler",
+        )?;
+        let xs_continuous_offsets = parse_process_offsets(
+            response,
+            "xs_continuous_offsets",
+            nr_samples,
+            continuous_dims,
+            continuous_len,
+            "sampler",
+        )?;
+        let mut builder = IndexedBatchBuilder::new(nr_samples);
+        for index in 0..nr_samples {
+            builder.push(
+                &xs_discrete_row_major[xs_discrete_offsets[index]..xs_discrete_offsets[index + 1]],
+                &xs_continuous_row_major
+                    [xs_continuous_offsets[index]..xs_continuous_offsets[index + 1]],
+                weights[index],
+            );
+        }
+        builder.finish()
+    };
+    Ok(Generation::batch(
+        LatentBatchSpec {
+            nr_samples,
+            accumulator: crate::core::AccumulatorConfig::scalar(),
+            payload,
+        },
+        training_remaining,
+    ))
+}
+
 /// Total row-major length implied by an offsets field: its last entry when
 /// present, otherwise the homogeneous `nr_samples * fixed_width`.
 fn offsets_total_len(
@@ -472,6 +496,106 @@ mod tests {
     use crate::sampling::{SamplerAggregator, SamplerAggregatorSnapshot};
     use crate::utils::domain::Domain;
     use serde_json::json;
+
+    #[test]
+    fn flat_generation_matches_explicit_offsets_and_preserves_training_window() {
+        for discrete_dims in [0, 1] {
+            let domain = Domain::rectangular_with_cardinalities(2, vec![2; discrete_dims]);
+            let discrete = if discrete_dims == 0 {
+                vec![]
+            } else {
+                vec![0_i64, 1, 0]
+            };
+            let continuous = [0.1_f64, 0.2, 0.3, 0.4, 0.5, 0.6];
+            let weights = [1.0_f64, 2.0, 3.0];
+            let binary: Vec<u8> = discrete
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .chain(continuous.iter().flat_map(|v| v.to_le_bytes()))
+                .chain(weights.iter().flat_map(|v| v.to_le_bytes()))
+                .collect();
+            let mut response = json!({"kind":"batch", "nr_samples":3, "training_remaining":10});
+            let crate::Generation::Batch {
+                batch,
+                training_remaining,
+            } = super::decode_generation(&domain, Some(3), &response, &binary).unwrap()
+            else {
+                panic!("expected batch");
+            };
+            assert_eq!(training_remaining, Some(10));
+            batch.clone().build().validate_nr_samples().unwrap();
+            let materialized = batch.payload.as_batch().unwrap();
+            domain.validate_batch(&materialized).unwrap();
+            for (index, point) in materialized.points().iter().enumerate() {
+                assert_eq!(point.continuous, continuous[index * 2..index * 2 + 2]);
+                assert_eq!(
+                    point.discrete,
+                    discrete[index * discrete_dims..(index + 1) * discrete_dims]
+                );
+                assert_eq!(point.total_weight(), weights[index]);
+            }
+            response["xs_continuous_offsets"] = json!([0, 2, 4, 6]);
+            response["xs_discrete_offsets"] =
+                json!((0..=3).map(|n| n * discrete_dims).collect::<Vec<_>>());
+            let generic = super::decode_generation(&domain, Some(3), &response, &binary)
+                .unwrap()
+                .into_batch()
+                .unwrap();
+            assert_eq!(batch, generic);
+        }
+    }
+
+    #[test]
+    fn generation_decoder_preserves_ragged_layout_and_rejects_invalid_frames() {
+        use crate::utils::domain::DomainBranch;
+        let domain = Domain::discrete(
+            None,
+            [
+                DomainBranch::new(0, Domain::continuous(1)),
+                DomainBranch::new(1, Domain::continuous(2)),
+            ],
+        );
+        let response = json!({"kind":"batch", "nr_samples":2,
+            "xs_discrete_offsets":[0,1,2], "xs_continuous_offsets":[0,1,3]});
+        let binary: Vec<u8> = [0_i64, 1]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .chain(
+                [0.2_f64, 0.3, 0.4, 1.0, 3.0]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes()),
+            )
+            .collect();
+        let batch = super::decode_generation(&domain, None, &response, &binary)
+            .unwrap()
+            .into_batch()
+            .unwrap();
+        let materialized = batch.payload.into_batch().unwrap();
+        domain.validate_batch(&materialized).unwrap();
+        assert_eq!(materialized.points()[0].continuous, [0.2]);
+        assert_eq!(materialized.points()[1].continuous, [0.3, 0.4]);
+        assert!(super::decode_generation(&domain, Some(1), &response, &binary).is_err());
+        for offsets in [
+            json!([0, 3, 2]),
+            json!([0, 1]),
+            json!([1, 2, 3]),
+            json!(null),
+        ] {
+            let mut invalid = response.clone();
+            invalid["xs_continuous_offsets"] = offsets;
+            assert!(super::decode_generation(&domain, None, &invalid, &binary).is_err());
+        }
+        for size in [binary.len() - 1, binary.len() + 1] {
+            let mut invalid = binary.clone();
+            invalid.resize(size, 0);
+            assert!(super::decode_generation(&domain, None, &response, &invalid).is_err());
+        }
+        for weight in [0.0_f64, -1.0, f64::NAN, f64::INFINITY] {
+            let mut invalid = binary.clone();
+            invalid[binary.len() - 8..].copy_from_slice(&weight.to_le_bytes());
+            assert!(super::decode_generation(&domain, None, &response, &invalid).is_err());
+        }
+    }
 
     const METADATA_ECHO_SAMPLER_WORKER: &str = r#"
 import json, sys

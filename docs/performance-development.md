@@ -447,11 +447,12 @@ Process overhead is adapter wall time minus callback work, including native
 conversion/accumulation; sampler feedback-on sums generation and feedback calls.
 It is not pure pipe latency and should not be subtracted from the I/O capacities.
 
-A subsequent code review found that the sampler timing includes
-`Generation::into_batch()`, expanding the flat generation into individual samples.
-The production sampler runner does not require this conversion. The saved numbers
-and plots retain that cost and therefore do not establish a process-API ceiling
-for the production generation path. The measurement correction is still pending.
+A subsequent review initially attributed sample expansion to
+`Generation::into_batch()`. That assessment was incorrect: the method only unwraps
+a flat `LatentBatchSpec`. The expanding method is `LatentBatchPayload::into_batch()`,
+which this benchmark did not call. Timing native generations makes the ownership
+clearer but does not remove a per-sample expansion cost. The controlled protocol
+comparison below distinguishes this measurement change from adapter optimizations.
 
 The 5 µs, 512-evaluator materialized point was unusually slow in the full sweep:
 **0.933 M/s**. A separate same-binary follow-up with a fresh database and a
@@ -511,3 +512,25 @@ The four-slide plot-only presentation is available as
 [Markdown](benchmarks/2026-10-01/consolidated/benchmark-plots.md). Its sampler I/O
 slide selects the production default of one thread from the existing trials.
 The complete thread sweep and resource comparisons remain in the research data.
+
+
+### Native process-API measurement and adapter optimization
+
+The [controlled protocol comparison](benchmarks/2026-10-01/protocol-overhead/README.md)
+uses native sampler generations, explicit cleanup timing and 32–128 calls per
+case. The old `Generation::into_batch()` only unwrapped a flat payload, so its
+removal explains no demonstrated per-sample saving. The evaluator benchmark
+already represented the production adapter and accumulation path.
+
+At 32,768 samples, the retained offset, packing and flat-payload changes reduced
+sampler overhead from 5.395 to 3.535 ms without feedback and 5.999 to 3.745 ms with
+feedback. Evaluator overhead fell from 7.893 to 3.153 ms and 8.266 to 3.295 ms.
+These are five-run mean adapter costs, not pure IPC latency. Tiny sampler calls
+did not improve. A separate three-repeat process end-to-end comparison measured
+1.482 → 1.579 M/s without feedback and 1.487 → 1.611 M/s with feedback. This is
+limited evidence for one deployment configuration, not a revised frontier ceiling.
+
+The [before/after plot](benchmarks/2026-10-01/protocol-overhead/comparison.svg) and
+[paired data](benchmarks/2026-10-01/protocol-overhead/paired-trials.json) supersede
+the protocol performance results above for the current adapters. The presentation's
+protocol slide is updated; its frontier and I/O slides remain historical.

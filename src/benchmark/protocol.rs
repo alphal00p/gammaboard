@@ -2,7 +2,7 @@
 use crate::core::{
     AccumulatorConfig, EvaluatorConfig, SamplerAggregatorConfig, TrainingProjection,
 };
-use crate::{Batch, Domain, EvalBatchOptions, Point};
+use crate::{Batch, Domain, EvalBatchOptions, Generation, Point};
 use anyhow::{Result, ensure};
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
@@ -116,7 +116,7 @@ pub fn measure(options: Config) -> Result<Value> {
     let accumulator = accumulator();
     let mut rows = Vec::new();
     for &batch_size in &options.batch_sizes {
-        let repetitions = (262_144 / batch_size).clamp(4, 64);
+        let repetitions = (1_048_576 / batch_size).clamp(32, 128);
         let batch = {
             let mut rng = Xoshiro256PlusPlus::seed_from_u64(1234);
             Batch::new(
@@ -134,13 +134,14 @@ pub fn measure(options: Config) -> Result<Value> {
             let startup = start.elapsed().as_secs_f64();
             let wall = time_calls(
                 || {
-                    black_box(evaluator.eval_batch(
+                    // Include result cleanup, as for sampler generations below.
+                    drop(black_box(evaluator.eval_batch(
                         &batch,
                         &accumulator,
                         EvalBatchOptions {
                             require_training_values: feedback,
                         },
-                    )?);
+                    )?));
                     Ok(())
                 },
                 repetitions,
@@ -167,11 +168,14 @@ pub fn measure(options: Config) -> Result<Value> {
             let startup = start.elapsed().as_secs_f64();
             let produce = time_calls(
                 || {
-                    black_box(
-                        sampler
-                            .generate(Some(batch_size))
-                            .and_then(|generated| generated.into_batch())?,
+                    // Keep the native generation, including its training window,
+                    // and time cleanup just as for evaluator results.
+                    let generation = sampler.generate(Some(batch_size))?;
+                    ensure!(
+                        matches!(generation, Generation::Batch { .. }),
+                        "expected a generated batch"
                     );
+                    drop(black_box(generation));
                     Ok(())
                 },
                 repetitions,
@@ -214,8 +218,9 @@ pub fn measure(options: Config) -> Result<Value> {
             serde_json::to_vec_pretty(&json!({"rows":rows}))?,
         )?;
     }
-    let report = json!({"schema_version":1,"experiment":"process_api","continuous_dims":6,
-        "scope":"Production Rust adapters and Python SDK; paired callback/native wall times; excludes startup, database and fleet orchestration. Includes packing, validation, IPC, native accumulation/conversion and OS scheduling delays.",
+    let report = json!({"schema_version":2,"experiment":"process_api","continuous_dims":6,
+        "sampler_representation":"native_generation", "result_cleanup_timed":true,
+        "scope":"Production Rust adapters and Python SDK; paired callback/native wall times; excludes startup, database and fleet orchestration. Includes packing, validation, IPC, native generation decoding/evaluator accumulation, result cleanup and OS scheduling delays. Sampler generations are not expanded into evaluator Points.",
         "profile_debug_assertions":cfg!(debug_assertions),"rows":rows});
     fs::write(
         output.join("measurements.json"),

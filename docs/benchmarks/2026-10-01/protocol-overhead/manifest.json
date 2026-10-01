@@ -1,0 +1,112 @@
+{
+  "experiment": "process_api",
+  "schema_version": 2,
+  "status": "completed",
+  "batch_sizes": [
+    16,
+    256,
+    4096,
+    32768,
+    131072
+  ],
+  "cpus": [
+    1,
+    3
+  ],
+  "repetitions": 5,
+  "aggregation": "Mean of paired (wall - callback) timings pooled across five complete alternating-order runs; each run has equal call counts.",
+  "scope": "Native sampler generations and production evaluator accumulation; result cleanup included, startup excluded; shared host, not exclusive cores.",
+  "baseline_revision": "2300d10e30144675d5dc54de4f41bb82b8064bed",
+  "sampler_wrapper_correction": "Generation::into_batch only unwraps LatentBatchSpec; it does not expand Points. Earlier assessment was incorrect.",
+  "stages": {
+    "legacy": {
+      "binary_sha256": "45ea5502138b603e2a5bb22ebca16267ed3f3e23f4ab595a74ea9de693836a80",
+      "python_files": {
+        "process_api/python/src/gammaboard_process/__init__.py": "d39497b8740eb27c04c86e3ecbb008a6aaf9be908c9e31414911f775fef0f913",
+        "process_api/python/src/gammaboard_process/abc.py": "c248319d62f10cafbae3d53a954b5e888835954ca59032a71b90b289dc3fc8dc",
+        "process_api/python/src/gammaboard_process/batches.py": "73ed6744f94df1c30af1115bde4f65c5da38275530cefe7ba03466a654f66df2",
+        "process_api/python/src/gammaboard_process/gammaloop.py": "82991014cfb82a495a373c1af1936af734cc7d004247b347cfe6791d21af7d22",
+        "process_api/python/src/gammaboard_process/log.py": "01c857021ece46d9289355e3e041133d8c35628f8dde6dfe9c02b9e24c9f2f88",
+        "process_api/python/src/gammaboard_process/protocol.py": "972c5db00fadd7efd123b81691a7588d5fd02a0dc9f2127f7704742c49a31659",
+        "process_api/python/src/gammaboard_process/runners.py": "10e5cc66cba0f162c029b4c91243e879e40f2c04ca0de3a1208315138ebbd63d",
+        "process_api/python/tests/runtime_fixture.py": "cfcad08924d35bb9ab246f1c9a55bbc207c2923176547b3a9db1d776c0ed60d4"
+      }
+    },
+    "native": {
+      "binary_sha256": "5102bbb06ee4ae65c84929605dc63ff71da0ec4bcb5d754073b53d2022f2c6bf",
+      "python_files": {
+        "process_api/python/src/gammaboard_process/__init__.py": "d39497b8740eb27c04c86e3ecbb008a6aaf9be908c9e31414911f775fef0f913",
+        "process_api/python/src/gammaboard_process/abc.py": "c248319d62f10cafbae3d53a954b5e888835954ca59032a71b90b289dc3fc8dc",
+        "process_api/python/src/gammaboard_process/batches.py": "73ed6744f94df1c30af1115bde4f65c5da38275530cefe7ba03466a654f66df2",
+        "process_api/python/src/gammaboard_process/gammaloop.py": "82991014cfb82a495a373c1af1936af734cc7d004247b347cfe6791d21af7d22",
+        "process_api/python/src/gammaboard_process/log.py": "01c857021ece46d9289355e3e041133d8c35628f8dde6dfe9c02b9e24c9f2f88",
+        "process_api/python/src/gammaboard_process/protocol.py": "972c5db00fadd7efd123b81691a7588d5fd02a0dc9f2127f7704742c49a31659",
+        "process_api/python/src/gammaboard_process/runners.py": "10e5cc66cba0f162c029b4c91243e879e40f2c04ca0de3a1208315138ebbd63d",
+        "process_api/python/tests/runtime_fixture.py": "cfcad08924d35bb9ab246f1c9a55bbc207c2923176547b3a9db1d776c0ed60d4"
+      }
+    },
+    "offsets": {
+      "binary_sha256": "8f28b8c2303ccbd78c5d7614cf55ee5773e034b45f6414130156287089f98835",
+      "python_files": {
+        "process_api/python/src/gammaboard_process/__init__.py": "d39497b8740eb27c04c86e3ecbb008a6aaf9be908c9e31414911f775fef0f913",
+        "process_api/python/src/gammaboard_process/abc.py": "c248319d62f10cafbae3d53a954b5e888835954ca59032a71b90b289dc3fc8dc",
+        "process_api/python/src/gammaboard_process/batches.py": "73ed6744f94df1c30af1115bde4f65c5da38275530cefe7ba03466a654f66df2",
+        "process_api/python/src/gammaboard_process/gammaloop.py": "82991014cfb82a495a373c1af1936af734cc7d004247b347cfe6791d21af7d22",
+        "process_api/python/src/gammaboard_process/log.py": "01c857021ece46d9289355e3e041133d8c35628f8dde6dfe9c02b9e24c9f2f88",
+        "process_api/python/src/gammaboard_process/protocol.py": "32669c131b7a426e6cbbceb4ae817d066aca29829d95ef6caf4062f070575e3b",
+        "process_api/python/src/gammaboard_process/runners.py": "10e5cc66cba0f162c029b4c91243e879e40f2c04ca0de3a1208315138ebbd63d",
+        "process_api/python/tests/runtime_fixture.py": "cfcad08924d35bb9ab246f1c9a55bbc207c2923176547b3a9db1d776c0ed60d4"
+      }
+    },
+    "packing": {
+      "binary_sha256": "91d0dd432ce57333acc2b409a50bcd349583179d2d81592428d7c75863203474",
+      "python_files": {
+        "process_api/python/src/gammaboard_process/__init__.py": "d39497b8740eb27c04c86e3ecbb008a6aaf9be908c9e31414911f775fef0f913",
+        "process_api/python/src/gammaboard_process/abc.py": "c248319d62f10cafbae3d53a954b5e888835954ca59032a71b90b289dc3fc8dc",
+        "process_api/python/src/gammaboard_process/batches.py": "73ed6744f94df1c30af1115bde4f65c5da38275530cefe7ba03466a654f66df2",
+        "process_api/python/src/gammaboard_process/gammaloop.py": "82991014cfb82a495a373c1af1936af734cc7d004247b347cfe6791d21af7d22",
+        "process_api/python/src/gammaboard_process/log.py": "01c857021ece46d9289355e3e041133d8c35628f8dde6dfe9c02b9e24c9f2f88",
+        "process_api/python/src/gammaboard_process/protocol.py": "32669c131b7a426e6cbbceb4ae817d066aca29829d95ef6caf4062f070575e3b",
+        "process_api/python/src/gammaboard_process/runners.py": "10e5cc66cba0f162c029b4c91243e879e40f2c04ca0de3a1208315138ebbd63d",
+        "process_api/python/tests/runtime_fixture.py": "cfcad08924d35bb9ab246f1c9a55bbc207c2923176547b3a9db1d776c0ed60d4"
+      }
+    },
+    "flat": {
+      "binary_sha256": "2f4609aa7d0d5cea4e7d98a375edc4e6981084249a148c7ddf851d6ca7ca50ea",
+      "python_files": {
+        "process_api/python/src/gammaboard_process/__init__.py": "d39497b8740eb27c04c86e3ecbb008a6aaf9be908c9e31414911f775fef0f913",
+        "process_api/python/src/gammaboard_process/abc.py": "c248319d62f10cafbae3d53a954b5e888835954ca59032a71b90b289dc3fc8dc",
+        "process_api/python/src/gammaboard_process/batches.py": "73ed6744f94df1c30af1115bde4f65c5da38275530cefe7ba03466a654f66df2",
+        "process_api/python/src/gammaboard_process/gammaloop.py": "82991014cfb82a495a373c1af1936af734cc7d004247b347cfe6791d21af7d22",
+        "process_api/python/src/gammaboard_process/log.py": "01c857021ece46d9289355e3e041133d8c35628f8dde6dfe9c02b9e24c9f2f88",
+        "process_api/python/src/gammaboard_process/protocol.py": "32669c131b7a426e6cbbceb4ae817d066aca29829d95ef6caf4062f070575e3b",
+        "process_api/python/src/gammaboard_process/runners.py": "10e5cc66cba0f162c029b4c91243e879e40f2c04ca0de3a1208315138ebbd63d",
+        "process_api/python/tests/runtime_fixture.py": "cfcad08924d35bb9ab246f1c9a55bbc207c2923176547b3a9db1d776c0ed60d4"
+      }
+    },
+    "python-pack": {
+      "binary_sha256": "2f4609aa7d0d5cea4e7d98a375edc4e6981084249a148c7ddf851d6ca7ca50ea",
+      "python_files": {
+        "process_api/python/src/gammaboard_process/__init__.py": "d39497b8740eb27c04c86e3ecbb008a6aaf9be908c9e31414911f775fef0f913",
+        "process_api/python/src/gammaboard_process/abc.py": "c248319d62f10cafbae3d53a954b5e888835954ca59032a71b90b289dc3fc8dc",
+        "process_api/python/src/gammaboard_process/batches.py": "73ed6744f94df1c30af1115bde4f65c5da38275530cefe7ba03466a654f66df2",
+        "process_api/python/src/gammaboard_process/gammaloop.py": "82991014cfb82a495a373c1af1936af734cc7d004247b347cfe6791d21af7d22",
+        "process_api/python/src/gammaboard_process/log.py": "01c857021ece46d9289355e3e041133d8c35628f8dde6dfe9c02b9e24c9f2f88",
+        "process_api/python/src/gammaboard_process/protocol.py": "32669c131b7a426e6cbbceb4ae817d066aca29829d95ef6caf4062f070575e3b",
+        "process_api/python/src/gammaboard_process/runners.py": "67b5d4f4387dfd2a6d4b2f9771ec6637e2443149275d2b26e7b90ae3276abf0f",
+        "process_api/python/tests/runtime_fixture.py": "cfcad08924d35bb9ab246f1c9a55bbc207c2923176547b3a9db1d776c0ed60d4"
+      }
+    }
+  },
+  "source_snapshots": "/common/dev/cedric/setup-logs/protocol-overhead-20261001",
+  "final_validation": {
+    "rust_library_passed": 344,
+    "rust_library_ignored": 1,
+    "rust_cli_passed": 8,
+    "process_roundtrip_passed": 1,
+    "python_sdk_and_madgraph_passed": 27,
+    "python_sdk_and_madgraph_skipped": 1,
+    "benchmark_harness_passed": 39,
+    "clippy": "passed, all targets and features, warnings denied"
+  }
+}

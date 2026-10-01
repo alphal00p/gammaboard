@@ -122,7 +122,7 @@ impl Generation {
         }
     }
 
-    /// Extract concrete work for direct sampler users.
+    /// Unwrap the flat queue payload without materializing evaluator `Point`s.
     pub fn into_batch(self) -> Result<LatentBatchSpec, EngineError> {
         match self {
             Self::Batch { batch, .. } => Ok(batch),

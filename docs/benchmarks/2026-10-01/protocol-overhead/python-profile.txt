@@ -1,0 +1,214 @@
+
+ eval-131072-false.json.prof
+Thu Oct  1 12:22:59 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/eval-131072-false.json.prof
+
+         3474 function calls in 0.362 seconds
+
+   Ordered by: cumulative time
+   List reduced from 87 to 13 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      106    0.187    0.002    0.187    0.002 {method 'readline' of '_io.BufferedReader' objects}
+       70    0.000    0.000    0.118    0.002 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+      105    0.018    0.000    0.018    0.000 {built-in method numpy.array}
+      107    0.018    0.000    0.018    0.000 {method 'write' of '_io.FileIO' objects}
+       35    0.000    0.000    0.013    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:418(_decode_eval_inputs)
+       35    0.003    0.000    0.003    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+       70    0.000    0.000    0.002    0.000 {method 'all' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+      140    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+
+
+
+ eval-131072-true.json.prof
+Thu Oct  1 12:22:59 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/eval-131072-true.json.prof
+
+         3474 function calls in 0.467 seconds
+
+   Ordered by: cumulative time
+   List reduced from 87 to 13 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      106    0.270    0.003    0.270    0.003 {method 'readline' of '_io.BufferedReader' objects}
+       70    0.000    0.000    0.138    0.002 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+      107    0.019    0.000    0.019    0.000 {method 'write' of '_io.FileIO' objects}
+      105    0.019    0.000    0.019    0.000 {built-in method numpy.array}
+       35    0.000    0.000    0.014    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:418(_decode_eval_inputs)
+       35    0.003    0.000    0.003    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+       70    0.000    0.000    0.002    0.000 {method 'all' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+      140    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+
+
+
+ eval-32768-false.json.prof
+Thu Oct  1 12:22:57 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/eval-32768-false.json.prof
+
+         3474 function calls in 0.090 seconds
+
+   Ordered by: cumulative time
+   List reduced from 87 to 13 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      106    0.045    0.000    0.045    0.000 {method 'readline' of '_io.BufferedReader' objects}
+       70    0.000    0.000    0.029    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+      105    0.005    0.000    0.005    0.000 {built-in method numpy.array}
+       35    0.000    0.000    0.005    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:418(_decode_eval_inputs)
+      107    0.004    0.000    0.004    0.000 {method 'write' of '_io.FileIO' objects}
+       35    0.001    0.000    0.001    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+       70    0.000    0.000    0.001    0.000 {method 'all' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+      140    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+
+
+
+ eval-32768-true.json.prof
+Thu Oct  1 12:22:58 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/eval-32768-true.json.prof
+
+         3474 function calls in 0.089 seconds
+
+   Ordered by: cumulative time
+   List reduced from 87 to 13 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      106    0.044    0.000    0.044    0.000 {method 'readline' of '_io.BufferedReader' objects}
+       70    0.000    0.000    0.029    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+      105    0.005    0.000    0.005    0.000 {built-in method numpy.array}
+       35    0.000    0.000    0.004    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:418(_decode_eval_inputs)
+      107    0.004    0.000    0.004    0.000 {method 'write' of '_io.FileIO' objects}
+       35    0.001    0.000    0.001    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+       70    0.000    0.000    0.001    0.000 {method 'all' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+      140    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+       35    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+
+
+
+ sampler-131072-false.json.prof
+Thu Oct  1 12:23:00 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/sampler-131072-false.json.prof
+
+         3752 function calls in 0.642 seconds
+
+   Ordered by: cumulative time
+   List reduced from 96 to 16 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       71    0.287    0.004    0.287    0.004 {method 'readline' of '_io.BufferedReader' objects}
+      107    0.248    0.002    0.248    0.002 {method 'write' of '_io.FileIO' objects}
+       35    0.029    0.001    0.050    0.001 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:436(_encode_batch_binary)
+      105    0.021    0.000    0.021    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+       35    0.016    0.000    0.016    0.000 {method 'repeat' of 'numpy.ndarray' objects}
+       35    0.003    0.000    0.003    0.000 {built-in method numpy.array}
+       70    0.000    0.000    0.001    0.000 {method 'all' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+       35    0.000    0.000    0.000    0.000 {method 'any' of 'numpy.ndarray' objects}
+      175    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+      140    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+      105    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+       35    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/site-packages/numpy/_core/multiarray.py:1085(copyto)
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+
+
+
+ sampler-131072-true.json.prof
+Thu Oct  1 12:23:01 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/sampler-131072-true.json.prof
+
+         6377 function calls in 0.669 seconds
+
+   Ordered by: cumulative time
+   List reduced from 101 to 18 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      176    0.289    0.002    0.289    0.002 {method 'readline' of '_io.BufferedReader' objects}
+      177    0.247    0.001    0.247    0.001 {method 'write' of '_io.FileIO' objects}
+       35    0.029    0.001    0.050    0.001 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:436(_encode_batch_binary)
+      105    0.021    0.000    0.021    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+      105    0.000    0.000    0.019    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+       35    0.016    0.000    0.016    0.000 {method 'repeat' of 'numpy.ndarray' objects}
+       70    0.004    0.000    0.004    0.000 {built-in method numpy.array}
+       70    0.000    0.000    0.001    0.000 {method 'all' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.001    0.000 {method 'sum' of 'numpy.ndarray' objects}
+       35    0.001    0.000    0.001    0.000 {method 'copy' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+       35    0.000    0.000    0.000    0.000 {method 'any' of 'numpy.ndarray' objects}
+      175    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+      140    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+      105    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+       35    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/site-packages/numpy/_core/multiarray.py:1085(copyto)
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+
+
+
+ sampler-32768-false.json.prof
+Thu Oct  1 12:22:58 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/sampler-32768-false.json.prof
+
+         3752 function calls in 0.115 seconds
+
+   Ordered by: cumulative time
+   List reduced from 96 to 16 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       71    0.045    0.001    0.045    0.001 {method 'readline' of '_io.BufferedReader' objects}
+      107    0.044    0.000    0.044    0.000 {method 'write' of '_io.FileIO' objects}
+       35    0.006    0.000    0.010    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:436(_encode_batch_binary)
+       35    0.005    0.000    0.005    0.000 {method 'repeat' of 'numpy.ndarray' objects}
+      105    0.004    0.000    0.004    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+       35    0.001    0.000    0.001    0.000 {built-in method numpy.array}
+       70    0.000    0.000    0.001    0.000 {method 'all' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+       35    0.000    0.000    0.000    0.000 {method 'any' of 'numpy.ndarray' objects}
+      175    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+      140    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+      105    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+       35    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/site-packages/numpy/_core/multiarray.py:1085(copyto)
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+
+
+
+ sampler-32768-true.json.prof
+Thu Oct  1 12:22:58 2026    /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/sampler-32768-true.json.prof
+
+         6377 function calls in 0.122 seconds
+
+   Ordered by: cumulative time
+   List reduced from 101 to 18 due to restriction <'encode_batch|decode_eval|read_exact|tobytes|array|copy|readinto|readline|write'>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      176    0.047    0.000    0.047    0.000 {method 'readline' of '_io.BufferedReader' objects}
+      177    0.043    0.000    0.043    0.000 {method 'write' of '_io.FileIO' objects}
+       35    0.006    0.000    0.010    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/runners.py:436(_encode_batch_binary)
+       35    0.005    0.000    0.005    0.000 {method 'repeat' of 'numpy.ndarray' objects}
+      105    0.004    0.000    0.004    0.000 {method 'tobytes' of 'numpy.ndarray' objects}
+      105    0.000    0.000    0.004    0.000 /common/dev/cedric/setup-logs/protocol-overhead-20261001/python-profile/process_api/python/src/gammaboard_process/protocol.py:77(_read_exact)
+       70    0.001    0.000    0.001    0.000 {built-in method numpy.array}
+       70    0.000    0.000    0.001    0.000 {method 'all' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 {method 'sum' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_local.py:548(write_text)
+        1    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/pathlib/_abc.py:644(write_text)
+       35    0.000    0.000    0.000    0.000 {method 'copy' of 'numpy.ndarray' objects}
+      175    0.000    0.000    0.000    0.000 {method 'reshape' of 'numpy.ndarray' objects}
+       35    0.000    0.000    0.000    0.000 {method 'any' of 'numpy.ndarray' objects}
+      140    0.000    0.000    0.000    0.000 {built-in method numpy.asarray}
+      105    0.000    0.000    0.000    0.000 {built-in method numpy.ascontiguousarray}
+       35    0.000    0.000    0.000    0.000 /nix/store/52cxija66hxph3mcx1dcsap9faqgl2jc-python3-3.13.12-env/lib/python3.13/site-packages/numpy/_core/multiarray.py:1085(copyto)
+        1    0.000    0.000    0.000    0.000 {method 'write' of '_io.TextIOWrapper' objects}

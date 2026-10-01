@@ -88,7 +88,7 @@ impl Evaluator for ProcessEvaluator {
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EvalError> {
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let inputs = ragged_row_major_inputs(batch);
+        let inputs = pack_eval_inputs(batch, &self.domain);
 
         if let AccumulatorState::Gammaloop(gl_state) = &mut observable_state {
             let (new_state, training_values) =
@@ -138,28 +138,57 @@ impl Evaluator for ProcessEvaluator {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RaggedRowMajorInputs {
-    xs_discrete_row_major: Vec<i64>,
-    xs_discrete_offsets: Vec<usize>,
-    xs_continuous_row_major: Vec<f64>,
-    xs_continuous_offsets: Vec<usize>,
+struct PackedEvalInputs {
+    binary: Vec<u8>,
+    xs_discrete_offsets: Option<Vec<usize>>,
+    xs_continuous_offsets: Option<Vec<usize>>,
 }
 
-/// Pack the row-major eval inputs into the request binary block: little-endian
-/// `i64` discrete values followed by little-endian `f64` continuous values. The
-/// receiver splits them using the offsets carried in the JSON envelope.
-fn pack_eval_inputs(inputs: &RaggedRowMajorInputs) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(
-        inputs.xs_discrete_row_major.len() * 8 + inputs.xs_continuous_row_major.len() * 8,
-    );
-    for value in &inputs.xs_discrete_row_major {
-        bytes.extend_from_slice(&value.to_le_bytes());
+/// Write coordinates directly into the wire block, discrete values first.
+/// Fixed-width dimensions need no offsets; ragged dimensions retain them.
+fn pack_eval_inputs(batch: &Batch, domain: &Domain) -> PackedEvalInputs {
+    let elements: usize = batch
+        .points()
+        .iter()
+        .map(|point| point.discrete.len() + point.continuous.len())
+        .sum();
+    let mut binary = Vec::with_capacity(elements * 8);
+    let mut discrete_offsets = domain
+        .fixed_discrete_depth()
+        .is_none()
+        .then(|| Vec::with_capacity(batch.size() + 1));
+    let mut continuous_offsets = domain
+        .fixed_continuous_dims()
+        .is_none()
+        .then(|| Vec::with_capacity(batch.size() + 1));
+    if let Some(offsets) = &mut discrete_offsets {
+        offsets.push(0);
     }
-    for value in &inputs.xs_continuous_row_major {
-        bytes.extend_from_slice(&value.to_le_bytes());
+    for point in batch.points() {
+        for value in &point.discrete {
+            binary.extend_from_slice(&value.to_le_bytes());
+        }
+        if let Some(offsets) = &mut discrete_offsets {
+            offsets.push(binary.len() / 8);
+        }
     }
-    bytes
+    let continuous_start = binary.len();
+    if let Some(offsets) = &mut continuous_offsets {
+        offsets.push(0);
+    }
+    for point in batch.points() {
+        for value in &point.continuous {
+            binary.extend_from_slice(&value.to_le_bytes());
+        }
+        if let Some(offsets) = &mut continuous_offsets {
+            offsets.push((binary.len() - continuous_start) / 8);
+        }
+    }
+    PackedEvalInputs {
+        binary,
+        xs_discrete_offsets: discrete_offsets,
+        xs_continuous_offsets: continuous_offsets,
+    }
 }
 
 /// Decode a little-endian `f64` binary block into a `Vec<f64>`.
@@ -178,42 +207,12 @@ fn unpack_f64_le(bytes: &[u8], what: &str) -> Result<Vec<f64>, EvalError> {
         .collect())
 }
 
-fn ragged_row_major_inputs(batch: &Batch) -> RaggedRowMajorInputs {
-    let mut xs_discrete = Vec::new();
-    let mut xs_discrete_offsets = Vec::with_capacity(batch.size() + 1);
-    let mut xs_continuous = Vec::new();
-    let mut xs_continuous_offsets = Vec::with_capacity(batch.size() + 1);
-    xs_discrete_offsets.push(0);
-    xs_continuous_offsets.push(0);
-    for point in batch.points() {
-        xs_discrete.extend_from_slice(&point.discrete);
-        xs_discrete_offsets.push(xs_discrete.len());
-        xs_continuous.extend_from_slice(&point.continuous);
-        xs_continuous_offsets.push(xs_continuous.len());
+fn add_required_offsets(params: &mut Value, inputs: &PackedEvalInputs) {
+    if let Some(offsets) = &inputs.xs_discrete_offsets {
+        params["xs_discrete_offsets"] = serde_json::json!(offsets);
     }
-    RaggedRowMajorInputs {
-        xs_discrete_row_major: xs_discrete,
-        xs_discrete_offsets,
-        xs_continuous_row_major: xs_continuous,
-        xs_continuous_offsets,
-    }
-}
-
-fn add_required_offsets(params: &mut Value, domain: &Domain, inputs: &RaggedRowMajorInputs) {
-    let object = params
-        .as_object_mut()
-        .expect("eval_batch params are constructed as an object");
-    if domain.fixed_discrete_depth().is_none() {
-        object.insert(
-            "xs_discrete_offsets".to_string(),
-            serde_json::json!(inputs.xs_discrete_offsets),
-        );
-    }
-    if domain.fixed_continuous_dims().is_none() {
-        object.insert(
-            "xs_continuous_offsets".to_string(),
-            serde_json::json!(inputs.xs_continuous_offsets),
-        );
+    if let Some(offsets) = &inputs.xs_continuous_offsets {
+        params["xs_continuous_offsets"] = serde_json::json!(offsets);
     }
 }
 
@@ -275,17 +274,17 @@ impl ProcessRuntimeWorker {
 
     fn eval_batch(
         &mut self,
-        inputs: &RaggedRowMajorInputs,
+        inputs: &PackedEvalInputs,
         nr_samples: usize,
     ) -> Result<Vec<f64>, EvalError> {
         let mut params = serde_json::json!({
             "nr_samples": nr_samples,
             "components": self.components,
         });
-        add_required_offsets(&mut params, &self.domain, inputs);
+        add_required_offsets(&mut params, inputs);
         let (_result, response_binary) = self
             .process
-            .request_with_binary("eval_batch", params, &pack_eval_inputs(inputs))
+            .request_with_binary("eval_batch", params, &inputs.binary)
             .map_err(EvalError::eval)?;
         let values = unpack_f64_le(&response_binary, "values")?;
         let expected_len = nr_samples.saturating_mul(self.components.len());
@@ -301,17 +300,17 @@ impl ProcessRuntimeWorker {
 
     fn eval_batch_gammaloop(
         &mut self,
-        inputs: &RaggedRowMajorInputs,
+        inputs: &PackedEvalInputs,
         nr_samples: usize,
     ) -> Result<(GammaLoopAccumulatorState, Option<Vec<f64>>), EvalError> {
         let mut params = serde_json::json!({
             "nr_samples": nr_samples,
             "accumulator": "gammaloop",
         });
-        add_required_offsets(&mut params, &self.domain, inputs);
+        add_required_offsets(&mut params, inputs);
         let (response, _response_binary) = self
             .process
-            .request_with_binary("eval_batch", params, &pack_eval_inputs(inputs))
+            .request_with_binary("eval_batch", params, &inputs.binary)
             .map_err(EvalError::eval)?;
         let state: GammaLoopAccumulatorState = serde_json::from_value(
             response
@@ -364,19 +363,22 @@ fn default_components() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessEvaluatorParams, ProcessRuntimeWorker, RaggedRowMajorInputs};
+    use super::{ProcessEvaluatorParams, ProcessRuntimeWorker};
     use crate::utils::domain::Domain;
+    use crate::{Batch, Point};
     use serde_json::json;
 
     #[test]
     fn eval_input_pack_and_value_unpack_roundtrip() {
-        let inputs = RaggedRowMajorInputs {
-            xs_discrete_row_major: vec![0_i64, 1, 2, 3],
-            xs_discrete_offsets: vec![0, 2, 4],
-            xs_continuous_row_major: vec![0.5_f64, 1.5, 2.5, 3.5],
-            xs_continuous_offsets: vec![0, 2, 4],
-        };
-        let packed = super::pack_eval_inputs(&inputs);
+        let batch = Batch::new(vec![
+            Point::new(vec![0.5, 1.5], vec![0, 1], 1.0),
+            Point::new(vec![2.5, 3.5], vec![2, 3], 1.0),
+        ])
+        .unwrap();
+        let inputs = super::pack_eval_inputs(&batch, &Domain::rectangular(2, 2));
+        assert!(inputs.xs_discrete_offsets.is_none());
+        assert!(inputs.xs_continuous_offsets.is_none());
+        let packed = inputs.binary;
         // 4 i64 + 4 f64 = 64 bytes; discrete block first.
         assert_eq!(packed.len(), 4 * 8 + 4 * 8);
         assert_eq!(&packed[0..8], &0_i64.to_le_bytes());
@@ -391,17 +393,11 @@ mod tests {
 
     #[test]
     fn eval_offsets_are_omitted_only_for_fixed_domain_dimensions() {
-        let inputs = RaggedRowMajorInputs {
-            xs_discrete_row_major: vec![0, 1, 1],
-            xs_discrete_offsets: vec![0, 1, 3],
-            xs_continuous_row_major: vec![0.5, 1.5, 2.5],
-            xs_continuous_offsets: vec![0, 1, 3],
-        };
-
-        let mut fixed_params = json!({});
-        super::add_required_offsets(&mut fixed_params, &Domain::rectangular(2, 2), &inputs);
-        assert_eq!(fixed_params, json!({}));
-
+        let batch = Batch::new(vec![
+            Point::new(vec![0.5], vec![0], 1.0),
+            Point::new(vec![1.5, 2.5], vec![1, 1], 1.0),
+        ])
+        .unwrap();
         let ragged_domain = Domain::discrete(
             None,
             [
@@ -416,7 +412,8 @@ mod tests {
             ],
         );
         let mut ragged_params = json!({});
-        super::add_required_offsets(&mut ragged_params, &ragged_domain, &inputs);
+        let inputs = super::pack_eval_inputs(&batch, &ragged_domain);
+        super::add_required_offsets(&mut ragged_params, &inputs);
         assert_eq!(
             ragged_params,
             json!({

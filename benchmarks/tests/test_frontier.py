@@ -14,6 +14,32 @@ class FrontierTests(unittest.TestCase):
             tomllib.loads((f.bench.ROOT / "benchmarks/frontier.toml").read_text())
         )
 
+    def test_process_evaluator_measurement_does_not_require_mock_sleep_counters(self):
+        evaluator = dict(worker_id="e", rss_bytes=0, metrics=dict(engine_diagnostics={}))
+        snapshot = dict(evaluators=[evaluator], samplers=[])
+        measured = dict(
+            valid=True,
+            issues=[],
+            snapshots=[snapshot, snapshot],
+            evaluator_deltas=[dict(batches_completed=8, samples_evaluated=128)],
+        )
+        counters = dict(
+            produced_samples_total=128,
+            completed_samples_total=128,
+            ingested_samples_total=0,
+            queue=dict(rolling=dict(insert_bundle_payload_bytes_per_batch=dict(mean=896))),
+        )
+        with patch.object(f, "sampler_progress", return_value=(128, 0, 1)), patch.object(
+            f, "runtime", return_value=counters
+        ), patch.object(f, "active_evaluators", return_value=[evaluator]), patch.object(
+            f.bench, "activity", return_value={}
+        ):
+            row = f.measurement_row(measured, f.Point("materialized", 0, 1, 16))
+        self.assertTrue(row["valid"] and row["adequate"])
+        self.assertEqual(row["rate"], 128)
+        self.assertIsNone(row["sleep_requested_seconds"])
+        self.assertIsNone(row["sleep_actual_seconds"])
+
     def test_modes_use_distinct_payloads_and_fixed_training_window(self):
         for mode in f.MODES:
             card = tomllib.loads(f.card(mode, 321, self.suite))
