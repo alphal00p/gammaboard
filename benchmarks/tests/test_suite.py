@@ -14,10 +14,25 @@ from benchmarks import common as bench
 class SuiteTests(unittest.TestCase):
     def test_frontier_plan_is_sparse_and_feedback_modes_are_paired(self):
         args = benchmark.parser().parse_args(["plan", "--workers", "1", "16", "--cpu-limit", "8"])
-        suite = benchmark.frontier_suite(args)
+        with patch.object(benchmark, "physical_cpus", return_value=list(range(8))):
+            suite = benchmark.frontier_suite(args)
         self.assertEqual(suite["workers"], [1, 16])
         self.assertEqual(suite["modes"], ["materialized", "training"])
         self.assertLess(suite["infrastructure_cores"], 8)
+
+    def test_frontier_plan_requires_three_available_cores(self):
+        for available, limit in [(1, None), (2, None), (8, 2)]:
+            with self.subTest(available=available, limit=limit):
+                args = benchmark.parser().parse_args(["plan"])
+                args.cpu_limit = limit
+                with patch.object(benchmark, "physical_cpus", return_value=list(range(available))):
+                    with self.assertRaisesRegex(ValueError, "at least three physical cores"):
+                        benchmark.frontier_suite(args)
+        args = benchmark.parser().parse_args(["plan"])
+        with patch.object(benchmark, "physical_cpus", return_value=list(range(3))):
+            suite = benchmark.frontier_suite(args)
+        self.assertEqual(suite["infrastructure_cores"], 2)
+        self.assertEqual(suite["sampler_io_threads"], 1)
 
     def session(self, root):
         session = bench.Session.__new__(bench.Session)

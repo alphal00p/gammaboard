@@ -1,0 +1,150 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>GammaBoard amortization</title><style>
+body{font:16px system-ui,sans-serif;color:#243248;background:#f3f5f8;margin:0}
+main{max-width:1150px;margin:32px auto;padding:32px;background:white;border-radius:12px}
+h1{font-size:28px}p{line-height:1.6}.status{color:#52667b}img{display:block;width:100%;height:auto;margin:24px 0}
+.table{overflow:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:10px;text-align:right;border-bottom:1px solid #dde3ea;white-space:nowrap}th{background:#edf2f7}th:first-child,td:first-child{text-align:left}details{margin-top:24px}pre{white-space:pre-wrap;overflow-wrap:anywhere}section{margin-bottom:48px}a{color:#185bbb}
+</style><main><h1>GammaBoard amortization</h1><p class="status">completed · 594.4 seconds</p><p>Extra runtime = 100 × (direct accepted throughput / GammaBoard accepted throughput − 1), an equivalent steady-state work comparison. Startup and final draining are excluded.</p><p>Matched CPU arithmetic, six-dimensional uniform sampler, scalar accumulation, generation size and optional generation feedback within each pair. Native engines; this is not a process-API or GLNIS optimizer measurement.</p><p>Fixed approximately 5 µs/sample; only batch size changes.</p><p>The x axis is measured direct evaluator call time per batch (ms), including local accumulation. Negative values mean the production pipeline was faster in that pair; they are not clipped.</p><p>Y axis linear near zero and logarithmic beyond ±10%.</p><p>Fixed disjoint core allocations, not an exclusive host. Run-to-run range is saved in CSV; plotted dots are repetitions, not confidence intervals.</p><p><a href="amortization.png">PNG</a> · <a href="amortization.svg">SVG</a> · <a href="summary.csv">CSV</a></p><img alt="amortization" src="amortization.png"><div class="table"><table><thead><tr><th>workers</th><th>mode</th><th>batch</th><th>trials</th><th>evaluator batch ms</th><th>evaluator sample us</th><th>overhead percent</th><th>overhead low</th><th>overhead high</th><th>direct samples per second</th><th>gammaboard samples per second</th></tr></thead><tbody><tr><td>1</td><td>materialized</td><td>128</td><td>2</td><td>0.643</td><td>5.02</td><td>97.8</td><td>88.6</td><td>107</td><td>1.87e+05</td><td>9.5e+04</td></tr><tr><td>1</td><td>materialized</td><td>512</td><td>2</td><td>2.55</td><td>4.99</td><td>24.6</td><td>22.4</td><td>26.7</td><td>1.94e+05</td><td>1.56e+05</td></tr><tr><td>1</td><td>materialized</td><td>2048</td><td>2</td><td>10.2</td><td>4.99</td><td>8.87</td><td>7.77</td><td>9.96</td><td>1.96e+05</td><td>1.8e+05</td></tr><tr><td>1</td><td>materialized</td><td>8192</td><td>2</td><td>40.9</td><td>5</td><td>3.45</td><td>2.06</td><td>4.83</td><td>1.96e+05</td><td>1.89e+05</td></tr><tr><td>1</td><td>materialized</td><td>32768</td><td>2</td><td>164</td><td>5</td><td>1.86</td><td>1.66</td><td>2.07</td><td>1.96e+05</td><td>1.92e+05</td></tr><tr><td>1</td><td>training</td><td>128</td><td>2</td><td>0.641</td><td>5</td><td>88.6</td><td>84.6</td><td>92.7</td><td>1.89e+05</td><td>1e+05</td></tr><tr><td>1</td><td>training</td><td>512</td><td>2</td><td>2.56</td><td>5</td><td>26.9</td><td>25.6</td><td>28.2</td><td>1.93e+05</td><td>1.52e+05</td></tr><tr><td>1</td><td>training</td><td>2048</td><td>2</td><td>10.3</td><td>5.02</td><td>6.75</td><td>5.96</td><td>7.54</td><td>1.93e+05</td><td>1.81e+05</td></tr><tr><td>1</td><td>training</td><td>8192</td><td>2</td><td>40.9</td><td>5</td><td>5.21</td><td>2.47</td><td>7.96</td><td>1.96e+05</td><td>1.86e+05</td></tr><tr><td>1</td><td>training</td><td>32768</td><td>2</td><td>164</td><td>5</td><td>3.43</td><td>2.08</td><td>4.78</td><td>1.96e+05</td><td>1.89e+05</td></tr><tr><td>16</td><td>materialized</td><td>128</td><td>2</td><td>0.641</td><td>5.01</td><td>1.26e+03</td><td>1.25e+03</td><td>1.27e+03</td><td>2.82e+06</td><td>2.07e+05</td></tr><tr><td>16</td><td>materialized</td><td>512</td><td>2</td><td>2.55</td><td>4.99</td><td>301</td><td>292</td><td>311</td><td>2.94e+06</td><td>7.34e+05</td></tr><tr><td>16</td><td>materialized</td><td>2048</td><td>2</td><td>10.2</td><td>4.98</td><td>88.3</td><td>86.1</td><td>90.4</td><td>3.11e+06</td><td>1.65e+06</td></tr><tr><td>16</td><td>materialized</td><td>8192</td><td>2</td><td>40.8</td><td>4.98</td><td>4.07</td><td>2.87</td><td>5.27</td><td>3.13e+06</td><td>3e+06</td></tr><tr><td>16</td><td>materialized</td><td>32768</td><td>2</td><td>164</td><td>4.99</td><td>2.12</td><td>2.01</td><td>2.22</td><td>3.14e+06</td><td>3.07e+06</td></tr><tr><td>16</td><td>training</td><td>128</td><td>2</td><td>0.643</td><td>5.02</td><td>1.3e+03</td><td>1.3e+03</td><td>1.31e+03</td><td>2.81e+06</td><td>2e+05</td></tr><tr><td>16</td><td>training</td><td>512</td><td>2</td><td>2.56</td><td>5</td><td>301</td><td>299</td><td>303</td><td>2.94e+06</td><td>7.33e+05</td></tr><tr><td>16</td><td>training</td><td>2048</td><td>2</td><td>10.2</td><td>4.99</td><td>91.2</td><td>90.4</td><td>92</td><td>3.1e+06</td><td>1.62e+06</td></tr><tr><td>16</td><td>training</td><td>8192</td><td>2</td><td>40.9</td><td>4.99</td><td>6.37</td><td>6.24</td><td>6.51</td><td>3.13e+06</td><td>2.94e+06</td></tr><tr><td>16</td><td>training</td><td>32768</td><td>2</td><td>164</td><td>4.99</td><td>1.7</td><td>1.19</td><td>2.2</td><td>3.13e+06</td><td>3.08e+06</td></tr></tbody></table></div><details><summary>Configuration and provenance</summary><pre>{
+  &quot;experiment&quot;: &quot;amortization&quot;,
+  &quot;schema_version&quot;: 1,
+  &quot;status&quot;: &quot;completed&quot;,
+  &quot;workers&quot;: [
+    1,
+    16
+  ],
+  &quot;batch_sizes&quot;: [
+    128,
+    512,
+    2048,
+    8192,
+    32768
+  ],
+  &quot;target_batch_seconds&quot;: null,
+  &quot;repetitions&quot;: 2,
+  &quot;duration_seconds&quot;: 4.0,
+  &quot;generation_size&quot;: 262144,
+  &quot;max_generation_size&quot;: 262144,
+  &quot;generation_policy&quot;: &quot;fixed sample count&quot;,
+  &quot;initial_core_loads&quot;: {
+    &quot;2&quot;: 0.0,
+    &quot;16&quot;: 0.0,
+    &quot;17&quot;: 0.0,
+    &quot;20&quot;: 0.0,
+    &quot;21&quot;: 0.0,
+    &quot;23&quot;: 0.0,
+    &quot;24&quot;: 0.0,
+    &quot;27&quot;: 0.0,
+    &quot;29&quot;: 0.0,
+    &quot;30&quot;: 0.0,
+    &quot;34&quot;: 0.0,
+    &quot;35&quot;: 0.0,
+    &quot;36&quot;: 0.0,
+    &quot;37&quot;: 0.0,
+    &quot;43&quot;: 0.0,
+    &quot;44&quot;: 0.0,
+    &quot;46&quot;: 0.0,
+    &quot;48&quot;: 0.0,
+    &quot;49&quot;: 0.0,
+    &quot;53&quot;: 0.0,
+    &quot;61&quot;: 0.0,
+    &quot;62&quot;: 0.0,
+    &quot;133&quot;: 0.0,
+    &quot;136&quot;: 0.0,
+    &quot;137&quot;: 0.0
+  },
+  &quot;sampler_cpus&quot;: [
+    2,
+    16,
+    17,
+    20,
+    21
+  ],
+  &quot;database_cpus&quot;: [
+    23,
+    24,
+    27,
+    29
+  ],
+  &quot;evaluator_cpus&quot;: [
+    30,
+    34,
+    35,
+    36,
+    37,
+    43,
+    44,
+    46,
+    48,
+    49,
+    53,
+    61,
+    62,
+    133,
+    136,
+    137
+  ],
+  &quot;binary_sha256&quot;: &quot;909eee663909131f0eec8177a616e86d291dff769f02616d793bbdb0b28cff95&quot;,
+  &quot;harness_files&quot;: {
+    &quot;benchmarks/__init__.py&quot;: &quot;5a18cfd66c9a9f142ef6a5aab3577c57936db9f7a70b01c3568e6305f772ea89&quot;,
+    &quot;benchmarks/frontier_plots.py&quot;: &quot;1094fe5329faa332659a964d9dd3597b96cc266bf43593fe9be5db08e3c37cbe&quot;,
+    &quot;benchmarks/cli.py&quot;: &quot;fcd973329dfad8766e7c50f321f824313b3f72352d34806ec50ea56e6fdd4775&quot;,
+    &quot;benchmarks/amortization.py&quot;: &quot;c6fdb19ea31ac7a0e8b02b3c074b08ffaa996149bac371617fd6045e52f500ea&quot;,
+    &quot;benchmarks/reporting.py&quot;: &quot;9d3ff8c823a51151136490fd696766bfd64a101d94370e0954f670185b75dfe2&quot;,
+    &quot;benchmarks/frontier.toml&quot;: &quot;5245c01b35d889c1b3ff0c3c2ca804a260b1ec9753267cebdfcf42f48a8026b4&quot;,
+    &quot;benchmarks/protocol.py&quot;: &quot;75f43922a91811243176b809bc92a6cef3ad9deb2263ec4122131b9b375185be&quot;,
+    &quot;benchmarks/frontier.py&quot;: &quot;1f4bb61d3f5fbc4dc05e2abb082454efd6b69f6d05e49936b65174e8ff5dc6b5&quot;,
+    &quot;benchmarks/__main__.py&quot;: &quot;935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d&quot;,
+    &quot;benchmarks/common.py&quot;: &quot;839ae0100a7c6e917d6114814a70038910712c7927254defd19a7968a1f5ee86&quot;,
+    &quot;benchmarks/io.py&quot;: &quot;a7b6d38603b03bd9928b1513b9d8150c5b6f2e534b0fa6fce3e2991b0be6e580&quot;,
+    &quot;benchmarks/tests/test_io.py&quot;: &quot;5aa8ffd5253c47f838d8062f2a3825a8b2d359de04a455da799534cc17f5997f&quot;,
+    &quot;benchmarks/tests/test_process.py&quot;: &quot;67ffb70b97c1aa6208681150f6f3984d5421bb1195f6db8932338578c3dbef3d&quot;,
+    &quot;benchmarks/tests/test_suite.py&quot;: &quot;09cda6e55b10bcd647f374ebfeac9cc3a3dcb50a31bad35a5e73dd66fe4a227c&quot;,
+    &quot;benchmarks/tests/__init__.py&quot;: &quot;e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855&quot;,
+    &quot;benchmarks/tests/test_amortization.py&quot;: &quot;e6aa152dfe6920fddcd038e084a9d1df6267c77cb86b90a38fa112e3177211d1&quot;,
+    &quot;benchmarks/tests/test_frontier.py&quot;: &quot;152de27a172b8d489bae7b5c6153d05e7bb5728b925d7b36ec59c4394aefd69b&quot;
+  },
+  &quot;scope&quot;: &quot;Native CPU work, six uniform coordinates, f(x)=x[0]; same sampler/evaluator/accumulator engines and generation-level feedback. Direct bounded in-memory pipeline versus PostgreSQL and production runners. Steady-state accepted throughput; startup/final drain excluded. Shared host; feedback is transport/ingestion, not model optimization.&quot;,
+  &quot;elapsed_seconds&quot;: 594.4353836327791,
+  &quot;platform&quot;: &quot;Linux-6.18.45-x86_64-with-glibc2.42&quot;,
+  &quot;python&quot;: &quot;3.13.12&quot;,
+  &quot;cpu_model&quot;: &quot;AMD EPYC 9754 128-Core Processor&quot;,
+  &quot;started_at&quot;: &quot;2026-10-03T09:50:07Z&quot;,
+  &quot;seconds_per_iteration&quot;: 1.6413308766682945e-09,
+  &quot;calibration&quot;: {
+    &quot;elapsed_seconds&quot;: 0.334419946,
+    &quot;evaluate_batches&quot;: 96,
+    &quot;evaluate_seconds&quot;: 0.32269878100000005,
+    &quot;mean_evaluate_batch_seconds&quot;: 0.003361445635416667,
+    &quot;rate&quot;: 293953.7583682284,
+    &quot;sampler_diagnostics&quot;: {
+      &quot;generation_timing&quot;: {
+        &quot;actual_seconds&quot;: 0.0,
+        &quot;calls&quot;: 8,
+        &quot;clipped_calls&quot;: 0,
+        &quot;requested_seconds&quot;: 0.0
+      },
+      &quot;ingest_timing&quot;: {
+        &quot;actual_seconds&quot;: 0.0,
+        &quot;calls&quot;: 0,
+        &quot;clipped_calls&quot;: 0,
+        &quot;requested_seconds&quot;: 0.0
+      },
+      &quot;pending_training_samples&quot;: 0,
+      &quot;produced_samples&quot;: 131072,
+      &quot;returned_samples&quot;: 0,
+      &quot;synthetic&quot;: true,
+      &quot;training_barrier_seconds&quot;: 0.0,
+      &quot;training_updates&quot;: 0,
+      &quot;training_window_samples&quot;: 0,
+      &quot;update_timing&quot;: {
+        &quot;actual_seconds&quot;: 0.0,
+        &quot;calls&quot;: 0,
+        &quot;clipped_calls&quot;: 0,
+        &quot;requested_seconds&quot;: 0.0
+      },
+      &quot;window_returned&quot;: 0
+    },
+    &quot;samples&quot;: 98304,
+    &quot;scope&quot;: &quot;Native engines in a bounded in-memory pipeline; generation, partitioning, materialization, evaluation, accumulation and ordered generation feedback. One warmup generation; full-generation completion endpoints. Startup and final drain excluded.&quot;
+  }
+}</pre></details></main></html>

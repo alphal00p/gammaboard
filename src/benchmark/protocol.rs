@@ -170,7 +170,7 @@ pub fn measure(options: Config) -> Result<Value> {
                 || {
                     // Keep the native generation, including its training window,
                     // and time cleanup just as for evaluator results.
-                    let generation = sampler.generate(Some(batch_size))?;
+                    let generation = sampler.generate(batch_size)?;
                     ensure!(
                         matches!(generation, Generation::Batch { .. }),
                         "expected a generated batch"

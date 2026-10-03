@@ -21,6 +21,7 @@ type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
 #[derive(Clone, Default)]
 pub(crate) struct RecordingStore {
     inserts: RecordedInserts,
+    pub(crate) active_task: Arc<Mutex<Option<RunTask>>>,
     first_insert_gate: Option<Arc<Notify>>,
     pub(crate) inserted: Arc<Notify>,
     fetch_completed_calls: Arc<Mutex<usize>>,
@@ -334,7 +335,7 @@ impl RunTaskStore for RecordingStore {
     }
 
     async fn load_active_run_task(&self, _run_id: i32) -> Result<Option<RunTask>, StoreError> {
-        unreachable!("unused in test")
+        Ok(self.active_task.lock().unwrap().clone())
     }
 
     async fn activate_next_run_task(&self, _run_id: i32) -> Result<Option<RunTask>, StoreError> {

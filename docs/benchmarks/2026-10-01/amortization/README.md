@@ -7,7 +7,9 @@
 
 These measurements predate the removal of the peer-based prefetch restriction.
 See the [follow-up measurements](../prefetch-removal/README.md) for that change;
-this historical curve has not been rerun or relabeled as a current result.
+this historical curve is retained unchanged. The
+[October 3 rerun](../../2026-10-03/amortization/README.md) shows the improved
+scheduler on this workload and a separate approximately constant-batch-time sweep.
 
 The study uses **1 and 16 evaluators**, **128, 512, 2,048, 8,192 and 32,768 samples
 per transport batch**, and feedback off/on. Three fresh deployments per evaluator

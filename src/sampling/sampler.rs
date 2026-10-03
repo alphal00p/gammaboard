@@ -69,12 +69,11 @@ impl SamplerAggregatorSnapshot {
 
 pub trait SamplerAggregator: Send {
     fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError>;
-    /// Generate a sampler-sized draw, bounded only by the remaining task budget.
-    /// `None` means the task has no sample-count limit. Never return an empty draw.
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError>;
+    /// Generate at most `max_samples` samples (a positive per-draw limit).
+    /// The runtime caps this by queue tuning and the remaining task budget.
+    /// Draws may be smaller, e.g. at a training boundary, but never empty.
+    /// The limit can change between draws without changing feedback boundaries.
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError>;
     /// One weighted scalar per sample of the oldest feedback-bearing draw.
     /// Calls preserve generation order and never split or combine draws.
     fn feedback(&mut self, values: &[f64]) -> Result<(), EngineError>;
@@ -130,8 +129,4 @@ impl Generation {
             Self::Finished => Err(EngineError::engine("sampler has finished")),
         }
     }
-}
-
-pub(crate) const fn default_generation_batch_size() -> usize {
-    1_048_576
 }

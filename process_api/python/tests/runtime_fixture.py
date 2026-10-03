@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from gammaboard_process import GenerationStatus, SampleBatch, run_evaluator, run_sampler
+from gammaboard_process import SampleBatch, run_evaluator, run_sampler
 
 
 def timed(method):
@@ -55,10 +55,8 @@ class Fixture:
         return values
 
     @timed
-    def generate(self, remaining_sample_budget):
-        if remaining_sample_budget == 0:
-            return GenerationStatus.FINISHED
-        nr_samples = min(1_048_576, remaining_sample_budget if remaining_sample_budget is not None else 1_048_576)
+    def generate(self, max_samples):
+        nr_samples = max_samples
         values = self.transform(self.rng.random(nr_samples) if self.benchmark else np.full(nr_samples, .5))
         discrete = np.empty((nr_samples, len(self.cards)), dtype=np.int64)
         for i, cardinality in enumerate(self.cards):

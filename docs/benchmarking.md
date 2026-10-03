@@ -90,7 +90,7 @@ the zero-delay curve, and sparse anchors on the 5 µs, 200 µs and 5 ms curves.
 Delays are simulated by one sleep per batch with seeded 10% Gaussian jitter;
 there is no artificial CPU arithmetic. Nominal batch time is capped at 30 seconds. The zero-delay materialized/training
 curve uses 32,768 samples per evaluator batch. The default transport cap is
-32,768, separately from the 4,194,304-sample generation cap. Delayed curves use
+32,768, separately from the 262,144-sample generation cap. Delayed curves use
 32,768 / 4,096 / 256 samples at 5 µs / 200 µs / 5 ms; timing and memory bounds can
 reduce these values. Generation stays large enough to amortize draws.
 
@@ -131,12 +131,25 @@ The default deployment requires 25 physical cores: five sampler, four database
 and sixteen evaluator cores. CPU affinity is fixed across the paired methods;
 the host is not reserved exclusively.
 
-One short calibration selects a fixed arithmetic iteration count targeting about
-5 µs/sample, then holds that count fixed for every case. There are no sleeps.
+By default, one short calibration selects a fixed arithmetic iteration count
+targeting about 5 µs/sample, then holds that count fixed for every case. There are no sleeps.
 Both methods use the same native six-dimensional uniform sampler, evaluator
 returning `x[0]`, scalar accumulation and optional ordered generation feedback.
-Generation size is fixed at 131,072, independent of transport batching. Feedback
+Generation size is fixed at 262,144, independent of transport batching. Feedback
 is transport and ingestion; this is not an adaptive-model or GLNIS benchmark.
+
+For a deployment-oriented sweep, add `--target-batch-seconds 0.16384`. CPU work
+per sample then increases as batch size decreases, targeting approximately 164 ms
+of compute per batch. The default batch sizes pair with approximately 5, 20, 80,
+320 and 1,280 µs/sample; the plot uses **measured time per sample** on its x axis.
+Generations contain four batches per evaluator (rounding evaluator count up to
+a power of two), capped by the default 262,144 samples. This bounds
+feedback-cycle compute time while avoiding very large generation bursts.
+Both reference and production use that same generation size for each pair.
+This measures overhead under a specified batching policy: fixed per-batch overhead
+need not decline as sample cost increases. The default fixed-cost sweep remains
+useful for diagnosing the small-batch limit. Do not interpret differences between
+these two sweep designs as gains from implementation changes.
 
 The direct reference uses a bounded in-memory worker pipeline with two outstanding
 batches per evaluator. It includes generation, partitioning, materialization,
@@ -150,14 +163,23 @@ queue settings. Warmup and final draining are excluded on both sides.
 Extra steady-state runtime is `100 × (direct_rate / gammaboard_rate − 1)` for
 equivalent accepted sample counts. The horizontal axis is measured direct
 evaluator time per batch, including local accumulation. Rates use their own
-monotonic completion windows. Small-batch runner windows are extended to cover
-feedback cycles even when the 10 ms runner tick dominates useful CPU work.
+monotonic completion windows. Runner windows are extended as needed to cover
+complete generation feedback cycles.
 Negative measured overhead is retained, never clipped. Lines show median paired
 results and faint dots show independent repetitions; CSV retains the full range.
 
 The command writes `amortization.png`, `.svg`, `.pdf`, CSV/JSON summaries and a
 small local HTML report. Run cards, exact windows, direct measurements, calibration,
 CPU allocations, source/binary provenance and cleanup outcomes are retained.
+The [October 3 measurements](benchmarks/2026-10-03/amortization/README.md) include
+both sweep designs on the improved evaluator scheduler.
+The [controlled generation-size comparison](benchmarks/2026-10-03/generation-size/README.md)
+shows why generation size should also be stated: at 16 CPU evaluators and 32,768
+samples/batch, smaller 131k–262k generations reduced overhead relative to a 2M
+generation. Queue `max_generation_size` now defaults to 262,144; slower
+benchmark cases may use smaller draws to keep measurement windows practical.
+The [queue-limit rerun](benchmarks/2026-10-03/queue-generation-limit/README.md)
+contains both updated amortization plots and the measured cost with this limit.
 
 ## I/O capacities
 
@@ -271,8 +293,8 @@ buffering constant. The run and frontier defaults now cap transported batches at
 32,768; bulk generation is independent. Existing October 1 frontier results used
 65,536-sample zero-delay batches and have not been remeasured at the new default.
 These defaults can be overridden: explicit larger I/O/protocol sizes remain supported up to
-1,048,576, and a custom frontier preset can raise its cap. Bulk generation retains
-its independent 4,194,304-sample cap. Recheck the knee for different dimensions,
+1,048,576, and a custom frontier preset can raise its cap. Generation uses
+its independent queue cap of 262,144 samples. Recheck the knee for different dimensions,
 feedback payloads, machines and database settings. Resource comparisons and the
 full rerun are recorded in [performance development](performance-development.md).
 

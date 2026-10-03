@@ -1,0 +1,17 @@
+{
+  "rust_tests": 358,
+  "process_roundtrip_tests": 1,
+  "postgres_cli_tests": 2,
+  "benchmark_tests": 43,
+  "python_sdk_tests": 17,
+  "python_sampler_tests": 4,
+  "frontend_tests": 142,
+  "frontend_lint": "passed",
+  "frontend_build": "passed (isolated output directory)",
+  "rust_fmt": "passed",
+  "clippy": "Rust 1.99.0, all targets/features, warnings denied: passed",
+  "benchmark_test_cpu_affinities": [
+    1,
+    2
+  ]
+}

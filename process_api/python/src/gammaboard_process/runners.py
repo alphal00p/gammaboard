@@ -182,10 +182,10 @@ class _SamplerWorker:
         if self.sampler is None:
             raise RuntimeError("worker not initialized")
         if method == "generate":
-            budget = params.get("remaining_sample_budget")
-            if budget is not None and (not isinstance(budget, int) or isinstance(budget, bool) or budget < 0):
-                raise ValueError("remaining_sample_budget must be a non-negative integer or null")
-            return self._generate(budget)
+            max_samples = params.get("max_samples")
+            if not isinstance(max_samples, int) or isinstance(max_samples, bool) or max_samples <= 0:
+                raise ValueError("max_samples must be a positive integer")
+            return self._generate(max_samples)
         if method == "feedback":
             nr_values = int(params["nr_values"])
             if nr_values < 0 or len(req_binary) != nr_values * 8:
@@ -207,14 +207,14 @@ class _SamplerWorker:
             return {"diagnostics": diagnostics if diagnostics is not None else {}}
         raise ValueError(f"unknown method: {method}")
 
-    def _generate(self, budget: int | None) -> dict[str, Any]:
-        generated = self.sampler.generate(budget)
+    def _generate(self, max_samples: int) -> dict[str, Any]:
+        generated = self.sampler.generate(max_samples)
         if isinstance(generated, GenerationStatus):
             return {"kind": generated.value}
         batch = _normalize_sample_batch(generated)
         weights = np.asarray(batch.weights, dtype=np.float64)
-        if weights.ndim != 1 or len(weights) == 0 or (budget is not None and len(weights) > budget):
-            raise ValueError("generated sample count is empty or exceeds the task budget")
+        if weights.ndim != 1 or len(weights) == 0 or len(weights) > max_samples:
+            raise ValueError("generated sample count is empty or exceeds max_samples")
         nr_samples = len(weights)
         remaining = batch.training_remaining
         if remaining is not None and (not isinstance(remaining, int) or isinstance(remaining, bool) or remaining < nr_samples):

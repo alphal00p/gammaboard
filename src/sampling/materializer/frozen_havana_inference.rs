@@ -89,7 +89,6 @@ mod tests {
     fn havana_inference_materializer_emits_discrete_points() {
         let domain = Domain::rectangular(2, 1);
         let params = HavanaSamplerParams {
-            generation_batch_size: 1_048_576,
             seed: 7,
             bins: 8,
             samples_for_update: 16,
@@ -103,7 +102,7 @@ mod tests {
         .build(domain.clone(), Some(8), None, serde_json::json!({}))
         .expect("build havana training sampler");
         let _ = training
-            .generate(Some(4))
+            .generate(4)
             .and_then(|generated| generated.into_batch())
             .expect("produce training batch");
         training
@@ -126,7 +125,7 @@ mod tests {
         )
         .expect("build inference sampler");
         let latent_batch = inference
-            .generate(Some(8))
+            .generate(8)
             .and_then(|generated| generated.into_batch())
             .expect("produce inference batch");
         let snapshot = inference.snapshot().expect("inference snapshot");

@@ -101,11 +101,11 @@ impl SamplerAggregator for ProcessSampler {
         Ok(())
     }
 
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError> {
-        self.worker.generate(remaining_sample_budget)
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
+        if max_samples == 0 {
+            return Err(EngineError::invalid_input("max_samples must be positive"));
+        }
+        self.worker.generate(max_samples)
     }
 
     fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
@@ -187,19 +187,16 @@ impl ProcessSamplerWorker {
         Self::expect_ack(response).map_err(BuildError::build)
     }
 
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError> {
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
         let (response, binary) = self
             .process
             .request_with_binary(
                 "generate",
-                serde_json::json!({"remaining_sample_budget": remaining_sample_budget}),
+                serde_json::json!({"max_samples": max_samples}),
                 &[],
             )
             .map_err(EngineError::engine)?;
-        decode_generation(&self.domain, remaining_sample_budget, &response, &binary)
+        decode_generation(&self.domain, max_samples, &response, &binary)
     }
 
     fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
@@ -363,7 +360,7 @@ impl ProcessSamplerWorker {
 /// Decode one generation without changing its sampler-owned flat representation.
 fn decode_generation(
     domain: &Domain,
-    remaining_sample_budget: Option<usize>,
+    max_samples: usize,
     response: &Value,
     binary: &[u8],
 ) -> Result<Generation, EngineError> {
@@ -377,9 +374,9 @@ fn decode_generation(
         .get("nr_samples")
         .and_then(Value::as_u64)
         .and_then(|n| usize::try_from(n).ok())
-        .filter(|n| *n > 0 && remaining_sample_budget.is_none_or(|budget| *n <= budget))
+        .filter(|n| *n > 0 && *n <= max_samples)
         .ok_or_else(|| {
-            EngineError::engine("process draw exceeds budget or has invalid sample count")
+            EngineError::engine("process draw exceeds max_samples or has invalid sample count")
         })?;
     let training_remaining = match response.get("training_remaining") {
         None | Some(Value::Null) => None,
@@ -518,7 +515,7 @@ mod tests {
             let crate::Generation::Batch {
                 batch,
                 training_remaining,
-            } = super::decode_generation(&domain, Some(3), &response, &binary).unwrap()
+            } = super::decode_generation(&domain, 3, &response, &binary).unwrap()
             else {
                 panic!("expected batch");
             };
@@ -537,7 +534,7 @@ mod tests {
             response["xs_continuous_offsets"] = json!([0, 2, 4, 6]);
             response["xs_discrete_offsets"] =
                 json!((0..=3).map(|n| n * discrete_dims).collect::<Vec<_>>());
-            let generic = super::decode_generation(&domain, Some(3), &response, &binary)
+            let generic = super::decode_generation(&domain, 3, &response, &binary)
                 .unwrap()
                 .into_batch()
                 .unwrap();
@@ -566,7 +563,7 @@ mod tests {
                     .flat_map(|v| v.to_le_bytes()),
             )
             .collect();
-        let batch = super::decode_generation(&domain, None, &response, &binary)
+        let batch = super::decode_generation(&domain, 100, &response, &binary)
             .unwrap()
             .into_batch()
             .unwrap();
@@ -574,7 +571,7 @@ mod tests {
         domain.validate_batch(&materialized).unwrap();
         assert_eq!(materialized.points()[0].continuous, [0.2]);
         assert_eq!(materialized.points()[1].continuous, [0.3, 0.4]);
-        assert!(super::decode_generation(&domain, Some(1), &response, &binary).is_err());
+        assert!(super::decode_generation(&domain, 1, &response, &binary).is_err());
         for offsets in [
             json!([0, 3, 2]),
             json!([0, 1]),
@@ -583,17 +580,17 @@ mod tests {
         ] {
             let mut invalid = response.clone();
             invalid["xs_continuous_offsets"] = offsets;
-            assert!(super::decode_generation(&domain, None, &invalid, &binary).is_err());
+            assert!(super::decode_generation(&domain, 100, &invalid, &binary).is_err());
         }
         for size in [binary.len() - 1, binary.len() + 1] {
             let mut invalid = binary.clone();
             invalid.resize(size, 0);
-            assert!(super::decode_generation(&domain, None, &response, &invalid).is_err());
+            assert!(super::decode_generation(&domain, 100, &response, &invalid).is_err());
         }
         for weight in [0.0_f64, -1.0, f64::NAN, f64::INFINITY] {
             let mut invalid = binary.clone();
             invalid[binary.len() - 8..].copy_from_slice(&weight.to_le_bytes());
-            assert!(super::decode_generation(&domain, None, &response, &invalid).is_err());
+            assert!(super::decode_generation(&domain, 100, &response, &invalid).is_err());
         }
     }
 

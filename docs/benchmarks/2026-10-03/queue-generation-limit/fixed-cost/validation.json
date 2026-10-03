@@ -1,0 +1,12 @@
+{
+  "comparisons": 40,
+  "configurations_matched": 40,
+  "valid_windows": 40,
+  "clean_deployments": 4,
+  "evaluator_batch_ms_range": [
+    0.6397301756184903,
+    163.90874387500003
+  ],
+  "elapsed_seconds": 594.4353836327791,
+  "local_source": "/common/dev/cedric/setup-logs/queue-generation-20261003/fixed-cost"
+}

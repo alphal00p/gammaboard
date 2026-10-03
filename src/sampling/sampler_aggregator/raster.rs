@@ -408,17 +408,13 @@ impl SamplerAggregator for RasterPlaneSampler {
         validate_plane_geometry(&self.params.geometry, domain)
     }
 
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError> {
-        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
-        {
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
+        if max_samples == 0 {
+            return Err(EngineError::invalid_input("max_samples must be positive"));
+        }
+        if self.next_index == self.params.geometry.nr_points() {
             return Ok(Generation::Finished);
         }
-        let nr_samples = remaining_sample_budget
-            .unwrap_or(usize::MAX)
-            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
         let batch = produce_raster_batch(
             &mut self.next_index,
@@ -426,7 +422,7 @@ impl SamplerAggregator for RasterPlaneSampler {
             self.stride,
             &geometry.discrete,
             |index| geometry.point_at(index),
-            nr_samples,
+            max_samples,
             "raster plane sampler",
         )?;
         Ok(Generation::batch(batch, None))
@@ -453,17 +449,13 @@ impl SamplerAggregator for RasterLineSampler {
         validate_line_geometry(&self.params.geometry, domain)
     }
 
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError> {
-        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
-        {
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
+        if max_samples == 0 {
+            return Err(EngineError::invalid_input("max_samples must be positive"));
+        }
+        if self.next_index == self.params.geometry.nr_points() {
             return Ok(Generation::Finished);
         }
-        let nr_samples = remaining_sample_budget
-            .unwrap_or(usize::MAX)
-            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
         let batch = produce_raster_batch(
             &mut self.next_index,
@@ -471,7 +463,7 @@ impl SamplerAggregator for RasterLineSampler {
             self.stride,
             &geometry.discrete,
             |index| geometry.point_at(index),
-            nr_samples,
+            max_samples,
             "raster line sampler",
         )?;
         Ok(Generation::batch(batch, None))
@@ -498,17 +490,13 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
         validate_plane_geometry(&self.params.geometry, domain)
     }
 
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError> {
-        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
-        {
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
+        if max_samples == 0 {
+            return Err(EngineError::invalid_input("max_samples must be positive"));
+        }
+        if self.next_index == self.params.geometry.nr_points() {
             return Ok(Generation::Finished);
         }
-        let nr_samples = remaining_sample_budget
-            .unwrap_or(usize::MAX)
-            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
         let batch = produce_raster_batch(
             &mut self.next_index,
@@ -516,7 +504,7 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
             self.stride,
             &geometry.discrete,
             |index| geometry.point_at(index),
-            nr_samples,
+            max_samples,
             "pdf adaptation raster plane sampler",
         )?;
         let training_remaining = geometry.nr_points() - self.next_index + batch.nr_samples;
@@ -580,17 +568,13 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
         validate_line_geometry(&self.params.geometry, domain)
     }
 
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError> {
-        if remaining_sample_budget == Some(0) || self.next_index == self.params.geometry.nr_points()
-        {
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
+        if max_samples == 0 {
+            return Err(EngineError::invalid_input("max_samples must be positive"));
+        }
+        if self.next_index == self.params.geometry.nr_points() {
             return Ok(Generation::Finished);
         }
-        let nr_samples = remaining_sample_budget
-            .unwrap_or(usize::MAX)
-            .min(super::super::sampler::default_generation_batch_size());
         let geometry = &self.params.geometry;
         let batch = produce_raster_batch(
             &mut self.next_index,
@@ -598,7 +582,7 @@ impl SamplerAggregator for PdfAdaptationRasterLineSampler {
             self.stride,
             &geometry.discrete,
             |index| geometry.point_at(index),
-            nr_samples,
+            max_samples,
             "pdf adaptation raster line sampler",
         )?;
         let training_remaining = geometry.nr_points() - self.next_index + batch.nr_samples;
@@ -773,7 +757,7 @@ mod tests {
         let mut sampler = RasterLineSampler::from_params_and_domain(params.clone(), &domain)
             .expect("build sampler");
         let first_batch = sampler
-            .generate(Some(2))
+            .generate(2)
             .and_then(|generated| generated.into_batch())
             .expect("first batch");
         let snapshot = sampler.snapshot().expect("snapshot");
@@ -786,7 +770,7 @@ mod tests {
         let mut restored =
             RasterLineSampler::from_snapshot(restored_snapshot, &domain).expect("restore");
         let second_batch = restored
-            .generate(Some(3))
+            .generate(3)
             .and_then(|generated| generated.into_batch())
             .expect("second batch");
 
@@ -1087,7 +1071,7 @@ mod tests {
         .expect("build pdf adaptation sampler");
 
         let batch_spec = sampler
-            .generate(Some(4))
+            .generate(4)
             .and_then(|generated| generated.into_batch())
             .expect("produce batch");
         let batch = batch_spec.payload.as_batch().expect("decode batch");

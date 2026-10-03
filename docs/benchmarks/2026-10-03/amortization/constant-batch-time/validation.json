@@ -1,0 +1,11 @@
+{
+  "comparisons": 40,
+  "configurations_matched": 40,
+  "valid_windows": 40,
+  "clean_deployments": 4,
+  "batch_ms_range": [
+    162.51093795758928,
+    164.9246947083333
+  ],
+  "local_source": "/common/dev/cedric/setup-logs/amortization-improved-20261003/constant-batch-time"
+}

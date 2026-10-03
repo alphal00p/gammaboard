@@ -43,7 +43,7 @@ def validate(suite):
         "infrastructure_cores",
         "measurement_seconds",
         "max_batch_seconds",
-        "generation_batch_size",
+        "max_generation_size",
         "sampler_min_tick_time_ms",
         "telemetry_interval_ms",
         "insert_concurrency",
@@ -88,7 +88,7 @@ def validate(suite):
     for name, low, high in [
         ("budget_seconds", 120, 7200),
         ("max_batch_size", 16, 16777216),
-        ("generation_batch_size", 16, 16777216),
+        ("max_generation_size", 16, 16777216),
         ("sample_memory_budget", 1024, 2147483648),
         ("infrastructure_cores", 2, 16),
         ("measurement_seconds", 6, 120),
@@ -100,7 +100,7 @@ def validate(suite):
         value = suite[name]
         integral = name in {
             "max_batch_size",
-            "generation_batch_size",
+            "max_generation_size",
             "sample_memory_budget",
             "infrastructure_cores",
             "sampler_min_tick_time_ms",
@@ -136,6 +136,7 @@ def batch_limit(suite, cost, workers):
     return floor_power_two(
         min(
             suite["max_batch_size"],
+            max_generation_size(suite, cost * 1e6),
             suite["max_batch_seconds"] / cost if cost else math.inf,
             suite["sample_memory_budget"] / (4 * workers + 2),
         )
@@ -189,10 +190,10 @@ def validate_points(points, suite):
     return points
 
 
-def generation_batch_size(suite, eval_us):
+def max_generation_size(suite, eval_us):
     return floor_power_two(
         min(
-            suite["generation_batch_size"],
+            suite["max_generation_size"],
             suite["sample_memory_budget"] / 2,
             suite["max_batch_seconds"] * 1e6 / eval_us if eval_us else math.inf,
         )
@@ -204,7 +205,7 @@ def measurement_seconds(suite, point):
     # Insert bundles can complete out of ID order in every mode. Collection
     # advances in bursts; cover generation cycles as well as evaluator batches.
     generation_seconds = (
-        generation_batch_size(suite, point.eval_us) * point.eval_us / 1e6 / point.workers
+        max_generation_size(suite, point.eval_us) * point.eval_us / 1e6 / point.workers
     )
     return max(
         suite["measurement_seconds"],
@@ -224,6 +225,7 @@ def queue_settings(point, suite):
     return dict(
         fixed_batch_size=point.batch,
         max_batch_size=point.batch,
+        max_generation_size=max_generation_size(suite, point.eval_us),
         max_batches_per_tick=128,
         completed_batch_fetch_limit=max(100, 2 * max(suite["workers"])),
         max_insert_bundle_size=5,
@@ -232,7 +234,7 @@ def queue_settings(point, suite):
 
 
 def card(mode, eval_us, suite, value_coordinate=VALUE_COORDINATE):
-    generation_size = generation_batch_size(suite, eval_us)
+    generation_size = max_generation_size(suite, eval_us)
     text = bench.run_card(
         16, suite["sampler_min_tick_time_ms"], suite["telemetry_interval_ms"], generation_size
     )
@@ -279,8 +281,8 @@ name = "measure"
 kind = "sample"
 stop_condition = { max_samples = 1000000000000000 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "havana_inference", seed = 1234, generation_batch_size = GENERATION_SIZE } }
-""".replace("GENERATION_SIZE", str(generation_size))
+sampler_aggregator = { config = { kind = "havana_inference", seed = 1234 } }
+"""
     return text
 
 
@@ -357,7 +359,7 @@ def generation_window(measurement, point, suite, completed_offset=0):
     if not measurement["valid"] or progress_agrees(point, accepted, evaluated):
         return measurement
     snapshots = measurement["snapshots"]
-    generation = generation_batch_size(suite, point.eval_us)
+    generation = max_generation_size(suite, point.eval_us)
     boundaries = [
         i
         for i in range(1, len(snapshots))

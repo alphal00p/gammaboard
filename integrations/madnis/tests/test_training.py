@@ -23,7 +23,7 @@ class TrainingTests(unittest.TestCase):
             batches = [sampler.generate(n) for n in [5, 11]]
             weights = np.concatenate([batch.weights for batch in batches])
             self.assertEqual(sampler._training_samples_remaining(), 0)
-            self.assertEqual(sampler.generate(None), GenerationStatus.WAITING)
+            self.assertEqual(sampler.generate(16), GenerationStatus.WAITING)
             sampler.feedback(weights[:5])
             self.assertEqual(sampler.step, step)
             self.assertEqual(sampler._training_samples_remaining(), 0)

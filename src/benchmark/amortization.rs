@@ -50,7 +50,6 @@ pub fn measure(config: Config) -> Result<Value> {
     }))?;
     let definition: SamplerAggregatorConfig = serde_json::from_value(json!({
         "kind":"naive_monte_carlo", "seed":1234,
-        "generation_batch_size":config.generation_size,
         "training_window_samples":if config.feedback { 1_000_000_000_000_usize } else { 0 }
     }))?;
     let mut sampler = definition.build(Domain::continuous(6), None, None, json!({}))?;
@@ -121,7 +120,12 @@ pub fn measure(config: Config) -> Result<Value> {
         loop {
             while sent - retired < 2 * workers {
                 if cursor == config.generation_size {
-                    generation = Some(sampler.generate(None)?.into_batch()?.build());
+                    generation = Some(
+                        sampler
+                            .generate(config.generation_size)?
+                            .into_batch()?
+                            .build(),
+                    );
                     cursor = 0;
                 }
                 let batch =

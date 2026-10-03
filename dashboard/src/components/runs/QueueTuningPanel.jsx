@@ -5,6 +5,7 @@ const FORM_REFRESH_HOLD_MS = 5000;
 
 const QUEUE_TUNING_FIELDS = [
   { key: "target_batch_eval_ms", label: "Target Evaluation Time (ms)", kind: "float" },
+  { key: "max_generation_size", label: "Maximum Sampler Draw Size", kind: "int", help: "Applies to the next draw. Training windows are unchanged." },
   { key: "max_batch_size", label: "Maximum Evaluator Batch Size", kind: "int" },
   { key: "fixed_batch_size", label: "Fixed Evaluator Batch Size (optional)", kind: "int", optional: true },
 ];
@@ -93,7 +94,7 @@ const QueueTuningPanel = ({
             <Box>
               <Typography variant="h6">Queue Tuning</Typography>
               <Typography variant="body2" color="text.secondary">
-                Evaluator batches adapt to the target duration. The sampler controls generation size; the queue refills below one pending batch per active evaluator.
+                Evaluator batches adapt to the target duration. The draw limit bounds how many samples the sampler generates at once; each draw can supply multiple evaluator batches.
               </Typography>
             </Box>
             {!task ? (
@@ -122,7 +123,7 @@ const QueueTuningPanel = ({
                       key={field.key}
                       size="small"
                       label={field.label}
-                      helperText={field.optional ? "Blank uses the run default." : undefined}
+                      helperText={field.optional ? "Blank uses the run default." : field.help}
                       value={form[field.key] ?? ""}
                       onChange={(event) => {
                         const raw = event.target.value;

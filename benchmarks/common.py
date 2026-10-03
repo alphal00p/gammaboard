@@ -261,7 +261,7 @@ def pinned_command(cpus, command):
 
 
 def run_card(
-    batch_size, sampler_min_tick_time_ms=10, telemetry_interval_ms=250, generation_batch_size=None
+    batch_size, sampler_min_tick_time_ms=10, telemetry_interval_ms=250, max_generation_size=262144
 ):
     return f"""name = "scaling-benchmark"
 [evaluator]
@@ -277,12 +277,13 @@ performance_snapshot_interval_ms = {telemetry_interval_ms}
 [sampler_aggregator_runner_params.queue]
 fixed_batch_size = {batch_size}
 max_batch_size = {batch_size}
+max_generation_size = {max_generation_size}
 [[task_queue]]
 name = "measure"
 kind = "sample"
 stop_condition = {{ max_samples = 1000000000000 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 1234, generation_batch_size = {generation_batch_size or 1048576} }} }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 1234 }} }}
 """
 
 

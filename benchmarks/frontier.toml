@@ -7,7 +7,7 @@ eval_us = [0.0, 5.0, 200.0, 5000.0]
 workers = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
 budget_seconds = 3600
 max_batch_size = 32768
-generation_batch_size = 4194304
+max_generation_size = 262144
 # Sample-count allowance, additionally limited to 40% of available host memory.
 # This covers queued and in-flight work, not just the generated sample buffer.
 sample_memory_budget = 2147483648

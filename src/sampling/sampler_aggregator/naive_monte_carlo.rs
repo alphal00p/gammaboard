@@ -29,11 +29,10 @@ pub struct NaiveMonteCarloSamplerAggregator {
     barrier_since: Option<std::time::Instant>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct NaiveMonteCarloSamplerParams {
     pub seed: u64,
-    pub generation_batch_size: usize,
     /// Zero means inference; otherwise updates repeat after each complete window.
     pub training_window_samples: usize,
     pub generation_timing: TimingModel,
@@ -43,29 +42,11 @@ pub struct NaiveMonteCarloSamplerParams {
     pub fail_on_materialize_batch_nr: Option<usize>,
 }
 
-impl Default for NaiveMonteCarloSamplerParams {
-    fn default() -> Self {
-        Self {
-            seed: 0,
-            generation_batch_size: super::super::sampler::default_generation_batch_size(),
-            training_window_samples: 0,
-            generation_timing: Default::default(),
-            ingest_timing: Default::default(),
-            update_timing: Default::default(),
-            fail_on_produce_batch_nr: None,
-            fail_on_materialize_batch_nr: None,
-        }
-    }
-}
-
 impl NaiveMonteCarloSamplerAggregator {
     pub(crate) fn from_params_and_domain(
         params: NaiveMonteCarloSamplerParams,
         domain: &Domain,
     ) -> Result<Self, BuildError> {
-        if params.generation_batch_size == 0 {
-            return Err(BuildError::build("generation_batch_size must be positive"));
-        }
         params.generation_timing.validate()?;
         params.ingest_timing.validate()?;
         params.update_timing.validate()?;
@@ -89,9 +70,6 @@ impl NaiveMonteCarloSamplerAggregator {
 
     pub(crate) fn from_snapshot(mut snapshot: Self, domain: &Domain) -> Result<Self, BuildError> {
         snapshot.validate_domain(domain)?;
-        if snapshot.params.generation_batch_size == 0 {
-            return Err(BuildError::build("generation_batch_size must be positive"));
-        }
         snapshot.params.generation_timing.validate()?;
         snapshot.params.ingest_timing.validate()?;
         snapshot.params.update_timing.validate()?;
@@ -143,22 +121,15 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         })
     }
 
-    fn generate(
-        &mut self,
-        remaining_sample_budget: Option<usize>,
-    ) -> Result<Generation, EngineError> {
-        if remaining_sample_budget == Some(0) {
-            return Ok(Generation::Finished);
+    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
+        if max_samples == 0 {
+            return Err(EngineError::invalid_input("max_samples must be positive"));
         }
         let training_remaining = self.training_samples_remaining();
         if training_remaining == Some(0) {
             return Ok(Generation::Waiting);
         }
-        let nr_samples = self
-            .params
-            .generation_batch_size
-            .min(remaining_sample_budget.unwrap_or(usize::MAX))
-            .min(training_remaining.unwrap_or(usize::MAX));
+        let nr_samples = max_samples.min(training_remaining.unwrap_or(usize::MAX));
         self.produced_batches_total += 1;
         if self
             .params
@@ -438,7 +409,7 @@ mod tests {
                 }))
                 .unwrap();
                 let actual = sampler
-                    .generate(Some(count))
+                    .generate(count)
                     .and_then(|generated| generated.into_batch())
                     .unwrap();
                 assert_eq!(actual.payload.as_batch().unwrap(), expected);
@@ -462,15 +433,15 @@ mod tests {
     #[test]
     fn repeating_barrier_waits_for_all_returns_and_survives_restore() {
         let mut s = sampler(10);
-        s.generate(Some(6))
+        s.generate(6)
             .and_then(|generated| generated.into_batch())
             .unwrap();
-        s.generate(Some(4))
+        s.generate(4)
             .and_then(|generated| generated.into_batch())
             .unwrap();
-        assert!(matches!(s.generate(None).unwrap(), Generation::Waiting));
+        assert!(matches!(s.generate(10).unwrap(), Generation::Waiting));
         assert!(
-            s.generate(Some(1))
+            s.generate(1)
                 .and_then(|generated| generated.into_batch())
                 .is_err()
         );
@@ -490,11 +461,11 @@ mod tests {
             assert_eq!(runtime.updates, 1);
         }
         assert_eq!(
-            s.generate(Some(10))
+            s.generate(10)
                 .and_then(|generated| generated.into_batch())
                 .unwrap(),
             restored
-                .generate(Some(10))
+                .generate(10)
                 .and_then(|generated| generated.into_batch())
                 .unwrap()
         );
@@ -506,7 +477,7 @@ mod tests {
     #[test]
     fn barrier_checkpoint_preserves_elapsed_time_without_serializing_clock() {
         let mut s = sampler(10);
-        s.generate(Some(10))
+        s.generate(10)
             .and_then(|generated| generated.into_batch())
             .unwrap();
         s.training_barrier_seconds = 3.0;
@@ -534,15 +505,15 @@ mod tests {
         let mut split = sampler(0);
         assert_eq!(whole.training_samples_remaining(), None);
         let a = whole
-            .generate(Some(10))
+            .generate(10)
             .and_then(|generated| generated.into_batch())
             .unwrap();
         let b = split
-            .generate(Some(4))
+            .generate(4)
             .and_then(|generated| generated.into_batch())
             .unwrap();
         let c = split
-            .generate(Some(6))
+            .generate(6)
             .and_then(|generated| generated.into_batch())
             .unwrap();
         // RNG state after the same number of samples is independent of grouping.

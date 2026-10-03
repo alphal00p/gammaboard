@@ -67,7 +67,6 @@ class SymbolicaHavanaSampler(Sampler):
         seed: int = 0,
         bins: int = 64,
         samples_for_update: int = 10_240,
-        generation_batch_size: int = 1_048_576,
         stop_training_after_n_samples: int = 10_240,
         initial_training_rate: float = 0.1,
         final_training_rate: float = 0.1,
@@ -83,9 +82,6 @@ class SymbolicaHavanaSampler(Sampler):
         self.seed = int(seed)
         self.bins = int(bins)
         self.samples_for_update = int(samples_for_update)
-        self.generation_batch_size = int(generation_batch_size)
-        if self.generation_batch_size <= 0:
-            raise ValueError("generation_batch_size must be positive")
         self.stop_training_after_n_samples = int(stop_training_after_n_samples)
         self.initial_training_rate = float(initial_training_rate)
         self.final_training_rate = float(final_training_rate)
@@ -148,7 +144,6 @@ class SymbolicaHavanaSampler(Sampler):
             discrete_cardinalities=discrete_cardinalities,
             continuous_dims=continuous_dims,
             seed=int(snapshot.get("seed", args.get("seed", 0))),
-            generation_batch_size=int(snapshot.get("generation_batch_size", args.get("generation_batch_size", 1_048_576))),
             bins=int(snapshot.get("bins", args.get("bins", 64))),
             samples_for_update=int(
                 snapshot.get("samples_for_update", args.get("samples_for_update", 10_240))
@@ -217,15 +212,13 @@ class SymbolicaHavanaSampler(Sampler):
             self.final_training_rate / self.initial_training_rate
         ) ** progress
 
-    def generate(self, remaining_sample_budget: int | None) -> SampleBatch | GenerationStatus:
-        if remaining_sample_budget == 0 or (not self.inference and self.remaining_training_samples_to_produce() == 0):
+    def generate(self, max_samples: int) -> SampleBatch | GenerationStatus:
+        if not self.inference and self.remaining_training_samples_to_produce() == 0:
             return GenerationStatus.FINISHED
         remaining = None if self.inference else self.training_window_samples_remaining()
         if remaining == 0:
             return GenerationStatus.WAITING
-        nr_samples = min(self.generation_batch_size, remaining_sample_budget if remaining_sample_budget is not None else self.generation_batch_size)
-        if remaining is not None:
-            nr_samples = min(nr_samples, remaining)
+        nr_samples = max_samples if remaining is None else min(max_samples, remaining)
         rng = NumericalIntegrator.rng(self.seed, self.batches_produced)
         samples = list(self.integrator.sample(nr_samples, rng))
         if not self.inference:
@@ -334,7 +327,6 @@ class SymbolicaHavanaSampler(Sampler):
             _save_grid(self.save_path, self.integrator)
         return {
             "seed": self.seed,
-            "generation_batch_size": self.generation_batch_size,
             "pending_draw_sizes": [len(samples) for samples in self.pending_samples],
             "bins": self.bins,
             "samples_for_update": self.samples_for_update,

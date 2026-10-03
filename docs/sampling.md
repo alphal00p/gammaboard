@@ -1,15 +1,16 @@
 # Sampler generation and feedback
 
 ```text
-sampler.generate(remaining task budget)
-  → sampler-sized draw → adaptive evaluator batches → parallel evaluation
+sampler.generate(min(queue.max_generation_size, remaining task budget))
+  → bounded draw → adaptive evaluator batches → parallel evaluation
   → ordered results → one feedback(values) call for the original draw
 ```
 
-`generate(remaining_sample_budget)` returns `Generation::Batch`, `Waiting`, or
-`Finished`. `None` is an unlimited task budget. A draw must contain at least one
-sample and must not exceed the remaining budget. The budget is a task limit,
-not a suggested draw size or queue capacity. The sampler chooses its own size.
+`generate(max_samples)` receives a positive per-draw limit and returns
+`Generation::Batch`, `Waiting`, or `Finished`. A draw contains 1..max_samples
+samples. The runtime bounds each call by the queue's `max_generation_size`
+(default 262,144) and any remaining task budget. Samplers may return fewer
+samples, for example at a training boundary.
 `Waiting` means it needs outstanding feedback before it can draw again;
 `Finished` means no more draws, while outstanding work still completes.
 
@@ -41,11 +42,13 @@ is dispatched. Internal batch tuning uses a 15% deadband and three completed-bat
 observations between changes. Finite training windows aim for four chunks per
 active evaluator, subject to the minimum chunk size.
 
-Naive Monte Carlo and native Havana default to 1,048,576 samples per draw,
-clipped to the task budget and training window. Their sampler config accepts
-`generation_batch_size` for workloads that need a different memory/call tradeoff.
-MadNIS uses its existing `max_batch_size` as the generation size. Sampler authors
-do not need to implement evaluator batch tuning.
+Set `max_generation_size` under `[sampler_aggregator_runner_params.queue]`,
+or override it in task `queue_tuning` or the dashboard. A live change takes
+effect on the next draw; buffered draws and their feedback boundaries remain
+intact. This is a per-draw cap, not a total queue or memory cap. All built-in
+samplers use the supplied limit, clipped to their training window or remaining
+raster points. Sampler authors need no independent generation-size setting
+and do not implement evaluator batch tuning.
 
 ## Feedback, memory, and recovery
 
@@ -79,13 +82,18 @@ Old single-seed queue payloads remain readable.
 
 The former planning/count/ordinary/bulk-generation methods are replaced by
 `generate` and `feedback`; bulk generation is now the only runtime model.
-Process workers use `gammaboard-jsonrpc-v3` and must update to the bundled SDK.
-Old v2 workers fail the protocol handshake rather than failing mid-run.
+Process workers use `gammaboard-jsonrpc-v4` and must update to the bundled SDK.
+Old v2/v3 workers fail the protocol handshake rather than failing mid-run.
+Update custom sampler callbacks from `generate(remaining_sample_budget)` to
+`generate(max_samples)`; the limit is now always a positive integer. Evaluator
+callbacks and binary payload layouts are unchanged. Move native sampler
+`generation_batch_size` settings to queue `max_generation_size`; retired values
+in saved sampler snapshots are ignored so the current queue limit takes effect.
 
 Removed settings (`bulk_sample_generation`, `queue_buffer`, `max_queue_size`,
 `batch_size_deadband_ratio`, `batch_size_cooldown_ticks`) are ignored when loading
-old configuration and omitted on export. Task tuning contains only the duration,
-maximum evaluator batch size, and fixed-size override. Insert/fetch and per-tick
+old configuration and omitted on export. Task tuning contains the duration,
+maximum evaluator batch size, maximum generation size, and fixed-size override. Insert/fetch and per-tick
 limits remain deployment settings, not task-level controls. Older checkpoint
 metadata is restored where its sampler implementation remains compatible;
 external sampler snapshots must satisfy the new pending-feedback contract.

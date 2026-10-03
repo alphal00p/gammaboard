@@ -22,7 +22,7 @@ fn main() {
             "initialize" => {
                 let params: Result<InitializeParams, _> = serde_json::from_value(request.params);
                 match params.and_then(|params| {
-                    if params.protocol != "gammaboard-jsonrpc-v3" {
+                    if params.protocol != "gammaboard-jsonrpc-v4" {
                         return Err(serde_json::Error::io(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             format!("unsupported protocol: {}", params.protocol),

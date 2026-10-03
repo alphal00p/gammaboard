@@ -52,7 +52,10 @@ impl SamplerAggregatorSnapshot {
         evaluator_metadata: JsonValue,
     ) -> Result<Box<dyn SamplerAggregator>, BuildError> {
         match self {
-            Self::NaiveMonteCarlo { raw } => {
+            Self::NaiveMonteCarlo { mut raw } => {
+                if let Some(params) = raw.get_mut("params").and_then(JsonValue::as_object_mut) {
+                    params.remove("generation_batch_size");
+                }
                 let snapshot: NaiveMonteCarloSamplerAggregator = serde_json::from_value(raw)
                     .map_err(|err| {
                         BuildError::build(format!(

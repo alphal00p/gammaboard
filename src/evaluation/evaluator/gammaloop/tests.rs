@@ -95,7 +95,7 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
     ];
     for size in [1, 32, 7] {
         let latent = sampler
-            .generate(Some(size))
+            .generate(size)
             .and_then(|generated| generated.into_batch())
             .unwrap()
             .with_accumulator_config(AccumulatorConfig::Gammaloop)

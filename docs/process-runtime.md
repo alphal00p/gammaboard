@@ -4,7 +4,7 @@ GammaBoard can run evaluators, samplers, batch transforms, and materializers as 
 
 ## Contract
 
-The extension protocol is `gammaboard-jsonrpc-v3`.
+The extension protocol is `gammaboard-jsonrpc-v4`.
 
 - Transport: JSON-RPC 2.0 messages framed with `Content-Length` headers, plus an
   optional raw binary block (see "Binary payloads" below).
@@ -85,7 +85,7 @@ GammaBoard requires exactly one of `result` or `error`.
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v3",
+  "protocol": "gammaboard-jsonrpc-v4",
   "role": "evaluator",
   "domain": { "continuous": { "dims": 2 } },
   "components": ["value"],
@@ -135,7 +135,7 @@ Process evaluators should use a `kind = "vector"` accumulator with matching `com
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v3",
+  "protocol": "gammaboard-jsonrpc-v4",
   "role": "sampler",
   "domain": { "continuous": { "dims": 2 } },
   "args": {},
@@ -150,8 +150,10 @@ Return:
 { "ok": true }
 ```
 
-`generate` receives `{ "remaining_sample_budget": 8192 }` (`null` for no task
-sample limit). The sampler chooses its draw size, at most this budget. It returns:
+`generate` receives `{ "max_samples": 8192 }`, a required positive integer.
+The runtime caps this by queue `max_generation_size` and any remaining task
+budget. The sampler returns between one and this many samples, possibly fewer
+at a training boundary. It returns:
 
 ```json
 { "kind": "batch", "nr_samples": 2048, "training_remaining": 10000 }
@@ -171,7 +173,9 @@ and sample order. It returns `{ "ok": true }`. Model updates remain sampler-owne
 and may combine multiple generation draws. Snapshots must retain private pending
 training state. See [the complete sampler contract](sampling.md).
 
-This is protocol v3; v2 sampler planning/generation methods are removed.
+Protocol v4 replaces the optional remaining-task budget with a required positive
+`max_samples` per-draw limit. Update custom workers and the SDK together.
+Framing, binary layouts, feedback, and evaluator callbacks are unchanged.
 
 `pdf` probes the sampler PDF for many points at once:
 
@@ -225,7 +229,7 @@ Return either an array of `f64 | null` values or `null` when unsupported:
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v3",
+  "protocol": "gammaboard-jsonrpc-v4",
   "role": "batch_transform",
   "domain": { "continuous": { "dims": 2 } },
   "args": {}
@@ -275,7 +279,7 @@ evaluation.
 
 ```json
 {
-  "protocol": "gammaboard-jsonrpc-v3",
+  "protocol": "gammaboard-jsonrpc-v4",
   "role": "materializer",
   "domain": { "continuous": { "dims": 2 } },
   "args": {}

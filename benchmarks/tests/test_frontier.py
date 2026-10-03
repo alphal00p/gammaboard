@@ -62,7 +62,8 @@ class FrontierTests(unittest.TestCase):
             self.assertEqual(
                 config.get("training_window_samples"), 10**12 if mode == "training" else None
             )
-            self.assertGreaterEqual(config["generation_batch_size"], 16)
+            self.assertGreaterEqual(card["sampler_aggregator_runner_params"]["queue"]["max_generation_size"], 16)
+            self.assertNotIn("max_generation_size", config)
             if mode == "rng":
                 self.assertEqual(len(card["task_queue"]), 2)
 
@@ -196,10 +197,10 @@ class FrontierTests(unittest.TestCase):
     def test_training_interval_covers_generation_feedback_with_small_eval_batches(self):
         for delay, batch in [(5, 65536), (200, 4096), (5000, 256)]:
             with self.subTest(delay=delay):
-                config = tomllib.loads(f.card("training", delay, self.suite))["task_queue"][-1][
-                    "sampler_aggregator"
-                ]["config"]
-                generation = config["generation_batch_size"]
+                config = tomllib.loads(f.card("training", delay, self.suite))[
+                    "sampler_aggregator_runner_params"
+                ]["queue"]
+                generation = config["max_generation_size"]
                 self.assertGreater(generation, batch)
                 for workers in [1, 4, 512]:
                     point = f.Point("training", delay, workers, batch)
@@ -247,9 +248,9 @@ class FrontierTests(unittest.TestCase):
 
     def test_transport_cap_preserves_bulk_generation(self):
         self.assertEqual(f.batch_limit(self.suite, 0, 1), 32768)
-        self.assertEqual(f.generation_batch_size(self.suite, 0), 4194304)
+        self.assertEqual(f.max_generation_size(self.suite, 0), 262144)
         self.assertEqual(
-            f.generation_batch_size(dict(self.suite, max_batch_size=65536), 0), 4194304
+            f.max_generation_size(dict(self.suite, max_batch_size=65536), 0), 262144
         )
 
     def test_prefer_shorter_batch_only_when_it_retains_peak_throughput(self):
@@ -440,7 +441,7 @@ class FrontierTests(unittest.TestCase):
         self.assertFalse(f.progress_agrees(point, 100 * 256, 80 * 256))
 
     def test_generation_window_removes_partial_cycles_and_recomputes_deltas(self):
-        suite = dict(self.suite, generation_batch_size=4096)
+        suite = dict(self.suite, max_generation_size=4096)
         point = f.Point("training", 5000, 1, 256)
 
         def snapshot(t, accepted, evaluated):

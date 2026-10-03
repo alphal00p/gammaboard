@@ -1,0 +1,142 @@
+{
+  "experiment": "amortization",
+  "schema_version": 1,
+  "status": "completed",
+  "workers": [
+    1,
+    16
+  ],
+  "batch_sizes": [
+    128,
+    512,
+    2048,
+    8192,
+    32768
+  ],
+  "target_batch_seconds": null,
+  "repetitions": 2,
+  "duration_seconds": 4.0,
+  "generation_policy": 131072,
+  "initial_core_loads": {
+    "1": 0.0,
+    "3": 0.0,
+    "8": 0.0,
+    "15": 0.0,
+    "18": 0.0,
+    "20": 0.0,
+    "21": 0.0,
+    "22": 0.0,
+    "23": 0.0,
+    "25": 0.0,
+    "26": 0.0,
+    "28": 0.0,
+    "33": 0.0,
+    "34": 0.0,
+    "35": 0.0,
+    "37": 0.0,
+    "38": 0.0,
+    "39": 0.0,
+    "40": 0.0,
+    "41": 0.0,
+    "42": 0.0,
+    "47": 0.0,
+    "49": 0.0,
+    "51": 0.0,
+    "52": 0.0
+  },
+  "sampler_cpus": [
+    1,
+    3,
+    8,
+    15,
+    18
+  ],
+  "database_cpus": [
+    20,
+    21,
+    22,
+    23
+  ],
+  "evaluator_cpus": [
+    25,
+    26,
+    28,
+    33,
+    34,
+    35,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    47,
+    49,
+    51,
+    52
+  ],
+  "binary_sha256": "2beaf04f35a0a12a8939dfe2e4d26c0de02bfbe6041f14ffc57615be51f37b1d",
+  "harness_files": {
+    "benchmarks/frontier.py": "d3aca1881aa24ea8203dce415cba6684936bcdd4c8a1294310a80e9feddc73df",
+    "benchmarks/frontier.toml": "042a78660ea54a3c7f9f0967d9c80676a624d86243699dc0ae401470dff51304",
+    "benchmarks/__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+    "benchmarks/io.py": "a7b6d38603b03bd9928b1513b9d8150c5b6f2e534b0fa6fce3e2991b0be6e580",
+    "benchmarks/protocol.py": "75f43922a91811243176b809bc92a6cef3ad9deb2263ec4122131b9b375185be",
+    "benchmarks/reporting.py": "9d3ff8c823a51151136490fd696766bfd64a101d94370e0954f670185b75dfe2",
+    "benchmarks/frontier_plots.py": "1094fe5329faa332659a964d9dd3597b96cc266bf43593fe9be5db08e3c37cbe",
+    "benchmarks/amortization.py": "ff1a256855ec20115cf90a35befc32fac4aa3669796e781f3c02ec79e3151daa",
+    "benchmarks/cli.py": "fcd973329dfad8766e7c50f321f824313b3f72352d34806ec50ea56e6fdd4775",
+    "benchmarks/common.py": "1db9a7d4eb0cc6d90ebd99ee8d3b593d6348b520d8c5dc596cca81bee637acf3",
+    "benchmarks/__init__.py": "5a18cfd66c9a9f142ef6a5aab3577c57936db9f7a70b01c3568e6305f772ea89",
+    "benchmarks/tests/test_process.py": "67ffb70b97c1aa6208681150f6f3984d5421bb1195f6db8932338578c3dbef3d",
+    "benchmarks/tests/test_suite.py": "09cda6e55b10bcd647f374ebfeac9cc3a3dcb50a31bad35a5e73dd66fe4a227c",
+    "benchmarks/tests/test_io.py": "5aa8ffd5253c47f838d8062f2a3825a8b2d359de04a455da799534cc17f5997f",
+    "benchmarks/tests/test_frontier.py": "3cebecef311437c36ec50a1248cc8f0e774e5d4822b90802003cd470715c13fe",
+    "benchmarks/tests/test_amortization.py": "d530d40214f74dce75f9405237060e4b821889ec8a679673e8fcffd8bfb0f1a9",
+    "benchmarks/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "scope": "Native CPU work, six uniform coordinates, f(x)=x[0]; same sampler/evaluator/accumulator engines and generation-level feedback. Direct bounded in-memory pipeline versus PostgreSQL and production runners. Steady-state accepted throughput; startup/final drain excluded. Shared host; feedback is transport/ingestion, not model optimization.",
+  "elapsed_seconds": 504.2850025109947,
+  "platform": "Linux-6.18.45-x86_64-with-glibc2.42",
+  "python": "3.13.12",
+  "cpu_model": "AMD EPYC 9754 128-Core Processor",
+  "started_at": "2026-10-03T08:01:37Z",
+  "seconds_per_iteration": 1.6422745768229172e-09,
+  "calibration": {
+    "elapsed_seconds": 0.334539019,
+    "evaluate_batches": 96,
+    "evaluate_seconds": 0.3228843200000001,
+    "mean_evaluate_batch_seconds": 0.0033633783333333347,
+    "rate": 293849.1309439752,
+    "sampler_diagnostics": {
+      "generation_timing": {
+        "actual_seconds": 0.0,
+        "calls": 8,
+        "clipped_calls": 0,
+        "requested_seconds": 0.0
+      },
+      "ingest_timing": {
+        "actual_seconds": 0.0,
+        "calls": 0,
+        "clipped_calls": 0,
+        "requested_seconds": 0.0
+      },
+      "pending_training_samples": 0,
+      "produced_samples": 131072,
+      "returned_samples": 0,
+      "synthetic": true,
+      "training_barrier_seconds": 0.0,
+      "training_updates": 0,
+      "training_window_samples": 0,
+      "update_timing": {
+        "actual_seconds": 0.0,
+        "calls": 0,
+        "clipped_calls": 0,
+        "requested_seconds": 0.0
+      },
+      "window_returned": 0
+    },
+    "samples": 98304,
+    "scope": "Native engines in a bounded in-memory pipeline; generation, partitioning, materialization, evaluation, accumulation and ordered generation feedback. One warmup generation; full-generation completion endpoints. Startup and final drain excluded."
+  }
+}

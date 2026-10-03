@@ -59,7 +59,7 @@ class MadnisConfig:
         batch_size:
             Number of samples per training step.
         max_batch_size:
-            Maximum number of samples to generate in one forward pass when calling get_samples(). Avoids out-of-memory errors on GPU.
+            Maximum number of samples per PDF forward pass. Generation uses the runtime max_samples limit; configure queue.max_generation_size to bound GPU draw memory.
         learning_rate:
             Learning rate for the optimizer.
         use_scheduler:
@@ -393,15 +393,11 @@ class MadnisSampler(Sampler):
             return max(self.cfg.training_batch_size - self.trained_samples, 0)
         return None
 
-    def generate(self, remaining_sample_budget: int | None) -> SampleBatch | GenerationStatus:
-        if remaining_sample_budget == 0:
-            return GenerationStatus.FINISHED
+    def generate(self, max_samples: int) -> SampleBatch | GenerationStatus:
         remaining = self._training_samples_remaining()
         if remaining == 0:
             return GenerationStatus.WAITING
-        nr_samples = min(self.cfg.max_batch_size, remaining_sample_budget if remaining_sample_budget is not None else self.cfg.max_batch_size)
-        if remaining is not None:
-            nr_samples = min(nr_samples, remaining)
+        nr_samples = max_samples if remaining is None else min(max_samples, remaining)
         with torch.no_grad():
             x_all, prob = self.madnis.flow.sample(
                 nr_samples, return_prob=True, device=self.device, dtype=torch.float64,

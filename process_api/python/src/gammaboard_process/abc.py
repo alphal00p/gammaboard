@@ -55,10 +55,11 @@ class Sampler(ABC):
     """
 
     @abstractmethod
-    def generate(self, remaining_sample_budget: int | None) -> Any:
-        """Return a sampler-sized SampleBatch, GenerationStatus.WAITING or FINISHED.
+    def generate(self, max_samples: int) -> Any:
+        """Return a SampleBatch with 1..max_samples samples, WAITING or FINISHED.
 
-        Respect the remaining task budget, if present. Set the batch's
+        max_samples is a positive per-draw limit supplied by queue tuning and
+        capped by the remaining task budget. It can change between calls. Set the batch's
         training_remaining to the ungenerated training window size to request
         one feedback value per sample. Evaluator splitting is runtime-owned.
         """

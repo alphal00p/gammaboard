@@ -15,9 +15,10 @@ fn runner(
         .try_into()
         .unwrap();
     params.queue.max_batch_size = max_batch;
+    params.queue.max_generation_size = max_batch.try_into().unwrap();
     params.queue.max_batches_per_tick = 20;
     let config: SamplerAggregatorConfig = serde_json::from_value(json!({
-        "kind": "naive_monte_carlo", "seed": 42, "training_window_samples": training_window, "generation_batch_size": max_batch,
+        "kind": "naive_monte_carlo", "seed": 42, "training_window_samples": training_window,
     }))
     .unwrap();
     let sampler = config
@@ -90,7 +91,7 @@ async fn training_draws_survive_soft_queue_overshoot() {
     assert_eq!(runner.task.nr_produced_samples, 5000);
     assert_eq!(runner.runtime_state.generation.pending_samples(), 15_000);
     assert!(matches!(
-        runner.sampler.generate(None).unwrap(),
+        runner.sampler.generate(20_000).unwrap(),
         Generation::Waiting
     ));
 
@@ -168,7 +169,7 @@ async fn generation_preserves_initial_probe_and_checkpointed_remainder() {
 }
 
 #[tokio::test]
-async fn draw_respects_sampler_size_and_task_budget_and_works_after_training() {
+async fn draw_respects_queue_limit_and_task_budget_and_works_after_training() {
     for (window, maximum, budget, expected) in [
         (20_000, 8000, 40_000, 8000),
         (20_000, 20_000, 777, 777),
@@ -266,4 +267,123 @@ fn sampler_io_threads_default_to_one_and_reject_zero() {
     assert_eq!(configured.io_threads.get(), 3);
     params["io_threads"] = toml::Value::Integer(0);
     assert!(params.try_into::<SamplerAggregatorRunnerParams>().is_err());
+}
+
+#[tokio::test]
+async fn live_generation_limit_preserves_buffered_draw_and_feedback_boundaries() {
+    let mut runner = runner(30_000, 20_000, 40_000);
+    runner.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
+    runner.produce(BatchQueueCounts::default()).await.unwrap();
+    assert_eq!(
+        runner.task.nr_produced_samples as usize
+            + runner.runtime_state.generation.pending_samples(),
+        20_000
+    );
+
+    let mut task = runner.task.clone();
+    task.task
+        .set_sample_queue_tuning(Some(
+            serde_json::from_value(json!({
+                "max_generation_size": 8000,
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    *runner.store.active_task.lock().unwrap() = Some(task);
+    runner.last_task_config_refresh_at = Instant::now() - TASK_CONFIG_REFRESH_INTERVAL;
+    runner.refresh_live_queue_tuning().await.unwrap();
+    assert_eq!(runner.params.queue.max_generation_size.get(), 8000);
+    assert_eq!(runner.queue.config().max_generation_size.get(), 8000);
+
+    // Finish the already-buffered 20k draw, even after lowering the limit.
+    while runner.runtime_state.generation.has_pending() {
+        runner.produce(BatchQueueCounts::default()).await.unwrap();
+    }
+    assert_eq!(draw_count(&mut runner), 1);
+    assert_eq!(runner.task.nr_produced_samples, 20_000);
+    // New draws are 8k and 2k: the training boundary is still at 30k.
+    for expected in [28_000, 30_000] {
+        runner.produce(BatchQueueCounts::default()).await.unwrap();
+        while runner.runtime_state.generation.has_pending() {
+            runner.produce(BatchQueueCounts::default()).await.unwrap();
+        }
+        assert_eq!(runner.task.nr_produced_samples, expected);
+    }
+    assert_eq!(draw_count(&mut runner), 3);
+    assert!(matches!(
+        runner.sampler.generate(8000).unwrap(),
+        Generation::Waiting
+    ));
+    for size in [20_000, 8000, 2000] {
+        let values = runner
+            .runtime_state
+            .generation
+            .accept_training_values(&vec![1.0; size])
+            .unwrap()
+            .unwrap();
+        assert_eq!(values.len(), size);
+        runner.sampler.feedback(&values).unwrap();
+    }
+    assert_eq!(runner.sampler.get_diagnostics()["training_updates"], 1);
+    runner.queue.flush().await.unwrap();
+}
+
+#[test]
+fn generation_limit_defaults_and_validation() {
+    let defaults: toml::Value =
+        toml::from_str(include_str!("../config_defaults/run.toml")).unwrap();
+    let mut queue = defaults["sampler_aggregator_runner_params"]["queue"].clone();
+    assert_eq!(
+        queue
+            .clone()
+            .try_into::<SamplerQueueConfig>()
+            .unwrap()
+            .max_generation_size
+            .get(),
+        262_144
+    );
+    queue.as_table_mut().unwrap().remove("max_generation_size");
+    assert_eq!(
+        queue
+            .clone()
+            .try_into::<SamplerQueueConfig>()
+            .unwrap()
+            .max_generation_size
+            .get(),
+        262_144
+    );
+    queue
+        .as_table_mut()
+        .unwrap()
+        .insert("max_generation_size".into(), toml::Value::Integer(0));
+    assert!(queue.try_into::<SamplerQueueConfig>().is_err());
+    assert!(
+        serde_json::from_value::<SamplerQueueTuning>(json!({"max_generation_size": 0})).is_err()
+    );
+}
+
+#[tokio::test]
+async fn naive_snapshot_discards_retired_generation_setting() {
+    let mut runner = runner(0, 100, 1000);
+    let SamplerAggregatorSnapshot::NaiveMonteCarlo { mut raw } = runner.sampler.snapshot().unwrap()
+    else {
+        panic!()
+    };
+    raw["params"]["generation_batch_size"] = json!(1);
+    let mut restored = SamplerAggregatorSnapshot::NaiveMonteCarlo { raw }
+        .into_runtime(&Domain::rectangular(2, 0), json!({}))
+        .unwrap();
+    assert_eq!(
+        restored
+            .generate(37)
+            .unwrap()
+            .into_batch()
+            .unwrap()
+            .nr_samples,
+        37
+    );
+    let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = restored.snapshot().unwrap() else {
+        panic!()
+    };
+    assert!(raw["params"].get("generation_batch_size").is_none());
 }

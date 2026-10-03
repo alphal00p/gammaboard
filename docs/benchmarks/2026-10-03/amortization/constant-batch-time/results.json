@@ -1,0 +1,1082 @@
+[
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 512,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-1/batch-128-materialized",
+    "load_average": [
+      17.55615234375,
+      28.06005859375,
+      41.92431640625
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 785.9057539144669,
+    "gammaboard_samples_per_second": 782.5715376882429,
+    "evaluator_batch_ms": 162.83539735714282,
+    "overhead_percent": 0.42605896913572305
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 512,
+    "mode": "training",
+    "directory": "repeat-00-workers-1/batch-128-training",
+    "load_average": [
+      18.30322265625,
+      27.88916015625,
+      41.720703125
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 786.0916055959668,
+    "gammaboard_samples_per_second": 766.5612585048624,
+    "evaluator_batch_ms": 162.79887564285715,
+    "overhead_percent": 2.5477868695317873
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 2048,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-1/batch-512-materialized",
+    "load_average": [
+      17.62841796875,
+      27.4306640625,
+      41.42333984375
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3147.3723015885234,
+    "gammaboard_samples_per_second": 3079.342720028338,
+    "evaluator_batch_ms": 162.5947631071429,
+    "overhead_percent": 2.209224102199281
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 2048,
+    "mode": "training",
+    "directory": "repeat-00-workers-1/batch-512-training",
+    "load_average": [
+      17.27783203125,
+      26.87060546875,
+      41.015625
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3147.5570167054652,
+    "gammaboard_samples_per_second": 3127.030146452205,
+    "evaluator_batch_ms": 162.58632171428573,
+    "overhead_percent": 0.6564333982052917
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 8192,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-1/batch-2048-materialized",
+    "load_average": [
+      15.51806640625,
+      26.0107421875,
+      40.5068359375
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12542.006223138596,
+    "gammaboard_samples_per_second": 12523.681979927629,
+    "evaluator_batch_ms": 163.03680475,
+    "overhead_percent": 0.1463167400796106
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 8192,
+    "mode": "training",
+    "directory": "repeat-00-workers-1/batch-2048-training",
+    "load_average": [
+      19.2158203125,
+      26.279296875,
+      40.3603515625
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12553.003175497382,
+    "gammaboard_samples_per_second": 12283.108845763785,
+    "evaluator_batch_ms": 162.88966264285716,
+    "overhead_percent": 2.1972802905404487
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 32768,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-1/batch-8192-materialized",
+    "load_average": [
+      19.5830078125,
+      26.1220703125,
+      40.158203125
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 49948.96344412914,
+    "gammaboard_samples_per_second": 50284.00064737901,
+    "evaluator_batch_ms": 163.10624385714286,
+    "overhead_percent": -0.666289871403325
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 32768,
+    "mode": "training",
+    "directory": "repeat-00-workers-1/batch-8192-training",
+    "load_average": [
+      17.20166015625,
+      25.28076171875,
+      39.65771484375
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 49897.44851345276,
+    "gammaboard_samples_per_second": 49795.11520238735,
+    "evaluator_batch_ms": 163.2451092142857,
+    "overhead_percent": 0.20550873444007411
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 131072,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-1/batch-32768-materialized",
+    "load_average": [
+      15.5654296875,
+      24.662109375,
+      39.3017578125
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 195279.94027978522,
+    "gammaboard_samples_per_second": 195474.66177592968,
+    "evaluator_batch_ms": 164.10481333333334,
+    "overhead_percent": -0.0996146990998037
+  },
+  {
+    "repeat": 0,
+    "workers": 1,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 131072,
+    "mode": "training",
+    "directory": "repeat-00-workers-1/batch-32768-training",
+    "load_average": [
+      13.2431640625,
+      23.69921875,
+      38.7509765625
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 195013.93077800956,
+    "gammaboard_samples_per_second": 192580.25625432696,
+    "evaluator_batch_ms": 164.300060625,
+    "overhead_percent": 1.2637196413679108
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 8192,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-16/batch-128-materialized",
+    "load_average": [
+      15.4775390625,
+      23.68115234375,
+      38.5029296875
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12570.763705900776,
+    "gammaboard_samples_per_second": 12527.687455094177,
+    "evaluator_batch_ms": 162.51258607589295,
+    "overhead_percent": 0.3438483835185524
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 8192,
+    "mode": "training",
+    "directory": "repeat-00-workers-16/batch-128-training",
+    "load_average": [
+      16.48583984375,
+      23.5,
+      38.20556640625
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12581.112863246624,
+    "gammaboard_samples_per_second": 12450.021198480317,
+    "evaluator_batch_ms": 162.51256220535737,
+    "overhead_percent": 1.052943305689369
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 32768,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-16/batch-512-materialized",
+    "load_average": [
+      17.26708984375,
+      23.43408203125,
+      38.02587890625
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 50362.63829849255,
+    "gammaboard_samples_per_second": 50161.42040608916,
+    "evaluator_batch_ms": 162.5120573348216,
+    "overhead_percent": 0.4011407387876975
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 32768,
+    "mode": "training",
+    "directory": "repeat-00-workers-16/batch-512-training",
+    "load_average": [
+      16.841796875,
+      23.03662109375,
+      37.6611328125
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 50212.150758889926,
+    "gammaboard_samples_per_second": 51050.991125322544,
+    "evaluator_batch_ms": 162.51093795758928,
+    "overhead_percent": -1.643142175973411
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 131072,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-16/batch-2048-materialized",
+    "load_average": [
+      16.73876953125,
+      22.70849609375,
+      37.318359375
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 200994.5543988667,
+    "gammaboard_samples_per_second": 200628.7867661977,
+    "evaluator_batch_ms": 162.55171198660713,
+    "overhead_percent": 0.18231064373390726
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 131072,
+    "mode": "training",
+    "directory": "repeat-00-workers-16/batch-2048-training",
+    "load_average": [
+      18.16455078125,
+      22.73779296875,
+      37.09326171875
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 201105.29015281532,
+    "gammaboard_samples_per_second": 198108.2623236958,
+    "evaluator_batch_ms": 162.69142059374997,
+    "overhead_percent": 1.5128232381456996
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 524288,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-16/batch-8192-materialized",
+    "load_average": [
+      18.6181640625,
+      22.60546875,
+      36.818359375
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 799042.3043792592,
+    "gammaboard_samples_per_second": 800283.4648136265,
+    "evaluator_batch_ms": 162.97885957142856,
+    "overhead_percent": -0.1550901010626604
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 524288,
+    "mode": "training",
+    "directory": "repeat-00-workers-16/batch-8192-training",
+    "load_average": [
+      17.9423828125,
+      22.263671875,
+      36.47802734375
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 799745.7306046861,
+    "gammaboard_samples_per_second": 788189.5843337575,
+    "evaluator_batch_ms": 162.85839704687507,
+    "overhead_percent": 1.4661632810964775
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 2097152,
+    "mode": "materialized",
+    "directory": "repeat-00-workers-16/batch-32768-materialized",
+    "load_average": [
+      20.1611328125,
+      22.5703125,
+      36.35205078125
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3132021.48471348,
+    "gammaboard_samples_per_second": 3043835.435221276,
+    "evaluator_batch_ms": 163.74154851041678,
+    "overhead_percent": 2.8972016184506177
+  },
+  {
+    "repeat": 0,
+    "workers": 16,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 2097152,
+    "mode": "training",
+    "directory": "repeat-00-workers-16/batch-32768-training",
+    "load_average": [
+      20.50048828125,
+      22.5263671875,
+      36.1162109375
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3119167.197267374,
+    "gammaboard_samples_per_second": 2591746.7465248513,
+    "evaluator_batch_ms": 163.95130023177086,
+    "overhead_percent": 20.349999530228622
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 2097152,
+    "mode": "training",
+    "directory": "repeat-01-workers-16/batch-32768-training",
+    "load_average": [
+      23.0224609375,
+      22.8623046875,
+      35.85986328125
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3122713.1357823135,
+    "gammaboard_samples_per_second": 2846620.386743128,
+    "evaluator_batch_ms": 163.8899654661458,
+    "overhead_percent": 9.698966196018443
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 2097152,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-16/batch-32768-materialized",
+    "load_average": [
+      25.29736328125,
+      23.34912109375,
+      35.80908203125
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3138962.119391315,
+    "gammaboard_samples_per_second": 2900292.8667209046,
+    "evaluator_batch_ms": 163.78958773958334,
+    "overhead_percent": 8.22914318098682
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 524288,
+    "mode": "training",
+    "directory": "repeat-01-workers-16/batch-8192-training",
+    "load_average": [
+      26.03955078125,
+      23.5830078125,
+      35.68408203125
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 799029.6359916857,
+    "gammaboard_samples_per_second": 798758.580855705,
+    "evaluator_batch_ms": 162.8984559174107,
+    "overhead_percent": 0.033934550748782044
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 524288,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-16/batch-8192-materialized",
+    "load_average": [
+      30.25830078125,
+      24.6201171875,
+      35.82861328125
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 798836.9555789244,
+    "gammaboard_samples_per_second": 794014.2396136776,
+    "evaluator_batch_ms": 163.0520838258929,
+    "overhead_percent": 0.6073840650002937
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 131072,
+    "mode": "training",
+    "directory": "repeat-01-workers-16/batch-2048-training",
+    "load_average": [
+      42.72265625,
+      27.63232421875,
+      36.6337890625
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 196460.53738018853,
+    "gammaboard_samples_per_second": 193204.20641989933,
+    "evaluator_batch_ms": 163.62626955133922,
+    "overhead_percent": 1.6854348156437382
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 131072,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-16/batch-2048-materialized",
+    "load_average": [
+      52.1650390625,
+      30.48583984375,
+      37.42529296875
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 199654.72660727354,
+    "gammaboard_samples_per_second": 197606.8575182072,
+    "evaluator_batch_ms": 163.16707303571425,
+    "overhead_percent": 1.0363350314791964
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 32768,
+    "mode": "training",
+    "directory": "repeat-01-workers-16/batch-512-training",
+    "load_average": [
+      50.37353515625,
+      31.12255859375,
+      37.52099609375
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 50083.97990550619,
+    "gammaboard_samples_per_second": 48751.904287945006,
+    "evaluator_batch_ms": 162.98244707142868,
+    "overhead_percent": 2.7323560730951213
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 32768,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-16/batch-512-materialized",
+    "load_average": [
+      51.20751953125,
+      32.271484375,
+      37.7958984375
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 50091.51595443642,
+    "gammaboard_samples_per_second": 49278.93401353221,
+    "evaluator_batch_ms": 162.94956114732153,
+    "overhead_percent": 1.6489438279672752
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 8192,
+    "mode": "training",
+    "directory": "repeat-01-workers-16/batch-128-training",
+    "load_average": [
+      57.216796875,
+      34.1748046875,
+      38.35595703125
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12526.09583548644,
+    "gammaboard_samples_per_second": 12588.630992295079,
+    "evaluator_batch_ms": 162.89453832366064,
+    "overhead_percent": -0.4967589950560458
+  },
+  {
+    "repeat": 1,
+    "workers": 16,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 8192,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-16/batch-128-materialized",
+    "load_average": [
+      53.36376953125,
+      34.47216796875,
+      38.3876953125
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12577.63129688065,
+    "gammaboard_samples_per_second": 12485.355272660745,
+    "evaluator_batch_ms": 162.63890611160707,
+    "overhead_percent": 0.7390740768263404
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 131072,
+    "mode": "training",
+    "directory": "repeat-01-workers-1/batch-32768-training",
+    "load_average": [
+      45.369140625,
+      33.83447265625,
+      38.09228515625
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 195006.75125254274,
+    "gammaboard_samples_per_second": 191235.18327098023,
+    "evaluator_batch_ms": 164.34224758333332,
+    "overhead_percent": 1.9722144832617916
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 32768,
+    "target_eval_us": 5.0,
+    "cpu_iterations_per_sample": 3054,
+    "generation_size": 131072,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-1/batch-32768-materialized",
+    "load_average": [
+      48.6982421875,
+      34.9404296875,
+      38.4072265625
+    ],
+    "settings": {
+      "fixed_batch_size": 32768,
+      "max_batch_size": 32768,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 194247.98627602923,
+    "gammaboard_samples_per_second": 192285.45207251317,
+    "evaluator_batch_ms": 164.9246947083333,
+    "overhead_percent": 1.0206358215680167
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 32768,
+    "mode": "training",
+    "directory": "repeat-01-workers-1/batch-8192-training",
+    "load_average": [
+      49.47216796875,
+      35.77880859375,
+      38.62646484375
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 49833.70141056247,
+    "gammaboard_samples_per_second": 48563.81228035809,
+    "evaluator_batch_ms": 163.46506771428574,
+    "overhead_percent": 2.6148876510627472
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 8192,
+    "target_eval_us": 20.0,
+    "cpu_iterations_per_sample": 12214,
+    "generation_size": 32768,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-1/batch-8192-materialized",
+    "load_average": [
+      47.650390625,
+      36.05078125,
+      38.67041015625
+    ],
+    "settings": {
+      "fixed_batch_size": 8192,
+      "max_batch_size": 8192,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 49855.66068313847,
+    "gammaboard_samples_per_second": 49893.45949696889,
+    "evaluator_batch_ms": 163.38261149999997,
+    "overhead_percent": -0.07575905581916897
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 8192,
+    "mode": "training",
+    "directory": "repeat-01-workers-1/batch-2048-training",
+    "load_average": [
+      40.99658203125,
+      35.1494140625,
+      38.3330078125
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12565.478060522906,
+    "gammaboard_samples_per_second": 12292.6097810451,
+    "evaluator_batch_ms": 162.72138317857144,
+    "overhead_percent": 2.2197750057808108
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 2048,
+    "target_eval_us": 80.0,
+    "cpu_iterations_per_sample": 48857,
+    "generation_size": 8192,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-1/batch-2048-materialized",
+    "load_average": [
+      37.90576171875,
+      34.6689453125,
+      38.1416015625
+    ],
+    "settings": {
+      "fixed_batch_size": 2048,
+      "max_batch_size": 2048,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 12540.920803808911,
+    "gammaboard_samples_per_second": 12792.439163752522,
+    "evaluator_batch_ms": 163.04760857142858,
+    "overhead_percent": -1.9661485720119054
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 2048,
+    "mode": "training",
+    "directory": "repeat-01-workers-1/batch-512-training",
+    "load_average": [
+      37.02001953125,
+      34.623046875,
+      38.0703125
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3144.0142615399327,
+    "gammaboard_samples_per_second": 3060.90304442306,
+    "evaluator_batch_ms": 162.76609132142858,
+    "overhead_percent": 2.7152515421323464
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 512,
+    "target_eval_us": 320.0,
+    "cpu_iterations_per_sample": 195429,
+    "generation_size": 2048,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-1/batch-512-materialized",
+    "load_average": [
+      35.54638671875,
+      34.3876953125,
+      37.95654296875
+    ],
+    "settings": {
+      "fixed_batch_size": 512,
+      "max_batch_size": 512,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 3138.0969078328485,
+    "gammaboard_samples_per_second": 3177.529090201244,
+    "evaluator_batch_ms": 163.0760420357143,
+    "overhead_percent": -1.2409699879694314
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 512,
+    "mode": "training",
+    "directory": "repeat-01-workers-1/batch-128-training",
+    "load_average": [
+      37.70263671875,
+      34.923828125,
+      38.0751953125
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 785.2609838422292,
+    "gammaboard_samples_per_second": 779.1155615613873,
+    "evaluator_batch_ms": 162.96871396428566,
+    "overhead_percent": 0.7887690329950736
+  },
+  {
+    "repeat": 1,
+    "workers": 1,
+    "batch": 128,
+    "target_eval_us": 1280.0,
+    "cpu_iterations_per_sample": 781716,
+    "generation_size": 512,
+    "mode": "materialized",
+    "directory": "repeat-01-workers-1/batch-128-materialized",
+    "load_average": [
+      41.83251953125,
+      35.8984375,
+      38.35888671875
+    ],
+    "settings": {
+      "fixed_batch_size": 128,
+      "max_batch_size": 128,
+      "max_batches_per_tick": 128,
+      "completed_batch_fetch_limit": 100,
+      "max_insert_bundle_size": 5,
+      "max_concurrent_insert_tasks": 4
+    },
+    "direct_samples_per_second": 782.2981572966904,
+    "gammaboard_samples_per_second": 790.9675836816677,
+    "evaluator_batch_ms": 163.58320489285717,
+    "overhead_percent": -1.0960533103802184
+  }
+]

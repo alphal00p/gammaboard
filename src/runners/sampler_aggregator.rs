@@ -1301,10 +1301,16 @@ where
             if !self.queue.needs_generation(queue_before_produce).await? {
                 return Ok((0, true));
             }
+            let max_samples = self
+                .params
+                .queue
+                .max_generation_size
+                .get()
+                .min(budget.unwrap_or(usize::MAX));
             let started = Instant::now();
             let generated = {
                 let _compute = self.busy.compute();
-                self.sampler.generate(budget)?
+                self.sampler.generate(max_samples)?
             };
             match generated {
                 Generation::Waiting => return Ok((0, false)),
@@ -1318,7 +1324,7 @@ where
                 } => {
                     let _compute = self.busy.compute();
                     if batch.nr_samples == 0
-                        || budget.is_some_and(|n| batch.nr_samples > n)
+                        || batch.nr_samples > max_samples
                         || training_remaining.is_some_and(|n| batch.nr_samples > n)
                     {
                         return Err(EngineError::engine(

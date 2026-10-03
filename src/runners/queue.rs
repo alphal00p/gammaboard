@@ -24,6 +24,9 @@ const DEFAULT_MAX_BATCH_RETRIES: i32 = 3;
 pub struct SamplerQueueConfig {
     pub target_batch_eval_ms: f64,
     pub max_batch_size: usize,
+    /// Upper bound for each new sampler draw; independent of evaluator batches.
+    #[serde(default = "default_max_generation_size")]
+    pub max_generation_size: std::num::NonZeroUsize,
     /// Disable adaptation; training boundaries and remaining budgets still cap batches.
     #[serde(default)]
     pub fixed_batch_size: Option<usize>,
@@ -43,7 +46,12 @@ impl SamplerQueueConfig {
         );
         apply_option(&mut self.target_batch_eval_ms, tuning.target_batch_eval_ms);
         apply_option(&mut self.max_batch_size, tuning.max_batch_size);
+        apply_option(&mut self.max_generation_size, tuning.max_generation_size);
     }
+}
+
+fn default_max_generation_size() -> std::num::NonZeroUsize {
+    std::num::NonZeroUsize::new(262_144).unwrap()
 }
 
 fn apply_option<T>(destination: &mut T, value: Option<T>) {
@@ -844,6 +852,7 @@ pub(crate) mod tests {
             1,
             1,
             SamplerQueueConfig {
+                max_generation_size: default_max_generation_size(),
                 target_batch_eval_ms: 500.0,
 
                 max_batch_size: 4096,

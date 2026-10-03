@@ -2,7 +2,7 @@
 use gammaboard::core::{
     AccumulatorConfig, EvaluatorConfig, SamplerAggregatorConfig, TrainingProjection,
 };
-use gammaboard::{Batch, Domain, EvalBatchOptions, Generation, Point};
+use gammaboard::{Batch, Domain, EvalBatchOptions, Point};
 use serde_json::{Value, json};
 use std::{env, error::Error, fs, path::Path};
 
@@ -64,7 +64,7 @@ fn process_api_roundtrips() -> Result {
     let mut total = 0.;
     for size in [1, 17, 4096] {
         let latent = sampler
-            .generate(Some(size))
+            .generate(size)
             .and_then(|generated| generated.into_batch())?;
         assert_eq!(latent.nr_samples, size);
         let batch = latent.payload.into_batch()?;
@@ -106,7 +106,7 @@ fn process_api_roundtrips() -> Result {
                 .is_none()
         );
     }
-    assert!(matches!(sampler.generate(Some(0))?, Generation::Finished));
+    assert!(sampler.generate(0).is_err());
     let bad = Batch::new(vec![Point::new(vec![f64::NAN; 6], vec![0], 1.)])?;
     assert!(
         evaluator

@@ -642,7 +642,7 @@ prefetch, and equal work distribution is not guaranteed.
 - `frontend_sync_interval_ms` sets how often the sampler runner refreshes frontend-facing and persisted accumulator snapshots during sampling.
 - Sampler queue settings live under `[sampler_aggregator_runner_params.queue]`.
 - `target_batch_eval_ms` (default 2000), `max_batch_size`, and optional `fixed_batch_size` control evaluator work units. They can be overridden live in task `queue_tuning` and the dashboard. Fixed sizing is an advanced option.
-- Generation size belongs to the sampler. Native Havana and Naive Monte Carlo accept `generation_batch_size` (default 1,048,576), independently of evaluator limits. Draws respect training boundaries and the remaining task budget.
+- `max_generation_size` (default 262,144, must be positive) caps each new sampler draw independently of evaluator batch sizes. It supports live task `queue_tuning` and the dashboard. Changes apply to the next draw; buffered draws finish unchanged. Draws are also clipped to training boundaries and the remaining task budget. Native samplers no longer have a separate `generation_batch_size` setting.
 - One pending batch per active evaluator is the fixed soft refill threshold, including local and in-flight inserts. An existing draw can exceed it; only starting another draw waits for the queue to fall below it.
 - The adaptive controller uses a fixed 15% deadband and a three-completion cooldown.
 - `max_batches_per_tick`, `max_insert_bundle_size`, `max_concurrent_insert_tasks`, `completed_batch_fetch_limit`, and `max_batch_retries` remain deployment settings under the runner queue config, not task tuning.

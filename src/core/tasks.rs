@@ -900,6 +900,7 @@ pub struct SamplerQueueTuning {
     pub fixed_batch_size: Option<usize>,
     pub target_batch_eval_ms: Option<f64>,
     pub max_batch_size: Option<usize>,
+    pub max_generation_size: Option<std::num::NonZeroUsize>,
 }
 
 impl SamplerQueueTuning {

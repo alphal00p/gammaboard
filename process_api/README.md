@@ -74,7 +74,7 @@ JSON-safe evaluator metadata. The default is `{}`.
 Sampler classes implement:
 
 ```python
-generate(remaining_sample_budget)
+generate(max_samples)
 feedback(training_values)
 snapshot()
 ```
@@ -82,7 +82,8 @@ snapshot()
 Samplers may also implement `pdf(xs_discrete, xs_continuous)`, `discrete_pdf(subspaces)`, and
 `get_diagnostics()`.
 
-`generate` chooses its own size and returns `SampleBatch`, `GenerationStatus.WAITING`,
+`generate` receives a positive per-draw limit and returns a `SampleBatch` with
+1..max_samples samples, `GenerationStatus.WAITING`,
 or `GenerationStatus.FINISHED`. Set `SampleBatch.training_remaining` to the
 ungenerated training-window size (including this draw) to request feedback;
 leave it `None` for inference. The runtime splits the draw for evaluation and

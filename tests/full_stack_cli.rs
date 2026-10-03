@@ -1355,7 +1355,6 @@ async fn full_stack_cli_havana_pause_resume_matches_direct_baseline() -> anyhow:
     let mut harness = FullStackHarness::new().await?;
     let training_samples = 256usize;
     let havana_params = HavanaSamplerParams {
-        generation_batch_size: 1_048_576,
         seed: 0,
         bins: 8,
         samples_for_update: 8,
@@ -3505,7 +3504,8 @@ completed_batch_fetch_limit = 64
 
                 "target_batch_eval_ms": 500.0,
                 "fixed_batch_size": 24,
-                "max_batch_size": 256
+                "max_batch_size": 256,
+                "max_generation_size": 256
             }
         }),
         Some(&cookie),
@@ -3529,7 +3529,8 @@ completed_batch_fetch_limit = 64
                     .await?;
                     Ok(
                         task["queue_tuning"]["fixed_batch_size"].as_u64() == Some(24)
-                            && task["queue_tuning"]["target_batch_eval_ms"].as_f64() == Some(500.0),
+                            && task["queue_tuning"]["target_batch_eval_ms"].as_f64() == Some(500.0)
+                            && task["queue_tuning"]["max_generation_size"].as_u64() == Some(256),
                     )
                 }
             },
@@ -3560,7 +3561,9 @@ completed_batch_fetch_limit = 64
                         diag["runner"]["queue_config"]["target_batch_eval_ms"].as_f64()
                             == Some(500.0)
                             && diag["runner"]["queue_config"]["fixed_batch_size"].as_u64()
-                                == Some(24),
+                                == Some(24)
+                            && diag["runner"]["queue_config"]["max_generation_size"].as_u64()
+                                == Some(256),
                     )
                 }
             },
@@ -6734,7 +6737,7 @@ name = "sample"
 kind = "sample"
 stop_condition = {{ max_samples = 1024 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 42, generation_batch_size = {generation_size}, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
+sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 42, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 20
 [sampler_aggregator_runner_params]
@@ -6742,7 +6745,7 @@ performance_snapshot_interval_ms = 20
 frontend_sync_interval_ms = 20
 min_tick_time_ms = 1
 [sampler_aggregator_runner_params.queue]
-
+max_generation_size = {generation_size}
 max_batch_size = 128
 fixed_batch_size = 16
 

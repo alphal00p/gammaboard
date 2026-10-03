@@ -51,6 +51,10 @@ def parser():
         help="override I/O, protocol or amortization batch sizes",
     )
     cli.add_argument(
+        "--target-batch-seconds", type=float,
+        help="amortization: vary CPU cost inversely with batch size to target constant batch time",
+    )
+    cli.add_argument(
         "--io-threads",
         type=int,
         nargs="+",

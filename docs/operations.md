@@ -112,7 +112,7 @@ interrupted transaction rolls back.
 
 Runtime logs are persisted to Postgres and exposed in the dashboard Logs tab.
 Process worker stderr is normal log output. Process worker stdout is reserved
-for framed `gammaboard-jsonrpc-v3`; wrappers should redirect accidental prints
+for framed `gammaboard-jsonrpc-v4`; wrappers should redirect accidental prints
 to stderr. See [process-runtime.md](process-runtime.md).
 
 Useful locations:

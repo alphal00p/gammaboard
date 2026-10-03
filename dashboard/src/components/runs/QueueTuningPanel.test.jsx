@@ -2,11 +2,11 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import QueueTuningPanel from "./QueueTuningPanel";
 
-const defaults = { target_batch_eval_ms: 2000, max_batch_size: 100000 };
+const defaults = { target_batch_eval_ms: 2000, max_batch_size: 100000, max_generation_size: 262144 };
 const props = { run: { queue_tuning_defaults: defaults }, runId: 1,
   task: { id: 2, is_sample: true }, authenticated: true };
 
-describe("evaluator batch tuning", () => {
+describe("queue tuning", () => {
   test("preserves an advanced fixed batch override when changing the target", async () => {
     const onSave = vi.fn();
     render(<QueueTuningPanel {...props} task={{ ...props.task, queue_tuning: { fixed_batch_size: 4096 } }} onSave={onSave} />);
