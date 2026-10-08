@@ -54,10 +54,22 @@ jobs:
               -d gammaboard_db -f "$migration"
           done
           cargo test --locked --test pg_store_integration -- --ignored
-      - name: Run authenticated API integration test
-        run: cargo test --locked --test full_stack_cli full_stack_server_auth_protects_pause_endpoint -- --ignored
-      - name: Run installation smoke integration test
-        run: cargo test --locked --test full_stack_cli full_stack_cli_installation_smoke_produces_unit_estimate -- --ignored
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install numpy
+      - name: Run backend workflows and seeded recovery invariants
+        env:
+          GAMMABOARD_TEST_PROFILE: dev
+          GAMMABOARD_RECOVERY_SEEDS: "17,41"
+        run: scripts/test_e2e.sh core
+      - name: Preserve backend recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-e2e-evidence
+          path: target/e2e
+          if-no-files-found: ignore
 
   frontend:
     runs-on: ubuntu-latest

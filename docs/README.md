@@ -13,6 +13,7 @@ Start with [quickstart.md](quickstart.md), then use the topic pages as needed:
 - [config.md](config.md): runtime, server, deploy, run, task, and node config.
 - [deployment.md](deployment.md): shared deploy model, profiles, paths, images, and ports.
 - [operations.md](operations.md): auth, node/run lifecycle, logs, and recovery.
+- [recovery-testing.md](recovery-testing.md): backend suite, seeded fault injection, invariants and publication claim boundaries.
 - [process-runtime.md](process-runtime.md): external process evaluator/sampler protocol.
 - [frontend.md](frontend.md): dashboard architecture and panel data flow.
 

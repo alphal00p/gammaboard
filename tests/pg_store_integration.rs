@@ -16,9 +16,14 @@ static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 async fn batch_notifications_survive_cancelled_waits_and_use_the_existing_pool() {
     let _guard = TEST_LOCK.lock().await;
     let url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap();
+    let application_name = format!("gammaboard-listener-test-{}", rand::random::<u64>());
+    let options = url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .application_name(&application_name);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
-        .connect(&url)
+        .connect_with(options)
         .await
         .unwrap();
     let run_id = -rand::random_range(1..i32::MAX);
@@ -55,6 +60,43 @@ async fn batch_notifications_survive_cancelled_waits_and_use_the_existing_pool()
         .await
         .expect("cancelled wait must not lose the subscription")
         .unwrap();
+
+    // PgListener reconnects while receiving notifications, but its SQL executor
+    // does not discard a dead connection. Exercise both possible entry points.
+    for during_claim in [true, false] {
+        sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name=$1 AND pid<>pg_backend_pid()")
+            .bind(&application_name).execute(&pool).await.unwrap();
+        if during_claim {
+            assert!(
+                store
+                    .claim_batch(run_id, "missing-node", "retry-token")
+                    .await
+                    .is_err()
+            );
+        } else {
+            let _ = tokio::time::timeout(Duration::from_secs(2), store.wait_for_work(run_id)).await;
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if store
+                    .claim_batch(run_id, "missing-node", "retry-token")
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("claims must reconnect after the listener backend dies");
+        store.notify_work_available(run_id).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), store.wait_for_work(run_id))
+            .await
+            .expect("reconnection must restore LISTEN")
+            .unwrap();
+        assert!(pool.size() <= 2);
+    }
     drop(store);
     pool.close().await;
 }

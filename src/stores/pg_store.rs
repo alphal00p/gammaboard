@@ -22,7 +22,35 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct PgStore {
     pool: PgPool,
-    batch_listener: Option<std::sync::Arc<tokio::sync::Mutex<sqlx::postgres::PgListener>>>,
+    batch_listener: Option<std::sync::Arc<tokio::sync::Mutex<BatchListener>>>,
+}
+
+/// Claims and wakeups share one connection. PgListener only repairs connections
+/// lost while receiving; errors through its Executor must invalidate it here.
+struct BatchListener {
+    channel: String,
+    connection: Option<sqlx::postgres::PgListener>,
+}
+
+impl BatchListener {
+    async fn connection(
+        &mut self,
+        pool: &PgPool,
+    ) -> Result<&mut sqlx::postgres::PgListener, sqlx::Error> {
+        if self.connection.is_none() {
+            let mut connection = sqlx::postgres::PgListener::connect_with(pool).await?;
+            connection.listen(&self.channel).await?;
+            self.connection = Some(connection);
+        }
+        Ok(self.connection.as_mut().expect("connected listener"))
+    }
+
+    fn finish<T>(&mut self, result: Result<T, sqlx::Error>) -> Result<T, sqlx::Error> {
+        if result.is_err() {
+            self.connection = None;
+        }
+        result
+    }
 }
 
 impl PgStore {
@@ -42,13 +70,11 @@ impl PgStore {
                 "evaluator requires two database connections",
             ));
         }
-        let mut listener = sqlx::postgres::PgListener::connect_with(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
-        listener
-            .listen(&format!("gammaboard_batches_{run_id}"))
-            .await
-            .map_err(map_sqlx)?;
+        let mut listener = BatchListener {
+            channel: format!("gammaboard_batches_{run_id}"),
+            connection: None,
+        };
+        listener.connection(&self.pool).await.map_err(map_sqlx)?;
         self.batch_listener = Some(std::sync::Arc::new(tokio::sync::Mutex::new(listener)));
         Ok(self)
     }
@@ -751,7 +777,14 @@ impl WorkQueueStore for PgStore {
     async fn wait_for_work(&self, _run_id: i32) -> Result<(), StoreError> {
         if let Some(listener) = &self.batch_listener {
             // A reconnect also wakes the caller to recheck the durable queue.
-            listener.lock().await.try_recv().await.map_err(map_sqlx)?;
+            let mut listener = listener.lock().await;
+            let result = listener
+                .connection(&self.pool)
+                .await
+                .map_err(map_sqlx)?
+                .try_recv()
+                .await;
+            listener.finish(result).map_err(map_sqlx)?;
             Ok(())
         } else {
             std::future::pending().await
@@ -830,10 +863,12 @@ impl WorkQueueStore for PgStore {
     ) -> Result<Option<BatchClaim>, StoreError> {
         let claimed = if let Some(listener) = &self.batch_listener {
             let mut listener = listener.lock().await;
+            let connection = listener.connection(&self.pool).await.map_err(map_sqlx)?;
             // Coalesce old hints before a fresh database snapshot. A commit
             // during or after this claim stays available to wait_for_work.
-            while listener.next_buffered().is_some() {}
-            queries::claim_batch(&mut *listener, run_id, node_uuid, claim_token).await
+            while connection.next_buffered().is_some() {}
+            let result = queries::claim_batch(connection, run_id, node_uuid, claim_token).await;
+            listener.finish(result)
         } else {
             queries::claim_batch(&self.pool, run_id, node_uuid, claim_token).await
         }

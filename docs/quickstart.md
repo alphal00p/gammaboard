@@ -205,15 +205,23 @@ cargo test -q
 just test-e2e
 ```
 
-`just test-e2e` starts the managed local PostgreSQL cluster, then runs the
-ignored full-stack CLI tests with four test threads. The tests create and
-migrate their own temporary databases, so an existing local `gammaboard_db`
-does not affect them. Set
-`GAMMABOARD_E2E_TEST_THREADS` to tune concurrency. For serial debugging:
+`just test-e2e` runs the consolidated backend workflows and seeded recovery
+checks with two test threads, followed by the process API roundtrip. Python
+with NumPy is required. Each scenario creates and migrates a private database.
+Set `GAMMABOARD_TEST_DATABASE_URL` to use an existing test server, or let the
+script start managed local PostgreSQL. Evidence is saved under `target/e2e`.
+For recovery replay and the optional profiles:
 
 ```bash
-cargo test -q --test full_stack_cli -- --ignored --nocapture --test-threads=1
+just test-recovery 17,41
+just test-e2e physics
+just test-e2e deployment
+just test-e2e container
 ```
+
+See [backend tests and recovery evidence](recovery-testing.md) for the
+invariants, fault model, prerequisites and test organization. Set
+`GAMMABOARD_E2E_TEST_THREADS=1` for serial debugging.
 
 The Apptainer E2E test builds and runs a container image. In the Nix development
 shell, `apptainer` uses a compatibility wrapper when `/bin/true` is missing:
@@ -230,7 +238,7 @@ The GammaLoop/MadNIS E2E test requires a generated state compatible with the
 pinned GammaLoop revision and is separate:
 
 ```bash
-just test-e2e-madnis
+just test-e2e physics
 ```
 
 Process API benchmarks require Python with NumPy and matplotlib:
