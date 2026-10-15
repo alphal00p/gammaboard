@@ -161,9 +161,31 @@ The UI findings are addressed as follows:
 Follow-up validation includes the original cap scenario with one and two samplers,
 a scheduling window larger than the cap, concurrent database grants, replay,
 unused-credit reclamation, prior-stage accounting, and final-stage publication.
-The frontend has 149 passing tests, including actual SVG-content checks and both
-passwordless and authenticated control flows. Browser evidence and final command
-logs use the `budget-` prefix in the artifact directory below.
+Final follow-up checks: 357 Rust library tests, 42 PostgreSQL contracts, 40 end-to-end
+tests (across the broad run and targeted reruns), 149 frontend tests, strict Clippy,
+frontend lint/build, and formatting passed. Scientific adapters were rerun with
+their existing Python runtimes and reference state explicitly configured. The
+stage-progression test permits early convergence after all final pilots; it still
+checks training-work accounting and the final result sources.
+
+The private deployment runs code revision `72f518a` (main fix `d5d03a7`) and restores
+six workers. Chromium created and steered these fresh campaigns through the UI:
+
+| Run | Outcome | Produced / completed / reserved | Result |
+| --- | --- | --- | --- |
+| `ui-budget-fixed` (#23), original 512 cap and error target | Completed | 64 / 64 / 64 | 0.5 ± 0 |
+| `ui-budget-hard-cap` (#26), 512 cap and 4,096 allocation window | Completed | 512 / 512 / 512 | 0.5 ± 0 |
+| `ui-budget-insufficient` (#29), cap 1 | Explicit budget failure | 1 / 1 / 1 | No combined result |
+
+Read-only SQL verified the counts and reservations. Browser checks also verified
+passwordless controls across reload, completed/failed/idle labels, scalar and
+sample-scope labels, the infinite zero-error ratio, unique allowed origins, launch
+history, and real SVG/PNG downloads. SVG files contain paths and no embedded PNG.
+Live sections remain separately timestamped rather than claiming a single atomic
+snapshot. JSON exports and existing numerical results are unchanged.
+
+Browser evidence and final command logs use the `budget-` prefix in the artifact
+directory below; downloaded figures are in `budget-downloads/`.
 
 ## What the tests do not establish
 
