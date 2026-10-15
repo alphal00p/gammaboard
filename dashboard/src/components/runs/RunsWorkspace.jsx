@@ -163,12 +163,17 @@ export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showC
   const notify = (message, severity = "success") => setNotice({ message, severity });
   const currentRunId = useRef(selectedRun);
   currentRunId.current = selectedRun;
+  const currentEditor = useRef(editor);
+  currentEditor.current = editor;
   const loading = useRef(null);
-  // Navigation closes drafts and cancels reads instead of changing their destination.
+  // Run-bound drafts follow navigation; a new-run draft has no selected-run
+  // destination and must survive polling/deletion selecting another run.
   useEffect(() => {
-    setEditor(null); setError(null);
+    if (!currentEditor.current || currentEditor.current.duplicate) {
+      setEditor(null); setError(null);
+      setBusy(false);
+    }
     loading.current?.abort();
-    setBusy(false);
     return () => loading.current?.abort();
   }, [selectedRun]);
   const loadDefinition = async () => {

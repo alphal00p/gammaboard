@@ -35,6 +35,16 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("definition editors", () => {
+  test("a new-run draft survives a background change of selected run", async () => {
+    const view = renderRun(3);
+    fireEvent.click(await screen.findByRole("button", { name: "New run" }));
+    const draft = 'name="independent-draft"\n# still editing';
+    fireEvent.change(await screen.findByLabelText("Run TOML"), { target: { value: draft } });
+    view.rerender(<RunsWorkspace runs={runs} selectedRun={1} />);
+    await act(async () => {});
+    expect(screen.getByLabelText("Run TOML")).toHaveValue(draft);
+  });
+
   test.each([1, 3])("run %s opens its original definition and duplicates the edited draft", async (id) => {
     fixtures.templates = ["old.toml"];
     window.localStorage.setItem("dialogs.create_run.selected_template", "old.toml");
