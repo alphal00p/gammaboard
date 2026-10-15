@@ -4,7 +4,7 @@ name = "grid-search"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
 replacements = { trial_samples = 8192, max_concurrent_trials = 2 }
 optimizer = { algorithm = "grid_search" }
-objective = { source_task = "sample", mode = "minimize", quantity = { metric = "error" } }
+objective = { source_task = "sample", mode = "minimize", selection = { kind = "metric", name = "error" } }
 parameters = { center = { kind = "categorical", values = ["1/4", "1/2", "3/4"] }, roughness = { kind = "categorical", values = ["2", "4", "8"] }, havana_bins = { kind = "integer", min = 16, max = 32, step = 16 } }
 
 [child]

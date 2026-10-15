@@ -21,7 +21,7 @@ name = "sample-a"
 kind = "sample"
 stop_condition = { max_samples = 8192 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 100
@@ -118,7 +118,7 @@ completed_batch_fetch_limit = 64
                 async move {
                     let diag: Option<JsonValue> = sqlx::query_scalar(
                         r#"
-                    SELECT engine_diagnostics
+                    SELECT metrics
                     FROM sampler_aggregator_performance_latest
                     WHERE run_id = $1 AND worker_id = 'w-1'
                     "#,
@@ -129,10 +129,7 @@ completed_batch_fetch_limit = 64
                     let Some(diag) = diag else {
                         return Ok(false);
                     };
-                    Ok(
-                        diag["runner"]["queue_config"]["target_batch_eval_ms"].as_f64()
-                            == Some(50.0),
-                    )
+                    Ok(diag["queue_config"]["target_batch_eval_ms"].as_f64() == Some(50.0))
                 }
             },
         )
@@ -188,7 +185,7 @@ completed_batch_fetch_limit = 64
                 async move {
                     let diag: Option<JsonValue> = sqlx::query_scalar(
                         r#"
-                        SELECT engine_diagnostics
+                        SELECT metrics
                         FROM sampler_aggregator_performance_latest
                         WHERE run_id = $1 AND worker_id = 'w-1'
                         "#,
@@ -200,12 +197,9 @@ completed_batch_fetch_limit = 64
                         return Ok(false);
                     };
                     Ok(
-                        diag["runner"]["queue_config"]["target_batch_eval_ms"].as_f64()
-                            == Some(500.0)
-                            && diag["runner"]["queue_config"]["fixed_batch_size"].as_u64()
-                                == Some(24)
-                            && diag["runner"]["queue_config"]["max_generation_size"].as_u64()
-                                == Some(256),
+                        diag["queue_config"]["target_batch_eval_ms"].as_f64() == Some(500.0)
+                            && diag["queue_config"]["fixed_batch_size"].as_u64() == Some(24)
+                            && diag["queue_config"]["max_generation_size"].as_u64() == Some(256),
                     )
                 }
             },
@@ -259,12 +253,12 @@ kind = "sample"
 max_samples = 1000000
 
 [task_queue.measurement]
-quantity = "central_value"
+selection = { kind = 'all_component_means' }
 
 [task_queue.accumulator]
 config = "scalar"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "naive_monte_carlo"
 '''
 "#,

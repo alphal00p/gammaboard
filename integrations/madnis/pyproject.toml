@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 
 [project]
 name = "madnis_gammaboard_api"
-version = "0.1.0"
+version = "0.2.0"
 description = "MADNIS process sampler integration for GammaBoard"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
@@ -17,7 +17,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "gammaboard-process>=0.2.0",
+    "gammaboard-process>=0.3.0,<0.4.0",
     "madnis @ git+https://github.com/madgraph-ml/madnis.git@f16fb71d41271e3078b8ffc9db072a4241c12498",
 ]
 

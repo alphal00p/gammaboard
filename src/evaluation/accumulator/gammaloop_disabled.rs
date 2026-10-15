@@ -28,50 +28,12 @@ pub struct GammaLoopAccumulatorDigest {
 
 impl GammaLoopAccumulatorState {
     pub fn merge_in_place(&mut self, other: Self) -> Result<(), EngineError> {
+        self.estimate.validate_merge(&other.estimate)?;
+        self.validate_training_statistics(&other)?;
         self.merge_training_statistics(&other);
         self.diagnostics.merge_in_place(other.diagnostics);
-        Accumulator::merge(&mut self.estimate, other.estimate);
+        Accumulator::merge(&mut self.estimate, other.estimate)?;
         Ok(())
-    }
-
-    pub fn signal_to_noise(&self) -> f64 {
-        self.estimate.signal_to_noise()
-    }
-
-    pub fn real_mean(&self) -> f64 {
-        self.estimate
-            .component("real")
-            .map(|component| component.state.mean())
-            .unwrap_or_default()
-    }
-
-    pub fn imag_mean(&self) -> f64 {
-        self.estimate
-            .component("imag")
-            .map(|component| component.state.mean())
-            .unwrap_or_default()
-    }
-
-    pub fn abs_mean(&self) -> f64 {
-        self.estimate.projection.state.mean()
-    }
-
-    pub fn real_stderr(&self) -> f64 {
-        self.estimate
-            .component("real")
-            .map(|component| component.state.stderr())
-            .unwrap_or_default()
-    }
-
-    pub fn imag_stderr(&self) -> f64 {
-        self.estimate
-            .component("imag")
-            .map(|component| component.state.stderr())
-            .unwrap_or_default()
-    }
-
-    pub fn abs_stderr(&self) -> f64 {
-        self.estimate.projection.state.stderr()
     }
 }
 
@@ -83,8 +45,8 @@ impl Accumulator for GammaLoopAccumulatorState {
         self.estimate.sample_count()
     }
 
-    fn merge(&mut self, other: Self) {
-        let _ = self.merge_in_place(other);
+    fn merge(&mut self, other: Self) -> Result<(), EngineError> {
+        self.merge_in_place(other)
     }
 
     fn get_persistent(&self) -> Self::Persistent {

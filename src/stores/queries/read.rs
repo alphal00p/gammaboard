@@ -1,4 +1,4 @@
-use crate::core::{SamplerPerformanceMetrics, WorkerRole};
+use crate::core::WorkerRole;
 use crate::evaluation::AccumulatorState;
 use crate::stores::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RegisteredWorkerSummary,
@@ -22,27 +22,8 @@ fn decode_optional_json<T: DeserializeOwned>(value: Option<JsonValue>) -> Option
     value.and_then(|payload| serde_json::from_value(payload).ok())
 }
 
-fn decode_json_or_default<T: DeserializeOwned + Default>(value: JsonValue) -> T {
-    serde_json::from_value(value).unwrap_or_default()
-}
-
 fn parse_worker_role(role: Option<String>) -> Option<WorkerRole> {
     role.and_then(|role| role.parse().ok())
-}
-
-fn default_sampler_performance_metrics() -> SamplerPerformanceMetrics {
-    SamplerPerformanceMetrics {
-        produced_batches: 0,
-        produced_samples: 0,
-        avg_produce_time_per_sample_ms: 0.0,
-        std_produce_time_per_sample_ms: 0.0,
-        ingested_batches: 0,
-        ingested_samples: 0,
-        avg_ingest_time_per_sample_ms: 0.0,
-        std_ingest_time_per_sample_ms: 0.0,
-        completed_samples_total: 0,
-        sampler_uptime_ms: 0.0,
-    }
 }
 
 fn id_text(value: impl Display) -> String {
@@ -237,8 +218,6 @@ struct RegisteredWorkerRow {
     evaluator_metrics: Option<JsonValue>,
     evaluator_rss_bytes: Option<i64>,
     sampler_metrics: Option<JsonValue>,
-    sampler_runtime_metrics: Option<JsonValue>,
-    sampler_engine_diagnostics: Option<JsonValue>,
     sampler_rss_bytes: Option<i64>,
 }
 
@@ -267,8 +246,6 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
             evaluator_metrics: decode_optional_json(value.evaluator_metrics),
             evaluator_rss_bytes: value.evaluator_rss_bytes,
             sampler_metrics: decode_optional_json(value.sampler_metrics),
-            sampler_runtime_metrics: value.sampler_runtime_metrics,
-            sampler_engine_diagnostics: value.sampler_engine_diagnostics,
             sampler_rss_bytes: value.sampler_rss_bytes,
         }
     }
@@ -318,7 +295,7 @@ impl From<RegisteredWorkerSummaryRow> for RegisteredWorkerSummary {
 }
 
 #[derive(sqlx::FromRow)]
-struct EvaluatorPerformanceHistoryRow {
+struct WorkerPerformanceHistoryRow {
     id: i64,
     run_id: i32,
     worker_id: String,
@@ -327,44 +304,20 @@ struct EvaluatorPerformanceHistoryRow {
     created_at: DateTime<Utc>,
 }
 
-impl From<EvaluatorPerformanceHistoryRow> for EvaluatorPerformanceHistoryEntry {
-    fn from(value: EvaluatorPerformanceHistoryRow) -> Self {
-        Self {
-            id: value.id,
-            run_id: value.run_id,
-            worker_id: value.worker_id,
-            metrics: decode_json_or_default(value.metrics),
-            rss_bytes: value.rss_bytes,
-            created_at: value.created_at,
-        }
-    }
-}
-
-#[derive(sqlx::FromRow)]
-struct SamplerPerformanceHistoryRow {
-    id: i64,
-    run_id: i32,
-    worker_id: String,
-    metrics: JsonValue,
-    runtime_metrics: JsonValue,
-    engine_diagnostics: JsonValue,
-    rss_bytes: Option<i64>,
-    created_at: DateTime<Utc>,
-}
-
-impl From<SamplerPerformanceHistoryRow> for SamplerPerformanceHistoryEntry {
-    fn from(value: SamplerPerformanceHistoryRow) -> Self {
-        Self {
+impl<M: DeserializeOwned> TryFrom<WorkerPerformanceHistoryRow>
+    for crate::stores::read_models::WorkerPerformanceHistoryEntry<M>
+{
+    type Error = sqlx::Error;
+    fn try_from(value: WorkerPerformanceHistoryRow) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: value.id,
             run_id: value.run_id,
             worker_id: value.worker_id,
             metrics: serde_json::from_value(value.metrics)
-                .unwrap_or_else(|_| default_sampler_performance_metrics()),
-            runtime_metrics: value.runtime_metrics,
-            engine_diagnostics: value.engine_diagnostics,
+                .map_err(|e| invalid_data_error("invalid worker report", e))?,
             rss_bytes: value.rss_bytes,
             created_at: value.created_at,
-        }
+        })
     }
 }
 
@@ -908,14 +861,12 @@ pub(crate) async fn get_registered_workers(
                     e.metrics AS evaluator_metrics,
                     e.rss_bytes AS evaluator_rss_bytes,
                     p.metrics AS sampler_metrics,
-                    p.runtime_metrics AS sampler_runtime_metrics,
-                    p.engine_diagnostics AS sampler_engine_diagnostics,
                     p.rss_bytes AS sampler_rss_bytes
                 FROM nodes n
                 LEFT JOIN sampler_aggregator_performance_latest p
                     ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
                    AND p.worker_id = n.name
-                   AND p.runtime_metrics->>'node_uuid' = n.uuid
+                   AND p.metrics->>'node_uuid' = n.uuid
                    AND p.created_at >= now() - interval '10 seconds'
                 LEFT JOIN evaluator_performance_latest e
                     ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
@@ -964,14 +915,12 @@ pub(crate) async fn get_registered_worker(
             e.metrics AS evaluator_metrics,
             e.rss_bytes AS evaluator_rss_bytes,
             p.metrics AS sampler_metrics,
-            p.runtime_metrics AS sampler_runtime_metrics,
-            p.engine_diagnostics AS sampler_engine_diagnostics,
             p.rss_bytes AS sampler_rss_bytes
         FROM nodes n
         LEFT JOIN sampler_aggregator_performance_latest p
             ON p.run_id = COALESCE(n.active_run_id, n.desired_run_id)
            AND p.worker_id = n.name
-           AND p.runtime_metrics->>'node_uuid' = n.uuid
+           AND p.metrics->>'node_uuid' = n.uuid
            AND p.created_at >= now() - interval '10 seconds'
         LEFT JOIN evaluator_performance_latest e
             ON e.run_id = COALESCE(n.active_run_id, n.desired_run_id)
@@ -1036,29 +985,7 @@ pub(crate) async fn get_evaluator_performance_history(
     limit: i64,
     worker_id: Option<&str>,
 ) -> Result<Vec<EvaluatorPerformanceHistoryEntry>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, EvaluatorPerformanceHistoryRow>(
-        r#"
-        SELECT
-            id,
-            run_id,
-            worker_id,
-            metrics,
-            rss_bytes,
-            created_at
-        FROM evaluator_performance_history
-        WHERE run_id = $1
-          AND ($2::text IS NULL OR worker_id = $2)
-        ORDER BY created_at DESC, id DESC
-        LIMIT $3
-        "#,
-    )
-    .bind(run_id)
-    .bind(worker_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows.into_iter().map(Into::into).collect())
+    get_worker_performance_history(pool, WorkerRole::Evaluator, run_id, limit, worker_id).await
 }
 
 pub(crate) async fn get_sampler_performance_history(
@@ -1067,29 +994,38 @@ pub(crate) async fn get_sampler_performance_history(
     limit: i64,
     worker_id: Option<&str>,
 ) -> Result<Vec<SamplerPerformanceHistoryEntry>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, SamplerPerformanceHistoryRow>(
+    get_worker_performance_history(
+        pool,
+        WorkerRole::SamplerAggregator,
+        run_id,
+        limit,
+        worker_id,
+    )
+    .await
+}
+
+async fn get_worker_performance_history<M: DeserializeOwned>(
+    pool: &PgPool,
+    role: WorkerRole,
+    run_id: i32,
+    limit: i64,
+    worker_id: Option<&str>,
+) -> Result<Vec<crate::stores::read_models::WorkerPerformanceHistoryEntry<M>>, sqlx::Error> {
+    let role = role.as_str();
+    let rows = sqlx::query_as::<_, WorkerPerformanceHistoryRow>(&format!(
         r#"
-        SELECT
-            id,
-            run_id,
-            worker_id,
-            metrics,
-            runtime_metrics,
-            engine_diagnostics,
-            rss_bytes,
-            created_at
-        FROM sampler_aggregator_performance_history
+        SELECT id, run_id, worker_id, metrics, rss_bytes, created_at
+        FROM {role}_performance_history
         WHERE run_id = $1
           AND ($2::text IS NULL OR worker_id = $2)
         ORDER BY created_at DESC, id DESC
         LIMIT $3
         "#,
-    )
+    ))
     .bind(run_id)
     .bind(worker_id)
     .bind(limit)
     .fetch_all(pool)
     .await?;
-
-    Ok(rows.into_iter().map(Into::into).collect())
+    rows.into_iter().map(TryInto::try_into).collect()
 }

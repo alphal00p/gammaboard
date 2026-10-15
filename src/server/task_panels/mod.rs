@@ -12,8 +12,7 @@ mod sample;
 
 use crate::core::{
     AccumulatorConfig, AccumulatorSourceSpec, BatchTransformConfig, EngineError, RunTask,
-    RunTaskSpec, SampleErrorProjection, SampleStopCondition, SamplerAggregatorConfig,
-    SamplerAggregatorSourceSpec,
+    RunTaskSpec, SampleStopCondition, SamplerSourceSpec, SamplingConfig,
 };
 use crate::evaluation::AccumulatorState;
 use crate::server::panels::{
@@ -230,7 +229,6 @@ impl RunTaskSpec {
     fn panel_projectors(
         &self,
         effective_accumulator_config: Option<AccumulatorConfig>,
-        evaluator: Option<&crate::core::EvaluatorConfig>,
     ) -> Result<Vec<TaskPanelProjector>, EngineError> {
         if matches!(self, Self::IntegrationCampaign { .. }) {
             let mut projectors = integration_campaign::projectors();
@@ -241,17 +239,7 @@ impl RunTaskSpec {
         projectors.extend(match self {
             Self::SetAccumulator { .. } => Vec::new(),
             Self::Sample { .. } => effective_accumulator_config
-                .map(|config| {
-                    sample::projectors(
-                        config,
-                        match evaluator {
-                            Some(crate::core::EvaluatorConfig::Gammaloop { params }) => {
-                                Some(params.training_projection)
-                            }
-                            _ => None,
-                        },
-                    )
-                })
+                .map(sample::projectors)
                 .unwrap_or_default(),
             Self::Image {
                 geometry, display, ..
@@ -331,7 +319,6 @@ fn build_task_summary_entries(
             stop_condition,
             sampler_aggregator,
             accumulator,
-            batch_transforms,
             ..
         } => {
             entries.push(key_value(
@@ -368,7 +355,9 @@ fn build_task_summary_entries(
                     format_duration_seconds(eta_seconds),
                 ));
             }
-            if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
+            if let Some(label) =
+                batch_transforms_label(task.task.batch_transforms_config().as_deref())
+            {
                 entries.push(key_value("batch_transforms", "Transforms", label));
             }
         }
@@ -575,13 +564,35 @@ fn sample_stop_condition_label(stop: &SampleStopCondition) -> String {
     if let Some(value) = stop.absolute_error {
         parts.push(format!(
             "abs_error<={value}{}",
-            projection_suffix(stop.projection)
+            stop.metric
+                .as_ref()
+                .map(|selector| format!(
+                    "{:?}.{}",
+                    selector.name,
+                    selector
+                        .component
+                        .as_deref()
+                        .unwrap_or("training_projection")
+                ))
+                .map(|label| format!(" ({label})"))
+                .unwrap_or_default()
         ));
     }
     if let Some(value) = stop.relative_error {
         parts.push(format!(
             "rel_error<={value}{}",
-            projection_suffix(stop.projection)
+            stop.metric
+                .as_ref()
+                .map(|selector| format!(
+                    "{:?}.{}",
+                    selector.name,
+                    selector
+                        .component
+                        .as_deref()
+                        .unwrap_or("training_projection")
+                ))
+                .map(|label| format!(" ({label})"))
+                .unwrap_or_default()
         ));
     }
     if parts.is_empty() {
@@ -591,20 +602,14 @@ fn sample_stop_condition_label(stop: &SampleStopCondition) -> String {
     }
 }
 
-fn projection_suffix(projection: Option<SampleErrorProjection>) -> &'static str {
-    match projection {
-        Some(SampleErrorProjection::Real) => " (real)",
-        Some(SampleErrorProjection::Imag) => " (imag)",
-        Some(SampleErrorProjection::Abs) => " (abs)",
-        None => "",
-    }
-}
-
-fn sampler_source_label(source: Option<&SamplerAggregatorSourceSpec>) -> String {
+fn sampler_source_label(source: Option<&SamplerSourceSpec>) -> String {
     match source {
-        Some(SamplerAggregatorSourceSpec::Config { config }) => sampler_config_label(config).into(),
-        Some(SamplerAggregatorSourceSpec::FromName { from_name }) => format!("from {from_name}"),
-        Some(SamplerAggregatorSourceSpec::Latest(_)) | None => "latest".to_string(),
+        Some(SamplerSourceSpec::Config { config }) => sampler_config_label(config).into(),
+        Some(SamplerSourceSpec::FromStage { config, from_stage }) => {
+            format!("{} from {from_stage}", sampler_config_label(config))
+        }
+        Some(SamplerSourceSpec::FromName { from_name }) => format!("from {from_name}"),
+        Some(SamplerSourceSpec::Latest(_)) | None => "latest".to_string(),
     }
 }
 
@@ -613,7 +618,10 @@ fn sample_accumulator_label(
     effective: Option<AccumulatorConfig>,
 ) -> String {
     match source {
-        Some(AccumulatorSourceSpec::Config { config }) => accumulator_label(config).to_string(),
+        Some(
+            AccumulatorSourceSpec::Config { config }
+            | AccumulatorSourceSpec::FromStage { config, .. },
+        ) => accumulator_label(config).to_string(),
         Some(AccumulatorSourceSpec::FromName { from_name }) => format!("from {from_name}"),
         Some(AccumulatorSourceSpec::Latest(_)) | None => effective
             .as_ref()
@@ -654,25 +662,49 @@ fn source_ref_label(source: Option<crate::core::SourceRefSpec>) -> String {
     }
 }
 
-fn sampler_source_override_label(source: Option<&SamplerAggregatorSourceSpec>) -> Option<String> {
+fn sampler_source_override_label(source: Option<&SamplerSourceSpec>) -> Option<String> {
     match source {
-        Some(SamplerAggregatorSourceSpec::Config { config }) => {
+        Some(SamplerSourceSpec::Config { config }) => {
             Some(sampler_config_label(config).to_string())
         }
         _ => None,
     }
 }
 
-fn sampler_config_label(config: &SamplerAggregatorConfig) -> &'static str {
+fn sampler_config_label(config: &SamplingConfig) -> &'static str {
     match config {
-        SamplerAggregatorConfig::NaiveMonteCarlo { .. } => "naive_monte_carlo",
-        SamplerAggregatorConfig::RasterPlane { .. } => "raster_plane",
-        SamplerAggregatorConfig::RasterLine { .. } => "raster_line",
-        SamplerAggregatorConfig::PdfAdaptationRasterPlane { .. } => "pdf_adaptation_raster_plane",
-        SamplerAggregatorConfig::PdfAdaptationRasterLine { .. } => "pdf_adaptation_raster_line",
-        SamplerAggregatorConfig::HavanaTraining { .. } => "havana_training",
-        SamplerAggregatorConfig::HavanaInference { .. } => "havana_inference",
-        SamplerAggregatorConfig::ProcessSampler { .. } => "process_sampler",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::NaiveMonteCarlo { .. },
+            ..
+        } => "naive_monte_carlo",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::RasterPlane { .. },
+            ..
+        } => "raster_plane",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::RasterLine { .. },
+            ..
+        } => "raster_line",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::PdfAdaptationRasterPlane { .. },
+            ..
+        } => "pdf_adaptation_raster_plane",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::PdfAdaptationRasterLine { .. },
+            ..
+        } => "pdf_adaptation_raster_line",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::HavanaTraining { .. },
+            ..
+        } => "havana_training",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::HavanaInference { .. },
+            ..
+        } => "havana_inference",
+        SamplingConfig {
+            sampler: crate::core::SamplerConfig::ProcessSampler { .. },
+            ..
+        } => "process_sampler",
     }
 }
 
@@ -698,16 +730,8 @@ impl TaskPanelSource {
         task_spec: &RunTaskSpec,
         effective_accumulator_config: Option<AccumulatorConfig>,
     ) -> Result<Self, EngineError> {
-        Self::for_evaluator(task_spec, effective_accumulator_config, None)
-    }
-
-    pub fn for_evaluator(
-        task_spec: &RunTaskSpec,
-        effective_accumulator_config: Option<AccumulatorConfig>,
-        evaluator: Option<&crate::core::EvaluatorConfig>,
-    ) -> Result<Self, EngineError> {
         Ok(Self {
-            projectors: task_spec.panel_projectors(effective_accumulator_config, evaluator)?,
+            projectors: task_spec.panel_projectors(effective_accumulator_config)?,
         })
     }
 
@@ -1117,7 +1141,6 @@ mod tests {
         AccumulatorState::FullVector(FullVectorAccumulatorState {
             components: vec!["real".to_string(), "imag".to_string()],
             values_row_major: vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0],
-            invalid_entries: vec![],
         })
     }
 

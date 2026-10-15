@@ -7,9 +7,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Domain {
-    Continuous {
-        dims: usize,
-    },
     Discrete {
         axis_label: Option<String>,
         branches: Vec<DomainBranch>,
@@ -28,7 +25,7 @@ pub struct DomainBranch {
 
 impl Domain {
     pub fn continuous(dims: usize) -> Self {
-        Self::Continuous { dims }
+        Self::rectangular(dims, 0)
     }
 
     pub fn rectangular(continuous_dims: usize, discrete_dims: usize) -> Self {
@@ -57,7 +54,6 @@ impl Domain {
 
     pub fn fixed_continuous_dims(&self) -> Option<usize> {
         match self {
-            Self::Continuous { dims } => Some(*dims),
             Self::Rectangular {
                 continuous_dims, ..
             } => Some(*continuous_dims),
@@ -77,7 +73,6 @@ impl Domain {
 
     pub fn fixed_discrete_depth(&self) -> Option<usize> {
         match self {
-            Self::Continuous { .. } => Some(0),
             Self::Rectangular {
                 discrete_cardinalities,
                 ..
@@ -107,10 +102,6 @@ impl Domain {
             });
         }
         match self {
-            Self::Continuous { .. } => Err(format!(
-                "discrete path {:?} continues beyond a continuous leaf",
-                discrete
-            )),
             Self::Rectangular {
                 discrete_cardinalities,
                 continuous_dims,
@@ -187,16 +178,6 @@ impl Domain {
 
     fn continuous_dims_at_leaf_path(&self, discrete: &[i64]) -> Result<usize, String> {
         match self {
-            Self::Continuous { dims } => {
-                if discrete.is_empty() {
-                    Ok(*dims)
-                } else {
-                    Err(format!(
-                        "discrete path {:?} continues beyond a continuous leaf",
-                        discrete
-                    ))
-                }
-            }
             Self::Rectangular {
                 discrete_cardinalities,
                 continuous_dims,
@@ -237,7 +218,6 @@ impl Domain {
 
     pub fn fixed_discrete_cardinalities(&self) -> Option<Vec<usize>> {
         match self {
-            Self::Continuous { .. } => Some(Vec::new()),
             Self::Rectangular {
                 discrete_cardinalities,
                 ..
@@ -344,5 +324,20 @@ mod tests {
         assert!(domain.validate_point_parts(&[0], &[0.1]).is_ok());
         assert!(domain.validate_point_parts(&[1], &[0.1, 0.2, 0.3]).is_ok());
         assert!(domain.validate_point_parts(&[1], &[0.1]).is_err());
+    }
+    #[test]
+    fn continuous_domains_have_one_canonical_representation() {
+        let continuous = Domain::continuous(6);
+        assert_eq!(continuous, Domain::rectangular_with_cardinalities(6, []));
+        let json = serde_json::to_value(&continuous).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"rectangular": {"discrete_cardinalities": [], "continuous_dims": 6}})
+        );
+        assert_eq!(serde_json::from_value::<Domain>(json).unwrap(), continuous);
+        assert!(
+            serde_json::from_value::<Domain>(serde_json::json!({"continuous": {"dims": 6}}))
+                .is_err()
+        );
     }
 }

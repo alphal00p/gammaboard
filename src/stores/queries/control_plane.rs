@@ -16,7 +16,7 @@ const CLEAR_CURRENT_ASSIGNMENT_SET: &str = r#"
     updated_at = now()
 "#;
 
-pub(crate) struct DesiredAssignmentRaw {
+pub(crate) struct AssignmentTargetRaw {
     pub node_name: String,
     pub role: String,
     pub run_id: i32,
@@ -29,13 +29,10 @@ pub(crate) struct NodeRaw {
     pub capabilities: JsonValue,
     pub pool_role: Option<String>,
     pub pool_run_id: Option<i32>,
-    pub pool_run_name: Option<String>,
     pub desired_role: Option<String>,
     pub desired_run_id: Option<i32>,
-    pub desired_run_name: Option<String>,
     pub current_role: Option<String>,
     pub current_run_id: Option<i32>,
-    pub current_run_name: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -93,10 +90,8 @@ async fn clear_expired_assignments<'e>(
     Ok(())
 }
 
-fn desired_assignment_raw(
-    (node_name, role, run_id): (String, String, i32),
-) -> DesiredAssignmentRaw {
-    DesiredAssignmentRaw {
+fn desired_assignment_raw((node_name, role, run_id): (String, String, i32)) -> AssignmentTargetRaw {
+    AssignmentTargetRaw {
         node_name,
         role,
         run_id,
@@ -398,7 +393,7 @@ pub(crate) async fn clear_all_desired_assignments(pool: &PgPool) -> Result<u64, 
 pub(crate) async fn get_desired_assignment(
     pool: &PgPool,
     node_name: &str,
-) -> Result<Option<DesiredAssignmentRaw>, sqlx::Error> {
+) -> Result<Option<AssignmentTargetRaw>, sqlx::Error> {
     let row = sqlx::query_as::<_, (String, String, i32)>(
         r#"
         SELECT name, desired_role AS role, desired_run_id AS run_id
@@ -418,7 +413,7 @@ pub(crate) async fn get_desired_assignment(
 pub(crate) async fn list_desired_assignments(
     pool: &PgPool,
     node_name: Option<&str>,
-) -> Result<Vec<DesiredAssignmentRaw>, sqlx::Error> {
+) -> Result<Vec<AssignmentTargetRaw>, sqlx::Error> {
     let rows = sqlx::query_as::<_, (String, String, i32)>(
         r#"
         SELECT name, desired_role AS role, desired_run_id AS run_id
@@ -445,18 +440,13 @@ pub(crate) async fn list_nodes(
             n.name,
             n.uuid,
             n.capabilities,
-            n.pool_role, n.pool_run_id, pr.name AS pool_run_name,
+            n.pool_role, n.pool_run_id,
             n.desired_role,
             n.desired_run_id,
-            dr.name AS desired_run_name,
             n.active_role AS current_role,
             n.active_run_id AS current_run_id,
-            cr.name AS current_run_name,
             n.last_seen
         FROM nodes n
-        LEFT JOIN runs pr ON pr.id = n.pool_run_id
-        LEFT JOIN runs dr ON dr.id = n.desired_run_id
-        LEFT JOIN runs cr ON cr.id = n.active_run_id
         WHERE n.lease_expires_at > now()
           AND ($1::text IS NULL OR n.name = $1)
         ORDER BY n.name ASC

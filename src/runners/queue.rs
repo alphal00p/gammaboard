@@ -1,3 +1,4 @@
+use crate::core::EvaluationBatch;
 use crate::core::SamplerQueueCheckpoint;
 use crate::core::{
     BatchQueueCounts, CompletedBatch, InsertBatchesMetrics, SamplerQueueRollingAverages,
@@ -6,7 +7,6 @@ use crate::core::{
 use crate::runners::busy_time::BusyTime;
 use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::window_metric::WindowMetric;
-use crate::sampling::LatentBatch;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -66,9 +66,10 @@ pub struct SamplerQueue<S> {
     store: S,
     config: SamplerQueueConfig,
     checkpoint: SamplerQueueCheckpoint,
-    pending_insert: VecDeque<(LatentBatch, bool)>,
+    pending_insert: VecDeque<(EvaluationBatch, bool)>,
     ready_processed: VecDeque<CompletedBatch>,
     pending_insert_tasks: Vec<PendingInsertTask>,
+    insert_error: Option<StoreError>,
     pending_processed_fetch: Option<PendingProcessedFetchTask>,
     pending_completed_cleanup: Option<PendingCompletedCleanupTask>,
     cached_db_queue_counts: Option<BatchQueueCounts>,
@@ -197,6 +198,7 @@ where
             pending_insert: VecDeque::new(),
             ready_processed: VecDeque::new(),
             pending_insert_tasks: Vec::new(),
+            insert_error: None,
             pending_processed_fetch: None,
             pending_completed_cleanup: None,
             cached_db_queue_counts: None,
@@ -417,10 +419,10 @@ where
         Some(active_evaluator_count)
     }
 
-    pub fn ingest(&mut self, batches: Vec<LatentBatch>, requires_feedback: bool) {
+    pub fn ingest(&mut self, batches: Vec<EvaluationBatch>, requires_feedback: bool) {
         if let Some(remaining) = &mut self.training_batch_sizing.previous_remaining {
-            *remaining =
-                remaining.saturating_sub(batches.iter().map(|batch| batch.nr_samples).sum());
+            *remaining = remaining
+                .saturating_sub(batches.iter().map(|batch| batch.samples.nr_samples).sum());
         }
         self.pending_insert
             .extend(batches.into_iter().map(|batch| (batch, requires_feedback)));
@@ -680,6 +682,9 @@ where
     }
 
     async fn drain_finished_insert(&mut self) -> Result<(), StoreError> {
+        if let Some(error) = &self.insert_error {
+            return Err(error.clone());
+        }
         let mut index = 0;
         while index < self.pending_insert_tasks.len() {
             if !self.pending_insert_tasks[index].handle.is_finished() {
@@ -695,9 +700,30 @@ where
     }
 
     async fn consume_insert_task(&mut self, task: PendingInsertTask) -> Result<(), StoreError> {
-        let metrics = task.handle.await.map_err(|err| {
-            StoreError::store(format!("sampler queue insert task failed: {err}"))
-        })??;
+        let outcome = task
+            .handle
+            .await
+            .map_err(|err| StoreError::store(format!("sampler queue insert task failed: {err}")))
+            .and_then(|result| result);
+        let metrics = match outcome {
+            Ok(metrics) => metrics,
+            Err(error) => {
+                // The transaction may have committed before the connection failed.
+                // Neither continuing nor saving these live cursors is safe. Settle
+                // all writes before restoring the last durable checkpoint.
+                let error = if error.is_database_error() {
+                    StoreError::retry_activation(format!("uncertain sampler insert: {error}"))
+                } else {
+                    error
+                };
+                self.insert_error = Some(error.clone());
+                for pending in self.pending_insert_tasks.drain(..) {
+                    let _ = pending.handle.await;
+                }
+                let _ = self.finish_background_maintenance().await;
+                return Err(error);
+            }
+        };
         self.observe_insert_bundle_start_state(
             task.local_pending_at_start,
             task.db_pending_at_start,
@@ -837,13 +863,14 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::core::EvaluationBatch;
     use crate::evaluation::{Batch, Point};
-    use crate::runners::test_support::RecordingStore;
-    use crate::sampling::LatentBatchSpec;
+    use crate::sampling::LatentBatch;
+    use crate::test_support::RecordingStore;
 
-    fn latent_batch_with_weight(weight: f64) -> LatentBatch {
-        let batch = Batch::from_points([Point::new(vec![weight], vec![], weight)]).expect("batch");
-        LatentBatchSpec::from_batch(&batch).build()
+    fn latent_batch_with_weight(weight: f64) -> EvaluationBatch {
+        let batch = Batch::from_iter([Point::new(vec![weight], vec![], weight)]);
+        LatentBatch::from_batch(&batch).for_evaluation(crate::core::AccumulatorConfig::scalar())
     }
 
     fn recording_queue(store: RecordingStore) -> SamplerQueue<RecordingStore> {
@@ -1057,6 +1084,50 @@ pub(crate) mod tests {
             first_ids,
             second_ids
         );
+    }
+
+    #[tokio::test]
+    async fn uncertain_insert_settles_writes_and_blocks_progress_and_checkpointing() {
+        let mut queue = recording_queue(RecordingStore::default());
+        let (release, pending) = tokio::sync::oneshot::channel();
+        queue.pending_insert_tasks.push(PendingInsertTask {
+            first_batch_id: 2,
+            batch_count: 1,
+            local_pending_at_start: 1,
+            db_pending_at_start: None,
+            handle: tokio::spawn(async move {
+                pending.await.unwrap();
+                Ok(InsertBatchesMetrics::default())
+            }),
+        });
+        let failure = PendingInsertTask {
+            first_batch_id: 1,
+            batch_count: 1,
+            local_pending_at_start: 2,
+            db_pending_at_start: None,
+            handle: tokio::spawn(async { Err(StoreError::Database("connection lost".into())) }),
+        };
+        {
+            let recovery = queue.consume_insert_task(failure);
+            tokio::pin!(recovery);
+            tokio::select! {
+                biased;
+                result = &mut recovery => panic!("later write is still running: {result:?}"),
+                _ = tokio::task::yield_now() => {}
+            }
+            release.send(()).unwrap();
+            assert!(recovery.await.unwrap_err().is_retry_activation());
+        }
+        assert!(queue.pending_insert_tasks.is_empty());
+        assert!(
+            queue
+                .get_processed()
+                .await
+                .unwrap_err()
+                .is_retry_activation()
+        );
+        assert!(queue.flush().await.unwrap_err().is_retry_activation());
+        assert_eq!(queue.last_completed_batch_id(), None);
     }
 
     #[tokio::test]

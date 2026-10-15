@@ -10,8 +10,8 @@ name = "ghost_bump_madnis"
 
 [evaluator]
 kind = "symbolica"
-expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) - 1/2"
 args = ["x", "y"]
+source = {kind = "expression", expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) - 1/2"}
 
 [[task_queue]]
 name = "accumulator"
@@ -25,7 +25,7 @@ kind = "sample"
 [task_queue.stop_condition]
 max_samples = 200000
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "process_sampler"
 # Direct venv deployment. From the GammaBoard workspace:
 #   cd integrations/madnis
@@ -38,9 +38,8 @@ command = ["$resources/../integrations/madnis/.venv/bin/madnis-gammaboard-sample
 # Alternative with the Nix runtime when Nix is available:
 # command = ["$resources/../integrations/madnis/result/bin/python", "-u", "-m", "run_sampler"]
 cwd = "$resources/.."
-requires_training_values = true
 
-[task_queue.sampler_aggregator.config.args]
+[task_queue.sampler.config.args]
 seed = 0
 training_steps = 200
 training_batch_size = 1000
@@ -51,7 +50,7 @@ save_path = "integrations/madnis/checkpoints/ghost_bump_madnis"
 [[task_queue]]
 name = "pdf-2d"
 kind = "pdf_adaptation_image"
-sampler_aggregator = { from_name = "madnis-train" }
+sampler = { from_name = "madnis-train" }
 
 [task_queue.geometry]
 offset = [0.0, 0.0]

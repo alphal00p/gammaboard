@@ -204,7 +204,7 @@ where
                             accumulator,
                         )),
                         evaluator: base_stage_snapshot.evaluator,
-                        sampler_aggregator: base_stage_snapshot.sampler_aggregator,
+
                         batch_transforms: base_stage_snapshot.batch_transforms,
                     })
                     .await?;

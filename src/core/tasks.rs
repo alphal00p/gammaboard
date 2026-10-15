@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::{
-    AccumulatorConfig, BatchTransformConfig, BuildError, EvaluatorConfig, MeasurementResult,
-    SamplerAggregatorConfig,
+    AccumulatorConfig, BatchTransformConfig, EngineError, EvaluatorConfig, MeasurementResult,
+    SamplingConfig,
 };
 use crate::sampling::{RasterLineSamplerParams, RasterPlaneSamplerParams};
 
@@ -160,14 +160,6 @@ impl NamedDiscreteProjection {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SampleErrorProjection {
-    Real,
-    Imag,
-    Abs,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum AccumulatorMetricName {
     Mean,
     AbsMean,
@@ -187,58 +179,27 @@ pub struct AccumulatorMetricSelector {
     pub component: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum MeasurementMetricSpec {
-    Name(AccumulatorMetricName),
-    Selector(AccumulatorMetricSelector),
-}
-
-impl MeasurementMetricSpec {
-    pub fn selector(&self) -> AccumulatorMetricSelector {
-        match self {
-            Self::Name(name) => AccumulatorMetricSelector {
-                name: *name,
-                component: None,
-            },
-            Self::Selector(selector) => selector.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum MeasurementQuantityName {
+/// Select all component means, or one explicitly named metric.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MeasurementSelection {
     #[default]
-    CentralValue,
+    AllComponentMeans,
+    Metric(AccumulatorMetricSelector),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct MeasurementMetricQuantity {
-    pub metric: AccumulatorMetricName,
-    pub component: Option<String>,
-}
-
-impl MeasurementMetricQuantity {
-    pub fn selector(&self) -> AccumulatorMetricSelector {
-        AccumulatorMetricSelector {
-            name: self.metric,
-            component: self.component.clone(),
-        }
+impl MeasurementSelection {
+    pub fn metric(name: AccumulatorMetricName) -> Self {
+        Self::Metric(AccumulatorMetricSelector {
+            name,
+            component: None,
+        })
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum MeasurementQuantitySpec {
-    Name(MeasurementQuantityName),
-    Metric(MeasurementMetricQuantity),
-}
-
-impl Default for MeasurementQuantitySpec {
-    fn default() -> Self {
-        Self::Name(MeasurementQuantityName::CentralValue)
+    pub fn metric_selector(&self) -> Option<&AccumulatorMetricSelector> {
+        match self {
+            Self::AllComponentMeans => None,
+            Self::Metric(selector) => Some(selector),
+        }
     }
 }
 
@@ -253,45 +214,20 @@ pub enum MeasurementMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TaskMeasurementSpec {
-    pub quantity: MeasurementQuantitySpec,
-    pub metric: Option<MeasurementMetricSpec>,
-    #[serde(default)]
+    pub selection: MeasurementSelection,
     pub mode: MeasurementMode,
 }
-
 impl TaskMeasurementSpec {
     pub fn validate(&self) -> Result<(), String> {
-        if self.metric.is_some()
-            && self.quantity != MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue)
+        if let Some(selector) = self.metric_selector()
+            && let Some(name) = &selector.component
         {
-            return Err("measurement cannot set both metric and quantity".to_string());
+            validate_source_name("measurement.selection.component", name)?;
         }
         Ok(())
     }
-
-    pub fn metric_selector(&self) -> AccumulatorMetricSelector {
-        match self.metric.as_ref() {
-            Some(metric) => metric.selector(),
-            None => match &self.quantity {
-                MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue) => {
-                    AccumulatorMetricSelector {
-                        name: AccumulatorMetricName::Mean,
-                        component: None,
-                    }
-                }
-                MeasurementQuantitySpec::Metric(metric) => metric.selector(),
-            },
-        }
-    }
-
-    pub fn explicit_metric_selector(&self) -> Option<AccumulatorMetricSelector> {
-        match self.metric.as_ref() {
-            Some(metric) => Some(metric.selector()),
-            None => match &self.quantity {
-                MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue) => None,
-                MeasurementQuantitySpec::Metric(metric) => Some(metric.selector()),
-            },
-        }
+    pub fn metric_selector(&self) -> Option<&AccumulatorMetricSelector> {
+        self.selection.metric_selector()
     }
 }
 
@@ -299,52 +235,36 @@ impl TaskMeasurementSpec {
 #[serde(default, deny_unknown_fields)]
 pub struct MeasurementSpec {
     pub source_task: String,
-    pub quantity: MeasurementQuantitySpec,
-    pub metric: Option<MeasurementMetricSpec>,
-    #[serde(default)]
-    pub mode: MeasurementMode,
+    #[serde(flatten)]
+    pub measurement: TaskMeasurementSpec,
 }
-
 impl Default for MeasurementSpec {
     fn default() -> Self {
         Self {
-            source_task: "sample".to_string(),
-            quantity: MeasurementQuantitySpec::default(),
-            metric: None,
-            mode: MeasurementMode::default(),
+            source_task: "sample".into(),
+            measurement: Default::default(),
         }
     }
 }
-
 impl MeasurementSpec {
     pub fn validate(&self) -> Result<(), String> {
         validate_source_name("measurement.source_task", &self.source_task)?;
-        self.task_measurement().validate()
+        self.measurement.validate()
     }
-
     pub fn task_measurement(&self) -> TaskMeasurementSpec {
-        TaskMeasurementSpec {
-            quantity: self.quantity.clone(),
-            metric: self.metric.clone(),
-            mode: self.mode,
-        }
+        self.measurement.clone()
     }
-
-    pub fn metric_selector(&self) -> AccumulatorMetricSelector {
-        self.task_measurement().metric_selector()
-    }
-
-    pub fn explicit_metric_selector(&self) -> Option<AccumulatorMetricSelector> {
-        self.task_measurement().explicit_metric_selector()
+    pub fn metric_selector(&self) -> Option<&AccumulatorMetricSelector> {
+        self.measurement.metric_selector()
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ParameterValueSourceSpec {
-    #[serde(default)]
-    pub values: Vec<toml::Value>,
-    pub linspace: Option<ParameterLinspaceSpec>,
-    pub range: Option<ParameterIntegerRangeSpec>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParameterValueSourceSpec {
+    Values(Vec<toml::Value>),
+    Linspace(ParameterLinspaceSpec),
+    Range(ParameterIntegerRangeSpec),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -365,28 +285,14 @@ pub struct ParameterIntegerRangeSpec {
 
 impl ParameterValueSourceSpec {
     pub fn values(&self, label: &str) -> Result<Vec<toml::Value>, String> {
-        let source_count = usize::from(!self.values.is_empty())
-            + usize::from(self.linspace.is_some())
-            + usize::from(self.range.is_some());
-        if source_count == 0 {
-            return Err(format!(
-                "{label} must define one of values, linspace, or range"
-            ));
-        }
-        if source_count > 1 {
-            return Err(format!(
-                "{label} must define only one of values, linspace, or range"
-            ));
-        }
-        if self.values.is_empty() {
-            if let Some(linspace) = &self.linspace {
-                return linspace.values(label);
+        match self {
+            Self::Values(values) if values.is_empty() => {
+                Err(format!("{label}.values must not be empty"))
             }
-            if let Some(range) = &self.range {
-                return range.values(label);
-            }
+            Self::Values(values) => Ok(values.clone()),
+            Self::Linspace(linspace) => linspace.values(label),
+            Self::Range(range) => range.values(label),
         }
-        Ok(self.values.clone())
     }
 
     pub fn len(&self, label: &str) -> Result<usize, String> {
@@ -538,20 +444,17 @@ impl HyperparameterTuningParameterDomain {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HyperparameterTuningAlgorithm {
-    RandomSearch,
-    GridSearch,
-    Egobox,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct HyperparameterTuningOptimizerSpec {
-    pub algorithm: HyperparameterTuningAlgorithm,
-    #[serde(default = "empty_json_object")]
-    pub params: serde_json::Value,
+#[serde(
+    tag = "algorithm",
+    content = "params",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum HyperparameterTuningOptimizerSpec {
+    RandomSearch(RandomSearchOptimizerParams),
+    GridSearch,
+    Egobox(EgoboxOptimizerParams),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -602,62 +505,33 @@ fn default_egobox_parallel_candidates() -> usize {
     1
 }
 
-fn empty_json_object() -> serde_json::Value {
-    serde_json::Value::Object(Default::default())
-}
-
 impl HyperparameterTuningOptimizerSpec {
     pub fn validate(&self) -> Result<(), String> {
-        let Some(params) = self.params.as_object() else {
-            return Err("hyperparameter_tuning.optimizer.params must be a table".to_string());
-        };
-        match self.algorithm {
-            HyperparameterTuningAlgorithm::GridSearch if !params.is_empty() => Err(
-                "hyperparameter_tuning.optimizer.params must be empty for grid_search".to_string(),
-            ),
-            HyperparameterTuningAlgorithm::RandomSearch => {
-                let params = self.random_search_params()?;
-                if params.max_trials == 0 {
-                    return Err(
-                        "hyperparameter_tuning.optimizer.params.max_trials must be > 0".to_string(),
-                    );
-                }
-                Ok(())
+        match self {
+            Self::RandomSearch(params) if params.max_trials == 0 => {
+                Err("random_search max_trials must be > 0".into())
             }
-            HyperparameterTuningAlgorithm::Egobox => {
-                let params = self.egobox_params()?;
-                if params.max_trials == 0 {
-                    return Err(
-                        "hyperparameter_tuning.optimizer.params.max_trials must be > 0".to_string(),
-                    );
-                }
-                if params.parallel_candidates == 0 {
-                    return Err(
-                        "hyperparameter_tuning.optimizer.params.parallel_candidates must be > 0"
-                            .to_string(),
-                    );
-                }
-                if params.qei_optmod.is_some_and(|qei_optmod| qei_optmod == 0) {
-                    return Err(
-                        "hyperparameter_tuning.optimizer.params.qei_optmod must be > 0".to_string(),
-                    );
-                }
-                Ok(())
+            Self::Egobox(params)
+                if params.max_trials == 0
+                    || params.parallel_candidates == 0
+                    || params.qei_optmod == Some(0) =>
+            {
+                Err("egobox max_trials, parallel_candidates and qei_optmod must be > 0".into())
             }
-            HyperparameterTuningAlgorithm::GridSearch => Ok(()),
+            _ => Ok(()),
         }
     }
-
-    pub fn random_search_params(&self) -> Result<RandomSearchOptimizerParams, String> {
-        serde_json::from_value(self.params.clone()).map_err(|err| {
-            format!("invalid hyperparameter_tuning.optimizer.params for random_search: {err}")
-        })
+    pub fn random_search_params(&self) -> Result<&RandomSearchOptimizerParams, String> {
+        match self {
+            Self::RandomSearch(params) => Ok(params),
+            _ => Err("expected random_search optimizer".into()),
+        }
     }
-
-    pub fn egobox_params(&self) -> Result<EgoboxOptimizerParams, String> {
-        serde_json::from_value(self.params.clone()).map_err(|err| {
-            format!("invalid hyperparameter_tuning.optimizer.params for egobox: {err}")
-        })
+    pub fn egobox_params(&self) -> Result<&EgoboxOptimizerParams, String> {
+        match self {
+            Self::Egobox(params) => Ok(params),
+            _ => Err("expected egobox optimizer".into()),
+        }
     }
 }
 
@@ -827,7 +701,6 @@ pub struct SampleStopCondition {
     pub max_samples: Option<i64>,
     pub absolute_error: Option<f64>,
     pub relative_error: Option<f64>,
-    pub projection: Option<SampleErrorProjection>,
     pub metric: Option<AccumulatorMetricSelector>,
 }
 
@@ -876,26 +749,12 @@ impl SampleStopCondition {
                     .to_string(),
             );
         }
-        if self.metric.is_some() && self.projection.is_some() {
-            return Err(
-                "sample.stop_condition.metric and projection are mutually exclusive".to_string(),
-            );
-        }
-        if self.projection.is_some()
-            && self.absolute_error.is_none()
-            && self.relative_error.is_none()
-        {
-            return Err(
-                "sample.stop_condition.projection requires absolute_error and/or relative_error"
-                    .to_string(),
-            );
-        }
         Ok(())
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SamplerQueueTuning {
     pub fixed_batch_size: Option<usize>,
     pub target_batch_eval_ms: Option<f64>,
@@ -937,14 +796,15 @@ pub enum SourceRefSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum StageSourceSpec<T> {
+    FromStage { config: T, from_stage: String },
     Latest(String),
     FromName { from_name: String },
     Config { config: T },
 }
 
-pub type SamplerAggregatorSourceSpec = StageSourceSpec<SamplerAggregatorConfig>;
+pub type SamplerSourceSpec = StageSourceSpec<SamplingConfig>;
 pub type EvaluatorSourceSpec = StageSourceSpec<EvaluatorConfig>;
 pub type AccumulatorSourceSpec = StageSourceSpec<AccumulatorConfig>;
 
@@ -974,6 +834,12 @@ impl<T> StageSourceSpec<T> {
                 }
             }
             Self::FromName { from_name } => validate_source_name(field, from_name),
+            Self::FromStage { from_stage, .. } => {
+                if field != "sampler" {
+                    return Err("from_stage only applies to sampler initialization".into());
+                }
+                validate_source_name(field, from_stage)
+            }
             Self::Config { .. } => Ok(()),
         }
     }
@@ -985,7 +851,7 @@ fn default_publish_result() -> bool {
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunTaskSpec {
     SetAccumulator {
         accumulator: AccumulatorConfig,
@@ -996,7 +862,8 @@ pub enum RunTaskSpec {
         stop_condition: SampleStopCondition,
         measurement: Option<TaskMeasurementSpec>,
         evaluator: Option<EvaluatorSourceSpec>,
-        sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
+        #[serde(rename = "sampler")]
+        sampler_aggregator: Option<SamplerSourceSpec>,
         accumulator: Option<AccumulatorSourceSpec>,
         queue_tuning: Option<SamplerQueueTuning>,
         batch_transforms: Option<Vec<BatchTransformConfig>>,
@@ -1011,12 +878,14 @@ pub enum RunTaskSpec {
     },
     PdfAdaptationImage {
         geometry: PlaneRasterGeometry,
-        sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
+        #[serde(rename = "sampler")]
+        sampler_aggregator: Option<SamplerSourceSpec>,
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PdfAdaptationPlotLine {
         geometry: LineRasterGeometry,
-        sampler_aggregator: Option<SamplerAggregatorSourceSpec>,
+        #[serde(rename = "sampler")]
+        sampler_aggregator: Option<SamplerSourceSpec>,
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PlotLine {
@@ -1068,8 +937,8 @@ impl RunTaskSpec {
             Self::Sample {
                 stop_condition,
                 sampler_aggregator:
-                    Some(SamplerAggregatorSourceSpec::Config {
-                        config: SamplerAggregatorConfig::HavanaTraining { .. },
+                    Some(SamplerSourceSpec::Config {
+                        config: SamplingConfig { sampler: crate::core::SamplerConfig::HavanaTraining { .. }, .. },
                     }),
                 ..
             } if stop_condition.max_samples.is_none() => Err(
@@ -1093,7 +962,7 @@ impl RunTaskSpec {
                     source.validate_ref("evaluator")?;
                 }
                 if let Some(source) = sampler_aggregator {
-                    source.validate_ref("sampler_aggregator")?;
+                    source.validate_ref("sampler")?;
                 }
                 if let Some(source) = accumulator {
                     source.validate_ref("accumulator")?;
@@ -1123,13 +992,13 @@ impl RunTaskSpec {
                 geometry.validate()?;
                 if let Some(source) = sampler_aggregator {
                     match source {
-                        SamplerAggregatorSourceSpec::Config { .. } => {
+                        SamplerSourceSpec::Config { .. } | SamplerSourceSpec::FromStage { .. } => {
                             return Err(
                                 "pdf_adaptation_image sampler_aggregator must be omitted, \"latest\", or { from_name = ... }"
                                     .to_string(),
                             );
                         }
-                        _ => source.validate_ref("sampler_aggregator")?,
+                        _ => source.validate_ref("sampler")?,
                     }
                 }
                 Ok(())
@@ -1142,13 +1011,13 @@ impl RunTaskSpec {
                 geometry.validate()?;
                 if let Some(source) = sampler_aggregator {
                     match source {
-                        SamplerAggregatorSourceSpec::Config { .. } => {
+                        SamplerSourceSpec::Config { .. } | SamplerSourceSpec::FromStage { .. } => {
                             return Err(
                                 "pdf_adaptation_plot_line sampler_aggregator must be omitted, \"latest\", or { from_name = ... }"
                                     .to_string(),
                             );
                         }
-                        _ => source.validate_ref("sampler_aggregator")?,
+                        _ => source.validate_ref("sampler")?,
                     }
                 }
                 Ok(())
@@ -1267,77 +1136,81 @@ impl RunTaskSpec {
         )
     }
 
-    pub fn sampler_config(&self) -> Option<SamplerAggregatorConfig> {
+    pub fn sampler_config(&self) -> Option<SamplingConfig> {
         match self {
-            Self::Image { geometry, .. } => Some(SamplerAggregatorConfig::RasterPlane {
-                params: RasterPlaneSamplerParams {
-                    geometry: geometry.clone(),
-                },
-                materializer: None,
-            }),
-            Self::PdfAdaptationImage { geometry, .. } => {
-                Some(SamplerAggregatorConfig::PdfAdaptationRasterPlane {
+            Self::Image { geometry, .. } => Some(SamplingConfig {
+                sampler: crate::core::SamplerConfig::RasterPlane {
                     params: RasterPlaneSamplerParams {
                         geometry: geometry.clone(),
                     },
-                    materializer: None,
-                })
-            }
-            Self::PdfAdaptationPlotLine { geometry, .. } => {
-                Some(SamplerAggregatorConfig::PdfAdaptationRasterLine {
+                },
+                materializer: None,
+                transforms: None,
+            }),
+            Self::PdfAdaptationImage { geometry, .. } => Some(SamplingConfig {
+                sampler: crate::core::SamplerConfig::PdfAdaptationRasterPlane {
+                    params: RasterPlaneSamplerParams {
+                        geometry: geometry.clone(),
+                    },
+                },
+                materializer: None,
+                transforms: None,
+            }),
+            Self::PdfAdaptationPlotLine { geometry, .. } => Some(SamplingConfig {
+                sampler: crate::core::SamplerConfig::PdfAdaptationRasterLine {
                     params: RasterLineSamplerParams {
                         geometry: geometry.clone(),
                     },
-                    materializer: None,
-                })
-            }
-            Self::PlotLine { geometry, .. } => Some(SamplerAggregatorConfig::RasterLine {
-                params: RasterLineSamplerParams {
-                    geometry: geometry.clone(),
                 },
                 materializer: None,
+                transforms: None,
+            }),
+            Self::PlotLine { geometry, .. } => Some(SamplingConfig {
+                sampler: crate::core::SamplerConfig::RasterLine {
+                    params: RasterLineSamplerParams {
+                        geometry: geometry.clone(),
+                    },
+                },
+                materializer: None,
+                transforms: None,
             }),
             _ => None,
         }
     }
 
     pub fn sample_sampler_source(&self) -> Option<SourceRefSpec> {
-        match self {
+        let source = match self {
             Self::Sample {
                 sampler_aggregator, ..
-            } => match sampler_aggregator {
-                None | Some(SamplerAggregatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
-                Some(SamplerAggregatorSourceSpec::FromName { from_name }) => {
-                    Some(SourceRefSpec::FromName(from_name.clone()))
-                }
-                Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
-            },
-            Self::PdfAdaptationImage {
+            }
+            | Self::PdfAdaptationImage {
                 sampler_aggregator, ..
-            } => match sampler_aggregator {
-                None | Some(SamplerAggregatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
-                Some(SamplerAggregatorSourceSpec::FromName { from_name }) => {
-                    Some(SourceRefSpec::FromName(from_name.clone()))
-                }
-                Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
-            },
-            Self::PdfAdaptationPlotLine {
+            }
+            | Self::PdfAdaptationPlotLine {
                 sampler_aggregator, ..
-            } => match sampler_aggregator {
-                None | Some(SamplerAggregatorSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
-                Some(SamplerAggregatorSourceSpec::FromName { from_name }) => {
-                    Some(SourceRefSpec::FromName(from_name.clone()))
-                }
-                Some(SamplerAggregatorSourceSpec::Config { .. }) => None,
-            },
-            _ => None,
+            } => sampler_aggregator,
+            _ => return None,
+        };
+        match source {
+            None | Some(StageSourceSpec::Latest(_)) => Some(SourceRefSpec::Latest),
+            Some(StageSourceSpec::FromName { from_name }) => {
+                Some(SourceRefSpec::FromName(from_name.clone()))
+            }
+            Some(StageSourceSpec::FromStage { from_stage, .. }) => {
+                Some(SourceRefSpec::FromName(from_stage.clone()))
+            }
+            Some(StageSourceSpec::Config { .. }) => None,
         }
     }
 
-    pub fn sample_sampler_config(&self) -> Option<SamplerAggregatorConfig> {
+    pub fn sample_sampler_config(&self) -> Option<SamplingConfig> {
         match self {
             Self::Sample {
-                sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
+                sampler_aggregator:
+                    Some(
+                        SamplerSourceSpec::Config { config }
+                        | SamplerSourceSpec::FromStage { config, .. },
+                    ),
                 ..
             } => Some(config.clone()),
             _ => None,
@@ -1353,7 +1226,9 @@ impl RunTaskSpec {
                 Some(EvaluatorSourceSpec::FromName { from_name }) => {
                     Some(SourceRefSpec::FromName(from_name.clone()))
                 }
-                Some(EvaluatorSourceSpec::Config { .. }) => None,
+                Some(
+                    EvaluatorSourceSpec::Config { .. } | EvaluatorSourceSpec::FromStage { .. },
+                ) => None,
             },
             _ => None,
         }
@@ -1381,7 +1256,10 @@ impl RunTaskSpec {
         match self {
             Self::Sample {
                 batch_transforms, ..
-            } => batch_transforms.clone(),
+            } => batch_transforms.clone().or_else(|| {
+                self.sample_sampler_config()
+                    .and_then(|config| config.transforms)
+            }),
             Self::Image {
                 batch_transforms, ..
             }
@@ -1405,7 +1283,9 @@ impl RunTaskSpec {
                 Some(AccumulatorSourceSpec::FromName { from_name }) => {
                     Some(SourceRefSpec::FromName(from_name.clone()))
                 }
-                Some(AccumulatorSourceSpec::Config { .. }) => None,
+                Some(
+                    AccumulatorSourceSpec::Config { .. } | AccumulatorSourceSpec::FromStage { .. },
+                ) => None,
             },
             _ => None,
         }
@@ -1425,7 +1305,7 @@ impl RunTaskSpec {
         out
     }
 
-    pub fn new_accumulator_config(&self) -> Result<Option<AccumulatorConfig>, BuildError> {
+    pub fn new_accumulator_config(&self) -> Result<Option<AccumulatorConfig>, EngineError> {
         match self {
             Self::SetAccumulator { accumulator } => Ok(Some(accumulator.clone())),
             Self::Sample {
@@ -1513,17 +1393,17 @@ fn hyperparameter_tuning_trial_count(
     optimizer: &HyperparameterTuningOptimizerSpec,
     parameters: &BTreeMap<String, HyperparameterTuningParameterDomain>,
 ) -> Option<usize> {
-    match optimizer.algorithm {
-        HyperparameterTuningAlgorithm::RandomSearch => optimizer
+    match optimizer {
+        HyperparameterTuningOptimizerSpec::RandomSearch(_) => optimizer
             .random_search_params()
             .ok()
             .map(|params| params.max_trials),
-        HyperparameterTuningAlgorithm::GridSearch => {
+        HyperparameterTuningOptimizerSpec::GridSearch => {
             parameters.values().try_fold(1usize, |count, domain| {
                 count.checked_mul(hyperparameter_grid_domain_len(domain)?)
             })
         }
-        HyperparameterTuningAlgorithm::Egobox => optimizer
+        HyperparameterTuningOptimizerSpec::Egobox(_) => optimizer
             .egobox_params()
             .ok()
             .map(|params| params.max_trials),
@@ -1779,6 +1659,24 @@ pub struct ControllerChildOutput {
     pub failure_reason: Option<String>,
 }
 
+impl ControllerChildOutput {
+    pub fn planned() -> Self {
+        Self {
+            child_run_id: None,
+            status: ControllerChildState::Planned,
+            result_source: None,
+            completed_samples_per_second: None,
+            measurement: None,
+            failure_reason: None,
+        }
+    }
+
+    pub fn fail(&mut self, reason: String) {
+        self.status = ControllerChildState::Failed;
+        self.failure_reason = Some(reason);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterScanPointOutput {
     pub index: usize,
@@ -1966,188 +1864,75 @@ mod tests {
             },
             measurement: None,
             evaluator: None,
-            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
-                config: SamplerAggregatorConfig::NaiveMonteCarlo {
-                    params: NaiveMonteCarloSamplerParams::default(),
+            sampler_aggregator: Some(SamplerSourceSpec::Config {
+                config: SamplingConfig {
+                    sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                        params: NaiveMonteCarloSamplerParams::default(),
+                    },
                     materializer: None,
+                    transforms: None,
                 },
             }),
             accumulator: Some(AccumulatorSourceSpec::Latest("latest".to_string())),
             queue_tuning: None,
-            batch_transforms: Some(Vec::new()),
+            batch_transforms: None,
         };
 
         assert_eq!(task.new_accumulator_config().unwrap(), None);
     }
 
     #[test]
-    fn sample_stop_condition_accepts_metric_target() {
-        let stop_condition: SampleStopCondition = toml::from_str(
-            r#"
-min_samples = 100
-relative_error = 0.1
-metric = { name = "variance", component = "real" }
-"#,
-        )
-        .expect("stop condition");
-
-        stop_condition.validate().expect("valid stop condition");
-        assert_eq!(stop_condition.min_samples, Some(100));
-        assert_eq!(
-            stop_condition.metric.as_ref().map(|metric| metric.name),
-            Some(AccumulatorMetricName::Variance)
-        );
-    }
-
-    #[test]
-    fn sample_stop_condition_accepts_time_normalized_variance_metric_target() {
-        let stop_condition: SampleStopCondition = toml::from_str(
-            r#"
-min_samples = 100
-relative_error = 0.1
-metric = { name = "time_normalized_variance", component = "real" }
-"#,
-        )
-        .expect("stop condition");
-
-        stop_condition.validate().expect("valid stop condition");
-        assert_eq!(
-            stop_condition.metric.as_ref().map(|metric| metric.name),
-            Some(AccumulatorMetricName::TimeNormalizedVariance)
-        );
-    }
-
-    #[test]
-    fn measurement_spec_defaults_to_central_value() {
-        #[derive(Debug, Deserialize)]
-        struct Wrapper {
-            measurement: MeasurementSpec,
+    fn sample_stop_condition_accepts_metric_targets() {
+        for (name, metric) in [
+            ("variance", AccumulatorMetricName::Variance),
+            (
+                "time_normalized_variance",
+                AccumulatorMetricName::TimeNormalizedVariance,
+            ),
+        ] {
+            let condition: SampleStopCondition = toml::from_str(&format!(
+                "min_samples = 100\nrelative_error = 0.1\nmetric = {{ name = '{name}', component = 'real' }}"
+            )).unwrap();
+            condition.validate().unwrap();
+            assert_eq!(condition.min_samples, Some(100));
+            assert_eq!(
+                condition.metric.as_ref().map(|selector| selector.name),
+                Some(metric)
+            );
         }
+    }
 
-        let wrapper: Wrapper = toml::from_str(
-            r#"
-[measurement]
-source_task = "sample"
-"#,
-        )
-        .expect("measurement spec");
-
-        wrapper.measurement.validate().expect("valid measurement");
-        let selector = wrapper.measurement.metric_selector();
-        assert_eq!(selector.name, AccumulatorMetricName::Mean);
-        assert_eq!(wrapper.measurement.explicit_metric_selector(), None);
+    #[test]
+    fn measurement_selection_is_explicit_and_has_one_form() {
+        let default: MeasurementSpec = toml::from_str("source_task = 'sample'").unwrap();
         assert_eq!(
-            wrapper.measurement.quantity,
-            MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue)
+            default.measurement.selection,
+            MeasurementSelection::AllComponentMeans
         );
-    }
-
-    #[test]
-    fn sample_task_parses_task_local_measurement() {
-        #[derive(Debug, Deserialize)]
-        struct Wrapper {
-            task: RunTaskSpec,
-        }
-
-        let wrapper: Wrapper = toml::from_str(
-            r#"
-[task]
-kind = "sample"
-
-[task.stop_condition]
-max_samples = 100000
-metric = { name = "time_normalized_variance" }
-
-[task.measurement]
-quantity = { metric = "time_normalized_variance" }
-mode = "minimize"
-"#,
-        )
-        .expect("sample task");
-
-        wrapper.task.validate().expect("valid sample task");
-        let measurement = wrapper
-            .task
-            .sample_measurement()
-            .expect("task-local measurement");
-        assert_eq!(
-            measurement.metric_selector().name,
-            AccumulatorMetricName::TimeNormalizedVariance
-        );
-        assert_eq!(measurement.mode, MeasurementMode::Minimize);
-    }
-
-    #[test]
-    fn measurement_spec_parses_metric_alias() {
-        #[derive(Debug, Deserialize)]
-        struct Wrapper {
-            measurement: MeasurementSpec,
-        }
-
-        let wrapper: Wrapper = toml::from_str(
-            r#"
-[measurement]
-source_task = "sample"
-metric = "time_normalized_variance"
-mode = "minimize"
-"#,
-        )
-        .expect("measurement spec");
-
-        wrapper.measurement.validate().expect("valid measurement");
-        let selector = wrapper.measurement.metric_selector();
-        assert_eq!(selector.name, AccumulatorMetricName::TimeNormalizedVariance);
-        assert_eq!(wrapper.measurement.mode, MeasurementMode::Minimize);
-    }
-
-    #[test]
-    fn measurement_spec_parses_component_qualified_metric() {
-        #[derive(Debug, Deserialize)]
-        struct Wrapper {
-            measurement: MeasurementSpec,
-        }
-
-        let wrapper: Wrapper = toml::from_str(
-            r#"
-[measurement]
-source_task = "sample"
-metric = { component = "real", name = "variance" }
-"#,
-        )
-        .expect("measurement spec");
-
-        wrapper.measurement.validate().expect("valid measurement");
-        let selector = wrapper
-            .measurement
-            .explicit_metric_selector()
-            .expect("metric selector");
+        assert!(default.metric_selector().is_none());
+        let selected: MeasurementSpec = toml::from_str("source_task = 'sample'\nselection = { kind = 'metric', name = 'variance', component = 'real' }").unwrap();
+        selected.validate().unwrap();
+        let selector = selected.metric_selector().unwrap();
         assert_eq!(selector.name, AccumulatorMetricName::Variance);
         assert_eq!(selector.component.as_deref(), Some("real"));
-    }
-
-    #[test]
-    fn measurement_spec_parses_quantity_metric() {
-        #[derive(Debug, Deserialize)]
-        struct Wrapper {
-            measurement: MeasurementSpec,
+        for invalid in [
+            "quantity = 'central_value'",
+            "metric = 'mean'",
+            "selection = { kind = 'metric', name = 'mean', component = '' }",
+        ] {
+            assert!(
+                toml::from_str::<MeasurementSpec>(invalid).map_or(true, |m| m.validate().is_err())
+            );
         }
-
-        let wrapper: Wrapper = toml::from_str(
-            r#"
-[measurement]
-source_task = "sample"
-quantity = { component = "real", metric = "time_normalized_variance" }
-"#,
+        let task: TaskMeasurementSpec = toml::from_str(
+            "selection = { kind = 'metric', name = 'time_normalized_variance' }\nmode = 'maximize'",
         )
-        .expect("measurement spec");
-
-        wrapper.measurement.validate().expect("valid measurement");
-        let selector = wrapper
-            .measurement
-            .explicit_metric_selector()
-            .expect("metric selector");
-        assert_eq!(selector.name, AccumulatorMetricName::TimeNormalizedVariance);
-        assert_eq!(selector.component.as_deref(), Some("real"));
+        .unwrap();
+        assert_eq!(task.mode, MeasurementMode::Maximize);
+        assert_eq!(
+            task.metric_selector().unwrap().name,
+            AccumulatorMetricName::TimeNormalizedVariance
+        );
     }
 
     #[test]
@@ -2174,7 +1959,7 @@ seed = 1
 [task.objective]
 source_task = "sample"
 mode = "minimize"
-quantity = { metric = "time_normalized_variance" }
+selection = { kind = 'metric', name = "time_normalized_variance" }
 
 [task.parameters.mu_scale]
 kind = "float"
@@ -2208,10 +1993,10 @@ values = ["auto", "none"]
         let random_params = optimizer.random_search_params().unwrap();
         assert_eq!(random_params.max_trials, 8);
         assert_eq!(random_params.seed, Some(1));
-        assert_eq!(
-            optimizer.algorithm,
-            HyperparameterTuningAlgorithm::RandomSearch
-        );
+        assert!(matches!(
+            optimizer,
+            HyperparameterTuningOptimizerSpec::RandomSearch(_)
+        ));
         assert_eq!(objective.source_task, "sample");
         assert_eq!(parameters.len(), 3);
         assert_eq!(max_concurrent_trials, 2);
@@ -2246,7 +2031,7 @@ qei_strategy = "kriging_believer"
 [task.objective]
 source_task = "sample"
 mode = "minimize"
-quantity = { metric = "error" }
+selection = { kind = 'metric', name = "error" }
 
 [task.parameters.x]
 kind = "float"
@@ -2259,7 +2044,10 @@ max = 1.0
         let RunTaskSpec::HyperparameterTuning { optimizer, .. } = wrapper.task else {
             panic!("expected hyperparameter tuning task");
         };
-        assert_eq!(optimizer.algorithm, HyperparameterTuningAlgorithm::Egobox);
+        assert!(matches!(
+            optimizer,
+            HyperparameterTuningOptimizerSpec::Egobox(_)
+        ));
         let params = optimizer.egobox_params().unwrap();
         assert_eq!(params.max_trials, 8);
         assert_eq!(params.seed, Some(1));
@@ -2285,10 +2073,9 @@ max = 1.0
 
         let categorical = HyperparameterTuningParameterDomain::Categorical(
             HyperparameterTuningCategoricalDomain {
-                source: ParameterValueSourceSpec {
-                    values: vec![toml::Value::String("auto".to_string())],
-                    ..Default::default()
-                },
+                source: ParameterValueSourceSpec::Values(vec![toml::Value::String(
+                    "auto".to_string(),
+                )]),
             },
         );
         categorical.validate("mode").expect("valid categorical");
@@ -2303,15 +2090,38 @@ max = 1.0
     }
 
     #[test]
+    fn parameter_sources_are_exclusive_and_reject_unknown_fields() {
+        for source in [
+            "values=[1,2]",
+            "linspace={start=0.0,stop=1.0,count=2}",
+            "range={min=1,max=2}",
+        ] {
+            let parameter: ParameterScanParameterSpec =
+                toml::from_str(&format!("name='x'\n{source}")).unwrap();
+            parameter.validate().unwrap();
+            let roundtrip: ParameterScanParameterSpec =
+                toml::from_str(&toml::to_string(&parameter).unwrap()).unwrap();
+            assert_eq!(roundtrip, parameter);
+        }
+        for source in [
+            "",
+            "values=[1]\nrange={min=1,max=2}",
+            "values=[1]\nunknown=1",
+        ] {
+            assert!(
+                toml::from_str::<ParameterScanParameterSpec>(&format!("name='x'\n{source}"))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn parameter_value_source_materializes_linspace_and_range() {
-        let linspace = ParameterValueSourceSpec {
-            linspace: Some(ParameterLinspaceSpec {
-                start: 0.0,
-                stop: 2.0,
-                count: 3,
-            }),
-            ..Default::default()
-        };
+        let linspace = ParameterValueSourceSpec::Linspace(ParameterLinspaceSpec {
+            start: 0.0,
+            stop: 2.0,
+            count: 3,
+        });
         assert_eq!(
             linspace.values("parameter").expect("linspace values"),
             vec![
@@ -2321,14 +2131,11 @@ max = 1.0
             ]
         );
 
-        let range = ParameterValueSourceSpec {
-            range: Some(ParameterIntegerRangeSpec {
-                min: 2,
-                max: 6,
-                step: Some(2),
-            }),
-            ..Default::default()
-        };
+        let range = ParameterValueSourceSpec::Range(ParameterIntegerRangeSpec {
+            min: 2,
+            max: 6,
+            step: Some(2),
+        });
         assert_eq!(
             range.values("parameter").expect("range values"),
             vec![
@@ -2405,7 +2212,7 @@ max = 1.0
             },
             measurement: None,
             evaluator: None,
-            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Latest("latest".to_string())),
+            sampler_aggregator: Some(SamplerSourceSpec::Latest("latest".to_string())),
             accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
@@ -2420,10 +2227,13 @@ max = 1.0
             stop_condition: SampleStopCondition::default(),
             measurement: None,
             evaluator: None,
-            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
-                config: SamplerAggregatorConfig::HavanaTraining {
-                    params: HavanaSamplerParams::default(),
+            sampler_aggregator: Some(SamplerSourceSpec::Config {
+                config: SamplingConfig {
+                    sampler: crate::core::SamplerConfig::HavanaTraining {
+                        params: HavanaSamplerParams::default(),
+                    },
                     materializer: None,
+                    transforms: None,
                 },
             }),
             accumulator: None,
@@ -2541,112 +2351,60 @@ max = 1.0
     }
 
     #[test]
-    fn pdf_adaptation_task_defaults_sampler_source_to_latest() {
-        let task = RunTaskSpec::PdfAdaptationImage {
-            geometry: PlaneRasterGeometry {
-                offset: vec![0.0, 0.0],
-                u_vector: vec![1.0, 0.0],
-                v_vector: vec![0.0, 1.0],
-                u_linspace: Linspace {
-                    start: 0.0,
-                    stop: 1.0,
-                    count: 4,
-                },
-                v_linspace: Linspace {
-                    start: 0.0,
-                    stop: 1.0,
-                    count: 4,
-                },
-                discrete: Vec::new(),
-            },
-            sampler_aggregator: None,
-            batch_transforms: None,
+    fn pdf_adaptation_uses_prior_sampler_and_rejects_inline_configs() {
+        let linspace = Linspace {
+            start: 0.0,
+            stop: 1.0,
+            count: 4,
         };
-
-        assert_eq!(task.sample_sampler_source(), Some(SourceRefSpec::Latest));
-        assert_eq!(
-            task.new_accumulator_config().unwrap(),
-            Some(AccumulatorConfig::Empty)
-        );
-    }
-
-    #[test]
-    fn pdf_adaptation_task_rejects_inline_sampler_config() {
-        let task = RunTaskSpec::PdfAdaptationImage {
-            geometry: PlaneRasterGeometry {
-                offset: vec![0.0, 0.0],
-                u_vector: vec![1.0, 0.0],
-                v_vector: vec![0.0, 1.0],
-                u_linspace: Linspace {
-                    start: 0.0,
-                    stop: 1.0,
-                    count: 4,
+        for mut task in [
+            RunTaskSpec::PdfAdaptationImage {
+                geometry: PlaneRasterGeometry {
+                    offset: vec![0.0, 0.0],
+                    u_vector: vec![1.0, 0.0],
+                    v_vector: vec![0.0, 1.0],
+                    u_linspace: linspace.clone(),
+                    v_linspace: linspace.clone(),
+                    discrete: Vec::new(),
                 },
-                v_linspace: Linspace {
-                    start: 0.0,
-                    stop: 1.0,
-                    count: 4,
-                },
-                discrete: Vec::new(),
+                sampler_aggregator: None,
+                batch_transforms: None,
             },
-            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
-                config: SamplerAggregatorConfig::NaiveMonteCarlo {
-                    params: NaiveMonteCarloSamplerParams::default(),
+            RunTaskSpec::PdfAdaptationPlotLine {
+                geometry: LineRasterGeometry {
+                    offset: vec![0.0, 0.0],
+                    direction: vec![1.0, 0.0],
+                    linspace,
+                    discrete: Vec::new(),
+                },
+                sampler_aggregator: None,
+                batch_transforms: None,
+            },
+        ] {
+            assert_eq!(task.sample_sampler_source(), Some(SourceRefSpec::Latest));
+            assert_eq!(
+                task.new_accumulator_config().unwrap(),
+                Some(AccumulatorConfig::Empty)
+            );
+            let (RunTaskSpec::PdfAdaptationImage {
+                sampler_aggregator, ..
+            }
+            | RunTaskSpec::PdfAdaptationPlotLine {
+                sampler_aggregator, ..
+            }) = &mut task
+            else {
+                unreachable!()
+            };
+            *sampler_aggregator = Some(SamplerSourceSpec::Config {
+                config: SamplingConfig {
+                    sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                        params: NaiveMonteCarloSamplerParams::default(),
+                    },
                     materializer: None,
+                    transforms: None,
                 },
-            }),
-            batch_transforms: None,
-        };
-
-        assert!(task.validate().is_err());
-    }
-
-    #[test]
-    fn pdf_adaptation_plot_line_task_defaults_sampler_source_to_latest() {
-        let task = RunTaskSpec::PdfAdaptationPlotLine {
-            geometry: LineRasterGeometry {
-                offset: vec![0.0, 0.0],
-                direction: vec![1.0, 0.0],
-                linspace: Linspace {
-                    start: 0.0,
-                    stop: 1.0,
-                    count: 8,
-                },
-                discrete: Vec::new(),
-            },
-            sampler_aggregator: None,
-            batch_transforms: None,
-        };
-
-        assert_eq!(task.sample_sampler_source(), Some(SourceRefSpec::Latest));
-        assert_eq!(
-            task.new_accumulator_config().unwrap(),
-            Some(AccumulatorConfig::Empty)
-        );
-    }
-
-    #[test]
-    fn pdf_adaptation_plot_line_task_rejects_inline_sampler_config() {
-        let task = RunTaskSpec::PdfAdaptationPlotLine {
-            geometry: LineRasterGeometry {
-                offset: vec![0.0, 0.0],
-                direction: vec![1.0, 0.0],
-                linspace: Linspace {
-                    start: 0.0,
-                    stop: 1.0,
-                    count: 8,
-                },
-                discrete: Vec::new(),
-            },
-            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
-                config: SamplerAggregatorConfig::NaiveMonteCarlo {
-                    params: NaiveMonteCarloSamplerParams::default(),
-                    materializer: None,
-                },
-            }),
-            batch_transforms: None,
-        };
-
-        assert!(task.validate().is_err());
+            });
+            assert!(task.validate().is_err());
+        }
     }
 }

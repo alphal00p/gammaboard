@@ -9,7 +9,7 @@ use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
 use gammaboard::PgStore;
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::RuntimeConfig;
-use gammaboard::core::{ControlPlaneStore, NodeCapabilities, RegisteredNode, WorkerRole};
+use gammaboard::core::{ControlPlaneStore, NodeCapabilities, WorkerRole};
 use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
 use gammaboard::runtime_context::RuntimeContext;
 
@@ -143,10 +143,11 @@ async fn run_control_node_command(
                     }
                 }
                 NodeCommand::List { node_name } => {
-                    let nodes = store.list_nodes(node_name.as_deref()).await?;
                     if json_output_enabled() {
-                        print_json(&nodes);
+                        print_json(&store.list_nodes(node_name.as_deref()).await?);
                     } else {
+                        let nodes = store.get_registered_worker_summaries(None).await?
+                            .into_iter().filter(|node| node_name.as_ref().is_none_or(|name| *name == node.node_name)).collect();
                         print_node_table(build_node_rows(nodes));
                     }
                 }
@@ -271,31 +272,22 @@ struct NodeRow {
     last_seen: String,
 }
 
-fn build_node_rows(nodes: Vec<RegisteredNode>) -> Vec<NodeRow> {
+fn build_node_rows(nodes: Vec<gammaboard::stores::RegisteredWorkerSummary>) -> Vec<NodeRow> {
+    let run_label = |id: Option<i32>, name: Option<String>| match id {
+        Some(id) => format!("{} (#{id})", name.as_deref().unwrap_or("run")),
+        None => "None".into(),
+    };
     nodes
         .into_iter()
         .map(|node| NodeRow {
-            node_name: node.name,
-            node_uuid: node.uuid,
-            capabilities: format_capabilities(&node.capabilities),
-            pool: node
-                .pool_assignment
-                .as_ref()
-                .map(|a| format!("{} (#{})", a.run_name.as_deref().unwrap_or("run"), a.run_id))
-                .unwrap_or_else(|| "None".into()),
-            run: node
-                .desired_assignment
-                .as_ref()
-                .map(|assignment| match assignment.run_name.as_deref() {
-                    Some(run_name) => format!("{run_name} (#{})", assignment.run_id),
-                    None => assignment.run_id.to_string(),
-                })
-                .unwrap_or_else(|| "N/A".to_string()),
-            role: node
-                .desired_assignment
-                .as_ref()
-                .map(|assignment| format_role(Some(assignment.role)))
-                .unwrap_or_else(|| "None".to_string()),
+            node_name: node.node_name,
+            node_uuid: node.node_uuid,
+            capabilities: format_capabilities(
+                &serde_json::from_value(node.capabilities).unwrap_or_default(),
+            ),
+            pool: run_label(node.pool_run_id, node.pool_run_name),
+            run: run_label(node.desired_run_id, node.desired_run_name),
+            role: format_role(node.desired_role),
             last_seen: format_last_seen(node.last_seen),
         })
         .collect()

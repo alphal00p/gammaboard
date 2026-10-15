@@ -13,8 +13,8 @@ target = { kind = "scalar", value = 4.166666666666667 }
 
 [evaluator]
 kind = "symbolica"
-expr = "1 + x + 2*y^2 + 3*z^3 + x*y + 2*y*z + 3*x*z^2"
 args = ["x", "y", "z"]
+source = {kind = "expression", expr = "1 + x + 2*y^2 + 3*z^3 + x*y + 2*y*z + 3*x*z^2"}
 
 [[task_queue]]
 name = "accumulator"
@@ -25,7 +25,7 @@ accumulator = "scalar"
 name = "havana-train"
 kind = "sample"
 stop_condition = { max_samples = "$(train_samples:200_000)" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(samples_for_update:16_384)", initial_training_rate = 0.1, final_training_rate = 0.001 } }
+sampler = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(samples_for_update:16_384)", initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
 [[task_queue]]
 name = "pdf-2d"

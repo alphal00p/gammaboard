@@ -11,12 +11,13 @@ command = ["apptainer", "exec", "$resources/../process_api/examples/rust_breit_w
 cwd = "$resources"
 args = { scale = 1.0 }
 domain = { discrete = { axis_label = "d0", branches = [
-  { index = 0, domain = { continuous = { dims = 3 } } },
+  { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 3 } } },
   { index = 1, domain = { discrete = { axis_label = "d1", branches = [
-    { index = 0, domain = { continuous = { dims = 1 } } },
+    { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 1 } } },
     { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
   ] } } },
 ] } }
+output = {kind = "values", components = ["value"]}
 
 [[task_queue]]
 name = "accumulator"
@@ -44,4 +45,4 @@ fixed_dims = { "0" = 1 }
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 100000 }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 32, samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }
+sampler = { config = { kind = "havana_training", seed = 0, bins = 32, samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }

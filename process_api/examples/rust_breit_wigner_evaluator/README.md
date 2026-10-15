@@ -40,9 +40,9 @@ Configure it through `evaluator.domain`; `args.scale` is optional:
 ```toml
 args = { scale = 1.0 }
 domain = { discrete = { axis_label = "d0", branches = [
-  { index = 0, domain = { continuous = { dims = 3 } } },
+  { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 3 } } },
   { index = 1, domain = { discrete = { axis_label = "d1", branches = [
-    { index = 0, domain = { continuous = { dims = 1 } } },
+    { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 1 } } },
     { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
   ] } } },
 ] } }

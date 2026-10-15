@@ -3,15 +3,15 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, BatchFailOutcome, BatchQueueCounts, CompletedBatch, DesiredAssignment,
+    AssignmentTarget, BatchClaim, BatchFailOutcome, BatchQueueCounts, CompletedBatch,
     EvaluatorPerformanceSnapshot, InsertBatchesOutcome, NodeCapabilities, NodeLaunchRequest,
     RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot,
 };
+use crate::core::EvaluationBatch;
 use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
-use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
@@ -118,11 +118,11 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn get_desired_assignment(
         &self,
         node_name: &str,
-    ) -> Result<Option<DesiredAssignment>, StoreError>;
+    ) -> Result<Option<AssignmentTarget>, StoreError>;
     async fn list_desired_assignments(
         &self,
         node_name: Option<&str>,
-    ) -> Result<Vec<DesiredAssignment>, StoreError>;
+    ) -> Result<std::collections::BTreeMap<String, AssignmentTarget>, StoreError>;
     async fn list_nodes(&self, node_name: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError>;
     async fn create_node_launch_request(
         &self,
@@ -192,7 +192,7 @@ pub trait WorkQueueStore: Send + Sync {
         task_id: i64,
         requires_training_values: bool,
         batch_ids: &[i64],
-        batches: &[LatentBatch],
+        batches: &[EvaluationBatch],
     ) -> Result<InsertBatchesOutcome, StoreError>;
     async fn get_batch_queue_counts(
         &self,

@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 pub struct EmptyAccumulatorState {}
 
 impl IngestScalar for EmptyAccumulatorState {
-    fn ingest_scalar(&mut self, _value: f64, _point: &Point) {}
+    fn ingest_scalar(&mut self, value: f64, point: &Point) -> Result<(), crate::core::EngineError> {
+        if !(value * point.total_weight()).is_finite() {
+            return Err(crate::core::EngineError::eval(
+                "non-finite weighted contribution",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Accumulator for EmptyAccumulatorState {
@@ -17,7 +24,9 @@ impl Accumulator for EmptyAccumulatorState {
         0
     }
 
-    fn merge(&mut self, _other: Self) {}
+    fn merge(&mut self, _other: Self) -> Result<(), crate::core::EngineError> {
+        Ok(())
+    }
 
     fn get_persistent(&self) -> Self::Persistent {
         self.clone()
@@ -32,7 +41,7 @@ mod tests {
     #[test]
     fn empty_accumulator_merges_as_no_op() {
         let mut left = EmptyAccumulatorState::default();
-        left.merge(EmptyAccumulatorState::default());
+        left.merge(EmptyAccumulatorState::default()).unwrap();
         assert_eq!(left.sample_count(), 0);
     }
 }

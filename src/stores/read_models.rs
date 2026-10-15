@@ -137,8 +137,6 @@ pub struct RegisteredWorkerEntry {
     pub evaluator_metrics: Option<EvaluatorPerformanceMetrics>,
     pub evaluator_rss_bytes: Option<i64>,
     pub sampler_metrics: Option<SamplerPerformanceMetrics>,
-    pub sampler_runtime_metrics: Option<serde_json::Value>,
-    pub sampler_engine_diagnostics: Option<serde_json::Value>,
     pub sampler_rss_bytes: Option<i64>,
 }
 
@@ -161,29 +159,21 @@ pub struct RegisteredWorkerSummary {
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Evaluator performance history row.
+/// Persisted worker report; both roles use the same envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvaluatorPerformanceHistoryEntry {
+pub struct WorkerPerformanceHistoryEntry<M> {
     pub id: i64,
     pub run_id: i32,
     pub worker_id: String,
-    pub metrics: EvaluatorPerformanceMetrics,
+    pub metrics: M,
     pub rss_bytes: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Sampler-aggregator performance history row.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SamplerPerformanceHistoryEntry {
-    pub id: i64,
-    pub run_id: i32,
-    pub worker_id: String,
-    pub metrics: SamplerPerformanceMetrics,
-    pub runtime_metrics: serde_json::Value,
-    pub engine_diagnostics: serde_json::Value,
-    pub rss_bytes: Option<i64>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
+pub type EvaluatorPerformanceHistoryEntry =
+    WorkerPerformanceHistoryEntry<EvaluatorPerformanceMetrics>;
+pub type SamplerPerformanceHistoryEntry = WorkerPerformanceHistoryEntry<SamplerPerformanceMetrics>;
+
 use crate::evaluation::AccumulatorState;
 
 impl RunProgress {

@@ -19,4 +19,4 @@ npm run build   # Production build
 npm test        # Run tests
 ```
 
-Architecture and data-flow notes live in [../docs/frontend.md](../docs/frontend.md).
+For dashboard use and measurement definitions, see [operations](../docs/operations.md#read-performance).

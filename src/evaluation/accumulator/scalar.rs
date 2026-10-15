@@ -1,6 +1,6 @@
 use super::{Accumulator, IngestScalar};
-use crate::core::{AccumulatorMomentConfig, DiscreteProjectionConfig};
-use crate::evaluation::batch::Point;
+use crate::core::{AccumulatorMomentConfig, DiscreteProjectionConfig, EngineError};
+use crate::evaluation::batch::{DiagnosticSample, Point, SampleEvaluation};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -20,13 +20,11 @@ pub struct ScalarAccumulatorState {
     #[serde(default)]
     pub sum_four: f64,
     #[serde(default)]
-    pub nan_count: usize,
-    #[serde(default)]
     pub max_weighted_positive: f64,
     #[serde(default)]
     pub max_weighted_negative: f64,
-    pub max_weighted_positive_point: Option<Point>,
-    pub max_weighted_negative_point: Option<Point>,
+    pub max_weighted_positive_sample: Option<DiagnosticSample>,
+    pub max_weighted_negative_sample: Option<DiagnosticSample>,
     #[serde(default)]
     pub discrete_bins: BTreeMap<String, DiscreteProjectionBinState>,
     #[serde(default)]
@@ -49,8 +47,17 @@ impl ScalarAccumulatorState {
         Self::default()
     }
 
-    pub fn add_sample(&mut self, value: f64, point: &Point) {
-        self.add_sample_without_discrete_projection(value, point);
+    pub fn add_sample(&mut self, value: f64, point: &Point) -> Result<(), EngineError> {
+        self.add_sample_with_details(value, point, None)
+    }
+
+    pub(crate) fn add_sample_with_details(
+        &mut self,
+        value: f64,
+        point: &Point,
+        evaluation: Option<&SampleEvaluation>,
+    ) -> Result<(), EngineError> {
+        let sums = self.sums_with_sample(value, point)?;
         if !point.discrete.is_empty() {
             upsert_scalar_discrete_bin(
                 &mut self.discrete_bins,
@@ -58,27 +65,85 @@ impl ScalarAccumulatorState {
                 &point.discrete,
                 value,
                 point,
-            );
+                evaluation,
+            )?;
         }
+        self.accept_sample(value, point, evaluation, sums);
+        Ok(())
     }
 
-    pub fn add_sample_without_discrete_projection(&mut self, value: f64, point: &Point) {
-        let weight = point.total_weight().abs();
-        let weighted_value = value * weight;
-        let weighted_sq = weighted_value * weighted_value;
-        if !weighted_value.is_finite() || !weighted_sq.is_finite() {
-            self.nan_count += 1;
-            return;
-        }
+    pub fn add_sample_without_discrete_projection(
+        &mut self,
+        value: f64,
+        point: &Point,
+    ) -> Result<(), EngineError> {
+        self.add_plain_sample(value, point, None)
+    }
+    pub(super) fn add_plain_sample(
+        &mut self,
+        value: f64,
+        point: &Point,
+        evaluation: Option<&SampleEvaluation>,
+    ) -> Result<(), EngineError> {
+        let sums = self.sums_with_sample(value, point)?;
+        self.accept_sample(value, point, evaluation, sums);
+        Ok(())
+    }
+
+    fn sums(&self) -> [f64; 5] {
+        [
+            self.sum_weighted_value,
+            self.sum_abs,
+            self.sum_sq,
+            self.sum_cu,
+            self.sum_four,
+        ]
+    }
+
+    fn sums_with_sample(&self, value: f64, point: &Point) -> Result<[f64; 5], EngineError> {
+        self.count
+            .checked_add(1)
+            .ok_or_else(|| EngineError::eval("sample count overflow"))?;
+        let weighted = value * point.total_weight().abs();
+        let square = weighted * weighted;
+        let (cube, fourth) = if self.moments == AccumulatorMomentConfig::MaxOrder4 {
+            (square * weighted, square * square)
+        } else {
+            (0.0, 0.0)
+        };
+        checked_sums(
+            self.sums(),
+            [weighted, weighted.abs(), square, cube, fourth],
+        )
+    }
+
+    fn accept_sample(
+        &mut self,
+        value: f64,
+        point: &Point,
+        evaluation: Option<&SampleEvaluation>,
+        sums: [f64; 5],
+    ) {
+        [
+            self.sum_weighted_value,
+            self.sum_abs,
+            self.sum_sq,
+            self.sum_cu,
+            self.sum_four,
+        ] = sums;
         self.count += 1;
-        self.sum_weighted_value += weighted_value;
-        self.sum_abs += weighted_value.abs();
-        self.sum_sq += weighted_sq;
-        if self.moments.max_order() >= 4 {
-            self.sum_cu += weighted_sq * weighted_value;
-            self.sum_four += weighted_sq * weighted_sq;
+        self.update_extrema(value * point.total_weight().abs(), point, evaluation);
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), EngineError> {
+        checked_sums([0.0; 5], self.sums())?;
+        if self.count < 0 {
+            return Err(EngineError::eval("negative accumulator sample count"));
         }
-        self.update_extrema(weighted_value, point);
+        for bin in self.discrete_bins.values() {
+            bin.state.validate()?;
+        }
+        Ok(())
     }
 
     pub fn mean(&self) -> f64 {
@@ -163,52 +228,82 @@ impl ScalarAccumulatorState {
         numer / denom
     }
 
-    fn update_extrema(&mut self, weighted_value: f64, point: &Point) {
+    fn update_extrema(
+        &mut self,
+        weighted_value: f64,
+        point: &Point,
+        evaluation: Option<&SampleEvaluation>,
+    ) {
         if weighted_value >= 0.0
-            && (self.max_weighted_positive_point.is_none()
+            && (self.max_weighted_positive_sample.is_none()
                 || weighted_value > self.max_weighted_positive)
         {
             self.max_weighted_positive = weighted_value;
-            self.max_weighted_positive_point = Some(point.clone());
+            self.max_weighted_positive_sample = Some(DiagnosticSample {
+                point: point.clone(),
+                evaluation: evaluation.copied(),
+            });
         }
         if weighted_value < 0.0
-            && (self.max_weighted_negative_point.is_none()
+            && (self.max_weighted_negative_sample.is_none()
                 || weighted_value < self.max_weighted_negative)
         {
             self.max_weighted_negative = weighted_value;
-            self.max_weighted_negative_point = Some(point.clone());
+            self.max_weighted_negative_sample = Some(DiagnosticSample {
+                point: point.clone(),
+                evaluation: evaluation.copied(),
+            });
         }
     }
 
-    pub fn merge_plain(&mut self, other: Self) {
+    pub(crate) fn validate_merge(&self, other: &Self) -> Result<(), crate::core::EngineError> {
+        if self.discrete_projections != other.discrete_projections
+            || self.moments.max_order() != other.moments.max_order()
+        {
+            return Err(crate::core::EngineError::engine(
+                "incompatible scalar accumulator configuration",
+            ));
+        }
+        self.validate()?;
+        other.validate()?;
+        checked_sums(self.sums(), other.sums())?;
+        self.count
+            .checked_add(other.count)
+            .ok_or_else(|| EngineError::eval("sample count overflow"))?;
+        for (key, bin) in &other.discrete_bins {
+            if let Some(current) = self.discrete_bins.get(key) {
+                current.state.validate_merge(&bin.state)?;
+            }
+        }
+        Ok(())
+    }
+
+    // Called only after the complete merge has been validated.
+    pub(super) fn merge_plain(&mut self, other: Self) {
         self.count += other.count;
         self.sum_weighted_value += other.sum_weighted_value;
         self.sum_abs += other.sum_abs;
         self.sum_sq += other.sum_sq;
         self.sum_cu += other.sum_cu;
         self.sum_four += other.sum_four;
-        if other.moments.max_order() > self.moments.max_order() {
-            self.moments = other.moments;
-        }
-        self.nan_count += other.nan_count;
         merge_positive_extrema(
             &mut self.max_weighted_positive,
-            &mut self.max_weighted_positive_point,
+            &mut self.max_weighted_positive_sample,
             other.max_weighted_positive,
-            other.max_weighted_positive_point,
+            other.max_weighted_positive_sample,
         );
         merge_negative_extrema(
             &mut self.max_weighted_negative,
-            &mut self.max_weighted_negative_point,
+            &mut self.max_weighted_negative_sample,
             other.max_weighted_negative,
-            other.max_weighted_negative_point,
+            other.max_weighted_negative_sample,
         );
     }
 }
 
 impl IngestScalar for ScalarAccumulatorState {
-    fn ingest_scalar(&mut self, value: f64, point: &Point) {
-        self.add_sample(value, point);
+    fn ingest_scalar(&mut self, value: f64, point: &Point) -> Result<(), EngineError> {
+        self.add_sample(value, point)
     }
 }
 
@@ -220,10 +315,10 @@ impl Accumulator for ScalarAccumulatorState {
         self.count
     }
 
-    fn merge(&mut self, other: Self) {
+    fn merge(&mut self, other: Self) -> Result<(), crate::core::EngineError> {
+        self.validate_merge(&other)?;
         let other_discrete_bins = other.discrete_bins;
         let other_discrete_bins_overflow_count = other.discrete_bins_overflow_count;
-        let other_discrete_projections = other.discrete_projections.clone();
         self.merge_plain(Self {
             discrete_bins: BTreeMap::new(),
             discrete_bins_overflow_count: 0,
@@ -236,14 +331,34 @@ impl Accumulator for ScalarAccumulatorState {
                 .or_insert(candidate);
         }
         self.discrete_bins_overflow_count += other_discrete_bins_overflow_count;
-        if self.discrete_projections.is_none() {
-            self.discrete_projections = other_discrete_projections;
-        }
+        Ok(())
     }
 
     fn get_persistent(&self) -> Self::Persistent {
         self.clone()
     }
+}
+
+fn checked_sums(left: [f64; 5], right: [f64; 5]) -> Result<[f64; 5], EngineError> {
+    let mut sums = [0.0; 5];
+    for (index, name) in [
+        "weighted contribution",
+        "absolute contribution",
+        "second moment",
+        "third moment",
+        "fourth moment",
+    ]
+    .iter()
+    .enumerate()
+    {
+        sums[index] = left[index] + right[index];
+        if !left[index].is_finite() || !right[index].is_finite() || !sums[index].is_finite() {
+            return Err(EngineError::eval(format!(
+                "non-finite {name} or accumulated sum"
+            )));
+        }
+    }
+    Ok(sums)
 }
 
 fn mean_from_sums(sum: f64, count: i64) -> f64 {
@@ -333,9 +448,9 @@ fn reduced_square_deviation_stderr(
 
 fn merge_positive_extrema(
     target_value: &mut f64,
-    target_point: &mut Option<Point>,
+    target_point: &mut Option<DiagnosticSample>,
     candidate_value: f64,
-    candidate_point: Option<Point>,
+    candidate_point: Option<DiagnosticSample>,
 ) {
     let has_candidate = candidate_point.is_some() || candidate_value != 0.0;
     if !has_candidate {
@@ -349,9 +464,9 @@ fn merge_positive_extrema(
 
 fn merge_negative_extrema(
     target_value: &mut f64,
-    target_point: &mut Option<Point>,
+    target_point: &mut Option<DiagnosticSample>,
     candidate_value: f64,
-    candidate_point: Option<Point>,
+    candidate_point: Option<DiagnosticSample>,
 ) {
     let has_candidate = candidate_point.is_some() || candidate_value != 0.0;
     if !has_candidate {
@@ -383,7 +498,7 @@ mod tests {
         for (values, expected) in cases {
             let mut state = ScalarAccumulatorState::plain();
             for &value in *values {
-                state.add_sample(value, &point);
+                state.add_sample(value, &point).unwrap();
             }
             let actual = state.ess();
             assert!((actual - expected).abs() < 1e-14, "{values:?}: {actual}");
@@ -396,9 +511,9 @@ mod tests {
         for scale in [1e-150, 1.0, 1e150] {
             let point = Point::new(vec![], vec![], scale);
             let mut left = ScalarAccumulatorState::plain();
-            left.add_sample(1.0, &point);
+            left.add_sample(1.0, &point).unwrap();
             let mut right = ScalarAccumulatorState::plain();
-            right.add_sample(-3.0, &point);
+            right.add_sample(-3.0, &point).unwrap();
             left.merge_plain(right);
             let restored: ScalarAccumulatorState =
                 serde_json::from_value(serde_json::to_value(&left).unwrap()).unwrap();
@@ -418,29 +533,27 @@ mod tests {
         let mut accumulator = ScalarAccumulatorState::default();
 
         let point = Point::new(vec![0.5], vec![1], -3.0);
-        accumulator.add_sample(2.0, &point);
+        accumulator.add_sample(2.0, &point).unwrap();
 
         assert_eq!(accumulator.count, 1);
         assert_eq!(accumulator.sum_weighted_value, 6.0);
         assert_eq!(accumulator.sum_abs, 6.0);
         assert_eq!(accumulator.sum_sq, 36.0);
-        assert_eq!(accumulator.nan_count, 0);
     }
 
     #[test]
-    fn add_sample_skips_non_finite_weighted_contributions() {
+    fn add_sample_rejects_non_finite_weighted_contributions() {
         let mut accumulator = ScalarAccumulatorState::default();
 
         let point = Point::new(vec![], vec![], 1.0);
         let inf_point = Point::new(vec![], vec![], f64::INFINITY);
-        accumulator.add_sample(f64::NAN, &point);
-        accumulator.add_sample(1.0, &inf_point);
+        assert!(accumulator.add_sample(f64::NAN, &point).is_err());
+        assert!(accumulator.add_sample(1.0, &inf_point).is_err());
 
         assert_eq!(accumulator.count, 0);
         assert_eq!(accumulator.sum_weighted_value, 0.0);
         assert_eq!(accumulator.sum_abs, 0.0);
         assert_eq!(accumulator.sum_sq, 0.0);
-        assert_eq!(accumulator.nan_count, 2);
     }
 
     #[test]
@@ -449,12 +562,46 @@ mod tests {
         let point_a = Point::new(vec![0.1], vec![0], 1.0);
         let point_b = Point::new(vec![0.9], vec![1], 2.0);
 
-        accumulator.add_sample(3.0, &point_a);
-        accumulator.add_sample(-4.0, &point_b);
+        accumulator.add_sample(3.0, &point_a).unwrap();
+        accumulator.add_sample(-4.0, &point_b).unwrap();
 
         assert_eq!(accumulator.max_weighted_positive, 3.0);
-        assert_eq!(accumulator.max_weighted_positive_point, Some(point_a));
+        assert_eq!(
+            accumulator
+                .max_weighted_positive_sample
+                .map(|sample| sample.point),
+            Some(point_a)
+        );
         assert_eq!(accumulator.max_weighted_negative, -8.0);
-        assert_eq!(accumulator.max_weighted_negative_point, Some(point_b));
+        assert_eq!(
+            accumulator
+                .max_weighted_negative_sample
+                .map(|sample| sample.point),
+            Some(point_b)
+        );
+    }
+    #[test]
+    fn moment_overflow_rejects_ingestion_and_merges_without_mutation() {
+        use crate::core::AccumulatorMomentConfig;
+        use crate::evaluation::Accumulator;
+        let point = Point::new(vec![], vec![], 1.0);
+        for (order, value) in [
+            (AccumulatorMomentConfig::MaxOrder2, 1e200),
+            (AccumulatorMomentConfig::MaxOrder4, 1e100),
+        ] {
+            let mut state = ScalarAccumulatorState::from_config(None, order);
+            state.add_sample(1.0, &point).unwrap();
+            let before = state.clone();
+            assert!(state.add_sample(value, &point).is_err());
+            assert_eq!(state, before);
+        }
+        let mut left = ScalarAccumulatorState {
+            count: 1,
+            sum_sq: 1e308,
+            ..Default::default()
+        };
+        let before = left.clone();
+        assert!(left.merge(before.clone()).is_err());
+        assert_eq!(left, before);
     }
 }

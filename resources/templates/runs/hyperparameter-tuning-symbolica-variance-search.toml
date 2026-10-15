@@ -1,35 +1,51 @@
-# Hyperparameter tuning; integration settings belong to the child.
 kind = "hyperparameter_tuning"
 name = "variance-search"
 max_concurrent_trials = "$(max_concurrent_trials:2)"
-replacements = { variance_trial_samples = 16384, variance_max_trials = 12, max_concurrent_trials = 2 }
-optimizer = { algorithm = "egobox", params = { max_trials = "$(variance_max_trials:12)", seed = 11, initial_design = 4, parallel_candidates = "$(max_concurrent_trials:2)", infill = "ei", qei_strategy = "kriging_believer" } }
-objective = { source_task = "sample", mode = "minimize", quantity = { metric = "time_normalized_variance" } }
 
-[parameters]
-center = { kind = "categorical", values = ["1/5", "3/10", "2/5", "1/2", "3/5", "7/10", "4/5"] }
-roughness = { kind = "categorical", values = ["2", "4", "8"] }
-havana_bins = { kind = "integer", min = 16, max = 64, step = 16 }
-samples_for_update = { kind = "categorical", values = [512, 1024, 2048] }
+[replacements]
+variance_trial_samples = 16384
+variance_max_trials = 12
+max_concurrent_trials = 2
+
+[optimizer]
+algorithm = "egobox"
+
+[optimizer.params]
+max_trials = "$(variance_max_trials:12)"
+seed = 11
+initial_design = 4
+parallel_candidates = "$(max_concurrent_trials:2)"
+infill = "ei"
+qei_strategy = "kriging_believer"
+
+[objective]
+source_task = "sample"
+mode = "minimize"
+
+[objective.selection]
+kind = "metric"
+name = "time_normalized_variance"
+
+[parameters.center]
+kind = "categorical"
+values = ["1/5", "3/10", "2/5", "1/2", "3/5", "7/10", "4/5"]
+
+[parameters.roughness]
+kind = "categorical"
+values = ["2", "4", "8"]
+
+[parameters.havana_bins]
+kind = "integer"
+min = 16
+max = 64
+step = 16
+
+[parameters.samples_for_update]
+kind = "categorical"
+values = [512, 1024, 2048]
 
 [child]
-replacements = { variance_trial_samples = "$(variance_trial_samples:16384)" }
+run = "name = \"variance-center-$(center:1/2)-rough-$(roughness:4)-bins-$(havana_bins:32)\"\n\n[target]\nkind = \"scalar\"\nvalue = 1.0\n\n[evaluator]\nkind = \"symbolica\"\nargs = [\"x\", \"y\"]\n\n[evaluator.source]\nkind = \"expression\"\nexpr = \"1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)\"\n\n[evaluator.source.constants]\ncenter = \"$(center:\\\"1/2\\\")\"\nroughness = \"$(roughness:\\\"4\\\")\"\n\n[[task_queue]]\nname = \"sample\"\nkind = \"sample\"\n\n[task_queue.measurement]\nmode = \"minimize\"\n\n[task_queue.measurement.selection]\nkind = \"metric\"\nname = \"time_normalized_variance\"\n\n[task_queue.stop_condition]\nmin_samples = 2048\nmax_samples = \"$(variance_trial_samples:16384)\"\nrelative_error = 0.25\n\n[task_queue.stop_condition.metric]\nname = \"variance\"\n\n[task_queue.accumulator.config]\nkind = \"scalar\"\nmoments = 4\n\n[task_queue.sampler.config]\nkind = \"havana_training\"\nseed = 0\nbins = \"$(havana_bins:32)\"\nsamples_for_update = \"$(samples_for_update:1024)\"\ninitial_training_rate = 0.1\nfinal_training_rate = 0.01\n"
 
-run = '''
-name = "variance-center-$(center:1/2)-rough-$(roughness:4)-bins-$(havana_bins:32)"
-target = { kind = "scalar", value = 1.0 }
-
-[evaluator]
-kind = "symbolica"
-expr = "1 + roughness * ((x - center)^2 + (y - center)^2 - 2 * (center^3 + (1 - center)^3) / 3)"
-args = ["x", "y"]
-constants = { center = "$(center:\"1/2\")", roughness = "$(roughness:\"4\")" }
-
-[[task_queue]]
-name = "sample"
-kind = "sample"
-measurement = { mode = "minimize", quantity = { metric = "time_normalized_variance" } }
-stop_condition = { min_samples = 2048, max_samples = "$(variance_trial_samples:16384)", relative_error = 0.25, metric = { name = "variance" } }
-accumulator = { config = { kind = "scalar", moments = { max_order = 4 } } }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:32)", samples_for_update = "$(samples_for_update:1024)", initial_training_rate = 0.1, final_training_rate = 0.01 } }
-'''
+[child.replacements]
+variance_trial_samples = "$(variance_trial_samples:16384)"

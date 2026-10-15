@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import numpy as np
+from numpy.typing import ArrayLike
+
+from .batches import Batch, GenerationStatus, SampleBatch
 
 if TYPE_CHECKING:
     from .gammaloop import GammaLoopBatchResult
 
 
-class Evaluator(ABC):
+class _EvaluatorBase(ABC):
+    def metadata(self) -> Any:
+        """Return JSON-safe evaluator metadata passed to sampler initialization."""
+        return {}
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {}
+
+
+class Evaluator(_EvaluatorBase):
     """Optional base class for process evaluators.
 
     Inheritance is not required. ``run_evaluator`` accepts any class with a
@@ -18,11 +30,21 @@ class Evaluator(ABC):
     """
 
     @abstractmethod
-    def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
+    def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> ArrayLike | dict[str, ArrayLike]:
         """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
 
+
+class GammaLoopEvaluator(_EvaluatorBase):
+    """Optional base for callbacks that produce GammaLoop accumulator state.
+
+    Implement only ``eval_gammaloop``; ordinary ``eval`` is not required.
+    Both evaluator interfaces use ``run_evaluator`` and the same constructor.
+    """
+
+    @abstractmethod
     def eval_gammaloop(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
+        weights: np.ndarray, *, require_training_values: bool,
     ) -> GammaLoopBatchResult:
         """Evaluate a batch and return a GammaLoop accumulator state.
 
@@ -30,19 +52,11 @@ class Evaluator(ABC):
         ``gammaloop``.  The returned :class:`~gammaboard_process.GammaLoopBatchResult`
         carries a JSON-serializable ``GammaLoopAccumulatorState`` dict (with at
         minimum a ``bundle`` key containing an
-        :class:`~gammaboard_process.gammaloop.ObservableSnapshotBundle`) and an
-        optional list of per-sample training values for the sampler.
+        :class:`~gammaboard_process.gammaloop.ObservableSnapshotBundle`) and a
+        list of weighted per-sample training values when requested, otherwise None.
+        Apply the supplied total weights exactly once to state and feedback.
 
-        The default implementation raises ``NotImplementedError``.
         """
-        raise NotImplementedError(
-            "eval_gammaloop is required when the run uses accumulator = 'gammaloop'; "
-            "override this method and return a GammaLoopBatchResult"
-        )
-
-    def metadata(self) -> Any:
-        """Return JSON-safe evaluator metadata passed to sampler initialization."""
-        return {}
 
 
 class Sampler(ABC):
@@ -51,11 +65,11 @@ class Sampler(ABC):
     Inheritance is not required. ``run_sampler`` accepts any class with the
     required sampler methods. Fresh workers construct samplers as
     ``ClassName(discrete_cardinalities=..., continuous_dims=..., evaluator_metadata=..., **args)``
-    when the class accepts the ``evaluator_metadata`` keyword.
+    including the ``evaluator_metadata`` keyword.
     """
 
     @abstractmethod
-    def generate(self, max_samples: int) -> Any:
+    def generate(self, max_samples: int) -> SampleBatch | GenerationStatus:
         """Return a SampleBatch with 1..max_samples samples, WAITING or FINISHED.
 
         max_samples is a positive per-draw limit supplied by queue tuning and
@@ -70,9 +84,10 @@ class Sampler(ABC):
 
     @abstractmethod
     def snapshot(self) -> Any:
-        """Return JSON-safe sampler state."""
+        """Return non-null JSON-safe sampler state; use {} for empty state."""
 
     @classmethod
+    @abstractmethod
     def from_snapshot(
         cls,
         *,
@@ -81,8 +96,8 @@ class Sampler(ABC):
         continuous_dims: int,
         init_args: dict[str, Any],
         evaluator_metadata: Any = None,
-    ) -> Any:
-        """Optional constructor used when restoring a persisted sampler snapshot."""
+    ) -> Self:
+        """Restore all private state needed for pending feedback from a non-null snapshot."""
         raise NotImplementedError("override from_snapshot(...) to support sampler restore")
 
     def pdf(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
@@ -91,8 +106,16 @@ class Sampler(ABC):
     def discrete_pdf(self, subspaces: list[dict[int, int]]) -> Any:
         return None
 
-    def get_diagnostics(self) -> dict[str, Any]:
+    def diagnostics(self) -> dict[str, Any]:
         return {}
+
+    def global_pdf_norm(self) -> float:
+        """Return the finite positive PDF normalization used by PDF diagnostics."""
+        return 1.0
+
+    def persisted_output(self) -> Any:
+        """Return optional JSON task output; this is separate from recovery state."""
+        return None
 
 
 class Materializer(ABC):
@@ -104,8 +127,8 @@ class Materializer(ABC):
     """
 
     @abstractmethod
-    def materialize_batch(self, latent_batch: dict[str, Any]) -> Any:
-        """Return a ``MaterializedBatch`` or compatible object."""
+    def materialize_batch(self, latent_batch: dict[str, Any]) -> Batch:
+        """Return materialized sample arrays as a ``Batch``."""
 
 
 class BatchTransform(ABC):
@@ -122,5 +145,5 @@ class BatchTransform(ABC):
         xs_discrete: np.ndarray,
         xs_continuous: np.ndarray,
         weights: np.ndarray,
-    ) -> Any:
-        """Return a ``TransformedBatch`` or compatible object."""
+    ) -> Batch:
+        """Return transformed sample arrays as a ``Batch``."""

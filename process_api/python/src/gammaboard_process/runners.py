@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from .batches import GenerationStatus
-
 from typing import Any
 
 import numpy as np
 
-from .batches import MaterializedBatch, SampleBatch, TransformedBatch
+from .batches import Batch, GenerationStatus, SampleBatch
 from .gammaloop import GammaLoopBatchResult
 from .protocol import (
     PROTOCOL,
@@ -66,7 +64,7 @@ class _EvaluatorWorker:
         self.discrete_cardinalities: list[int] | None = None
         self.continuous_dims: int | None = None
         self.components = ["value"]
-        self._accumulator_kind: str = "vector"
+        self._output_kind: str = "values"
 
     def run(self) -> None:
         _serve(self.io, self.handle)
@@ -80,9 +78,11 @@ class _EvaluatorWorker:
             discrete_cardinalities, continuous_dims = fixed_domain_shape(params["domain"])
             if any(value <= 0 for value in discrete_cardinalities):
                 raise ValueError("discrete_cardinalities must contain only positive integers")
-            self._accumulator_kind = str(params.get("accumulator") or "vector")
-            if self._accumulator_kind != "gammaloop":
-                self.components = [str(value) for value in params.get("components", ["value"])]
+            self._output_kind = str(params["output"]["kind"])
+            if self._output_kind not in ("values", "gammaloop"):
+                raise ValueError("unknown evaluator output kind")
+            if self._output_kind == "values":
+                self.components = [str(value) for value in params["output"]["components"]]
                 if not self.components:
                     raise ValueError("components must not be empty")
             self.evaluator = instantiate_user_object(
@@ -93,8 +93,15 @@ class _EvaluatorWorker:
             )
             self.discrete_cardinalities = discrete_cardinalities
             self.continuous_dims = continuous_dims
-            metadata = _read_metadata(self.evaluator)
+            callback = "eval_gammaloop" if self._output_kind == "gammaloop" else "eval"
+            if not callable(getattr(self.evaluator, callback, None)):
+                raise TypeError(f"{self._output_kind} evaluator must implement {callback}")
+            metadata = _call_optional(self.evaluator, "metadata", {})
             return {"ok": True, "metadata": metadata}
+        if self.evaluator is None:
+            raise RuntimeError("worker not initialized")
+        if method == "diagnostics":
+            return {"diagnostics": _call_optional(self.evaluator, "diagnostics", {})}
         if method == "eval_batch":
             if self.evaluator is None or self.discrete_cardinalities is None or self.continuous_dims is None:
                 raise RuntimeError("worker not initialized")
@@ -102,12 +109,22 @@ class _EvaluatorWorker:
             discrete_dims = len(self.discrete_cardinalities)
             require_homogeneous_offsets(params, "xs_discrete_offsets", nr_samples, discrete_dims, "evaluator")
             require_homogeneous_offsets(params, "xs_continuous_offsets", nr_samples, self.continuous_dims, "evaluator")
+            coordinate_bytes = nr_samples * (discrete_dims + self.continuous_dims) * 8
+            expected_bytes = coordinate_bytes + (nr_samples * 8 if self._output_kind == "gammaloop" else 0)
+            if nr_samples < 0 or len(req_binary) != expected_bytes:
+                raise ValueError("invalid evaluator input length")
             xs_discrete, xs_continuous = _decode_eval_inputs(
                 req_binary, nr_samples, discrete_dims, self.continuous_dims
             )
             self._validate_points(xs_discrete, xs_continuous)
-            if self._accumulator_kind == "gammaloop":
-                return self._eval_batch_gammaloop(xs_discrete, xs_continuous, nr_samples)
+            if self._output_kind == "gammaloop":
+                weights = np.frombuffer(req_binary, dtype="<f8", count=nr_samples, offset=coordinate_bytes).copy()
+                if not np.isfinite(weights).all() or (weights <= 0).any():
+                    raise ValueError("sampling weights must be finite and positive")
+                required = params["require_training_values"]
+                if not isinstance(required, bool):
+                    raise TypeError("require_training_values must be a boolean")
+                return self._eval_batch_gammaloop(xs_discrete, xs_continuous, weights, required)
             raw_values = self.evaluator.eval(xs_discrete, xs_continuous)
             values = _normalize_evaluator_values(raw_values, nr_samples, self.components)
             values_row_major = np.ascontiguousarray(
@@ -117,22 +134,25 @@ class _EvaluatorWorker:
         raise ValueError(f"unknown method: {method}")
 
     def _eval_batch_gammaloop(
-        self,
-        xs_discrete: np.ndarray,
-        xs_continuous: np.ndarray,
-        nr_samples: int,
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
+        weights: np.ndarray, require_training_values: bool,
     ) -> dict[str, Any]:
-        raw = self.evaluator.eval_gammaloop(xs_discrete, xs_continuous)
-        result = _normalize_gammaloop_result(raw, nr_samples)
+        result = self.evaluator.eval_gammaloop(
+            xs_discrete, xs_continuous, weights,
+            require_training_values=require_training_values,
+        )
+        if not isinstance(result, GammaLoopBatchResult):
+            raise TypeError("eval_gammaloop must return GammaLoopBatchResult")
         response: dict[str, Any] = {"gammaloop_state": result.state}
-        if result.training_values is not None:
-            tvs = list(result.training_values)
-            if len(tvs) != nr_samples:
-                raise ValueError(
-                    f"GammaLoopBatchResult.training_values length {len(tvs)} "
-                    f"does not match nr_samples {nr_samples}"
-                )
-            response["training_values"] = [float(v) for v in tvs]
+        if require_training_values:
+            values = np.asarray(result.training_values, dtype="<f8")
+            if values.shape != (len(weights),):
+                raise ValueError("GammaLoop training values must contain one weighted value per sample")
+            if not np.isfinite(values).all():
+                raise ValueError("GammaLoop returned non-finite training feedback")
+            response["__binary__"] = values.tobytes()
+        elif result.training_values is not None:
+            raise ValueError("GammaLoop inference must not return training values")
         return response
 
     def _validate_points(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> None:
@@ -168,6 +188,9 @@ class _SamplerWorker:
                 raise ValueError("discrete_cardinalities must contain only positive integers")
             self.sampler_args = params.get("args") or {}
             self.evaluator_metadata = params.get("evaluator_metadata") or {}
+            restore = getattr(self.target, "from_snapshot", None)
+            if not callable(restore) or getattr(restore, "__isabstractmethod__", False):
+                raise TypeError("sampler class must implement from_snapshot for recovery")
             self.sampler = instantiate_user_object(
                 self.target,
                 discrete_cardinalities=discrete_cardinalities,
@@ -191,6 +214,8 @@ class _SamplerWorker:
             if nr_values < 0 or len(req_binary) != nr_values * 8:
                 raise ValueError("invalid feedback length")
             values = np.frombuffer(req_binary, dtype="<f8", count=nr_values).copy()
+            if not np.isfinite(values).all():
+                raise ValueError("non-finite training feedback")
             self.sampler.feedback(values)
             return {"ok": True}
         if method == "pdf":
@@ -199,19 +224,28 @@ class _SamplerWorker:
             return self._discrete_pdf(params)
         if method == "snapshot":
             snapshot = self.sampler.snapshot()
-            if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in self.sampler_args:
-                snapshot = {**snapshot, "save_path": self.sampler_args["save_path"]}
+            if snapshot is None:
+                raise ValueError("sampler snapshot must not be null; use {} for empty state")
             return {"snapshot": snapshot}
-        if method == "get_diagnostics":
-            diagnostics = _call_optional(self.sampler, "get_diagnostics", {})
+        if method == "diagnostics":
+            diagnostics = _call_optional(self.sampler, "diagnostics", {})
             return {"diagnostics": diagnostics if diagnostics is not None else {}}
+        if method == "global_pdf_norm":
+            norm = float(_call_optional(self.sampler, "global_pdf_norm", 1.0))
+            if not np.isfinite(norm) or norm <= 0:
+                raise ValueError("global_pdf_norm must be finite and positive")
+            return {"norm": norm}
+        if method == "persisted_output":
+            return {"output": _call_optional(self.sampler, "persisted_output", None)}
         raise ValueError(f"unknown method: {method}")
 
     def _generate(self, max_samples: int) -> dict[str, Any]:
         generated = self.sampler.generate(max_samples)
         if isinstance(generated, GenerationStatus):
             return {"kind": generated.value}
-        batch = _normalize_sample_batch(generated)
+        batch = generated
+        if not isinstance(batch, SampleBatch):
+            raise TypeError("generate must return SampleBatch, WAITING or FINISHED")
         weights = np.asarray(batch.weights, dtype=np.float64)
         if weights.ndim != 1 or len(weights) == 0 or len(weights) > max_samples:
             raise ValueError("generated sample count is empty or exceeds max_samples")
@@ -241,7 +275,9 @@ class _SamplerWorker:
         values = _call_optional(self.sampler, "pdf", None, xs_discrete, xs_continuous)
         if values is None:
             return {"values": None}
-        return {"values": np.asarray(values, dtype=np.float64).reshape((nr_samples,)).tolist()}
+        if len(values) != nr_samples:
+            raise ValueError("pdf must return one value per point")
+        return {"values": [None if value is None else float(value) for value in values]}
 
     def _discrete_pdf(self, params: dict[str, Any]) -> dict[str, Any]:
         subspaces = normalize_discrete_subspaces(params)
@@ -304,7 +340,9 @@ class _MaterializerWorker:
 
     def _materialize_batch(self, params: dict[str, Any]) -> dict[str, Any]:
         nr_samples = int(params["nr_samples"])
-        batch = _normalize_materialized_batch(self.materializer.materialize_batch(params["latent_batch"]))
+        batch = self.materializer.materialize_batch(params["latent_batch"])
+        if not isinstance(batch, Batch):
+            raise TypeError("materialize_batch must return Batch")
         discrete_dims = len(self.discrete_cardinalities or [])
         continuous_dims = int(self.continuous_dims or 0)
         xs_discrete = np.asarray(batch.xs_discrete, dtype=np.int64).reshape((nr_samples, discrete_dims))
@@ -385,7 +423,9 @@ class _BatchTransformWorker:
             (nr_samples, self.continuous_dims)
         )
         weights = np.asarray(params["weights"], dtype=np.float64).reshape((nr_samples,))
-        batch = _normalize_transformed_batch(self.transform.transform_batch(xs_discrete, xs_continuous, weights))
+        batch = self.transform.transform_batch(xs_discrete, xs_continuous, weights)
+        if not isinstance(batch, Batch):
+            raise TypeError("transform_batch must return Batch")
         out_discrete = np.asarray(batch.xs_discrete, dtype=np.int64).reshape((nr_samples, discrete_dims))
         out_continuous = np.asarray(batch.xs_continuous, dtype=np.float64).reshape((nr_samples, self.continuous_dims))
         out_weights = np.asarray(batch.weights, dtype=np.float64).reshape((nr_samples,))
@@ -450,18 +490,6 @@ def _encode_batch_binary(
     )
 
 
-def _normalize_gammaloop_result(raw: Any, nr_samples: int) -> GammaLoopBatchResult:
-    if isinstance(raw, GammaLoopBatchResult):
-        return raw
-    if isinstance(raw, dict):
-        state = raw.get("state", raw)
-        training_values = raw.get("training_values")
-        return GammaLoopBatchResult(state=state, training_values=training_values)
-    raise TypeError(
-        f"eval_gammaloop must return a GammaLoopBatchResult or dict, got {type(raw).__name__}"
-    )
-
-
 def _normalize_evaluator_values(values: Any, nr_samples: int, components: list[str]) -> np.ndarray:
     if isinstance(values, dict):
         columns = [np.asarray(values[name], dtype=np.float64).reshape((nr_samples,)) for name in components]
@@ -473,43 +501,11 @@ def _normalize_evaluator_values(values: Any, nr_samples: int, components: list[s
         raise ValueError(
             f"eval returned shape {array.shape}, expected ({nr_samples},) or ({nr_samples}, {len(components)})"
         )
-    if not np.isfinite(array).all():
-        raise ValueError("eval returned non-finite values")
+    finite = np.isfinite(array)
+    if not finite.all():
+        sample, component = np.argwhere(~finite)[0]
+        raise ValueError(f"sample {sample}, component {components[component]!r}: eval returned non-finite value")
     return array
-
-
-def _normalize_sample_batch(batch: Any) -> SampleBatch:
-    if isinstance(batch, SampleBatch):
-        return batch
-    if isinstance(batch, dict):
-        return SampleBatch(batch["xs_discrete"], batch["xs_continuous"], batch["weights"], batch.get("training_remaining"))
-    if isinstance(batch, tuple) and len(batch) == 3:
-        return SampleBatch(batch[0], batch[1], batch[2])
-    return SampleBatch(batch.xs_discrete, batch.xs_continuous, batch.weights, getattr(batch, "training_remaining", None))
-
-
-def _normalize_materialized_batch(batch: Any) -> MaterializedBatch:
-    if isinstance(batch, MaterializedBatch):
-        return batch
-    if isinstance(batch, SampleBatch):
-        return MaterializedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
-    if isinstance(batch, dict):
-        return MaterializedBatch(batch["xs_discrete"], batch["xs_continuous"], batch["weights"])
-    if isinstance(batch, tuple) and len(batch) == 3:
-        return MaterializedBatch(batch[0], batch[1], batch[2])
-    return MaterializedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
-
-
-def _normalize_transformed_batch(batch: Any) -> TransformedBatch:
-    if isinstance(batch, TransformedBatch):
-        return batch
-    if isinstance(batch, (MaterializedBatch, SampleBatch)):
-        return TransformedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
-    if isinstance(batch, dict):
-        return TransformedBatch(batch["xs_discrete"], batch["xs_continuous"], batch["weights"])
-    if isinstance(batch, tuple) and len(batch) == 3:
-        return TransformedBatch(batch[0], batch[1], batch[2])
-    return TransformedBatch(batch.xs_discrete, batch.xs_continuous, batch.weights)
 
 
 def _call_optional(obj: Any, name: str, fallback: Any, *args: Any) -> Any:
@@ -517,11 +513,3 @@ def _call_optional(obj: Any, name: str, fallback: Any, *args: Any) -> Any:
     if method is None:
         return fallback
     return method(*args)
-
-
-def _read_metadata(obj: Any) -> Any:
-    raw = getattr(obj, "metadata", None)
-    if raw is None:
-        return {}
-    value = raw() if callable(raw) else raw
-    return {} if value is None else value

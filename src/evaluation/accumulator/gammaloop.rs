@@ -139,17 +139,27 @@ impl GammaLoopAccumulatorState {
     }
 
     pub fn merge_in_place(&mut self, other: Self) -> Result<(), EngineError> {
-        self.merge_training_statistics(&other);
-        if self.bundle.histograms.is_empty() {
-            self.bundle = other.bundle;
-        } else if !other.bundle.histograms.is_empty() {
-            self.bundle.merge_in_place(&other.bundle).map_err(|err| {
-                EngineError::engine(format!(
-                    "failed to merge gammaloop accumulator bundle: {err}"
-                ))
-            })?;
+        self.validate_values()?;
+        other.validate_values()?;
+        // The first batch establishes the externally supplied observable schema.
+        if self.bundle.histograms.is_empty() && self.estimate.projection().state.count == 0 {
+            *self = other;
+            return Ok(());
         }
-        self.estimate.merge(other.estimate);
+        self.estimate.validate_merge(&other.estimate)?;
+        self.validate_training_statistics(&other)?;
+        // GammaLoop's bundle merge can fail after editing a histogram. Stage it
+        // separately so a rejected result leaves the destination unchanged.
+        let mut bundle = self.bundle.clone();
+        bundle.merge_in_place(&other.bundle).map_err(|err| {
+            EngineError::engine(format!(
+                "failed to merge gammaloop accumulator bundle: {err}"
+            ))
+        })?;
+        validate_histogram_bundle(&bundle)?;
+        self.merge_training_statistics(&other);
+        self.bundle = bundle;
+        self.estimate.merge(other.estimate)?;
         self.diagnostics.merge_in_place(other.diagnostics);
         Ok(())
     }
@@ -204,46 +214,6 @@ impl GammaLoopAccumulatorState {
         }
         self.bundle.histograms.values().next()
     }
-
-    pub fn real_mean(&self) -> f64 {
-        self.estimate
-            .component("real")
-            .map(|component| component.state.mean())
-            .unwrap_or_default()
-    }
-
-    pub fn imag_mean(&self) -> f64 {
-        self.estimate
-            .component("imag")
-            .map(|component| component.state.mean())
-            .unwrap_or_default()
-    }
-
-    pub fn abs_mean(&self) -> f64 {
-        self.estimate.projection.state.mean()
-    }
-
-    pub fn real_stderr(&self) -> f64 {
-        self.estimate
-            .component("real")
-            .map(|component| component.state.stderr())
-            .unwrap_or_default()
-    }
-
-    pub fn imag_stderr(&self) -> f64 {
-        self.estimate
-            .component("imag")
-            .map(|component| component.state.stderr())
-            .unwrap_or_default()
-    }
-
-    pub fn abs_stderr(&self) -> f64 {
-        self.estimate.projection.state.stderr()
-    }
-
-    pub fn signal_to_noise(&self) -> f64 {
-        self.estimate.signal_to_noise()
-    }
 }
 
 fn cleared_histogram_snapshot(histogram: &HistogramSnapshot) -> HistogramSnapshot {
@@ -275,9 +245,8 @@ impl Accumulator for GammaLoopAccumulatorState {
         self.estimate.sample_count()
     }
 
-    fn merge(&mut self, other: Self) {
+    fn merge(&mut self, other: Self) -> Result<(), EngineError> {
         self.merge_in_place(other)
-            .expect("gammaloop accumulator payloads should be merge-compatible");
     }
 
     fn get_persistent(&self) -> Self::Persistent {
@@ -315,6 +284,26 @@ impl From<GammaLoopAccumulatorState> for GammaLoopAccumulatorDigest {
             imag_error: state.imag_stderr(),
         }
     }
+}
+
+pub(super) fn validate_histogram_bundle(
+    bundle: &ObservableSnapshotBundle,
+) -> Result<(), EngineError> {
+    for (name, histogram) in &bundle.histograms {
+        for (index, bin) in histogram
+            .bins
+            .iter()
+            .chain([&histogram.underflow_bin, &histogram.overflow_bin])
+            .enumerate()
+        {
+            if !bin.sum_weights.is_finite() || !bin.sum_weights_squared.is_finite() {
+                return Err(EngineError::eval(format!(
+                    "histogram {name:?}, bin {index}: non-finite contribution or second moment"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -410,10 +399,10 @@ mod tests {
         estimate.components[0].state.sum_abs = sum.abs();
         estimate.components[0].state.sum_sq = sum_sq;
         estimate.components[1].state.count = count;
-        estimate.projection.state.count = count;
-        estimate.projection.state.sum_weighted_value = sum.abs();
-        estimate.projection.state.sum_abs = sum.abs();
-        estimate.projection.state.sum_sq = sum_sq;
+        estimate.projection_mut().state.count = count;
+        estimate.projection_mut().state.sum_weighted_value = sum.abs();
+        estimate.projection_mut().state.sum_abs = sum.abs();
+        estimate.projection_mut().state.sum_sq = sum_sq;
         estimate
     }
 
@@ -422,7 +411,7 @@ mod tests {
         let mut left = GammaLoopAccumulatorState::default();
         let right = state(4.0, 20.0, 2, 6.0, 20.0, 2);
 
-        left.merge(right.clone());
+        left.merge(right.clone()).unwrap();
 
         assert_eq!(left.histogram_count(), 1);
         assert_eq!(left.sample_count(), 2);
@@ -451,7 +440,7 @@ mod tests {
         let mut left = state(4.0, 20.0, 2, 6.0, 20.0, 2);
         let right = state(2.0, 10.0, 1, 1.0, 1.0, 1);
 
-        left.merge(right);
+        left.merge(right).unwrap();
 
         assert_eq!(left.sample_count(), 3);
         assert_eq!(left.real_mean(), 7.0 / 3.0);
@@ -461,5 +450,15 @@ mod tests {
                 .sample_count,
             3
         );
+    }
+    #[test]
+    fn histogram_overflow_rejects_the_complete_merge() {
+        let mut left = state(1.0, 1e308, 1, 1.0, 1.0, 1);
+        let before = left.to_persistent_json().unwrap();
+        let right = left.clone();
+        assert!(left.merge(right).is_err());
+        assert_eq!(left.to_persistent_json().unwrap(), before);
+        let invalid = state(f64::NAN, 1.0, 1, 1.0, 1.0, 1);
+        assert!(invalid.validate_values().is_err());
     }
 }

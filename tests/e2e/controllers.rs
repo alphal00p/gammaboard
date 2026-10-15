@@ -47,12 +47,12 @@ kind = "sample"
 max_samples = 32
 
 [task_queue.measurement]
-quantity = "central_value"
+selection = { kind = 'all_component_means' }
 
 [task_queue.accumulator]
 config = "scalar"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "naive_monte_carlo"
 seed = 1
 
@@ -77,12 +77,12 @@ kind = "sample"
 max_samples = 32
 
 [task_queue.measurement]
-quantity = "central_value"
+selection = { kind = 'all_component_means' }
 
 [task_queue.accumulator]
 config = "scalar"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "naive_monte_carlo"
 seed = 2
 '''
@@ -179,7 +179,7 @@ seed = 2
     let raw = exported["toml"].as_str().unwrap();
     let child_config = gammaboard::api::runs::parse_run_add_config_toml(raw)?;
     assert_eq!(child_config.name, "campaign-result-left");
-    assert_eq!(child_config.task_queue.unwrap().len(), 1);
+    assert_eq!(child_config.integration().unwrap().task_queue.len(), 1);
     let document: toml::Value = toml::from_str(raw)?;
     assert!(document.get("gammaboard").is_none());
     // Controller duplication starts a new orchestration; child duplication is standalone.
@@ -266,9 +266,9 @@ target_batch_eval_ms = 50.0
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 512 }
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = 'all_component_means' } }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 1 } }
 
 '''
 [[children]]
@@ -296,9 +296,9 @@ target_batch_eval_ms = 50.0
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 512 }
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = 'all_component_means' } }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 2 } }
 '''
 "#,
     );
@@ -450,66 +450,93 @@ async fn campaign_follows_child_stages_and_freezes_shared_file() -> anyhow::Resu
     let child_path = dir.path().join("child.toml");
     std::fs::write(
         &child_path,
-        r#"
-name = "child-$(value:9)"
-replacements = { value = 9, final_name = "default-final" }
+        r#"name = "child-$(value:9)"
+
+[replacements]
+value = 9
+final_name = "default-final"
+
 [evaluator]
 kind = "symbolica"
-expr = "1"
 args = ["x"]
+
+[evaluator.source]
+kind = "expression"
+expr = "1"
+
 [[task_queue]]
 name = "training"
 kind = "sample"
-stop_condition = { max_samples = 32 }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
+
+[task_queue.stop_condition]
+max_samples = 32
+
+[task_queue.accumulator]
+config = "scalar"
+
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
+seed = 1
+
 [[task_queue]]
 name = "$(final_name:default-final)"
 kind = "sample"
-# A fresh inference accumulator has fewer samples than the training result.
-stop_condition = { max_samples = 16 }
-evaluator = { config = { kind = "symbolica", expr = "0 + $(value:9)", args = ["x"] } }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+
+[task_queue.stop_condition]
+max_samples = 16
+
+[task_queue.evaluator.config]
+kind = "symbolica"
+args = ["x"]
+
+[task_queue.evaluator.config.source]
+kind = "expression"
+expr = "0 + $(value:9)"
+
+[task_queue.accumulator]
+config = "scalar"
+
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
+seed = 2
 "#,
     )?;
     let document = format!(
-        r#"
-kind = "integration_campaign"
+        r#"kind = "integration_campaign"
 name = "stage-campaign"
-stop_condition = {{ absolute_error = 1e-10, max_total_samples = 10000 }}
-allocation = {{ min_samples_per_child = 4, allocation_window_samples = 8 }}
+
+[stop_condition]
+absolute_error = 1e-10
+max_total_samples = 10000
+
+[allocation]
+min_samples_per_child = 4
+allocation_window_samples = 8
+
 [[children]]
 name = "left"
-replacements = {{ value = 2, final_name = "left-inference" }}
-run = {{ file = "{}" }}
+
+[children.replacements]
+value = 2
+final_name = "left-inference"
+
+[children.run]
+file = "{}"
+
 [[children]]
 name = "right"
 coefficient = -0.5
-replacements = {{ value = 3, final_name = "right-inference" }}
-run = {{ file = "{}" }}
+
+[children.replacements]
+value = 3
+final_name = "right-inference"
+
+[children.run]
+file = "{}"
+
 [[children]]
 name = "inline"
-run = '''
-name = "inline-stages"
-[evaluator]
-kind = "symbolica"
-expr = "0"
-args = ["x"]
-[[task_queue]]
-name = "excluded-training"
-kind = "sample"
-publish_result = false
-stop_condition = {{ max_samples = 32 }}
-accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
-[[task_queue]]
-name = "inline-inference"
-kind = "sample"
-stop_condition = {{ max_samples = 16 }}
-accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
-'''
+run = "name = \"inline-stages\"\n\n[evaluator]\nkind = \"symbolica\"\nargs = [\"x\"]\n\n[evaluator.source]\nkind = \"expression\"\nexpr = \"0\"\n\n[[task_queue]]\nname = \"excluded-training\"\nkind = \"sample\"\npublish_result = false\n\n[task_queue.stop_condition]\nmax_samples = 32\n\n[task_queue.accumulator]\nconfig = \"scalar\"\n\n[task_queue.sampler.config]\nkind = \"naive_monte_carlo\"\n\n[[task_queue]]\nname = \"inline-inference\"\nkind = \"sample\"\n\n[task_queue.stop_condition]\nmax_samples = 16\n\n[task_queue.accumulator]\nconfig = \"scalar\"\n\n[task_queue.sampler.config]\nkind = \"naive_monte_carlo\"\n"
 "#,
         child_path.display(),
         child_path.display()
@@ -582,9 +609,9 @@ discrete_dims = 0
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = "$(samples:4)" }
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = 'all_component_means' } }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }
 "#;
     for kind in [
         "integration_campaign",
@@ -608,7 +635,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
                 }
                 "parameter_scan" => "parameters = [{ name = 'scale', values = [3] }]\n[child]",
                 "hyperparameter_tuning" => {
-                    "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', quantity = 'central_value' }\nparameters = { scale = { kind = 'integer', min = 3, max = 3, step = 1 } }\n[child]"
+                    "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', selection = { kind = 'all_component_means' } }\nparameters = { scale = { kind = 'integer', min = 3, max = 3, step = 1 } }\n[child]"
                 }
                 _ => unreachable!(),
             };
@@ -695,7 +722,7 @@ name = "train"
 kind = "sample"
 stop_condition = { max_samples = 100000000 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 [task_queue.queue_tuning]
 max_batch_size = 100
 "#;

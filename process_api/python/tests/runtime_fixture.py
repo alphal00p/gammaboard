@@ -70,9 +70,24 @@ class Fixture:
         self.total += float(self.transform(values).sum())
 
     def snapshot(self):
-        return self.get_diagnostics()
+        return dict(count=self.count, total=self.total, rng=self.rng.bit_generator.state)
 
-    def get_diagnostics(self):
+    @classmethod
+    def from_snapshot(cls, *, snapshot, discrete_cardinalities, continuous_dims, init_args, evaluator_metadata=None):
+        instance = cls(discrete_cardinalities=discrete_cardinalities, continuous_dims=continuous_dims,
+                       evaluator_metadata=evaluator_metadata, **init_args)
+        instance.count = snapshot["count"]
+        instance.total = snapshot["total"]
+        instance.rng.bit_generator.state = snapshot["rng"]
+        return instance
+
+    def diagnostics(self):
+        return dict(count=self.count, total=self.total)
+
+    def global_pdf_norm(self):
+        return 2.5
+
+    def persisted_output(self):
         return dict(count=self.count, total=self.total)
 
 

@@ -845,7 +845,10 @@ async fn get_run_panels(
                 .map(|resolved| {
                     (
                         Some((resolved.evaluator_config, resolved.evaluator_provenance)),
-                        Some((resolved.sampler_config, resolved.sampler_provenance)),
+                        Some((
+                            resolved.sampler.config().clone(),
+                            resolved.sampler_provenance,
+                        )),
                     )
                 })
         }
@@ -976,7 +979,7 @@ fn append_engine_config_panels(
 }
 
 type EffectiveEvaluatorConfig = (crate::core::EvaluatorConfig, StageConfigProvenance);
-type EffectiveSamplerConfig = (crate::core::SamplerAggregatorConfig, StageConfigProvenance);
+type EffectiveSamplerConfig = (crate::core::SamplingConfig, StageConfigProvenance);
 
 fn configs_from_stage_snapshot(
     snapshot: Option<&crate::core::RunStageSnapshot>,
@@ -992,8 +995,8 @@ fn configs_from_stage_snapshot(
     });
     let sampler = snapshot.and_then(|snapshot| {
         snapshot
-            .sampler_aggregator
-            .clone()
+            .sampler_config()
+            .cloned()
             .map(|config| (config, StageConfigProvenance::from_snapshot(snapshot)))
     });
     (evaluator, sampler)
@@ -1026,9 +1029,7 @@ async fn get_run_task_output(
         .get_run_progress(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let mut task = load_run_task(&state.store, run_id, task_id).await?;
-    crate::services::measurement::hydrate_campaign_absolute_results(&state.store, &mut task)
-        .await?;
+    let task = load_run_task(&state.store, run_id, task_id).await?;
     let effective_accumulator_config =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. }) {
             crate::services::stage::try_resolve_effective_sample_accumulator_config(
@@ -1063,15 +1064,6 @@ async fn get_run_task_output(
     } else {
         None
     };
-    let evaluator = if matches!(
-        effective_accumulator_config,
-        Some(crate::core::AccumulatorConfig::Gammaloop)
-    ) {
-        crate::services::stage::try_resolve_effective_evaluator_config(&state.store, run_id, &task)
-            .await?
-    } else {
-        None
-    };
     let panel_source = if matches!(
         task.task,
         crate::core::RunTaskSpec::IntegrationCampaign { .. }
@@ -1079,15 +1071,8 @@ async fn get_run_task_output(
         let workers = crate::core::ControlPlaneStore::list_nodes(&state.store, None).await?;
         TaskPanelSource::for_campaign(&workers)
     } else {
-        match evaluator.as_ref() {
-            Some(evaluator) => TaskPanelSource::for_evaluator(
-                &task.task,
-                effective_accumulator_config,
-                Some(evaluator),
-            ),
-            None => TaskPanelSource::new(&task.task, effective_accumulator_config),
-        }
-        .map_err(|err| ApiError::Internal(err.to_string()))?
+        TaskPanelSource::new(&task.task, effective_accumulator_config)
+            .map_err(|err| ApiError::Internal(err.to_string()))?
     };
     let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
         state
@@ -1129,24 +1114,20 @@ async fn get_run_task_output(
             && live_sampler.as_ref().is_some_and(|worker| {
                 worker.current_run_id == Some(run_id)
                     && worker.current_role == Some(crate::core::WorkerRole::SamplerAggregator)
-                    && entry.runtime_metrics["node_uuid"] == worker.node_uuid
-                    && entry.runtime_metrics["task_id"].as_str()
-                        == Some(task.id.to_string().as_str())
+                    && entry.metrics.worker.node_uuid == worker.node_uuid
+                    && entry.metrics.worker.task_id.as_deref() == Some(task.id.to_string().as_str())
             })
     });
     let sampler_engine_diagnostics = latest_sampler_performance
         .as_ref()
-        .map(|entry| entry.engine_diagnostics.clone());
+        .map(|entry| entry.metrics.engine_diagnostics.clone());
     let (completed_samples_per_second, eta_seconds) =
         if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
             && matches!(task.state, crate::core::RunTaskState::Active)
         {
-            let metrics = latest_sampler_performance.as_ref().and_then(|entry| {
-                serde_json::from_value::<crate::core::SamplerRuntimeMetrics>(
-                    entry.runtime_metrics.clone(),
-                )
-                .ok()
-            });
+            let metrics = latest_sampler_performance
+                .as_ref()
+                .map(|entry| &entry.metrics);
             let completed_samples_per_second = metrics
                 .as_ref()
                 .map(|metrics| metrics.completed_samples_per_second)

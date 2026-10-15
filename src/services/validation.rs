@@ -1,18 +1,18 @@
-use crate::core::BuildError;
-use crate::preprocess::RunAddConfig;
+use crate::core::EngineError;
+use crate::preprocess::RunDefinition;
 use crate::process_runtime::build_process_worker_command;
 use crate::resources::resolve_resource_path;
 use serde_json::Value;
 use std::path::Path;
 
-pub(crate) fn validate_resources(config: &RunAddConfig) -> Result<(), BuildError> {
-    if config.kind != "integration" {
+pub(crate) fn validate_resources(config: &RunDefinition) -> Result<(), EngineError> {
+    let Some(config) = config.integration() else {
         return Ok(());
-    }
-    if let Some(evaluator) = &config.integration_params.evaluator {
+    };
+    if let Some(evaluator) = &config.params.evaluator {
         validate_value(&serde_json::to_value(evaluator).unwrap(), "evaluator")?;
     }
-    for (index, task) in config.task_queue.iter().flatten().enumerate() {
+    for (index, task) in config.task_queue.iter().enumerate() {
         validate_value(
             &serde_json::to_value(task).unwrap(),
             &format!("task_queue[{index}]"),
@@ -21,7 +21,7 @@ pub(crate) fn validate_resources(config: &RunAddConfig) -> Result<(), BuildError
     Ok(())
 }
 
-fn validate_value(value: &Value, field: &str) -> Result<(), BuildError> {
+fn validate_value(value: &Value, field: &str) -> Result<(), EngineError> {
     if let Some(kind) = value.get("kind").and_then(Value::as_str) {
         if matches!(
             kind,
@@ -32,21 +32,21 @@ fn validate_value(value: &Value, field: &str) -> Result<(), BuildError> {
         ) {
             let argv: Vec<String> =
                 serde_json::from_value(value.get("command").cloned().unwrap_or(Value::Null))
-                    .map_err(|err| BuildError::build(format!("{field}.command: {err}")))?;
+                    .map_err(|err| EngineError::build(format!("{field}.command: {err}")))?;
             let command =
                 build_process_worker_command(&argv, value.get("cwd").and_then(Value::as_str), kind)
-                    .map_err(|err| BuildError::build(format!("{field}: {err}")))?;
+                    .map_err(|err| EngineError::build(format!("{field}: {err}")))?;
             validate_executable(
                 command.get_program(),
                 command.get_current_dir().unwrap_or(Path::new(".")),
             )
-            .map_err(|err| BuildError::build(format!("{field}.command[0]: {err}")))?;
+            .map_err(|err| EngineError::build(format!("{field}.command[0]: {err}")))?;
         }
         if kind == "gammaloop"
             && let Some(folder) = value.get("state_folder").and_then(Value::as_str)
         {
             let folder = resolve_resource_path(Path::new(folder))
-                .map_err(|err| BuildError::build(format!("{field}.state_folder: {err}")))?;
+                .map_err(|err| EngineError::build(format!("{field}.state_folder: {err}")))?;
             for file in ["state_manifest.toml", "model.json", "symbolica_state.bin"] {
                 require_file(&folder.join(file), field)?;
             }
@@ -62,19 +62,19 @@ fn validate_value(value: &Value, field: &str) -> Result<(), BuildError> {
                     continue;
                 }
                 for process in std::fs::read_dir(&processes)
-                    .map_err(|err| BuildError::build(format!("{}: {err}", processes.display())))?
+                    .map_err(|err| EngineError::build(format!("{}: {err}", processes.display())))?
                 {
                     let process = process
-                        .map_err(|err| BuildError::build(err.to_string()))?
+                        .map_err(|err| EngineError::build(err.to_string()))?
                         .path();
                     if !process.is_dir() {
                         continue;
                     }
                     for integrand in std::fs::read_dir(&process)
-                        .map_err(|err| BuildError::build(err.to_string()))?
+                        .map_err(|err| EngineError::build(err.to_string()))?
                     {
                         let integrand = integrand
-                            .map_err(|err| BuildError::build(err.to_string()))?
+                            .map_err(|err| EngineError::build(err.to_string()))?
                             .path();
                         if !integrand.is_dir() {
                             continue;
@@ -101,7 +101,7 @@ fn validate_value(value: &Value, field: &str) -> Result<(), BuildError> {
                 }
             }
             if !selected_found {
-                return Err(BuildError::build(format!(
+                return Err(EngineError::build(format!(
                     "{field}: integrand {} has no generated state under {}",
                     value["integrand_name"],
                     folder.display()
@@ -127,9 +127,9 @@ fn validate_value(value: &Value, field: &str) -> Result<(), BuildError> {
     Ok(())
 }
 
-fn require_file(path: &Path, field: &str) -> Result<(), BuildError> {
+fn require_file(path: &Path, field: &str) -> Result<(), EngineError> {
     if !path.is_file() {
-        return Err(BuildError::build(format!(
+        return Err(EngineError::build(format!(
             "{field}: required state file missing: {}. Complete state generation before starting this run.",
             path.display()
         )));

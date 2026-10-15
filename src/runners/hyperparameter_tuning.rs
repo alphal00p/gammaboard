@@ -1,14 +1,18 @@
 use crate::api::runs::{ChildRunRequest, create_child_run};
+#[cfg(test)]
+use crate::core::MeasurementSelection;
+#[cfg(test)]
+use crate::core::TaskMeasurementSpec;
 use crate::core::{
     AccumulatorMetricName, AggregationStore, ControlPlaneStore, ControllerChildOutput,
     ControllerChildState, ControllerTaskOutput, EgoboxInfillStrategy, EgoboxQeiStrategy,
-    HyperparameterTrialOutput, HyperparameterTuningAlgorithm, HyperparameterTuningOutput,
-    HyperparameterTuningParameterDomain, MeasurementMode, MeasurementQuantityName,
-    MeasurementQuantitySpec, MeasurementSpec, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
-    RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput,
+    HyperparameterTrialOutput, HyperparameterTuningOutput, HyperparameterTuningParameterDomain,
+    MeasurementMode, MeasurementSpec, RunReadStore, RunSpecStore, RunTask, RunTaskSpec,
+    RunTaskStore, StoreError, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerAssignmentPlan, apply_controller_assignment_plan, load_child_task_result_reference,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, finish_controller,
+    load_child_task_result_reference, load_controller_children,
 };
 use crate::runners::parameter_grid::{ParameterGridItem, cartesian_grid_len, cartesian_grid_point};
 use egobox_ego::{EgorServiceBuilder, InfillStrategy, QEiStrategy, XType};
@@ -90,14 +94,8 @@ where
             ));
         };
 
-        let child_runs = self
-            .store
-            .get_child_runs_for_task(self.run_id, self.task.id, HYPERPARAMETER_TUNING_SPAWN_KIND)
-            .await?;
-        let child_runs_by_label = child_runs
-            .iter()
-            .filter_map(|run| run.spawn_label.as_deref().map(|label| (label, run)))
-            .collect::<BTreeMap<_, _>>();
+        let child_runs_by_label =
+            load_controller_children(&self.store, self.run_id, &self.task).await?;
 
         let existing_trial_indices = child_runs_by_label
             .keys()
@@ -121,7 +119,7 @@ where
             &existing_trial_indices,
             &previous_trials,
             &previous_observations,
-            objective.mode,
+            objective.measurement.mode,
             candidate_capacity,
         )?;
         let total_trials = optimizer_plan.total_trials;
@@ -143,7 +141,7 @@ where
                 .parameters
                 .clone();
             let parameters_json = parameters_to_json(&values)?;
-            let child = child_runs_by_label.get(label.as_str()).copied();
+            let child = child_runs_by_label.get(label.as_str());
 
             let Some(child) = child else {
                 trials.push(HyperparameterTrialOutput {
@@ -151,149 +149,67 @@ where
                     parameters: parameters_json,
                     objective_value: None,
                     objective_uncertainty: None,
-                    child: ControllerChildOutput {
-                        child_run_id: None,
-                        status: ControllerChildState::Planned,
-                        result_source: None,
-                        completed_samples_per_second: None,
-                        measurement: None,
-                        failure_reason: None,
-                    },
+                    child: ControllerChildOutput::planned(),
                 });
                 continue;
             };
-
-            let measurement_output =
+            let result =
                 load_child_task_result_reference(&self.store, child.run_id, &objective.source_task)
                     .await?;
-            let result_source = Some(measurement_output.source.clone());
-            if let Some(reason) = measurement_output.task_failure_reason() {
-                failed_count += 1;
-                trials.push(HyperparameterTrialOutput {
-                    index,
-                    parameters: parameters_json,
-                    objective_value: None,
-                    objective_uncertainty: None,
-                    child: ControllerChildOutput {
-                        child_run_id: Some(child.run_id),
-                        status: ControllerChildState::Failed,
-                        result_source,
-                        completed_samples_per_second: None,
-                        measurement: measurement_output.output,
-                        failure_reason: Some(reason),
-                    },
-                });
-                continue;
-            }
-            match measurement_output.output {
-                Some(TaskMeasurementOutput::Completed { results }) => {
-                    match objective_result(objective, &results) {
-                        Ok(result) => {
-                            completed_count += 1;
-                            trials.push(HyperparameterTrialOutput {
-                                index,
-                                parameters: parameters_json,
-                                objective_value: Some(result.value),
-                                objective_uncertainty: result.uncertainty,
-                                child: ControllerChildOutput {
-                                    child_run_id: Some(child.run_id),
-                                    status: ControllerChildState::Completed,
-                                    result_source,
-                                    completed_samples_per_second: None,
-                                    measurement: Some(TaskMeasurementOutput::Completed { results }),
-                                    failure_reason: None,
-                                },
-                            });
-                        }
-                        Err(reason) => {
-                            failed_count += 1;
-                            let failure_reason = objective_failure_reason(
-                                index,
-                                child.run_id,
-                                objective,
-                                &results,
-                                &reason,
-                            );
-                            trials.push(HyperparameterTrialOutput {
-                                index,
-                                parameters: parameters_json,
-                                objective_value: None,
-                                objective_uncertainty: None,
-                                child: ControllerChildOutput {
-                                    child_run_id: Some(child.run_id),
-                                    status: ControllerChildState::Failed,
-                                    result_source,
-                                    completed_samples_per_second: None,
-                                    measurement: Some(TaskMeasurementOutput::Completed { results }),
-                                    failure_reason: Some(failure_reason),
-                                },
-                            });
+            let mut observed = result.controller_output();
+            let mut objective_value = None;
+            let mut objective_uncertainty = None;
+            if result.task_failure_reason().is_none() {
+                match observed.measurement.as_ref() {
+                    Some(TaskMeasurementOutput::Completed { results }) => {
+                        match objective_result(objective, results) {
+                            Ok(value) => {
+                                objective_value = Some(value.value);
+                                objective_uncertainty = value.uncertainty;
+                            }
+                            Err(reason) => {
+                                let reason = objective_failure_reason(
+                                    index,
+                                    child.run_id,
+                                    objective,
+                                    results,
+                                    &reason,
+                                );
+                                observed.fail(reason);
+                            }
                         }
                     }
-                }
-                Some(TaskMeasurementOutput::Failed { reason }) => {
-                    failed_count += 1;
-                    let failure_reason = objective_measurement_failure_reason(
-                        index,
-                        child.run_id,
-                        objective,
-                        &reason,
-                    );
-                    trials.push(HyperparameterTrialOutput {
-                        index,
-                        parameters: parameters_json,
-                        objective_value: None,
-                        objective_uncertainty: None,
-                        child: ControllerChildOutput {
-                            child_run_id: Some(child.run_id),
-                            status: ControllerChildState::Failed,
-                            result_source,
-                            completed_samples_per_second: None,
-                            measurement: Some(TaskMeasurementOutput::Failed {
-                                reason: reason.clone(),
-                            }),
-                            failure_reason: Some(failure_reason),
-                        },
-                    });
-                }
-                None => {
-                    if measurement_output.task_state == RunTaskState::Completed {
-                        failed_count += 1;
-                        let failure_reason =
-                            objective_missing_measurement_reason(index, child.run_id, objective);
-                        trials.push(HyperparameterTrialOutput {
+                    Some(TaskMeasurementOutput::Failed { reason }) => {
+                        let reason = objective_measurement_failure_reason(
                             index,
-                            parameters: parameters_json,
-                            objective_value: None,
-                            objective_uncertainty: None,
-                            child: ControllerChildOutput {
-                                child_run_id: Some(child.run_id),
-                                status: ControllerChildState::Failed,
-                                result_source,
-                                completed_samples_per_second: None,
-                                measurement: None,
-                                failure_reason: Some(failure_reason),
-                            },
-                        });
-                    } else {
-                        running_count += 1;
-                        trials.push(HyperparameterTrialOutput {
-                            index,
-                            parameters: parameters_json,
-                            objective_value: None,
-                            objective_uncertainty: None,
-                            child: ControllerChildOutput {
-                                child_run_id: Some(child.run_id),
-                                status: measurement_output.task_state.into(),
-                                result_source,
-                                completed_samples_per_second: None,
-                                measurement: None,
-                                failure_reason: None,
-                            },
-                        });
+                            child.run_id,
+                            objective,
+                            reason,
+                        );
+                        observed.fail(reason);
                     }
+                    None if observed.status == ControllerChildState::Completed => {
+                        observed.fail(objective_missing_measurement_reason(
+                            index,
+                            child.run_id,
+                            objective,
+                        ));
+                    }
+                    None => {}
                 }
             }
+            match observed.status {
+                ControllerChildState::Completed => completed_count += 1,
+                ControllerChildState::Failed => failed_count += 1,
+                _ => running_count += 1,
+            }
+            trials.push(HyperparameterTrialOutput {
+                index,
+                parameters: parameters_json,
+                objective_value,
+                objective_uncertainty,
+                child: observed,
+            });
         }
 
         if failed_count > 0 {
@@ -305,18 +221,8 @@ where
                 trials,
             )
             .await?;
-            apply_controller_assignment_plan(
-                &self.store,
-                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
-            )
-            .await?;
-            self.store
-                .fail_run_task(
-                    self.task.id,
-                    &format!("hyperparameter tuning failed: failed_trials={failed_count}"),
-                )
-                .await?;
-            return Ok(true);
+            let reason = format!("hyperparameter tuning failed: failed_trials={failed_count}");
+            return finish_controller(&self.store, self.run_id, self.task.id, Err(&reason)).await;
         }
 
         if completed_count + failed_count == total_trials {
@@ -331,13 +237,7 @@ where
             self.store
                 .update_run_task_progress(self.task.id, total_trials as i64, completed_count as i64)
                 .await?;
-            apply_controller_assignment_plan(
-                &self.store,
-                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
-            )
-            .await?;
-            self.store.complete_run_task(self.task.id).await?;
-            return Ok(true);
+            return finish_controller(&self.store, self.run_id, self.task.id, Ok(())).await;
         }
 
         let mut created_child_run_ids = Vec::new();
@@ -386,8 +286,13 @@ where
                             trials,
                         )
                         .await?;
-                        self.store.fail_run_task(self.task.id, &reason).await?;
-                        return Ok(true);
+                        return finish_controller(
+                            &self.store,
+                            self.run_id,
+                            self.task.id,
+                            Err(&reason),
+                        )
+                        .await;
                     }
                 };
                 created_child_run_ids.push(child.run_id);
@@ -458,7 +363,7 @@ where
 
 fn objective_mode(task: &RunTaskSpec) -> MeasurementMode {
     match task {
-        RunTaskSpec::HyperparameterTuning { objective, .. } => objective.mode,
+        RunTaskSpec::HyperparameterTuning { objective, .. } => objective.measurement.mode,
         _ => MeasurementMode::Minimize,
     }
 }
@@ -491,7 +396,7 @@ fn objective_result<'a>(
                 .unwrap_or_default()
         )),
         _ => Err(format!(
-            "objective measurement produced multiple {:?} results; set objective.quantity.component or objective.metric.component",
+            "objective measurement produced multiple {:?} results; set objective.selection.component",
             selector.0
         )),
     }
@@ -561,18 +466,9 @@ fn metric_selector_label(name: AccumulatorMetricName, component: Option<&str>) -
 }
 
 fn objective_selector(objective: &MeasurementSpec) -> (AccumulatorMetricName, Option<String>) {
-    if let Some(metric) = objective.metric.as_ref() {
-        let selector = metric.selector();
-        return (selector.name, selector.component);
-    }
-    match &objective.quantity {
-        MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue) => {
-            (AccumulatorMetricName::Mean, None)
-        }
-        MeasurementQuantitySpec::Metric(metric) => {
-            let selector = metric.selector();
-            (selector.name, selector.component)
-        }
+    match objective.metric_selector() {
+        Some(selector) => (selector.name, selector.component.clone()),
+        None => (AccumulatorMetricName::Mean, None),
     }
 }
 
@@ -624,8 +520,8 @@ fn plan_optimizer_trials(
     mode: MeasurementMode,
     candidate_capacity: usize,
 ) -> Result<OptimizerTrialPlan, StoreError> {
-    match optimizer.algorithm {
-        HyperparameterTuningAlgorithm::RandomSearch => {
+    match optimizer {
+        crate::core::HyperparameterTuningOptimizerSpec::RandomSearch(_) => {
             let total_trials = optimizer
                 .random_search_params()
                 .map_err(StoreError::store)?
@@ -643,7 +539,7 @@ fn plan_optimizer_trials(
                 candidates,
             })
         }
-        HyperparameterTuningAlgorithm::GridSearch => {
+        crate::core::HyperparameterTuningOptimizerSpec::GridSearch => {
             let grid_items = hyperparameter_grid_items(parameters)?;
             let total_trials = cartesian_grid_len(&grid_items)?;
             let candidates = (0..total_trials)
@@ -659,7 +555,7 @@ fn plan_optimizer_trials(
                 candidates,
             })
         }
-        HyperparameterTuningAlgorithm::Egobox => egobox_trial_plan(
+        crate::core::HyperparameterTuningOptimizerSpec::Egobox(_) => egobox_trial_plan(
             optimizer,
             parameters,
             existing_trial_indices,
@@ -814,7 +710,7 @@ fn egobox_trial_plan(
         .take(desired_new)
         .collect::<Vec<_>>();
     let new_candidates =
-        if observations.len() <= effective_egobox_initial_design(&params, parameters.len()) {
+        if observations.len() <= effective_egobox_initial_design(params, parameters.len()) {
             next_indices
                 .into_iter()
                 .map(|index| {
@@ -834,7 +730,7 @@ fn egobox_trial_plan(
                 .collect::<Result<Vec<_>, StoreError>>()?
         } else {
             suggest_egobox_candidates(
-                &params,
+                params,
                 &encoder,
                 observations,
                 mode,
@@ -1422,7 +1318,6 @@ mod tests {
     use crate::core::{
         HyperparameterTuningCategoricalDomain, HyperparameterTuningFloatDomain,
         HyperparameterTuningIntegerDomain, HyperparameterTuningOptimizerSpec,
-        MeasurementMetricQuantity, MeasurementMetricSpec,
     };
     use serde_json::json;
 
@@ -1446,10 +1341,9 @@ mod tests {
             ),
         ]);
 
-        let optimizer = HyperparameterTuningOptimizerSpec {
-            algorithm: HyperparameterTuningAlgorithm::RandomSearch,
-            params: json!({ "max_trials": 8, "seed": 7 }),
-        };
+        let optimizer = HyperparameterTuningOptimizerSpec::RandomSearch(
+            serde_json::from_value(json!({ "max_trials": 8, "seed": 7 })).unwrap(),
+        );
 
         let first = trial_parameters(&optimizer, &parameters, 3).expect("first");
         let second = trial_parameters(&optimizer, &parameters, 3).expect("second");
@@ -1478,21 +1372,15 @@ mod tests {
                 "mode".to_string(),
                 HyperparameterTuningParameterDomain::Categorical(
                     crate::core::HyperparameterTuningCategoricalDomain {
-                        source: crate::core::ParameterValueSourceSpec {
-                            values: vec![
-                                toml::Value::String("auto".to_string()),
-                                toml::Value::String("none".to_string()),
-                            ],
-                            ..Default::default()
-                        },
+                        source: crate::core::ParameterValueSourceSpec::Values(vec![
+                            toml::Value::String("auto".to_string()),
+                            toml::Value::String("none".to_string()),
+                        ]),
                     },
                 ),
             ),
         ]);
-        let optimizer = HyperparameterTuningOptimizerSpec {
-            algorithm: HyperparameterTuningAlgorithm::GridSearch,
-            params: json!({}),
-        };
+        let optimizer = HyperparameterTuningOptimizerSpec::GridSearch;
 
         assert_eq!(optimizer_trial_count(&optimizer, &parameters).unwrap(), 6);
         let trials = (0..6)
@@ -1541,10 +1429,7 @@ mod tests {
                 max: 1.0,
             }),
         )]);
-        let optimizer = HyperparameterTuningOptimizerSpec {
-            algorithm: HyperparameterTuningAlgorithm::GridSearch,
-            params: json!({}),
-        };
+        let optimizer = HyperparameterTuningOptimizerSpec::GridSearch;
 
         let err = optimizer_trial_count(&optimizer, &parameters).expect_err("float grid");
         assert!(err.to_string().contains("does not support float"));
@@ -1572,13 +1457,10 @@ mod tests {
                 "mode".to_string(),
                 HyperparameterTuningParameterDomain::Categorical(
                     HyperparameterTuningCategoricalDomain {
-                        source: crate::core::ParameterValueSourceSpec {
-                            values: vec![
-                                toml::Value::String("auto".to_string()),
-                                toml::Value::String("none".to_string()),
-                            ],
-                            ..Default::default()
-                        },
+                        source: crate::core::ParameterValueSourceSpec::Values(vec![
+                            toml::Value::String("auto".to_string()),
+                            toml::Value::String("none".to_string()),
+                        ]),
                     },
                 ),
             ),
@@ -1605,15 +1487,15 @@ mod tests {
                 max: 1.0,
             }),
         )]);
-        let optimizer = HyperparameterTuningOptimizerSpec {
-            algorithm: HyperparameterTuningAlgorithm::Egobox,
-            params: json!({
+        let optimizer = HyperparameterTuningOptimizerSpec::Egobox(
+            serde_json::from_value(json!({
                 "max_trials": 4,
                 "seed": 2,
                 "initial_design": 3,
                 "parallel_candidates": 2
-            }),
-        };
+            }))
+            .unwrap(),
+        );
 
         let plan = plan_optimizer_trials(
             &optimizer,
@@ -1643,16 +1525,16 @@ mod tests {
                 max: 1.0,
             }),
         )]);
-        let optimizer = HyperparameterTuningOptimizerSpec {
-            algorithm: HyperparameterTuningAlgorithm::Egobox,
-            params: json!({
+        let optimizer = HyperparameterTuningOptimizerSpec::Egobox(
+            serde_json::from_value(json!({
                 "max_trials": 4,
                 "seed": 2,
                 "initial_design": 2,
                 "parallel_candidates": 1,
                 "infill": "ei"
-            }),
-        };
+            }))
+            .unwrap(),
+        );
         let previous_trials = BTreeMap::from([
             (
                 0,
@@ -1716,15 +1598,15 @@ mod tests {
                 max: 1.0,
             }),
         )]);
-        let optimizer = HyperparameterTuningOptimizerSpec {
-            algorithm: HyperparameterTuningAlgorithm::Egobox,
-            params: json!({
+        let optimizer = HyperparameterTuningOptimizerSpec::Egobox(
+            serde_json::from_value(json!({
                 "max_trials": 3,
                 "seed": 4,
                 "initial_design": 2,
                 "parallel_candidates": 1
-            }),
-        };
+            }))
+            .unwrap(),
+        );
         let previous_output: ControllerTaskOutput = serde_json::from_value(json!({
             "completed_trials": 1,
             "running_trials": 0,
@@ -1791,10 +1673,10 @@ mod tests {
                 "max_eta_min".to_string(),
                 HyperparameterTuningParameterDomain::Categorical(
                     HyperparameterTuningCategoricalDomain {
-                        source: crate::core::ParameterValueSourceSpec {
-                            values: vec![toml::Value::Float(0.0), toml::Value::Float(1.0e10)],
-                            ..Default::default()
-                        },
+                        source: crate::core::ParameterValueSourceSpec::Values(vec![
+                            toml::Value::Float(0.0),
+                            toml::Value::Float(1.0e10),
+                        ]),
                     },
                 ),
             ),
@@ -1814,17 +1696,17 @@ mod tests {
                 }),
             ),
         ]);
-        let optimizer = HyperparameterTuningOptimizerSpec {
-            algorithm: HyperparameterTuningAlgorithm::Egobox,
-            params: json!({
+        let optimizer = HyperparameterTuningOptimizerSpec::Egobox(
+            serde_json::from_value(json!({
                 "max_trials": 16,
                 "seed": 23,
                 "initial_design": 6,
                 "parallel_candidates": 2,
                 "infill": "ei",
                 "qei_strategy": "kriging_believer"
-            }),
-        };
+            }))
+            .unwrap(),
+        );
         let previous_trials = (0..7)
             .map(|index| {
                 let mut rng = Xoshiro256StarStar::seed_from_u64(23 ^ splitmix64(index as u64));
@@ -1893,12 +1775,13 @@ mod tests {
     fn objective_result_selects_requested_component() {
         let objective = MeasurementSpec {
             source_task: "sample".to_string(),
-            quantity: MeasurementQuantitySpec::Metric(MeasurementMetricQuantity {
-                metric: AccumulatorMetricName::Mean,
-                component: Some("imag".to_string()),
-            }),
-            metric: None,
-            mode: MeasurementMode::Minimize,
+            measurement: TaskMeasurementSpec {
+                selection: MeasurementSelection::Metric(crate::AccumulatorMetricSelector {
+                    name: AccumulatorMetricName::Mean,
+                    component: Some("imag".to_string()),
+                }),
+                mode: MeasurementMode::Minimize,
+            },
         };
         let results = vec![
             crate::core::MeasurementResult {
@@ -1925,9 +1808,10 @@ mod tests {
     fn objective_result_rejects_ambiguous_metric() {
         let objective = MeasurementSpec {
             source_task: "sample".to_string(),
-            quantity: MeasurementQuantitySpec::Name(MeasurementQuantityName::CentralValue),
-            metric: Some(MeasurementMetricSpec::Name(AccumulatorMetricName::Mean)),
-            mode: MeasurementMode::Minimize,
+            measurement: TaskMeasurementSpec {
+                selection: MeasurementSelection::metric(AccumulatorMetricName::Mean),
+                mode: MeasurementMode::Minimize,
+            },
         };
         let results = vec![
             crate::core::MeasurementResult {
@@ -1954,12 +1838,13 @@ mod tests {
     fn objective_failure_reason_includes_context_and_available_results() {
         let objective = MeasurementSpec {
             source_task: "sample".to_string(),
-            quantity: MeasurementQuantitySpec::Metric(MeasurementMetricQuantity {
-                metric: AccumulatorMetricName::Mean,
-                component: Some("missing".to_string()),
-            }),
-            metric: None,
-            mode: MeasurementMode::Minimize,
+            measurement: TaskMeasurementSpec {
+                selection: MeasurementSelection::Metric(crate::AccumulatorMetricSelector {
+                    name: AccumulatorMetricName::Mean,
+                    component: Some("missing".to_string()),
+                }),
+                mode: MeasurementMode::Minimize,
+            },
         };
         let results = vec![crate::core::MeasurementResult {
             name: AccumulatorMetricName::Mean,

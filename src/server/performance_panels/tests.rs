@@ -15,16 +15,18 @@ fn fixture() -> (PerformanceSnapshot, Vec<Value>, Vec<Value>) {
             json!({"name":name,"uuid":name,"live":true,"active_run_id":1,"active_role":role}),
         );
         for (time, samples, busy) in [(50, 0, 0.0), (98, 480, 24.0)] {
-            let row = json!({"worker_id":name,"created_at":DateTime::from_timestamp(time,0).unwrap(),"rss_bytes":1024,
-                "metrics":{"epoch":"eval-epoch","node_uuid":name,"task_id":"2","samples_evaluated":samples,
+            let metrics = if role == "evaluator" {
+                json!({"epoch":"eval-epoch","node_uuid":name,"task_id":"2","samples_evaluated":samples,
                     "cumulative":{"evaluate_seconds":busy,"materialize_seconds":0.0},
-                    "busy":{"elapsed_seconds":time,"compute_seconds":busy,"io_seconds":busy*0.5}},
-                "runtime_metrics":{"runner_epoch":"sample-epoch","node_uuid":name,"task_id":"2",
-                    "completed_samples_total":samples,
+                    "busy":{"elapsed_seconds":time,"compute_seconds":busy,"io_seconds":busy*0.5}})
+            } else {
+                json!({"epoch":"sample-epoch","node_uuid":name,"task_id":"2","completed_samples_total":samples,
                     "busy":{"elapsed_seconds":time,"compute_seconds":busy,"io_seconds":busy*1.5},
                     "sampler":{"produce_ms_per_sample":{"count":1,"total":busy*500.0},
                         "completed_training_ingest_ms":{"count":1,"total":busy*500.0},
-                        "completed_merge_ingest_ms":{"count":0,"total":null}}}});
+                        "completed_merge_ingest_ms":{"count":0,"total":null}}})
+            };
+            let row = json!({"worker_id":name,"created_at":DateTime::from_timestamp(time,0).unwrap(),"rss_bytes":1024,"metrics":metrics});
             if role == "evaluator" {
                 evaluators.push(row);
             } else {
@@ -113,12 +115,12 @@ fn stale_replaced_and_stopped_workers_do_not_supply_current_usage() {
 #[test]
 fn rates_require_two_points_in_one_epoch_and_clip_boundary_intervals() {
     let (snapshot, e, mut s) = fixture();
-    s[0]["runtime_metrics"]["runner_epoch"] = json!("old-epoch");
+    s[0]["metrics"]["epoch"] = json!("old-epoch");
     assert!(overview(&snapshot, &e, &s)["accepted_rate"].is_null());
-    s[0]["runtime_metrics"]["runner_epoch"] = json!("sample-epoch");
-    s[0]["runtime_metrics"]["completed_samples_total"] = json!(1000);
+    s[0]["metrics"]["epoch"] = json!("sample-epoch");
+    s[0]["metrics"]["completed_samples_total"] = json!(1000);
     assert!(overview(&snapshot, &e, &s)["accepted_rate"].is_null());
-    s[0]["runtime_metrics"]["completed_samples_total"] = json!(0);
+    s[0]["metrics"]["completed_samples_total"] = json!(0);
     s[0]["created_at"] = json!(DateTime::from_timestamp(30, 0).unwrap());
     assert!(
         (overview(&snapshot, &e, &s)["accepted_rate"]
@@ -137,7 +139,7 @@ fn operation_means_use_totals_and_counts_instead_of_summing_conditional_means() 
     let mut history = graphs::Graphs::new([0., 3000.]);
     for (time, n, total) in [(0, 999, 99999.), (1000, 1, 10.), (2000, 1000, 100.)] {
         history.observe(json!({"worker_id":"s", "created_at": DateTime::from_timestamp_millis(time).unwrap(),
-            "runtime_metrics":{"runner_epoch":"one", "task_id":"t", "node_uuid":"s", "completed_samples_total":time,
+            "metrics":{"epoch":"one", "task_id":"t", "node_uuid":"s", "completed_samples_total":time,
                 "sampler":{"eval_ms_per_sample":{"count":n,"total":total}}}}), false);
     }
     add_sampler_timings(&mut panels, &mut states, &history.measurements.timings);
@@ -171,9 +173,9 @@ fn cumulative_busy_survives_missing_publications_and_uses_monotonic_time() {
     // Database publication timestamps vary; the actual measurement clock does not.
     s[0]["created_at"] = json!(DateTime::from_timestamp(88, 0).unwrap());
     assert_eq!(overview(&snapshot, &e, &s)["sampler_busy"], 50.0);
-    s[1]["runtime_metrics"]["busy"]["compute_seconds"] = json!(100.0);
+    s[1]["metrics"]["busy"]["compute_seconds"] = json!(100.0);
     assert!(overview(&snapshot, &e, &s)["sampler_busy"].is_null());
-    s[1]["runtime_metrics"]["busy"] = Value::Null;
+    s[1]["metrics"]["busy"] = Value::Null;
     assert!(overview(&snapshot, &e, &s)["sampler_io"].is_null());
 }
 
@@ -223,10 +225,10 @@ fn graphs_do_not_bridge_tasks_restarts_or_invalid_counters() {
 #[test]
 fn missing_busy_is_unknown_while_reported_idle_is_zero() {
     let (snapshot, e, mut s) = fixture();
-    s[0]["runtime_metrics"]["busy"] = Value::Null;
+    s[0]["metrics"]["busy"] = Value::Null;
     let mut last = s[1].clone();
     last["created_at"] = json!(DateTime::from_timestamp(99, 0).unwrap());
-    last["runtime_metrics"]["busy"]["elapsed_seconds"] = json!(99);
+    last["metrics"]["busy"]["elapsed_seconds"] = json!(99);
     s.push(last);
     let busy = graph(&snapshot, &e, &s, "busy_history");
     let points = busy["series"][2]["points"].as_array().unwrap();

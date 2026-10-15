@@ -8,9 +8,7 @@ use assert_cmd::Command;
 use gammaboard::Domain;
 use gammaboard::api::nodes as node_api;
 use gammaboard::config::RuntimeConfig;
-use gammaboard::sampling::{
-    HavanaSamplerParams, LatentBatch, PdfAdaptationImagePersistedOutput, SamplerAggregatorSnapshot,
-};
+use gammaboard::sampling::{HavanaSamplerParams, PdfAdaptationImagePersistedOutput, SavedSampler};
 use predicates::prelude::*;
 use rand::SeedableRng;
 use rand_xoshiro::Xoshiro256StarStar;

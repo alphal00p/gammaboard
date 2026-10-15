@@ -232,7 +232,7 @@ fn image_view_panel(
                 height,
                 values: reorder_scalar_values(&real_values, total),
                 imag_values: imag_values.map(|values| reorder_scalar_values(&values, total)),
-                invalid_indices: reordered_invalid_indices(&state.invalid_entries, total),
+                invalid_indices: None,
                 x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
                 y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
                 color_mode: image_color_mode(mode),
@@ -395,20 +395,6 @@ fn reorder_scalar_values(values: &[f64], total: usize) -> Vec<f32> {
         }
     }
     reordered
-}
-
-fn reordered_invalid_indices(invalid_entries: &[usize], total: usize) -> Option<Vec<usize>> {
-    if invalid_entries.is_empty() {
-        return None;
-    }
-    let stride = coprime_stride(total);
-    Some(
-        invalid_entries
-            .iter()
-            .copied()
-            .map(|shuffled_index| permuted_raster_index(shuffled_index, total, stride))
-            .collect(),
-    )
 }
 
 fn decode_full_progress(persisted: &JsonValue) -> Result<FullAccumulatorProgress, EngineError> {

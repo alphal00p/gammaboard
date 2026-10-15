@@ -1,4 +1,4 @@
-use crate::core::{BatchTransformConfig, BuildError};
+use crate::core::{BatchTransformConfig, EngineError};
 use crate::evaluation::BatchTransform;
 
 mod process;
@@ -6,7 +6,6 @@ mod spherical;
 mod unit_ball;
 
 use process::ProcessBatchTransform;
-pub use process::ProcessBatchTransformParams;
 use spherical::SphericalBatchTransform;
 pub use spherical::SphericalBatchTransformParams;
 use unit_ball::UnitBallBatchTransform;
@@ -21,17 +20,22 @@ impl BatchTransformConfig {
         }
     }
 
-    pub fn build(&self) -> Result<Box<dyn BatchTransform>, BuildError> {
-        match self {
-            Self::UnitBall { params } => Ok(Box::new(UnitBallBatchTransform::from_params(
-                params.clone(),
-            ))),
-            Self::Spherical { params } => Ok(Box::new(SphericalBatchTransform::from_params(
-                params.clone(),
-            ))),
-            Self::ProcessBatchTransform { params } => Ok(Box::new(
-                ProcessBatchTransform::from_params(params.clone())?,
-            )),
-        }
+    pub fn build(
+        &self,
+        domain: &crate::utils::domain::Domain,
+    ) -> Result<Box<dyn BatchTransform>, EngineError> {
+        let transform: Box<dyn BatchTransform> = match self {
+            Self::UnitBall { params } => {
+                Box::new(UnitBallBatchTransform::from_params(params.clone()))
+            }
+            Self::Spherical { params } => {
+                Box::new(SphericalBatchTransform::from_params(params.clone()))
+            }
+            Self::ProcessBatchTransform { params } => {
+                Box::new(ProcessBatchTransform::from_params(params.clone(), domain)?)
+            }
+        };
+        transform.validate_domain(domain)?;
+        Ok(transform)
     }
 }

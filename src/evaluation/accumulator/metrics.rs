@@ -1,23 +1,14 @@
+use crate::core::MeasurementResult;
 use crate::core::{AccumulatorMetricName, AccumulatorMetricSelector, EngineError};
 use crate::evaluation::{
     AccumulatorState, GammaLoopAccumulatorState, NamedScalarAccumulator, ScalarAccumulatorState,
     VectorAccumulatorState,
 };
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AccumulatorMetricValue {
-    pub name: AccumulatorMetricName,
-    pub component: Option<String>,
-    pub value: f64,
-    pub uncertainty: Option<f64>,
-    pub sample_count: i64,
-}
 
 pub fn extract_accumulator_metric(
     state: &AccumulatorState,
     selector: &AccumulatorMetricSelector,
-) -> Result<Option<AccumulatorMetricValue>, EngineError> {
+) -> Result<Option<MeasurementResult>, EngineError> {
     if selector.name == AccumulatorMetricName::TimeNormalizedVariance {
         return Ok(None);
     }
@@ -32,7 +23,7 @@ pub fn extract_accumulator_metric_with_runtime(
     state: &AccumulatorState,
     selector: &AccumulatorMetricSelector,
     completed_samples_per_second: Option<f64>,
-) -> Result<Option<AccumulatorMetricValue>, EngineError> {
+) -> Result<Option<MeasurementResult>, EngineError> {
     if selector.name != AccumulatorMetricName::TimeNormalizedVariance {
         return extract_accumulator_metric(state, selector);
     }
@@ -47,7 +38,7 @@ pub fn extract_accumulator_metric_with_runtime(
     let Some(variance) = extract_accumulator_metric(state, &variance_selector)? else {
         return Ok(None);
     };
-    Ok(Some(AccumulatorMetricValue {
+    Ok(Some(MeasurementResult {
         name: AccumulatorMetricName::TimeNormalizedVariance,
         component: variance.component,
         value: variance.value / rate,
@@ -59,20 +50,30 @@ pub fn extract_accumulator_metric_with_runtime(
 fn metric_for_vector(
     vector: &VectorAccumulatorState,
     selector: &AccumulatorMetricSelector,
-) -> Option<AccumulatorMetricValue> {
-    let component = match selector.component.as_deref() {
-        None => &vector.projection,
-        Some("training_projection") => &vector.projection,
-        Some(name) => vector.component(name)?,
-    };
-    Some(metric_for_named_scalar(component, selector.name))
+) -> Option<MeasurementResult> {
+    match selector.component.as_deref() {
+        None | Some("training_projection") => Some(metric_for_scalar(
+            &vector.projection().state,
+            selector.name,
+            Some("training_projection".into()),
+        )),
+        Some(name) => Some(metric_for_named_scalar(
+            vector.component(name)?,
+            selector.name,
+        )),
+    }
 }
 
 fn metric_for_gammaloop(
     gammaloop: &GammaLoopAccumulatorState,
     selector: &AccumulatorMetricSelector,
-) -> Option<AccumulatorMetricValue> {
+) -> Option<MeasurementResult> {
     match selector.component.as_deref() {
+        Some("norm") => Some(metric_for_scalar(
+            gammaloop.norm_statistics(),
+            selector.name,
+            Some("norm".into()),
+        )),
         None | Some("training_projection") => Some(metric_for_scalar(
             gammaloop.training_statistics()?,
             selector.name,
@@ -85,7 +86,7 @@ fn metric_for_gammaloop(
 fn metric_for_named_scalar(
     component: &NamedScalarAccumulator,
     name: AccumulatorMetricName,
-) -> AccumulatorMetricValue {
+) -> MeasurementResult {
     metric_for_scalar(&component.state, name, Some(component.name.clone()))
 }
 
@@ -93,7 +94,7 @@ fn metric_for_scalar(
     state: &ScalarAccumulatorState,
     name: AccumulatorMetricName,
     component: Option<String>,
-) -> AccumulatorMetricValue {
+) -> MeasurementResult {
     let mean = state.mean();
     let mean_error = state.stderr();
     let variance = state.variance();
@@ -124,7 +125,7 @@ fn metric_for_scalar(
         | AccumulatorMetricName::Ess
         | AccumulatorMetricName::TimeNormalizedVariance => None,
     };
-    AccumulatorMetricValue {
+    MeasurementResult {
         name,
         component,
         value,
@@ -139,5 +140,72 @@ pub fn relative_error(value: f64, abs_error: f64) -> f64 {
         if abs_error == 0.0 { 0.0 } else { f64::INFINITY }
     } else {
         abs_error.abs() / denominator
+    }
+}
+
+/// One estimate calculation shared by execution and dashboard ETA. GammaLoop's
+/// default is mean per-sample magnitude, independent of the training projection.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProjectedEstimate {
+    pub value: f64,
+    pub error: f64,
+}
+
+pub(crate) fn estimate_for_stop(
+    state: &AccumulatorState,
+    selector: Option<&AccumulatorMetricSelector>,
+    rate: Option<f64>,
+) -> Result<Option<ProjectedEstimate>, EngineError> {
+    let default = AccumulatorMetricSelector {
+        name: AccumulatorMetricName::Mean,
+        component: matches!(state, AccumulatorState::Gammaloop(_)).then(|| "norm".into()),
+    };
+    Ok(
+        extract_accumulator_metric_with_runtime(state, selector.unwrap_or(&default), rate)?
+            .and_then(|metric| {
+                metric.uncertainty.map(|error| ProjectedEstimate {
+                    value: metric.value,
+                    error,
+                })
+            }),
+    )
+}
+
+#[cfg(test)]
+mod stopping_tests {
+    use super::*;
+    use crate::Point;
+
+    #[test]
+    fn gammaloop_norm_stopping_is_independent_of_training_and_cancellation() {
+        let mut state = GammaLoopAccumulatorState::default();
+        state
+            .estimate
+            .ingest_vector(&[1.0, 0.0], &Point::new(vec![], vec![], 1.0))
+            .unwrap();
+        state
+            .estimate
+            .ingest_vector(&[-1.0, 0.0], &Point::new(vec![], vec![], 1.0))
+            .unwrap();
+        state.training_projection =
+            Some(crate::evaluation::evaluator::gammaloop::TrainingProjection::Real);
+        let accumulator = AccumulatorState::Gammaloop(state);
+        let norm = estimate_for_stop(&accumulator, None, None)
+            .unwrap()
+            .unwrap();
+        let real = estimate_for_stop(
+            &accumulator,
+            Some(&AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Mean,
+                component: Some("real".into()),
+            }),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(norm.value, 1.0);
+        assert_eq!(norm.error, 0.0);
+        assert_eq!(real.value, 0.0);
+        assert!(real.error > 0.0);
     }
 }

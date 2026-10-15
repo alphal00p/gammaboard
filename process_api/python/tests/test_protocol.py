@@ -9,7 +9,7 @@ from gammaboard_process.protocol import (
 
 
 def test_fixed_domain_shapes():
-    assert fixed_domain_shape({"continuous": {"dims": 3}}) == ([], 3)
+    assert fixed_domain_shape({"rectangular": {"discrete_cardinalities": [], "continuous_dims": 3}}) == ([], 3)
     assert fixed_domain_shape(
         {
             "rectangular": {
@@ -22,8 +22,8 @@ def test_fixed_domain_shapes():
         {
             "discrete": {
                 "branches": [
-                    {"domain": {"continuous": {"dims": 2}}},
-                    {"domain": {"continuous": {"dims": 2}}},
+                    {"domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 2}}},
+                    {"domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 2}}},
                 ]
             }
         }
@@ -36,8 +36,8 @@ def test_inhomogeneous_domain_and_offsets_are_rejected():
             {
                 "discrete": {
                     "branches": [
-                        {"domain": {"continuous": {"dims": 1}}},
-                        {"domain": {"continuous": {"dims": 2}}},
+                        {"domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}},
+                        {"domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 2}}},
                     ]
                 }
             }
@@ -91,12 +91,12 @@ def test_user_object_initialization_and_restore():
         )
 
 
-def test_discrete_subspaces_accept_wire_and_mapping_shapes():
+def test_discrete_subspaces_decode_wire_shape():
     assert normalize_discrete_subspaces(
         {
             "subspaces": [
                 {"fixed_dims": [{"dim": 0, "value": 2}]},
-                {"fixed_dims": {"1": 3}},
+                {"fixed_dims": [{"dim": 1, "value": 3}]},
             ]
         }
     ) == [{0: 2}, {1: 3}]
@@ -159,3 +159,117 @@ def test_evaluator_and_feedback_callback_arrays_are_independent_and_writable():
     current = worker.sampler.feedback.call_args.args[0]
     assert retained.flags.writeable and retained.flags.owndata
     np.testing.assert_array_equal(current, [0.25, 0.75])
+
+
+def test_sampler_snapshot_and_partial_pdf_contract():
+    from unittest.mock import Mock
+    from gammaboard_process.runners import _SamplerWorker
+
+    worker = _SamplerWorker.__new__(_SamplerWorker)
+    worker.sampler = Mock()
+    worker.discrete_cardinalities = []
+    worker.continuous_dims = 1
+    worker.sampler_args = {"save_path": "must-not-be-injected"}
+    worker.sampler.snapshot.return_value = None
+    with pytest.raises(ValueError, match="must not be null"):
+        worker.handle("snapshot", {})
+    worker.sampler.snapshot.return_value = {}
+    assert worker.handle("snapshot", {}) == {"snapshot": {}}
+    worker.sampler.pdf.return_value = [1.0, None]
+    assert worker.handle("pdf", {"nr_samples": 2, "xs_discrete_row_major": [],
+                                "xs_continuous_row_major": [0.25, 0.75]}) == {"values": [1.0, None]}
+
+
+def test_gammaloop_weights_feedback_and_owned_arrays(monkeypatch):
+    import numpy as np
+    from gammaboard_process import GammaLoopBatchResult, GammaLoopEvaluator
+    from gammaboard_process import runners
+    from gammaboard_process.protocol import PROTOCOL
+
+    retained = []
+    class Evaluator(GammaLoopEvaluator):
+        def __init__(self, **kwargs): pass
+        def eval_gammaloop(self, discrete, continuous, weights, *, require_training_values):
+            assert all(a.flags.writeable and a.flags.owndata for a in (discrete, continuous, weights))
+            retained.append(weights)
+            values = continuous[:, 0] * weights
+            return GammaLoopBatchResult({"sum": float(values.sum())},
+                                        values if require_training_values else None)
+
+    monkeypatch.setattr(runners, "ProtocolIo", lambda: None)
+    worker = runners._EvaluatorWorker(Evaluator)
+    worker.handle("initialize", {"protocol": PROTOCOL, "role": "evaluator", "output": {"kind": "gammaloop"},
+                                 "domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}, "args": {}})
+    binary = np.array([0.25, 0.75, 2., 3.], dtype="<f8").tobytes()
+    for required in [True, False]:
+        result = worker.handle("eval_batch", {"nr_samples": 2, "require_training_values": required}, binary)
+        assert result["gammaloop_state"] == {"sum": 2.75}
+        if required:
+            np.testing.assert_array_equal(np.frombuffer(result["__binary__"], dtype="<f8"), [0.5, 2.25])
+        else:
+            assert "__binary__" not in result
+        retained[-1][:] = 0
+    with pytest.raises(ValueError, match="input length"):
+        worker.handle("eval_batch", {"nr_samples": 2, "require_training_values": True}, binary[:-1])
+    with pytest.raises(TypeError, match="must implement eval"):
+        worker.handle("initialize", {"protocol": PROTOCOL, "role": "evaluator", "output": {"kind":"values", "components":["value"]},
+                                     "domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}})
+
+
+def test_sampler_requires_restoration_at_initialization(monkeypatch):
+    from gammaboard_process import runners
+    from gammaboard_process.protocol import PROTOCOL
+    monkeypatch.setattr(runners, "ProtocolIo", lambda: None)
+    class Sampler: pass
+    worker = runners._SamplerWorker(Sampler)
+    with pytest.raises(TypeError, match="from_snapshot"):
+        worker.handle("initialize", {"protocol": PROTOCOL, "role": "sampler", "domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}})
+
+
+def test_optional_sampler_hooks_have_defaults_and_validate_normalization(monkeypatch):
+    from gammaboard_process import runners
+
+    monkeypatch.setattr(runners, "ProtocolIo", lambda: None)
+    worker = runners._SamplerWorker(None)
+    worker.sampler = type("Sampler", (), {})()
+    assert worker.handle("global_pdf_norm", {}) == {"norm": 1.0}
+    assert worker.handle("persisted_output", {}) == {"output": None}
+    for invalid in (0.0, -1.0, float("nan"), float("inf")):
+        worker.sampler.global_pdf_norm = lambda: invalid
+        with pytest.raises(ValueError, match="finite and positive"):
+            worker.handle("global_pdf_norm", {})
+
+
+def test_materializer_and_transform_share_batch_type(monkeypatch):
+    from gammaboard_process import Batch, Materializer, BatchTransform, runners
+    from gammaboard_process.protocol import PROTOCOL
+
+    class Materialize(Materializer):
+        def __init__(self, **kwargs): pass
+        def materialize_batch(self, latent_batch):
+            return Batch([[]], [[latent_batch["x"]]], [2.0])
+
+    class Transform(BatchTransform):
+        def __init__(self, **kwargs): pass
+        def transform_batch(self, discrete, continuous, weights):
+            continuous *= 2
+            weights *= 3
+            return Batch(discrete, continuous, weights)
+
+    monkeypatch.setattr(runners, "ProtocolIo", lambda: None)
+    materializer = runners._MaterializerWorker(Materialize)
+    transform = runners._BatchTransformWorker(Transform)
+    for worker, role in [(materializer, "materializer"), (transform, "batch_transform")]:
+        worker.handle("initialize", {"protocol": PROTOCOL, "role": role,
+                                     "domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}})
+    batch = materializer.handle("materialize_batch", {"nr_samples": 1, "latent_batch": {"x": 0.25}})
+    result = transform.handle("transform_batch", {"nr_samples": 1, **batch})
+    assert result["xs_continuous_row_major"] == [0.5]
+    assert result["weights"] == [6.0]
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_invalid_evaluator_component_rejects_the_whole_response(value):
+    from gammaboard_process.runners import _normalize_evaluator_values
+    with pytest.raises(ValueError, match="sample 1, component 'imag'.*non-finite"):
+        _normalize_evaluator_values([[1., 2.], [3., value]], 2, ["real", "imag"])

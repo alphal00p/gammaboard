@@ -3,12 +3,13 @@ pub(crate) mod gammaloop;
 #[cfg(not(feature = "gammaloop"))]
 #[path = "gammaloop_disabled.rs"]
 pub(crate) mod gammaloop;
+mod gammaloop_config;
 pub(crate) mod process;
 mod symbolica;
 pub(crate) mod unit;
 
-use crate::core::{AccumulatorConfig, BuildError, EvaluatorConfig};
-use crate::evaluation::{Evaluator, SemanticAccumulatorKind};
+use crate::core::{AccumulatorConfig, EngineError, EvaluatorConfig};
+use crate::evaluation::Evaluator;
 use crate::utils::domain::Domain;
 
 use self::gammaloop::GammaLoopEvaluator;
@@ -16,7 +17,7 @@ use self::process::ProcessEvaluator;
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
 pub use gammaloop::GammaLoopParams;
-pub use process::{ProcessAccumulatorKind, ProcessEvaluatorParams};
+pub use process::{ProcessEvaluatorParams, ProcessOutput};
 pub use symbolica::SymbolicaParams;
 pub use unit::UnitEvaluatorParams;
 
@@ -30,7 +31,7 @@ impl EvaluatorConfig {
         }
     }
 
-    pub fn build(&self) -> Result<Box<dyn Evaluator>, BuildError> {
+    pub fn build(&self) -> Result<Box<dyn Evaluator>, EngineError> {
         match self {
             Self::Gammaloop { params } => {
                 Ok(Box::new(GammaLoopEvaluator::from_params(params.clone())?))
@@ -45,7 +46,7 @@ impl EvaluatorConfig {
         }
     }
 
-    pub fn resolve_domain(&self) -> Result<Domain, BuildError> {
+    pub fn resolve_domain(&self) -> Result<Domain, EngineError> {
         match self {
             Self::Gammaloop { params } => {
                 GammaLoopEvaluator::resolve_domain_from_params(params.clone())
@@ -62,36 +63,27 @@ impl EvaluatorConfig {
     pub fn validate_accumulator_config(
         &self,
         config: &AccumulatorConfig,
-    ) -> Result<(), BuildError> {
-        if matches!(self, Self::Gammaloop { .. }) {
-            return Ok(());
-        }
-
+    ) -> Result<(), EngineError> {
         match self {
-            Self::ProcessEvaluator { params } => {
-                if matches!(
-                    params.accumulator,
-                    process::ProcessAccumulatorKind::Gammaloop
-                ) {
-                    match config {
-                        AccumulatorConfig::Empty | AccumulatorConfig::Gammaloop => Ok(()),
-                        other => Err(BuildError::invalid_input(format!(
-                            "evaluator.kind = \"{}\" with accumulator = \"gammaloop\" requires \
-                             gammaloop accumulator config, got \"{}\"",
-                            self.kind_str(),
-                            other.kind_str()
-                        ))),
+            Self::ProcessEvaluator { params } => match &params.output {
+                process::ProcessOutput::Gammaloop => {
+                    if matches!(config, AccumulatorConfig::Gammaloop) {
+                        Ok(())
+                    } else {
+                        Err(EngineError::invalid_input(
+                            "GammaLoop process output requires a gammaloop accumulator",
+                        ))
                     }
-                } else {
-                    validate_process_accumulator(self.kind_str(), config, &params.components)
                 }
-            }
+                process::ProcessOutput::Values { components } => {
+                    validate_value_accumulator(self.kind_str(), config, components)
+                }
+            },
             Self::Symbolica { .. } => validate_symbolica_accumulator(self.kind_str(), config),
-            Self::Unit { .. } => validate_semantic_accumulator(
-                self.kind_str(),
-                config,
-                SemanticAccumulatorKind::Scalar,
-            ),
+            Self::Unit { .. } if matches!(config, AccumulatorConfig::Empty) => Ok(()),
+            Self::Unit { .. } => {
+                validate_value_accumulator(self.kind_str(), config, &["value".into()])
+            }
             Self::Gammaloop { .. } => Ok(()),
         }
     }
@@ -100,17 +92,14 @@ impl EvaluatorConfig {
 fn validate_symbolica_accumulator(
     evaluator_kind: &str,
     config: &AccumulatorConfig,
-) -> Result<(), BuildError> {
+) -> Result<(), EngineError> {
     if matches!(config, AccumulatorConfig::Empty) {
         return Ok(());
     }
 
     let supported = match config {
-        AccumulatorConfig::Scalar { .. } => true,
-        AccumulatorConfig::Vector { components, .. } => {
-            components == &["real".to_string(), "imag".to_string()]
-        }
-        AccumulatorConfig::FullVector { components } => {
+        AccumulatorConfig::Vector { components, .. }
+        | AccumulatorConfig::FullVector { components } => {
             components == &["value".to_string()]
                 || components == &["real".to_string(), "imag".to_string()]
         }
@@ -119,20 +108,19 @@ fn validate_symbolica_accumulator(
     if supported {
         Ok(())
     } else {
-        Err(BuildError::invalid_input(format!(
+        Err(EngineError::invalid_input(format!(
             "evaluator.kind = \"{evaluator_kind}\" supports scalar accumulators, or vector/full_vector components [\"value\"] or [\"real\", \"imag\"], got \"{}\"",
-            accumulator_config_str(config)
+            config.kind_str()
         )))
     }
 }
 
-fn validate_process_accumulator(
+fn validate_value_accumulator(
     evaluator_kind: &str,
     config: &AccumulatorConfig,
     components: &[String],
-) -> Result<(), BuildError> {
+) -> Result<(), EngineError> {
     match config {
-        AccumulatorConfig::Empty => Ok(()),
         AccumulatorConfig::Vector {
             components: accumulator_components,
             ..
@@ -146,52 +134,15 @@ fn validate_process_accumulator(
         }
         | AccumulatorConfig::FullVector {
             components: accumulator_components,
-        } => Err(BuildError::invalid_input(format!(
+        } => Err(EngineError::invalid_input(format!(
             "evaluator.kind = \"{evaluator_kind}\" components {:?} do not match accumulator components {:?}",
             components, accumulator_components
         ))),
-        other => Err(BuildError::invalid_input(format!(
+        other => Err(EngineError::invalid_input(format!(
             "evaluator.kind = \"{evaluator_kind}\" requires accumulator config \"vector\" or \"full_vector\", got \"{}\"",
-            accumulator_config_str(other)
+            other.kind_str()
         ))),
     }
-}
-
-fn validate_semantic_accumulator(
-    evaluator_kind: &str,
-    config: &AccumulatorConfig,
-    semantic_kind: SemanticAccumulatorKind,
-) -> Result<(), BuildError> {
-    if matches!(config, AccumulatorConfig::Empty) {
-        return Ok(());
-    }
-
-    let supported = match semantic_kind {
-        SemanticAccumulatorKind::Scalar => match config {
-            AccumulatorConfig::Scalar { .. } => true,
-            AccumulatorConfig::FullVector { components } => components == &["value".to_string()],
-            _ => false,
-        },
-        SemanticAccumulatorKind::Vector => match config {
-            AccumulatorConfig::Vector { .. } => true,
-            AccumulatorConfig::FullVector { components } => {
-                components == &["real".to_string(), "imag".to_string()]
-            }
-            _ => false,
-        },
-    };
-    if supported {
-        Ok(())
-    } else {
-        Err(BuildError::invalid_input(format!(
-            "evaluator.kind = \"{evaluator_kind}\" does not support accumulator config \"{}\"",
-            accumulator_config_str(config)
-        )))
-    }
-}
-
-fn accumulator_config_str(config: &AccumulatorConfig) -> &'static str {
-    config.kind_str()
 }
 
 #[cfg(all(test, not(feature = "gammaloop")))]
@@ -209,5 +160,37 @@ mod no_gammaloop_tests {
             err.to_string()
                 .contains("requires a gammaboard build with the default \"gammaloop\" feature")
         );
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn process_output_contract_accepts_both_storage_modes_and_rejects_mismatches() {
+        let evaluator: EvaluatorConfig = serde_json::from_value(serde_json::json!({
+            "kind": "process_evaluator", "command": ["worker"],
+            "domain": Domain::continuous(1),
+            "output": {"kind": "values", "components": ["value"]}
+        }))
+        .unwrap();
+        for config in [
+            AccumulatorConfig::scalar(),
+            AccumulatorConfig::FullVector {
+                components: vec!["value".into()],
+            },
+        ] {
+            evaluator.validate_accumulator_config(&config).unwrap();
+        }
+        for config in [
+            AccumulatorConfig::Empty,
+            AccumulatorConfig::Gammaloop,
+            AccumulatorConfig::FullVector {
+                components: vec!["other".into()],
+            },
+        ] {
+            assert!(evaluator.validate_accumulator_config(&config).is_err());
+        }
     }
 }

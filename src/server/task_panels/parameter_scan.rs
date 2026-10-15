@@ -416,14 +416,11 @@ mod tests {
         let task = RunTaskSpec::ParameterScan {
             parameters: vec![ParameterScanParameterSpec {
                 name: "scale".to_string(),
-                source: crate::core::ParameterValueSourceSpec {
-                    values: vec![
-                        toml::Value::Float(0.0),
-                        toml::Value::Float(1.0),
-                        toml::Value::Float(2.0),
-                    ],
-                    ..Default::default()
-                },
+                source: crate::core::ParameterValueSourceSpec::Values(vec![
+                    toml::Value::Float(0.0),
+                    toml::Value::Float(1.0),
+                    toml::Value::Float(2.0),
+                ]),
             }],
             measurement: MeasurementSpec::default(),
             child: crate::core::tasks::ChildRunTemplate {

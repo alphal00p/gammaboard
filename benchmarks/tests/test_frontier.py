@@ -44,7 +44,7 @@ class FrontierTests(unittest.TestCase):
         for mode in f.MODES:
             card = tomllib.loads(f.card(mode, 321, self.suite))
             task = card["task_queue"][-1]
-            config = task["sampler_aggregator"]["config"]
+            config = task["sampler"]["config"]
             self.assertEqual(card["evaluator"]["cpu_iterations_per_sample"], 0)
             self.assertEqual(card["evaluator"]["value_coordinate"], 0)
             self.assertEqual(card["evaluator"]["timing"]["per_sample_seconds"], 0.000321)
@@ -177,11 +177,9 @@ class FrontierTests(unittest.TestCase):
             return dict(
                 samplers=[
                     dict(
-                        runtime_metrics=dict(
-                            produced_samples_total=produced, completed_samples_total=completed
-                        ),
-                        engine_diagnostics=dict(
-                            runner=dict(queue_config=settings, buffered_generated_samples=buffered)
+                        metrics=dict(
+                            produced_samples_total=produced, completed_samples_total=completed,
+                            queue_config=settings, buffered_generated_samples=buffered,
                         ),
                     )
                 ]
@@ -275,10 +273,10 @@ class FrontierTests(unittest.TestCase):
             return dict(
                 samplers=[
                     dict(
-                        runtime_metrics=dict(
-                            completed_samples_total=completed, produced_samples_total=produced
+                        metrics=dict(
+                            completed_samples_total=completed, produced_samples_total=produced,
+                            buffered_generated_samples=0,
                         ),
-                        engine_diagnostics=dict(runner=dict(buffered_generated_samples=0)),
                     )
                 ]
             )
@@ -306,11 +304,11 @@ class FrontierTests(unittest.TestCase):
             return dict(
                 samplers=[
                     dict(
-                        runtime_metrics=dict(
+                        metrics=dict(
                             completed_samples_total=n,
                             ingested_samples_total=ingested,
                             busy=dict(elapsed_seconds=t),
-                            runner_epoch="e",
+                            epoch="e",
                             node_uuid="n",
                             task_id="t",
                         )
@@ -325,14 +323,14 @@ class FrontierTests(unittest.TestCase):
         )
         self.assertEqual(f.sampler_progress(measurement), (400, 400, 5))
         # Feedback already present at the first publication is outside the interval.
-        last = measurement["snapshots"][-1]["samplers"][0]["runtime_metrics"]
+        last = measurement["snapshots"][-1]["samplers"][0]["metrics"]
         last["ingested_samples_total"] = 80
         self.assertEqual(f.sampler_progress(measurement), (400, 0, 5))
         last["ingested_samples_total"] = 79
         with self.assertRaisesRegex(RuntimeError, "invalid sampler progress"):
             f.sampler_progress(measurement)
         last["ingested_samples_total"] = 480
-        measurement["snapshots"][-1]["samplers"][0]["runtime_metrics"]["runner_epoch"] = "changed"
+        measurement["snapshots"][-1]["samplers"][0]["metrics"]["epoch"] = "changed"
         with self.assertRaisesRegex(RuntimeError, "identity changed"):
             f.sampler_progress(measurement)
 
@@ -450,8 +448,8 @@ class FrontierTests(unittest.TestCase):
                 nodes=[dict(name="e", live=True, active_run_id=1, active_role="evaluator")],
                 samplers=[
                     dict(
-                        runtime_metrics=dict(
-                            runner_epoch="s",
+                        metrics=dict(
+                            epoch="s",
                             node_uuid="s",
                             task_id="1",
                             completed_samples_total=accepted + 16,

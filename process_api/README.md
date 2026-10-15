@@ -1,164 +1,93 @@
-# Process API Examples
+# External evaluators and samplers
 
-This folder contains self-contained examples for external GammaBoard evaluators, samplers, batch transforms, and materializers.
-
-For the stable process protocol, see [../docs/process-runtime.md](../docs/process-runtime.md).
-
-## Examples
-
-- `examples/rust_breit_wigner_evaluator`: non-Python evaluator packaged with Apptainer. This direct protocol implementation demonstrates ragged row-major batches for inhomogeneous domains.
-- `examples/python_scalar_sin`: NumPy scalar evaluator using a plain `.venv`.
-- `examples/python_sampler_symbolica_havana`: Symbolica-backed Havana sampler using a Nix-pinned runtime.
-
-## Python Package
-
-The Python helpers live in `python/` and can be installed from a checkout into
-any runtime:
+Install the Python SDK from the same GammaBoard revision as the server:
 
 ```bash
 pip install ./process_api/python
 ```
 
-For a remote build, use the same path as a Git subdirectory dependency and pin
-the GammaBoard release tag or commit used by the server.
+Use **gammaboard-jsonrpc-v6** for every worker. Non-Python implementations use the
+[wire contract](protocol.md). Examples: [NumPy evaluator](examples/python_scalar_sin/README.md),
+[Havana sampler](examples/python_sampler_symbolica_havana/README.md),
+[Rust/Apptainer evaluator](examples/rust_breit_wigner_evaluator/README.md), and
+[GammaLoop observable evaluator](examples/python_gammaloop_observable/run.toml).
 
-Example entrypoint modules should be tiny:
+## Configure a worker
 
-```python
-from demo_integrand import SinIntegrand
-from gammaboard_process import run_evaluator
-
-run_evaluator(SinIntegrand)
+```toml
+[evaluator]
+kind = "process_evaluator"
+command = ["/path/to/venv/bin/python", "-m", "my_worker"]
+cwd = "/shared/project"
+domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 2 } }
+output = { kind = "values", components = ["value"] }
+args = { scale = 2.0 }
 ```
 
-or:
+All process roles share `command`, optional `cwd`, `args`, and
+`shutdown_grace_seconds` (30 by default). Process samplers inherit the run domain.
+Ordinary evaluator output defaults to one `value` component; tasks choose
+statistical or full-vector accumulation with matching components. Use
+`output = { kind = "gammaloop" }` for native observable bundles.
+Commands may launch a local executable or an explicit container invocation.
+
+## Python callbacks
+
+Entrypoints call `run_evaluator(MyClass)`, `run_sampler(MyClass)`,
+`run_materializer(MyClass)`, or `run_batch_transform(MyClass)`. Inheritance from
+SDK base classes is optional. The [typed interfaces](python/src/gammaboard_process/abc.py)
+and [batch types](python/src/gammaboard_process/batches.py) are the reference.
+
+Fresh constructors receive `discrete_cardinalities`, `continuous_dims`, and
+expanded `args`; samplers also receive `evaluator_metadata`. Python wrappers
+support homogeneous fixed-width layouts. Callback inputs own writable NumPy
+storage and may be retained without affecting later requests.
+
+| Role | Callback and result |
+| --- | --- |
+| Evaluator | `eval(xs_discrete, xs_continuous)` → unweighted array or component-name mapping |
+| Observable evaluator | `eval_gammaloop(xs_discrete, xs_continuous, weights, *, require_training_values)` → `GammaLoopBatchResult` |
+| Sampler | `generate(max_samples)` → `SampleBatch`, `WAITING`, or `FINISHED` |
+| Materializer | `materialize_batch(latent_batch)` → `Batch` |
+| Transform | `transform_batch(xs_discrete, xs_continuous, weights)` → `Batch` |
+
+Rust applies weights/projection for ordinary values. Observable callbacks apply
+supplied weights exactly once to state and requested feedback. Invalid values,
+shapes, or overflowing moments reject the whole batch. JSON must be finite.
+`metadata()` and `diagnostics()` are methods returning JSON-safe data.
+
+## Sampler feedback and restoration
+
+A draw contains 1..`max_samples` samples. `training_remaining` is `None` for
+inference or the remaining training-window size **including this draw**. It must
+be at least the draw size. The runtime splits draws into evaluator batches and
+calls `feedback(values)` once per feedback-bearing draw, in original generation
+and sample order, with one already-weighted scalar per sample.
+
+Draws, evaluator batches, and training windows are independent. `WAITING` waits
+for outstanding feedback; the sampler decides when to update its model.
+`FINISHED` stops generation while pending work drains. Private training buffers
+belong to the sampler; the runtime keeps split cursors and partial feedback.
+
+`snapshot()` must return non-null JSON containing all private state needed for
+pending feedback. Restoration requires:
 
 ```python
-from demo_sampler import MySampler
-from gammaboard_process import run_sampler
-
-run_sampler(MySampler)
+@classmethod
+def from_snapshot(cls, *, snapshot, discrete_cardinalities, continuous_dims,
+                  init_args, evaluator_metadata=None): ...
 ```
 
-or:
+Construction config is stored separately by GammaBoard. External files must be
+immutable, durable, and available to resumed workers; snapshots do not copy them.
+Optional sampler callbacks: `pdf`/`discrete_pdf` (default `None`), `global_pdf_norm`
+(default `1.0`), `persisted_output` (default `None`), and `diagnostics` (default `{}`).
 
-```python
-from demo_materializer import MyMaterializer
-from gammaboard_process import run_materializer
+## Logging and shutdown
 
-run_materializer(MyMaterializer)
-```
-
-or:
-
-```python
-from demo_transform import MyTransform
-from gammaboard_process import run_batch_transform
-
-run_batch_transform(MyTransform)
-```
-
-The `Evaluator`, `Sampler`, `BatchTransform`, and `Materializer` ABCs are optional documentation/type-hint helpers.
-`run_evaluator(...)`, `run_sampler(...)`, `run_batch_transform(...)`, and
-`run_materializer(...)` accept any compatible class.
-
-Evaluator classes implement:
-
-```python
-eval(xs_discrete, xs_continuous)
-```
-
-They may also implement `metadata()` or expose a `metadata` attribute returning
-JSON-safe evaluator metadata. The default is `{}`.
-
-Sampler classes implement:
-
-```python
-generate(max_samples)
-feedback(training_values)
-snapshot()
-```
-
-Samplers may also implement `pdf(xs_discrete, xs_continuous)`, `discrete_pdf(subspaces)`, and
-`get_diagnostics()`.
-
-`generate` receives a positive per-draw limit and returns a `SampleBatch` with
-1..max_samples samples, `GenerationStatus.WAITING`,
-or `GenerationStatus.FINISHED`. Set `SampleBatch.training_remaining` to the
-ungenerated training-window size (including this draw) to request feedback;
-leave it `None` for inference. The runtime splits the draw for evaluation and
-returns one ordered scalar array per complete draw. Snapshot all private state
-needed by pending feedback. See [the sampler contract](../docs/sampling.md).
-
-Batch transform classes implement:
-
-```python
-transform_batch(xs_discrete, xs_continuous, weights)
-```
-
-They return a `TransformedBatch`, a dict with `xs_discrete` /
-`xs_continuous` / `weights`, a 3-tuple, or any object with those attributes.
-Use them in task configs with `batch_transforms = [{ kind = "process_batch_transform", ... }]`.
-
-Materializer classes implement:
-
-```python
-materialize_batch(latent_batch)
-```
-
-They return a `MaterializedBatch`, a dict with `xs_discrete` /
-`xs_continuous` / `weights`, a 3-tuple, or any object with those attributes.
-Attach them to sampler configs with `materializer = { kind = "process_materializer", ... }`.
-
-`discrete_pdf(subspaces)` receives a list of fixed-dimension maps:
-
-```python
-[{0: 2}]
-```
-
-It should return one marginal discrete PDF value per subspace, or `None` when
-unsupported.
-
-Fresh initialization always uses:
-
-```python
-ClassName(discrete_cardinalities=..., continuous_dims=..., **init_args)
-```
-
-If the sampler class accepts an `evaluator_metadata` keyword, the wrapper passes
-the evaluator metadata to fresh and restored sampler construction.
-
-Sampler restore may additionally implement:
-
-```python
-from_snapshot(*, snapshot, discrete_cardinalities, continuous_dims, init_args, evaluator_metadata=None)
-```
-
-These homogeneous dimensions are derived from the protocol `domain`; `init_args`
-is the process config `args` table unchanged.
-This wrapper shape is only a convenience layer. Non-Python runtimes can implement
-the protocol directly. The bundled Python wrappers intentionally support only
-homogeneous fixed-width evaluator/sampler/batch-transform/materializer batches
-and reject ragged offset layouts with a clear error.
-
-## Logging
-
-The protocol owns stdout, so logs go over stderr. The package handles this:
-
-```python
-import gammaboard_process as gb
-
-gb.log("started")                  # default info
-gb.log("unstable", level="warn")
-gb.log(f"loss={loss}", level="debug")
-print("captured at info")          # print() is rerouted to info
-```
-
-`gb.log(message, level=...)` takes `trace|debug|info|warn|error` and records a
-runtime log with `source = "worker"` at that level. Direct stderr writes
-(tracebacks, native libraries) are recorded unstructured at `warn`. Messages
-below `GAMMABOARD_LOG_LEVEL` (env, default `info`) are dropped in the worker; the
-server then keeps only those at or above runtime config
-`tracing.db_gammaboard_level` (default `info`).
-See [../docs/process-runtime.md](../docs/process-runtime.md) for the wire format
-non-Python workers use.
+Stdout belongs to the protocol. The SDK redirects `print` to logs; use
+`gammaboard_process.log(message, level="info")` for structured levels.
+`GAMMABOARD_LOG_LEVEL` filters worker messages; runtime `tracing.db_gammaboard_level`
+filters persistence. Direct stderr is recorded at warning level.
+On shutdown GammaBoard closes stdin, waits the grace period, then sends SIGTERM
+and, after five seconds, SIGKILL to the process group if needed.

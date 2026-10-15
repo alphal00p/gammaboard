@@ -1,7 +1,13 @@
+-- Fresh schema for the consolidated core models. Existing databases must be recreated.
 
--- Source: migrations/202605220001_runs.sql
+CREATE TABLE gammaboard_compatibility (
+    singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+    model_version INTEGER NOT NULL
+);
+INSERT INTO gammaboard_compatibility (singleton, model_version) VALUES (true, 1);
+
 -- Runs are the top-level integration records.
-CREATE TABLE IF NOT EXISTS runs (
+CREATE TABLE runs (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     started_at TIMESTAMPTZ DEFAULT now(),
@@ -13,6 +19,8 @@ CREATE TABLE IF NOT EXISTS runs (
     point_spec JSONB NOT NULL,
     current_observable JSONB,
     batches_completed INT DEFAULT 0,
+    provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+    checkpoint_status JSONB NOT NULL DEFAULT '{}'::jsonb,
     exposed_info JSONB NOT NULL DEFAULT '{}'::jsonb,
     run_toml TEXT,
     parent_run_id INT REFERENCES runs(id) ON DELETE CASCADE,
@@ -30,20 +38,19 @@ CREATE TABLE IF NOT EXISTS runs (
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_runs_started_at
+CREATE INDEX idx_runs_started_at
     ON runs(started_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_runs_parent_run_id
+CREATE INDEX idx_runs_parent_run_id
     ON runs(parent_run_id, started_at DESC)
     WHERE parent_run_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_runs_parent_task_id
+CREATE INDEX idx_runs_parent_task_id
     ON runs(parent_task_id, started_at DESC)
     WHERE parent_task_id IS NOT NULL;
 
--- Source: migrations/202605220002_tasks_batches_outputs.sql
 -- Run task queue and sample work queue.
-CREATE TABLE IF NOT EXISTS run_tasks (
+CREATE TABLE run_tasks (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
@@ -56,6 +63,8 @@ CREATE TABLE IF NOT EXISTS run_tasks (
     nr_completed_samples BIGINT NOT NULL DEFAULT 0,
     measurement_output JSONB,
     controller_output JSONB,
+    cpu_seconds DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        CHECK (cpu_seconds >= 0.0 AND cpu_seconds < 'Infinity'::DOUBLE PRECISION),
     failure_reason TEXT,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
@@ -83,17 +92,17 @@ CREATE TABLE IF NOT EXISTS run_tasks (
     CONSTRAINT run_tasks_name_unique UNIQUE (run_id, name)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_run_tasks_active_one_per_run
+CREATE UNIQUE INDEX idx_run_tasks_active_one_per_run
     ON run_tasks(run_id)
     WHERE state = 'active';
 
-CREATE INDEX IF NOT EXISTS idx_run_tasks_run_sequence
+CREATE INDEX idx_run_tasks_run_sequence
     ON run_tasks(run_id, sequence_nr, id);
 
-CREATE INDEX IF NOT EXISTS idx_run_tasks_run_name
+CREATE INDEX idx_run_tasks_run_name
     ON run_tasks(run_id, name);
 
-CREATE TABLE IF NOT EXISTS batches (
+CREATE TABLE batches (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     task_id BIGINT NOT NULL REFERENCES run_tasks(id) ON DELETE CASCADE,
@@ -102,6 +111,7 @@ CREATE TABLE IF NOT EXISTS batches (
     status TEXT NOT NULL DEFAULT 'pending',
     claimed_by_node_name TEXT,
     claimed_by_node_uuid TEXT,
+    claim_token TEXT,
     claimed_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now(),
@@ -109,12 +119,12 @@ CREATE TABLE IF NOT EXISTS batches (
     last_error TEXT
 );
 
-CREATE TABLE IF NOT EXISTS batch_inputs (
+CREATE TABLE batch_inputs (
     batch_id BIGINT PRIMARY KEY REFERENCES batches(id) ON DELETE CASCADE,
     latent_batch BYTEA NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS batch_results (
+CREATE TABLE batch_results (
     batch_id BIGINT PRIMARY KEY REFERENCES batches(id) ON DELETE CASCADE,
     "values" BYTEA,
     batch_observable JSONB NOT NULL,
@@ -122,37 +132,37 @@ CREATE TABLE IF NOT EXISTS batch_results (
     completed_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_batches_status_runid
+CREATE INDEX idx_batches_status_runid
     ON batches(run_id, status)
     WHERE status IN ('pending', 'claimed');
 
-CREATE INDEX IF NOT EXISTS idx_batches_pending_run_created
+CREATE INDEX idx_batches_pending_run_created
     ON batches(run_id, created_at, id)
     WHERE status = 'pending';
 
-CREATE INDEX IF NOT EXISTS idx_batches_task_created
+CREATE INDEX idx_batches_task_created
     ON batches(task_id, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_batches_claimed
+CREATE INDEX idx_batches_claimed
     ON batches(claimed_at)
     WHERE status = 'claimed';
 
-CREATE INDEX IF NOT EXISTS idx_batches_completed
+CREATE INDEX idx_batches_completed
     ON batches(run_id, completed_at)
     WHERE status = 'completed';
 
-CREATE INDEX IF NOT EXISTS idx_batches_completed_run_id
+CREATE INDEX idx_batches_completed_run_id
     ON batches(run_id, id)
     WHERE status = 'completed';
 
-CREATE INDEX IF NOT EXISTS idx_batches_run_id_id
+CREATE INDEX idx_batches_run_id_id
     ON batches(run_id, id);
 
-CREATE INDEX IF NOT EXISTS idx_batch_results_completed_at
+CREATE INDEX idx_batch_results_completed_at
     ON batch_results(completed_at);
 
 -- Compact task-local panel/output history.
-CREATE TABLE IF NOT EXISTS persisted_observable_snapshots (
+CREATE TABLE persisted_observable_snapshots (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     task_id BIGINT NOT NULL,
@@ -160,18 +170,17 @@ CREATE TABLE IF NOT EXISTS persisted_observable_snapshots (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_persisted_observable_snapshots_run_task_id
+CREATE INDEX idx_persisted_observable_snapshots_run_task_id
     ON persisted_observable_snapshots(run_id, task_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_persisted_observable_snapshots_created
+CREATE INDEX idx_persisted_observable_snapshots_created
     ON persisted_observable_snapshots(created_at);
 
-CREATE INDEX IF NOT EXISTS idx_persisted_observable_snapshots_run_task_id_id_desc
+CREATE INDEX idx_persisted_observable_snapshots_run_task_id_id_desc
     ON persisted_observable_snapshots(run_id, task_id, id DESC);
 
--- Source: migrations/202605220003_stage_snapshots_checkpoints.sql
 -- Branchable stage state and sampler handoff checkpoints.
-CREATE TABLE IF NOT EXISTS run_stage_snapshots (
+CREATE TABLE run_stage_snapshots (
     id BIGSERIAL PRIMARY KEY,
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     task_id BIGINT REFERENCES run_tasks(id) ON DELETE SET NULL,
@@ -181,18 +190,17 @@ CREATE TABLE IF NOT EXISTS run_stage_snapshots (
     sampler_snapshot JSONB,
     observable_state JSONB,
     evaluator JSONB,
-    sampler_aggregator JSONB,
     batch_transforms JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_run_stage_snapshots_run_created
+CREATE INDEX idx_run_stage_snapshots_run_created
     ON run_stage_snapshots(run_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_run_stage_snapshots_run_sequence
+CREATE INDEX idx_run_stage_snapshots_run_sequence
     ON run_stage_snapshots(run_id, sequence_nr, created_at DESC);
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_run_stage_snapshots_root
+CREATE UNIQUE INDEX uq_run_stage_snapshots_root
     ON run_stage_snapshots(run_id)
     WHERE queue_empty = TRUE
       AND task_id IS NULL
@@ -202,16 +210,15 @@ ALTER TABLE run_tasks
     ADD CONSTRAINT run_tasks_spawned_from_snapshot_fkey
     FOREIGN KEY (spawned_from_snapshot_id) REFERENCES run_stage_snapshots(id) ON DELETE SET NULL;
 
-CREATE TABLE IF NOT EXISTS run_sampler_checkpoints (
+CREATE TABLE run_sampler_checkpoints (
     run_id INT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
     task_id BIGINT NOT NULL REFERENCES run_tasks(id) ON DELETE CASCADE,
     sampler_checkpoint JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Source: migrations/202605220004_nodes_logs_performance.sql
 -- Node control plane, runtime logs, and worker performance history.
-CREATE TABLE IF NOT EXISTS nodes (
+CREATE TABLE nodes (
     name TEXT PRIMARY KEY,
     uuid TEXT NOT NULL,
     lease_expires_at TIMESTAMPTZ NOT NULL,
@@ -224,6 +231,16 @@ CREATE TABLE IF NOT EXISTS nodes (
     registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     shutdown_requested_at TIMESTAMPTZ,
+    cpu_time_accounted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resume_requested BOOLEAN NOT NULL DEFAULT FALSE,
+    launch_group JSONB,
+    launch_request_id BIGINT,
+    activity JSONB NOT NULL DEFAULT '{}'::jsonb,
+    pool_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
+    pool_role TEXT CHECK (pool_role IN ('evaluator', 'sampler_aggregator')),
+    CONSTRAINT nodes_pool_assignment_pair_check CHECK (
+        (pool_run_id IS NULL) = (pool_role IS NULL)
+    ),
     CONSTRAINT nodes_desired_assignment_pair_check CHECK (
         (desired_run_id IS NULL AND desired_role IS NULL)
         OR (desired_run_id IS NOT NULL AND desired_role IS NOT NULL)
@@ -234,22 +251,22 @@ CREATE TABLE IF NOT EXISTS nodes (
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_nodes_last_seen
+CREATE INDEX idx_nodes_last_seen
     ON nodes(last_seen DESC);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_desired_sampler_run
+CREATE INDEX idx_nodes_desired_sampler_run
     ON nodes(desired_run_id)
     WHERE desired_role = 'sampler_aggregator';
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_current_sampler_run
+CREATE UNIQUE INDEX idx_nodes_current_sampler_run
     ON nodes(active_run_id)
     WHERE active_role = 'sampler_aggregator';
 
-CREATE INDEX IF NOT EXISTS idx_nodes_active_evaluator_run
+CREATE INDEX idx_nodes_active_evaluator_run
     ON nodes(active_run_id)
     WHERE active_role = 'evaluator';
 
-CREATE TABLE IF NOT EXISTS runtime_logs (
+CREATE TABLE runtime_logs (
     id BIGSERIAL PRIMARY KEY,
     ts TIMESTAMPTZ NOT NULL DEFAULT now(),
     source TEXT NOT NULL,
@@ -262,79 +279,85 @@ CREATE TABLE IF NOT EXISTS runtime_logs (
     fields JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
-CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_run_id
+CREATE INDEX idx_runtime_logs_source_run_id
     ON runtime_logs(source, run_id, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_node_name
+CREATE INDEX idx_runtime_logs_source_node_name
     ON runtime_logs(source, node_name, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_node_uuid
+CREATE INDEX idx_runtime_logs_source_node_uuid
     ON runtime_logs(source, node_uuid, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_runtime_logs_source_level
+CREATE INDEX idx_runtime_logs_source_level
     ON runtime_logs(source, level, id DESC);
 
-CREATE TABLE IF NOT EXISTS evaluator_performance_history (
-    id BIGSERIAL PRIMARY KEY,
+-- Each worker owns its telemetry independently, avoiding fleet-wide FK locks.
+CREATE TABLE run_telemetry_workers (
     run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     worker_id TEXT NOT NULL REFERENCES nodes(name) ON DELETE CASCADE,
-    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-    rss_bytes BIGINT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    PRIMARY KEY (run_id, worker_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_eval_perf_history_run_worker_time
+CREATE TABLE evaluator_performance_history (
+    id BIGSERIAL PRIMARY KEY,
+    run_id INT NOT NULL,
+    worker_id TEXT NOT NULL,
+    metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+    rss_bytes BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (run_id, worker_id) REFERENCES run_telemetry_workers ON DELETE CASCADE
+);
+
+CREATE INDEX idx_eval_perf_history_run_worker_time
     ON evaluator_performance_history(run_id, worker_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_eval_perf_history_run_time
+CREATE INDEX idx_eval_perf_history_run_time
     ON evaluator_performance_history(run_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS evaluator_performance_latest (
-    run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    worker_id TEXT NOT NULL REFERENCES nodes(name) ON DELETE CASCADE,
+CREATE TABLE evaluator_performance_latest (
+    run_id INT NOT NULL,
+    worker_id TEXT NOT NULL,
     id BIGINT NOT NULL,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
     rss_bytes BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (run_id, worker_id)
+    PRIMARY KEY (run_id, worker_id),
+    FOREIGN KEY (run_id, worker_id) REFERENCES run_telemetry_workers ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS sampler_aggregator_performance_history (
+CREATE TABLE sampler_aggregator_performance_history (
     id BIGSERIAL PRIMARY KEY,
-    run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    worker_id TEXT NOT NULL REFERENCES nodes(name) ON DELETE CASCADE,
+    run_id INT NOT NULL,
+    worker_id TEXT NOT NULL,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-    runtime_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-    engine_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,
     rss_bytes BIGINT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (run_id, worker_id) REFERENCES run_telemetry_workers ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_sampler_perf_history_run_worker_time
+CREATE INDEX idx_sampler_perf_history_run_worker_time
     ON sampler_aggregator_performance_history(run_id, worker_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_sampler_perf_history_run_time
+CREATE INDEX idx_sampler_perf_history_run_time
     ON sampler_aggregator_performance_history(run_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS sampler_aggregator_performance_latest (
-    run_id INT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-    worker_id TEXT NOT NULL REFERENCES nodes(name) ON DELETE CASCADE,
+CREATE TABLE sampler_aggregator_performance_latest (
+    run_id INT NOT NULL,
+    worker_id TEXT NOT NULL,
     id BIGINT NOT NULL,
     metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-    runtime_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-    engine_diagnostics JSONB NOT NULL DEFAULT '{}'::jsonb,
     rss_bytes BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (run_id, worker_id)
+    PRIMARY KEY (run_id, worker_id),
+    FOREIGN KEY (run_id, worker_id) REFERENCES run_telemetry_workers ON DELETE CASCADE
 );
 
--- Source: migrations/202605220005_node_launch_requests.sql
 -- Persisted requests for external node launch backends.
-CREATE TABLE IF NOT EXISTS node_launch_requests (
+CREATE TABLE node_launch_requests (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    state TEXT NOT NULL CHECK (state IN ('pending', 'starting', 'running', 'failed', 'canceled')),
+    state TEXT NOT NULL CHECK (state IN ('pending', 'starting', 'fulfilled', 'failed', 'canceled')),
     backend TEXT NOT NULL,
     requested_count INT NOT NULL CHECK (requested_count > 0),
     started_count INT NOT NULL DEFAULT 0 CHECK (started_count >= 0),
@@ -344,19 +367,14 @@ CREATE TABLE IF NOT EXISTS node_launch_requests (
     error TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_node_launch_requests_state_created
+CREATE INDEX idx_node_launch_requests_state_created
     ON node_launch_requests(state, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_node_launch_requests_created
+CREATE INDEX idx_node_launch_requests_created
     ON node_launch_requests(created_at DESC);
 
--- Source: migrations/202605220006_run_provenance.sql
-ALTER TABLE runs
-    ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}'::jsonb;
-
--- Source: migrations/202608180001_batch_queue_counters.sql
 -- Keep hot queue state reads independent of retained failed-batch history.
-CREATE TABLE IF NOT EXISTS run_batch_queue_counters (
+CREATE TABLE run_batch_queue_counters (
     run_id INT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
     total_batches BIGINT NOT NULL DEFAULT 0 CHECK (total_batches >= 0),
     total_samples BIGINT NOT NULL DEFAULT 0 CHECK (total_samples >= 0),
@@ -366,28 +384,7 @@ CREATE TABLE IF NOT EXISTS run_batch_queue_counters (
     failed_batches BIGINT NOT NULL DEFAULT 0 CHECK (failed_batches >= 0)
 );
 
-INSERT INTO run_batch_queue_counters (
-    run_id, total_batches, total_samples, pending_batches, claimed_batches, completed_batches, failed_batches
-)
-SELECT
-    run_id,
-    COUNT(*),
-    COALESCE(SUM(batch_size), 0),
-    COUNT(*) FILTER (WHERE status = 'pending'),
-    COUNT(*) FILTER (WHERE status = 'claimed'),
-    COUNT(*) FILTER (WHERE status = 'completed'),
-    COUNT(*) FILTER (WHERE status = 'failed')
-FROM batches
-GROUP BY run_id
-ON CONFLICT (run_id) DO UPDATE SET
-    total_batches = EXCLUDED.total_batches,
-    total_samples = EXCLUDED.total_samples,
-    pending_batches = EXCLUDED.pending_batches,
-    claimed_batches = EXCLUDED.claimed_batches,
-    completed_batches = EXCLUDED.completed_batches,
-    failed_batches = EXCLUDED.failed_batches;
-
-CREATE OR REPLACE FUNCTION sync_run_batch_queue_counters()
+CREATE FUNCTION sync_run_batch_queue_counters()
 RETURNS TRIGGER AS $$
 DECLARE
     old_pending BIGINT := 0;
@@ -442,11 +439,78 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS batches_queue_counter_trigger ON batches;
-CREATE TRIGGER batches_queue_counter_trigger
+CREATE CONSTRAINT TRIGGER batches_queue_counter_trigger
 AFTER INSERT OR DELETE OR UPDATE OF status ON batches
+DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION sync_run_batch_queue_counters();
 
-CREATE INDEX IF NOT EXISTS idx_runs_controller_children
+CREATE INDEX idx_runs_controller_children
     ON runs(parent_run_id, parent_task_id, spawn_kind, started_at DESC, id DESC)
     WHERE parent_run_id IS NOT NULL;
+
+ALTER TABLE nodes ADD FOREIGN KEY (launch_request_id) REFERENCES node_launch_requests(id);
+CREATE INDEX idx_nodes_pool_run ON nodes(pool_run_id);
+
+-- Fence stale submissions and make acknowledgement retries idempotent.
+CREATE UNIQUE INDEX idx_batches_claim_token ON batches(claim_token)
+    WHERE claim_token IS NOT NULL;
+CREATE INDEX idx_batches_task_id_id ON batches(task_id, id);
+
+CREATE FUNCTION worker_pool_root(run_id INT) RETURNS INT
+LANGUAGE SQL STABLE AS $$
+    WITH RECURSIVE ancestors AS (
+        SELECT id, parent_run_id FROM runs WHERE id = run_id
+        UNION
+        SELECT r.id, r.parent_run_id FROM runs r JOIN ancestors a ON r.id = a.parent_run_id
+    ) SELECT id FROM ancestors WHERE parent_run_id IS NULL
+$$;
+
+-- Allocated time is accumulated independently per worker and task.
+CREATE TABLE task_worker_cpu_time (
+    task_id BIGINT NOT NULL REFERENCES run_tasks(id) ON DELETE CASCADE,
+    node_uuid TEXT NOT NULL,
+    cpu_seconds DOUBLE PRECISION NOT NULL
+        CHECK (cpu_seconds >= 0 AND cpu_seconds < 'Infinity'::DOUBLE PRECISION),
+    PRIMARY KEY (task_id, node_uuid)
+);
+
+CREATE FUNCTION task_cpu_seconds(task_id BIGINT, baseline DOUBLE PRECISION)
+RETURNS DOUBLE PRECISION LANGUAGE sql STABLE AS $$
+    SELECT baseline + COALESCE(SUM(cpu_seconds), 0.0)
+    FROM task_worker_cpu_time WHERE task_worker_cpu_time.task_id = $1
+$$;
+
+CREATE FUNCTION account_node_cpu_time() RETURNS trigger AS $$
+DECLARE
+    accounted_until TIMESTAMPTZ;
+    elapsed_seconds DOUBLE PRECISION;
+    cpu_count DOUBLE PRECISION;
+BEGIN
+    accounted_until := LEAST(clock_timestamp(), OLD.lease_expires_at);
+    elapsed_seconds := GREATEST(EXTRACT(EPOCH FROM accounted_until - OLD.cpu_time_accounted_at), 0.0);
+    cpu_count := CASE WHEN jsonb_typeof(OLD.capabilities->'cpus') = 'number'
+        THEN GREATEST((OLD.capabilities->>'cpus')::DOUBLE PRECISION, 1.0) ELSE 1.0 END;
+    IF OLD.active_run_id IS NOT NULL AND elapsed_seconds > 0 THEN
+        INSERT INTO task_worker_cpu_time (task_id, node_uuid, cpu_seconds)
+        SELECT id, OLD.uuid,
+            GREATEST(EXTRACT(EPOCH FROM accounted_until - GREATEST(OLD.cpu_time_accounted_at, started_at)), 0.0) * cpu_count
+        FROM run_tasks WHERE run_id = OLD.active_run_id AND state = 'active'
+        ON CONFLICT (task_id, node_uuid) DO UPDATE
+        SET cpu_seconds = task_worker_cpu_time.cpu_seconds + EXCLUDED.cpu_seconds;
+    END IF;
+    NEW.cpu_time_accounted_at := clock_timestamp();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER nodes_account_cpu_time
+BEFORE UPDATE OF lease_expires_at, active_run_id, active_role, capabilities, cpu_time_accounted_at ON nodes
+FOR EACH ROW EXECUTE FUNCTION account_node_cpu_time();
+
+-- Large random sample arrays spent substantially less time in COPY with LZ4.
+DO $$
+BEGIN
+    ALTER TABLE batch_inputs ALTER COLUMN latent_batch SET COMPRESSION lz4;
+EXCEPTION WHEN feature_not_supported THEN
+    RAISE WARNING 'PostgreSQL lacks LZ4 support; batch input compression is unchanged';
+END $$;

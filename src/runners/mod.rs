@@ -36,6 +36,3 @@ pub(crate) fn role_db_pool_size(role: crate::core::WorkerRole, requested: u32) -
         },
     )
 }
-
-#[cfg(test)]
-pub(crate) mod test_support;

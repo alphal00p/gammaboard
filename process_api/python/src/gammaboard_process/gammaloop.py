@@ -89,16 +89,20 @@ class GammaLoopBatchResult:
     the GammaLoop accumulator state's serialization method and passing its
     output directly as ``state``.
 
-    ``training_values`` is an optional list of one scalar per sample.  These
-    are forwarded to the sampler as importance-sampling feedback.  When
-    omitted, no training update is sent for this batch.
+    ``training_values`` contains one weighted scalar per sample when
+    ``require_training_values`` is true, and must be None otherwise.
+    Apply the supplied weights once to both the state and feedback. Every component
+    and the projection must count every sample, including finite zeros. Final values,
+    required moments, and feedback must be finite; an invalid result rejects the batch.
 
     Example::
 
         from gammaboard_process import GammaLoopBatchResult
 
-        def eval_gammaloop(self, xs_discrete, xs_continuous):
-            state_dict = my_gammaloop_run.eval_batch(xs_continuous)
+        def eval_gammaloop(self, xs_discrete, xs_continuous, weights, *, require_training_values):
+            state_dict = my_gammaloop_run.eval_batch(
+                xs_continuous, weights=weights, require_training_values=require_training_values
+            )
             training = state_dict.pop("training_values", None)
             return GammaLoopBatchResult(state=state_dict, training_values=training)
     """

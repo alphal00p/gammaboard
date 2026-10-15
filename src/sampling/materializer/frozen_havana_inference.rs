@@ -1,10 +1,9 @@
+use crate::core::EngineError;
 use crate::core::EngineResultExt;
-use crate::core::{BuildError, EngineError};
 use crate::evaluation::{Batch, Materializer};
 use crate::sampling::havana_grid::{sample_to_point, validate_havana_grid_domain};
-use crate::sampling::{LatentBatch, LatentBatchPayload, SamplerAggregatorSnapshot, StageHandoff};
+use crate::sampling::{LatentBatch, LatentBatchPayload, StageHandoff};
 use crate::utils::domain::Domain;
-use serde::Deserialize;
 use symbolica::numerical_integration::{Grid, Sample};
 
 pub struct HavanaInferenceMaterializer {
@@ -12,52 +11,36 @@ pub struct HavanaInferenceMaterializer {
 }
 
 impl HavanaInferenceMaterializer {
-    pub fn new(handoff: Option<StageHandoff<'_>>) -> Result<Self, BuildError> {
+    pub fn new(handoff: Option<StageHandoff<'_>>) -> Result<Self, EngineError> {
         crate::activate_symbolica_oem_license()
-            .map_err(|err| BuildError::build(err.to_string()))?;
+            .map_err(|err| EngineError::build(err.to_string()))?;
         let handoff = handoff.unwrap_or_default();
 
-        // Accept either a HavanaTraining snapshot (which contains the grid) or a
-        // HavanaInference snapshot that has been persisted with a grid. This keeps
-        // materializer construction simple and compatible with both snapshot kinds.
-        let raw = match handoff.sampler_snapshot {
-            Some(SamplerAggregatorSnapshot::HavanaTraining { raw }) => raw.clone(),
-            Some(SamplerAggregatorSnapshot::HavanaInference { raw }) => raw.clone(),
-            _ => {
-                return Err(BuildError::build(
-                    "havana inference materializer requires a havana training or inference sampler snapshot containing a grid",
-                ));
-            }
-        };
-
-        #[derive(Deserialize)]
-        struct GridOnlySnapshot {
-            grid: serde_json::Value,
-        }
-        let grid_only: GridOnlySnapshot = serde_json::from_value(raw.clone()).map_err(|err| {
-            BuildError::build(format!(
-                "failed to decode havana sampler snapshot grid for materializer handoff: {err}"
-            ))
-        })?;
-        let grid: Grid<f64> = serde_json::from_value(grid_only.grid).map_err(|err| {
-            BuildError::build(format!(
-                "failed to decode havana grid for materializer handoff: {err}"
-            ))
-        })?;
+        let snapshot = handoff
+            .sampler_snapshot
+            .filter(|s| s.contains_havana_grid())
+            .ok_or_else(|| {
+                EngineError::build("havana inference materializer requires a saved Havana grid")
+            })?;
+        let grid: Grid<f64> =
+            serde_json::from_value(snapshot.state["grid"].clone()).map_err(|err| {
+                EngineError::build(format!(
+                    "failed to decode havana grid for materializer handoff: {err}"
+                ))
+            })?;
 
         Ok(Self { grid })
     }
 }
 
 impl Materializer for HavanaInferenceMaterializer {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
         validate_havana_grid_domain(&self.grid, domain, "havana inference materializer")
     }
 
     fn materialize_batch(&mut self, latent_batch: &LatentBatch) -> Result<Batch, EngineError> {
         let (state, offset) = match &latent_batch.payload {
-            LatentBatchPayload::HavanaInference { rng_state } => (rng_state, 0),
-            LatentBatchPayload::HavanaInferenceIndexed { rng_states, offset } => {
+            LatentBatchPayload::HavanaInference { rng_states, offset } => {
                 latent_batch.validate_nr_samples().engine_err()?;
                 (&rng_states[0], *offset)
             }
@@ -75,14 +58,14 @@ impl Materializer for HavanaInferenceMaterializer {
             self.grid.sample(&mut rng, &mut sample);
             points.push(sample_to_point(&sample)?);
         }
-        Batch::new(points).engine_err()
+        Ok(Batch::new(points))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{AccumulatorConfig, SamplerAggregatorConfig};
+    use crate::core::SamplingConfig;
     use crate::sampling::{HavanaInferenceSamplerParams, HavanaSamplerParams};
 
     #[test]
@@ -95,12 +78,14 @@ mod tests {
             initial_training_rate: 0.1,
             final_training_rate: 0.01,
         };
-        let mut training = SamplerAggregatorConfig::HavanaTraining {
-            params,
+        let training_config = SamplingConfig {
+            sampler: crate::core::SamplerConfig::HavanaTraining { params },
             materializer: None,
-        }
-        .build(domain.clone(), Some(8), None, serde_json::json!({}))
-        .expect("build havana training sampler");
+            transforms: None,
+        };
+        let mut training = training_config
+            .create(domain.clone(), Some(8), serde_json::json!({}))
+            .expect("build havana training sampler");
         let _ = training
             .generate(4)
             .and_then(|generated| generated.into_batch())
@@ -109,26 +94,53 @@ mod tests {
             .feedback(&[1.0, 2.0, 3.0, 4.0])
             .expect("ingest training weights");
 
-        let snapshot = training.snapshot().expect("snapshot");
-        let mut inference = SamplerAggregatorConfig::HavanaInference {
-            params: HavanaInferenceSamplerParams::default(),
+        let snapshot = training_config.snapshot(&mut *training).expect("snapshot");
+        let mut invalid = snapshot.clone();
+        invalid.version += 1;
+        let invalid_handoff = StageHandoff {
+            sampler_snapshot: Some(&invalid),
+            observable_state: None,
+        };
+        assert!(HavanaInferenceMaterializer::new(Some(invalid_handoff)).is_err());
+        assert!(
+            SamplingConfig {
+                sampler: crate::core::SamplerConfig::HavanaInference {
+                    params: Default::default()
+                },
+                materializer: None,
+                transforms: None
+            }
+            .from_stage(&domain, invalid_handoff)
+            .is_err()
+        );
+        let mut inference = SamplingConfig {
+            sampler: crate::core::SamplerConfig::HavanaInference {
+                params: HavanaInferenceSamplerParams::default(),
+            },
             materializer: None,
+            transforms: None,
         }
-        .build(
-            domain.clone(),
-            None,
-            Some(crate::sampling::StageHandoff {
+        .from_stage(
+            &domain,
+            crate::sampling::StageHandoff {
                 sampler_snapshot: Some(&snapshot),
                 observable_state: None,
-            }),
-            serde_json::json!({}),
+            },
         )
         .expect("build inference sampler");
         let latent_batch = inference
             .generate(8)
             .and_then(|generated| generated.into_batch())
             .expect("produce inference batch");
-        let snapshot = inference.snapshot().expect("inference snapshot");
+        let snapshot = SamplingConfig {
+            sampler: crate::core::SamplerConfig::HavanaInference {
+                params: Default::default(),
+            },
+            materializer: None,
+            transforms: None,
+        }
+        .snapshot(&mut *inference)
+        .expect("snapshot");
 
         let handoff = crate::sampling::StageHandoffOwned {
             sampler_snapshot: Some(snapshot),
@@ -142,12 +154,11 @@ mod tests {
         let batch = materializer
             .materialize_batch(&crate::sampling::LatentBatch {
                 nr_samples: latent_batch.nr_samples,
-                accumulator: AccumulatorConfig::scalar(),
                 payload: latent_batch.payload,
             })
             .expect("materialize batch");
 
-        assert_eq!(batch.size(), 8);
+        assert_eq!(batch.len(), 8);
         assert!(batch.points().iter().all(|point| point.discrete.len() == 1));
         assert!(
             batch

@@ -1,130 +1,102 @@
 # Deployment
 
-`gammaboard deploy` is the normal dashboard stack supervisor. It starts the
-backend API, nginx/frontend exposure, and optionally the managed local
-PostgreSQL instance. When local node spawning is enabled, it also resolves
-dashboard node-launch requests into child worker processes.
+`gammaboard deploy` supervises the API, nginx/dashboard, managed PostgreSQL, and
+local worker launch requests. Ctrl-C drains workers and stops the stack.
+Profile commands: [local](../ops/local/README.md),
+[ITPhlies](../ops/itphlies/README.md), [UBELIX/Slurm](../ops/ubelix/README.md).
 
-## Profiles
+## Configuration and ports
 
-- [local](../ops/local/README.md): development profile for running from the checkout.
-- [itphlies](../ops/itphlies/README.md): foreground-supervised deployment on the ITPhlies server.
-- [ubelix](../ops/ubelix/README.md): Slurm-supervised control and worker jobs on UBELIX.
+Runtime config controls database connection, resource roots, logging, and local
+PostgreSQL. The checkout uses `ops/local/config/runtime.toml` when present;
+omitted settings use embedded defaults. Select another file with
+`--runtime-config PATH`. Common overrides are `--database-url URL` and
+`--resource-root PATH`. Relative state paths resolve through `resources.roots`.
 
-Profile-specific commands stay in `ops/*/README.md`. Shared config semantics are
-documented in [config.md](config.md).
+Server config controls hosting; pass `deploy --server-config PATH`:
 
-## CPU Threads
+```toml
+api_host = "127.0.0.1"
+api_port = 4000
+allowed_origins = ["http://localhost:8080"]
+allow_local_node_spawn = true
+secure_cookie = false
 
-Worker and CLI processes use one background Tokio thread by default. Worker
-computation runs on the calling thread while control-plane and evaluator I/O
-continue in the background. Each active sampler additionally owns an I/O pool
-configured by `[sampler_aggregator_runner_params].io_threads` (default 1). The API server retains Tokio's automatic pool size.
-`TOKIO_WORKER_THREADS` overrides the process runtime, but not the sampler pool. Help and version output do not
-start a runtime.
+[frontend]
+host = "127.0.0.1"
+port = 8080
 
-CPU allocation remains a deployment setting: use the worker CPU allowance or
-Slurm allocation to provide physical cores. `io_threads` neither reserves nor
-pins cores. Three sampler I/O threads with four allocated cores is a useful
-starting point for large materialized/training payloads; scaling is workload
-dependent, not proportional to the thread count.
-
-The MADNIS sampler defaults to one OpenMP thread; see its
-[runtime options](../integrations/madnis/README.md#runtime-options).
-
-See [concurrency.md](concurrency.md) for what runs serially, which I/O overlaps,
-and how training barriers appear in the busy graphs.
-
-## Runtime Layout
-
-Paths are resolved from the configured resources root unless explicitly
-absolute. The default resource layout is:
-
-```text
-resources/
-  db/                Managed local PostgreSQL state and log
-  logs/nodes/        Local worker stdout/stderr
-  nginx/             Per-port nginx runtime state
-  runtimes/          Process evaluator/sampler runtime projects and images
-  states/            Shared model/integrator/checkpoint state
-  templates/         Run, task, and node launch TOML templates
-  tmp/               Evaluator/runtime scratch state
+[database]
+ensure_started = true
 ```
 
-Cluster deployment workspaces may additionally contain:
+Set `frontend.build_dir` for a separately installed dashboard. Set
+`allow_local_node_spawn = false` when an external launcher handles worker requests.
+Default frontend/API/PostgreSQL ports are **8080/4000/5400**.
+`--port-offset 1` shifts them to **8081/4001/5401** and isolates managed state paths;
+use the same offset on every command for that instance.
 
-```text
-artifacts/           Build inputs, compiled binaries, package caches
-images/              Deployment/service images such as gammaboard.sif and gammaloop.sif
-logs/                Slurm and deployment logs
+For a tunnel or alternate hostname, allow the origin shown in the browser:
+
+```bash
+./gammaboard deploy --allowed-origin http://localhost:39491
 ```
 
-## Image Model
-
-There are two different image/artifact roles:
-
-- Service images run GammaBoard infrastructure. `gammaboard.sif` contains the
-  Rust backend, nginx/Postgres dependencies, embedded frontend build, and enough
-  tooling to launch process workers. `gammaloop.sif` is the GammaLoop execution
-  service image.
-- Process runtime images run task code. They are task-specific evaluator or
-  sampler environments, for example a Python MADNIS sampler image under
-  `resources/runtimes/...`.
-
-The service image should be updated when GammaBoard itself changes. A process
-runtime image should be updated when the evaluator/sampler implementation or
-its dependencies change. The process protocol is the boundary between them, so
-multiple runtime images can be used with the same GammaBoard service image.
-
-Current service image builds overwrite the latest image and write a small
-`.meta` file. Generic process runtime image builds simply overwrite the
-requested runtime `.sif`. Older image generations are intentionally not
-retained.
-
-## Symbolica OEM License
-
-GammaBoard and GammaLoop use their own bundled Symbolica 3 application licenses.
-Users and runtime Slurm jobs do not need `SYMBOLICA_LICENSE`. The binaries use
-Symbolica's application-key API; the old v2 OEM keys are no longer accepted.
-
-`NO_SYMBOLICA_OEM_LICENSE=1` during compilation disables the embedded key. Those
-builds require a regular v3 `SYMBOLICA_LICENSE` at runtime. Never put a personal
-license in a run card, deployment log, or tracked configuration.
-
-## Nested Runtimes
-
-Process tasks run explicit commands from their config. A command may directly
-start a local binary or script, execute an Apptainer runtime image, or use any
-other packaging tool that can start a protocol-speaking process.
-For nested Apptainer runtimes, the outer worker image launches the inner runtime
-with normal bind paths. GPU-capable workers add NVIDIA passthrough with `--nv`.
-
-The process protocol itself is packaging-agnostic. See
-[process-runtime.md](process-runtime.md).
-
-## Nix
-
-The repository flake is a development/operator shell for local work. It provides
-compilers and service tools such as Rust, Node.js, PostgreSQL, nginx, Apptainer,
-and `sqlx`.
-
-It is not the deployment mechanism. Deployments should be described in terms of
-the `gammaboard` binary, runtime/server/deploy config files, and, for UBELIX,
-Slurm plus Apptainer service/runtime images.
-
-## Ports
-
-Default ports are:
-
-- Frontend: `8080`
-- API: `4000`
-- Postgres: `5400`
-
-`--port-offset 1` shifts these to `8081/4001/5401` and isolates the managed
-PostgreSQL and nginx state paths.
+This option is repeatable. Persistent origins belong in `allowed_origins`.
+Configured local origin ports shift with the port offset; CLI origins are added
+as written. Set `GAMMABOARD_FRONTEND_BASE=/board/` when building for a URL subpath.
 
 ## Access
 
-Local and ITPhlies deployments usually expose the frontend directly on the
-selected host and port. UBELIX deployments print an SSH tunnel command; open the
-frontend through that tunnel from the workstation.
+Anyone with access can launch configured process commands. Passwordless control
+is for trusted networks. To require a single administrator password, run
+`gammaboard auth hash-password`, then add to a private server config:
+
+```toml
+[auth]
+admin_password_hash = "<Argon2 hash>"
+session_secret = "<random secret>"
+```
+
+Use HTTPS and top-level `secure_cookie = true` for secure cookies. There are no
+per-user roles. Increasing `auth.session_version` invalidates existing sessions.
+`--postgres-trusted-network` permits passwordless database access from directly
+connected networks; every reachable user/device must be trusted.
+
+## Capacity and storage
+
+Budget **4 PostgreSQL connections per worker, plus 4 per sampler**, and at least
+16 for the server/maintenance. Managed launches enforce available capacity;
+manual workers and unrelated clients also consume connections. Stop unused workers.
+Embedded PostgreSQL defaults allow 128 connections; profiles can override this.
+Change the active runtime config and restart PostgreSQL:
+
+```toml
+[local_postgres]
+max_connections = 512
+# For a large payload workload on a sufficiently sized host:
+# shared_buffers = "4GB"
+```
+
+Increasing sampler `io_threads` can help materialized/training workloads; allocate
+several physical cores to that worker too. Scaling is workload-dependent. Worker
+CPU allowance/Slurm allocation controls cores, not `io_threads`. Reserve separate
+capacity for PostgreSQL and use [benchmarks](benchmarking.md) before scaling.
+
+Keep states, process environments, and checkpoint files accessible at the same
+paths on all relevant workers. A service image contains GammaBoard; process
+runtime images contain task dependencies. Rebuild workers with the matching
+[process protocol](../process_api/README.md). GPU containers need `--nv` and
+matching binds. Normal builds include Symbolica licensing; builds made with
+`NO_SYMBOLICA_OEM_LICENSE=1` require a regular runtime license.
+
+## Upgrading this revision
+
+Follow the [0.3 upgrade guide](upgrading-0.3.md) for definition conversion, SDK
+installation, compatibility checks, and verification before recreating runs.
+
+The consolidated schema, saved states, and process v6 require a fresh database.
+Export needed run TOML and back up the old deployment first. Stop all components,
+reset with `gammaboard db reset --yes`, then restart matching binaries/workers and
+recreate runs. Old snapshots cannot be resumed; external artifacts are not migrated.
+See [backup and recovery](operations.md#backup-and-recovery).

@@ -15,14 +15,12 @@ mod generation_tests;
 use crate::core::checkpoint::{AccumulatorCheckpointState, SamplerProgress};
 use crate::core::{
     AccumulatorMetricSelector, BatchTransformConfig, EngineError, EvaluatorConfig,
-    RunSampleProgress, RunStageSnapshot, RunTask, SampleErrorProjection, SamplerAggregatorConfig,
-    SamplerAggregatorPerformanceSnapshot, SamplerQueueTuning, SamplerRuntimeMetrics,
-    SamplerWorkRollingAverages, SamplerWorkerStore, StoreError, WorkerRole,
+    RunSampleProgress, RunStageSnapshot, RunTask, SamplerAggregatorPerformanceSnapshot,
+    SamplerPerformanceMetrics, SamplerQueueTuning, SamplerWorkRollingAverages, SamplerWorkerStore,
+    SamplingConfig, StoreError, WorkerRole,
 };
 use crate::core::{SamplerAggregatorCheckpoint, SamplerQueueCheckpoint};
-use crate::evaluation::{
-    AccumulatorState, extract_accumulator_metric_with_runtime, relative_error,
-};
+use crate::evaluation::{AccumulatorState, relative_error};
 use crate::runners::busy_time::BusyTime;
 use crate::runners::process_memory::current_rss_bytes;
 use crate::runners::queue::MIN_BATCH_SIZE;
@@ -31,7 +29,7 @@ use crate::runners::wall_time_rate::WallTimeRate;
 use crate::runners::window_metric::WindowMetric;
 use crate::runners::{QueueTickResult, SamplerQueue, SamplerQueueConfig};
 use crate::sampling::DiscreteSubspace;
-use crate::sampling::{Generation, SamplerAggregator};
+use crate::sampling::{Generation, Sampler};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -106,10 +104,10 @@ pub struct SamplerAggregatorRunner<S> {
     run_id: i32,
     node_name: String,
     task: RunTask,
-    sampler: Box<dyn SamplerAggregator>,
+    sampler: Box<dyn Sampler>,
     observable_state: AccumulatorState,
     evaluator_config: EvaluatorConfig,
-    sampler_config: SamplerAggregatorConfig,
+    sampler_config: SamplingConfig,
     batch_transforms: Vec<BatchTransformConfig>,
     store: S,
     params: SamplerAggregatorRunnerParams,
@@ -150,19 +148,15 @@ fn collect_discrete_pdf_subspaces(
 ) -> Result<Vec<(String, Vec<i64>, DiscreteSubspace)>, EngineError> {
     let mut out = Vec::new();
     if let AccumulatorState::Vector(state) = state {
-        for component in state
-            .components
-            .iter()
-            .chain(std::iter::once(&state.projection))
-        {
-            if !discrete_projection_includes_stream(config, &component.name) {
+        for (stream_name, component) in state.streams() {
+            if !discrete_projection_includes_stream(config, stream_name) {
                 continue;
             }
             collect_discrete_pdf_subspaces_from_bins(
-                &component.state.discrete_bins,
+                &component.discrete_bins,
                 config,
                 bin_limit,
-                Some(&component.name),
+                Some(stream_name),
                 &mut out,
             )?;
         }
@@ -274,12 +268,6 @@ struct PendingAggregationFlushTask {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ProjectedEstimate {
-    value: f64,
-    error: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
 struct StopConditionStatus {
     reached: bool,
     max_samples_reached: bool,
@@ -316,19 +304,29 @@ impl<S> SamplerAggregatorRunner<S>
 where
     S: SamplerWorkerStore + Clone + Send + Sync + 'static,
 {
-    fn to_runtime_metrics(
+    fn performance_metrics(
         &self,
         sampler: SamplerWorkRollingAverages,
         queue: crate::core::SamplerQueueRuntimeMetrics,
         completed_samples_total: i64,
         sampler_uptime_ms: f64,
         evaluator_fleet: EvaluatorFleetSnapshot,
-    ) -> SamplerRuntimeMetrics {
-        SamplerRuntimeMetrics {
-            node_uuid: Some(self.node_uuid.clone()),
-            busy: Some(self.busy.snapshot()),
-            runner_epoch: Some(self.epoch.clone()),
-            task_id: Some(self.task.id.to_string()),
+        engine_diagnostics: JsonValue,
+    ) -> SamplerPerformanceMetrics {
+        SamplerPerformanceMetrics {
+            worker: crate::core::WorkerReportContext {
+                node_uuid: self.node_uuid.clone(),
+                busy: self.busy.snapshot(),
+                epoch: self.epoch.clone(),
+                task_id: Some(self.task.id.to_string()),
+            },
+            engine_diagnostics,
+            queue_config: self.params.queue.clone(),
+            target_pending_batches: self
+                .queue
+                .target_pending_batches(evaluator_fleet.active_count),
+            buffered_generated_samples: self.runtime_state.generation.pending_samples(),
+            checkpoint_state: self.runtime_state.accumulator_checkpoint_state,
             produced_batches_total: self.runtime_state.produced_batches_total,
             produced_samples_total: self.runtime_state.produced_samples_total,
             ingested_batches_total: self.runtime_state.ingested_batches_total,
@@ -352,10 +350,10 @@ where
         node_name: impl Into<String>,
         node_uuid: impl Into<String>,
         mut task: RunTask,
-        sampler: Box<dyn SamplerAggregator>,
+        sampler: Box<dyn Sampler>,
         observable_state: AccumulatorState,
         evaluator_config: EvaluatorConfig,
-        sampler_config: SamplerAggregatorConfig,
+        sampler_config: SamplingConfig,
         batch_transforms: Vec<BatchTransformConfig>,
         params: SamplerAggregatorRunnerParams,
         base_queue_config: SamplerQueueConfig,
@@ -395,14 +393,6 @@ where
         let frontend_sync_interval = Duration::from_millis(params.frontend_sync_interval_ms);
         let now = Instant::now();
         let task_id = task.id;
-        let requires_training_values = sampler_config.requires_training();
-        if requires_training_values {
-            runtime_state.generation.restore_legacy_samples(
-                task.nr_produced_samples
-                    .saturating_sub(task.nr_completed_samples)
-                    .max(0) as usize,
-            );
-        }
         let queue = SamplerQueue::new(
             store.clone(),
             run_id,
@@ -508,44 +498,6 @@ where
         Ok(())
     }
 
-    fn current_runner_diagnostics(&mut self) -> JsonValue {
-        let diagnostics_snapshot = self.queue.diagnostics_snapshot();
-        let queue_counts = diagnostics_snapshot.map(|snapshot| snapshot.queue_counts);
-        let active_evaluator_count =
-            diagnostics_snapshot.and_then(|snapshot| snapshot.active_evaluator_count);
-        let target_pending_batches =
-            active_evaluator_count.and_then(|count| self.queue.target_pending_batches(count));
-        let queue_runtime = self.queue.runtime_metrics();
-        let pending_shortfall = target_pending_batches
-            .zip(queue_counts)
-            .map(|(target, counts)| target.saturating_sub(counts.pending.max(0) as usize));
-        json!({
-            "queue_config": self.params.queue,
-            "active_evaluator_count": active_evaluator_count,
-            "target_batch_eval_ms": self.params.queue.target_batch_eval_ms,
-            "pending_batches": queue_counts.map(|counts| counts.pending),
-            "claimed_batches": queue_counts.map(|counts| counts.claimed),
-            "completed_batches": queue_counts.map(|counts| counts.completed),
-            "open_batches": queue_counts.map(|counts| counts.open()),
-            "target_pending_batches": target_pending_batches,
-            "pending_shortfall": pending_shortfall,
-            "last_completed_batch_id": self.queue.last_completed_batch_id(),
-            "db_pending_batches": queue_runtime.db_pending_batches,
-            "db_claimed_batches": queue_runtime.db_claimed_batches,
-            "db_completed_batches": queue_runtime.db_completed_batches,
-            "local_pending_batches": queue_runtime.local_pending_batches,
-            "local_inflight_insert_tasks": queue_runtime.local_inflight_insert_tasks,
-            "local_inflight_insert_batches": queue_runtime.local_inflight_insert_batches,
-            "local_ready_processed_batches": queue_runtime.local_ready_processed_batches,
-            "buffered_generated_samples": self.runtime_state.generation.pending_samples(),
-            "accumulator_checkpoint_state": match self.runtime_state.accumulator_checkpoint_state {
-                AccumulatorCheckpointState::NeedsInitialRoundTrip => "needs_initial_round_trip",
-                AccumulatorCheckpointState::WaitingForInitialRoundTrip => "waiting_for_initial_round_trip",
-                AccumulatorCheckpointState::Ready => "ready",
-            },
-        })
-    }
-
     fn take_sampler_window_snapshot(&mut self) -> SamplerWorkRollingAverages {
         SamplerWorkRollingAverages {
             eval_ms_per_sample: self.window_state.eval_ms_per_sample.snapshot_and_reset(),
@@ -598,79 +550,6 @@ where
         Ok(usize::try_from(remaining).ok())
     }
 
-    fn effective_stop_projection(&self) -> SampleErrorProjection {
-        self.task
-            .task
-            .sample_stop_condition()
-            .and_then(|condition| condition.projection)
-            .unwrap_or(match self.observable_state {
-                AccumulatorState::Gammaloop(_) => SampleErrorProjection::Abs,
-                _ => SampleErrorProjection::Real,
-            })
-    }
-
-    fn projected_estimate_for_stop(
-        &self,
-        projection: SampleErrorProjection,
-    ) -> Option<ProjectedEstimate> {
-        match &self.observable_state {
-            AccumulatorState::Vector(state) => Some(ProjectedEstimate {
-                value: state.projection.state.mean(),
-                error: state.projection.state.stderr(),
-            }),
-            AccumulatorState::Gammaloop(state) => Self::project_component_estimate(
-                projection,
-                (state.real_mean(), state.real_stderr()),
-                (state.imag_mean(), state.imag_stderr()),
-                (state.abs_mean(), state.abs_stderr()),
-            ),
-            AccumulatorState::Empty(_) | AccumulatorState::FullVector(_) => None,
-        }
-    }
-
-    fn project_component_estimate(
-        projection: SampleErrorProjection,
-        real: (f64, f64),
-        imag: (f64, f64),
-        abs: (f64, f64),
-    ) -> Option<ProjectedEstimate> {
-        let (value, error) = match projection {
-            SampleErrorProjection::Real => real,
-            SampleErrorProjection::Imag => imag,
-            SampleErrorProjection::Abs => abs,
-        };
-        Some(ProjectedEstimate { value, error })
-    }
-
-    fn metric_estimate_for_stop(
-        &self,
-        selector: &AccumulatorMetricSelector,
-    ) -> Result<Option<ProjectedEstimate>, RunnerError> {
-        let completed_samples_per_second = if self.completed_samples_per_second.is_finite()
-            && self.completed_samples_per_second > 0.0
-        {
-            Some(self.completed_samples_per_second)
-        } else {
-            None
-        };
-        let Some(metric) = extract_accumulator_metric_with_runtime(
-            &self.observable_state,
-            selector,
-            completed_samples_per_second,
-        )
-        .map_err(RunnerError::Engine)?
-        else {
-            return Ok(None);
-        };
-        let Some(error) = metric.uncertainty else {
-            return Ok(None);
-        };
-        Ok(Some(ProjectedEstimate {
-            value: metric.value,
-            error,
-        }))
-    }
-
     fn stop_condition_status(&self) -> Result<StopConditionStatus, RunnerError> {
         if self.task.task.sample_stop_condition().is_none() {
             let reached = self
@@ -692,12 +571,12 @@ where
                 self.run_id, self.task.id
             )))
         })?;
-        let projected = if let Some(metric) = &stop_condition.metric {
-            self.metric_estimate_for_stop(metric)?
-        } else {
-            let projection = self.effective_stop_projection();
-            self.projected_estimate_for_stop(projection)
-        };
+        let projected = crate::evaluation::accumulator::metrics::estimate_for_stop(
+            &self.observable_state,
+            stop_condition.metric.as_ref(),
+            Some(self.completed_samples_per_second),
+        )
+        .map_err(RunnerError::Engine)?;
         let min_samples_reached = stop_condition
             .min_samples
             .is_none_or(|target| self.task.nr_completed_samples >= target);
@@ -709,15 +588,7 @@ where
                 .metric
                 .as_ref()
                 .map(metric_selector_label)
-                .unwrap_or_else(|| {
-                    let projection = self.effective_stop_projection();
-                    match projection {
-                        SampleErrorProjection::Real => "real",
-                        SampleErrorProjection::Imag => "imag",
-                        SampleErrorProjection::Abs => "abs",
-                    }
-                    .to_string()
-                });
+                .unwrap_or_else(|| "default mean".to_string());
             return Err(RunnerError::Engine(EngineError::engine(format!(
                 "run {} task {} stop_condition target {} is incompatible with accumulator {} or has no uncertainty",
                 self.run_id,
@@ -762,12 +633,13 @@ where
         if !completed_samples_per_second.is_finite() || completed_samples_per_second <= 0.0 {
             return None;
         }
-        let projected = if let Some(metric) = &stop_condition.metric {
-            self.metric_estimate_for_stop(metric).ok().flatten()
-        } else {
-            let projection = self.effective_stop_projection();
-            self.projected_estimate_for_stop(projection)
-        };
+        let projected = crate::evaluation::accumulator::metrics::estimate_for_stop(
+            &self.observable_state,
+            stop_condition.metric.as_ref(),
+            Some(self.completed_samples_per_second),
+        )
+        .ok()
+        .flatten();
         let completed_samples = self.task.nr_completed_samples.max(0) as f64;
         let mut etas = Vec::new();
         if let Some(max_samples) = stop_condition.max_samples {
@@ -950,11 +822,15 @@ where
             }
             self.checkpoint_sampler_uptime_now();
             let checkpoint = SamplerAggregatorCheckpoint {
+                format_version: crate::compatibility::MODEL_VERSION,
                 completed_samples: self.task.nr_completed_samples,
                 task_id: self.task.id,
                 output_snapshot_id: None,
                 batches_completed: 0,
-                sampler_snapshot: self.sampler.snapshot().map_err(RunnerError::Engine)?,
+                sampler_snapshot: self
+                    .sampler_config
+                    .snapshot(&mut *self.sampler)
+                    .map_err(RunnerError::Engine)?,
                 observable_state: self.observable_state.clone(),
                 runtime_state: self.runtime_state.clone(),
                 queue: self.queue.checkpoint(),
@@ -972,7 +848,7 @@ where
                     sampler_snapshot: Some(checkpoint.sampler_snapshot.clone()),
                     observable_state: Some(checkpoint.observable_state.clone()),
                     evaluator: Some(self.evaluator_config.clone()),
-                    sampler_aggregator: Some(self.sampler_config.clone()),
+
                     batch_transforms: self.batch_transforms.clone(),
                 })
             } else {
@@ -1205,7 +1081,7 @@ where
             }
 
             if batch.requires_training_values {
-                let training_values = batch.result.values.as_deref().ok_or_else(|| {
+                let training_values = batch.result.training_values.as_deref().ok_or_else(|| {
                     RunnerError::Engine(EngineError::engine(format!(
                         "completed batch {} requires training but has no training values",
                         batch.batch_id
@@ -1335,7 +1211,7 @@ where
                     let generated_samples = batch.nr_samples;
                     self.runtime_state
                         .generation
-                        .buffer_draw(batch.build(), training_remaining)?;
+                        .buffer_draw(batch, training_remaining)?;
                     if training_remaining.is_some() {
                         self.runtime_state.generation.record_draw(generated_samples);
                     }
@@ -1365,16 +1241,12 @@ where
     fn enqueue_generated(&mut self, slots: usize, chunk_size: usize) -> Result<usize, RunnerError> {
         let _compute = self.busy.compute();
         let requires_feedback = self.runtime_state.generation.requires_feedback();
-        let mut batches = self
+        let batches = self
             .runtime_state
             .generation
             .take_batches(slots, chunk_size)?;
         let count = batches.len();
         let accumulator = self.observable_state.config();
-        for batch in &mut batches {
-            // The initial probe may have established the accumulator's shape.
-            batch.accumulator = accumulator.clone();
-        }
         let samples = batches
             .iter()
             .map(|batch| batch.nr_samples as i64)
@@ -1383,7 +1255,13 @@ where
         self.runtime_state.produced_samples_total += samples;
         self.nr_produced_samples += samples;
         self.task.nr_produced_samples += samples;
-        self.queue.ingest(batches, requires_feedback);
+        self.queue.ingest(
+            batches
+                .into_iter()
+                .map(|batch| batch.for_evaluation(accumulator.clone()))
+                .collect(),
+            requires_feedback,
+        );
         Ok(count)
     }
 
@@ -1435,7 +1313,7 @@ where
             return Ok(());
         }
 
-        let mut engine_diagnostics = self.sampler.get_diagnostics();
+        let mut engine_diagnostics = self.sampler.diagnostics();
         if let Some(discrete_pdf) = self.discrete_pdf_diagnostics()? {
             match &mut engine_diagnostics {
                 JsonValue::Object(object) => {
@@ -1449,18 +1327,6 @@ where
                 }
             }
         }
-        match &mut engine_diagnostics {
-            JsonValue::Object(object) => {
-                object.insert("runner".to_string(), self.current_runner_diagnostics());
-            }
-            other => {
-                engine_diagnostics = json!({
-                    "sampler": other.clone(),
-                    "runner": self.current_runner_diagnostics(),
-                });
-            }
-        }
-
         let mut queue_runtime = self.queue.runtime_metrics();
         queue_runtime.rolling = self.queue.take_metrics_snapshot();
         let sampler_runtime = self.take_sampler_window_snapshot();
@@ -1469,14 +1335,14 @@ where
         let snapshot = SamplerAggregatorPerformanceSnapshot {
             run_id: self.run_id,
             node_name: self.node_name.clone(),
-            runtime_metrics: self.to_runtime_metrics(
+            metrics: self.performance_metrics(
                 sampler_runtime,
                 queue_runtime,
                 self.nr_completed_samples,
                 self.current_sampler_uptime_ms(),
                 evaluator_fleet,
+                engine_diagnostics,
             ),
-            engine_diagnostics,
             rss_bytes: current_rss_bytes(),
         };
         self.store
@@ -1576,78 +1442,28 @@ where
 mod tests {
     use super::{SamplerAggregatorCheckpoint, SamplerProgress, no_progress_is_terminal};
     use crate::core::SamplerQueueCheckpoint;
-    use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
-    use crate::sampling::{
-        NaiveMonteCarloSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
-        SamplerAggregatorSnapshot,
-    };
+    use crate::sampling::SavedSampler;
     use serde_json::json;
-
-    #[test]
-    fn snapshot_kind_match_requires_same_sampler_family() {
-        let raster_plane = SamplerAggregatorConfig::RasterPlane {
-            params: RasterPlaneSamplerParams {
-                geometry: PlaneRasterGeometry {
-                    offset: vec![0.0, 0.0],
-                    u_vector: vec![1.0, 0.0],
-                    v_vector: vec![0.0, 1.0],
-                    u_linspace: Linspace {
-                        start: 0.0,
-                        stop: 1.0,
-                        count: 2,
-                    },
-                    v_linspace: Linspace {
-                        start: 0.0,
-                        stop: 1.0,
-                        count: 2,
-                    },
-                    discrete: Vec::new(),
-                },
-            },
-            materializer: None,
-        };
-        let raster_line = SamplerAggregatorConfig::RasterLine {
-            params: RasterLineSamplerParams {
-                geometry: LineRasterGeometry {
-                    offset: vec![0.0],
-                    direction: vec![1.0],
-                    linspace: Linspace {
-                        start: 0.0,
-                        stop: 1.0,
-                        count: 2,
-                    },
-                    discrete: Vec::new(),
-                },
-            },
-            materializer: None,
-        };
-        let naive = SamplerAggregatorConfig::NaiveMonteCarlo {
-            params: NaiveMonteCarloSamplerParams::default(),
-            materializer: None,
-        };
-
-        assert!(
-            SamplerAggregatorSnapshot::RasterPlane { raw: json!({}) }.matches_config(&raster_plane)
-        );
-        assert!(
-            !SamplerAggregatorSnapshot::RasterLine { raw: json!({}) }.matches_config(&raster_plane)
-        );
-        assert!(
-            !SamplerAggregatorSnapshot::RasterPlane { raw: json!({}) }.matches_config(&raster_line)
-        );
-        assert!(
-            SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) }.matches_config(&naive)
-        );
-    }
 
     #[test]
     fn carryover_batch_size_is_reduced_and_clamped() {
         let snapshot = SamplerAggregatorCheckpoint {
+            format_version: crate::compatibility::MODEL_VERSION,
             completed_samples: 0,
             task_id: 1,
             output_snapshot_id: None,
             batches_completed: 0,
-            sampler_snapshot: SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) },
+            sampler_snapshot: SavedSampler {
+                version: 1,
+                config: crate::core::SamplingConfig {
+                    sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                        params: Default::default(),
+                    },
+                    materializer: None,
+                    transforms: None,
+                },
+                state: json!({}),
+            },
             observable_state: crate::evaluation::AccumulatorState::empty_scalar(),
             runtime_state: SamplerProgress::default(),
             queue: SamplerQueueCheckpoint {

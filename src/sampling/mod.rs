@@ -1,40 +1,31 @@
-pub mod batch_transform;
+pub(crate) mod batch_transform;
 pub(crate) mod havana_grid;
-pub mod latent_batch;
-pub mod materializer;
-pub mod sampler;
-pub mod sampler_aggregator;
+pub(crate) mod latent_batch;
+pub(crate) mod materializer;
+pub(crate) mod sampler;
+pub(crate) mod sampler_aggregator;
 
 use crate::core::{RunStageSnapshot, SamplerAggregatorCheckpoint};
 use crate::evaluation::AccumulatorState;
 
-pub use batch_transform::{
-    ProcessBatchTransformParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
-};
-pub use latent_batch::{LatentBatch, LatentBatchPayload, LatentBatchSpec};
-pub use materializer::{
-    HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer,
-    ProcessMaterializerParams,
-};
-pub use sampler::{
-    DiscreteSubspace, Generation, PdfPoint, SamplerAggregator, SamplerAggregatorSnapshot,
-};
+pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
+pub use latent_batch::{LatentBatch, LatentBatchPayload};
+pub use materializer::{HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer};
+pub use sampler::{DiscreteSubspace, Generation, PdfPoint, Sampler, SavedSampler};
 pub use sampler_aggregator::{
-    HavanaInferenceSamplerParams, HavanaInferenceSource, HavanaSamplerParams,
-    NaiveMonteCarloSamplerParams, PdfAdaptationImagePersistedOutput,
-    PdfAdaptationRasterLineSamplerParams, PdfAdaptationRasterPlaneSamplerParams,
-    ProcessSamplerParams, RasterLineSamplerParams, RasterPlaneSamplerParams,
+    HavanaInferenceSamplerParams, HavanaSamplerParams, NaiveMonteCarloSamplerParams,
+    PdfAdaptationImagePersistedOutput, RasterLineSamplerParams, RasterPlaneSamplerParams,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StageHandoff<'a> {
-    pub sampler_snapshot: Option<&'a SamplerAggregatorSnapshot>,
+    pub sampler_snapshot: Option<&'a SavedSampler>,
     pub observable_state: Option<&'a AccumulatorState>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct StageHandoffOwned {
-    pub sampler_snapshot: Option<SamplerAggregatorSnapshot>,
+    pub sampler_snapshot: Option<SavedSampler>,
     pub observable_state: Option<AccumulatorState>,
 }
 

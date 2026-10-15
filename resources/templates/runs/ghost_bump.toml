@@ -9,9 +9,8 @@ name = '$(run_name:"ghost_bump")'
 
 [evaluator]
 kind = "symbolica"
-expr = "1/((x-a)^2+(y-a)^2+w) + 1/((x-b)^2+(y-b)^2+w) - 1/2"
 args = ["x", "y"]
-constants = { a = "1/4", b = "3/4", w = "1/20" }
+source = {kind = "expression", expr = "1/((x-a)^2+(y-a)^2+w) + 1/((x-b)^2+(y-b)^2+w) - 1/2", constants = { a = "1/4", b = "3/4", w = "1/20" }}
 
 [[task_queue]]
 name = "havana-train"
@@ -21,7 +20,7 @@ accumulator = { config = "scalar" }
 [task_queue.stop_condition]
 max_samples = "$(train_samples:200000)"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "havana_training"
 seed = 0
 bins = "$(havana_bins:64)"
@@ -56,9 +55,8 @@ display = "complex_phase"
 
 [task_queue.evaluator.config]
 kind = "symbolica"
-expr = "(x - cx) + i * (y - cy)"
 args = ["x", "y"]
-constants = { cx = '$(phase_center_x:"1/2")', cy = '$(phase_center_y:"1/2")' }
+source = {kind = "expression", expr = "(x - cx) + i * (y - cy)", constants = { cx = '$(phase_center_x:"1/2")', cy = '$(phase_center_y:"1/2")' }}
 
 [task_queue.geometry]
 offset = [0.0, 0.0]

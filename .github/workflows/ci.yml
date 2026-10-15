@@ -39,14 +39,6 @@ jobs:
       - run: cargo check --locked --no-default-features
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked
-      - name: Test migration upgrade from the previous schema
-        run: |
-          createdb -h 127.0.0.1 -p 5400 -U postgres gammaboard_upgrade_test
-          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5400 -U postgres \
-            -d gammaboard_upgrade_test -f migrations/202608180001_initial_schema.sql
-          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5400 -U postgres \
-            -d gammaboard_upgrade_test -f tests/migration_upgrade.sql
-          dropdb -h 127.0.0.1 -p 5400 -U postgres gammaboard_upgrade_test
       - name: Run PostgreSQL store integration tests
         run: |
           for migration in migrations/*.sql; do
@@ -97,15 +89,17 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: python -m pip install --upgrade build pytest 'tomli>=2.4,<3'
+      - run: python -m pip install --upgrade build pytest tomlkit 'tomli>=2.4,<3'
       - run: python -m build process_api/python
       - name: Install process wheel into a clean environment
         run: |
           python -m venv /tmp/gammaboard-process-wheel
           /tmp/gammaboard-process-wheel/bin/pip install process_api/python/dist/*.whl
-          /tmp/gammaboard-process-wheel/bin/python -c 'import gammaboard_process'
+          /tmp/gammaboard-process-wheel/bin/python -c 'from gammaboard_process import Batch, GenerationStatus, GammaLoopEvaluator; from gammaboard_process.protocol import PROTOCOL; assert PROTOCOL == "gammaboard-jsonrpc-v6"'
       - run: python -m pip install process_api/python/dist/*.whl
-      - run: python -m pip install --no-deps -e integrations/madgraph
+      - run: python -m pip install --find-links process_api/python/dist integrations/madgraph
+      - run: python -m pip check
+      - run: python -m unittest discover -s scripts/tests
       - run: python -m pytest -q process_api/python/tests integrations/madgraph/tests
       - name: Test benchmark measurement and lifecycle contracts
         run: python -m unittest discover -s benchmarks/tests

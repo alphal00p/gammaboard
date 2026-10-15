@@ -69,7 +69,7 @@ class RecoverySampler:
             assert cursor == sampler.produced, "snapshot lost pending feedback"
         return sampler
 
-    def get_diagnostics(self):
+    def diagnostics(self):
         return self.snapshot()
 
 

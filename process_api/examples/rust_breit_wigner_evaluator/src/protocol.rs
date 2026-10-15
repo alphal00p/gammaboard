@@ -14,13 +14,18 @@ pub struct Request {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EvaluatorOutput {
+    Values { components: Vec<String> },
+}
+
+#[derive(Debug, Deserialize)]
 pub struct InitializeParams {
     pub protocol: String,
     pub role: String,
     #[serde(default)]
     pub args: Value,
-    #[serde(default)]
-    pub components: Vec<String>,
+    pub output: EvaluatorOutput,
     #[serde(default)]
     pub domain: Value,
 }

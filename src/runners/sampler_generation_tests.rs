@@ -1,6 +1,6 @@
 use super::*;
 use crate::core::BatchQueueCounts;
-use crate::runners::test_support::RecordingStore;
+use crate::test_support::RecordingStore;
 use crate::utils::domain::Domain;
 
 fn runner(
@@ -17,12 +17,12 @@ fn runner(
     params.queue.max_batch_size = max_batch;
     params.queue.max_generation_size = max_batch.try_into().unwrap();
     params.queue.max_batches_per_tick = 20;
-    let config: SamplerAggregatorConfig = serde_json::from_value(json!({
+    let config: SamplingConfig = serde_json::from_value(json!({
         "kind": "naive_monte_carlo", "seed": 42, "training_window_samples": training_window,
     }))
     .unwrap();
     let sampler = config
-        .build(Domain::rectangular(2, 0), Some(budget), None, json!({}))
+        .create(Domain::rectangular(2, 0), Some(budget), json!({}))
         .unwrap();
     let task = serde_json::from_value(json!({
         "id": 1, "run_id": 1, "name": "test", "sequence_nr": 1,
@@ -53,10 +53,7 @@ fn runner(
 }
 
 fn draw_count(runner: &mut SamplerAggregatorRunner<RecordingStore>) -> usize {
-    let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = runner.sampler.snapshot().unwrap()
-    else {
-        panic!()
-    };
+    let raw = runner.sampler.snapshot().unwrap();
     raw["produced_batches_total"].as_u64().unwrap() as usize
 }
 
@@ -76,8 +73,6 @@ async fn persistence_reports_execution_time_returned_by_the_operation() {
         Some(7.0)
     );
 }
-
-use crate::sampling::SamplerAggregatorSnapshot;
 
 #[tokio::test]
 async fn training_draws_survive_soft_queue_overshoot() {
@@ -126,10 +121,7 @@ async fn training_draws_survive_soft_queue_overshoot() {
         }
     }
     assert!(runner.runtime_state.generation.is_empty());
-    assert_eq!(
-        runner.sampler.get_diagnostics()["pending_training_samples"],
-        0
-    );
+    assert_eq!(runner.sampler.diagnostics()["pending_training_samples"], 0);
     runner.queue.flush().await.unwrap();
 }
 
@@ -159,7 +151,6 @@ async fn generation_preserves_initial_probe_and_checkpointed_remainder() {
     // Model a pause after the probe has completed: no DB samples outstanding.
     let value = serde_json::to_value(&runner.runtime_state).unwrap();
     runner.runtime_state = serde_json::from_value(value).unwrap();
-    runner.runtime_state.generation.restore_legacy_samples(0);
     assert_eq!(
         runner.produce(BatchQueueCounts::default()).await.unwrap(),
         (20, true)
@@ -257,8 +248,8 @@ fn sampler_io_threads_default_to_one_and_reject_zero() {
         toml::from_str(include_str!("../config_defaults/run.toml")).unwrap();
     let mut params = defaults["sampler_aggregator_runner_params"].clone();
     params.as_table_mut().unwrap().remove("io_threads");
-    let legacy: SamplerAggregatorRunnerParams = params.clone().try_into().unwrap();
-    assert_eq!(legacy.io_threads.get(), 1);
+    let defaulted: SamplerAggregatorRunnerParams = params.clone().try_into().unwrap();
+    assert_eq!(defaulted.io_threads.get(), 1);
     params
         .as_table_mut()
         .unwrap()
@@ -324,7 +315,7 @@ async fn live_generation_limit_preserves_buffered_draw_and_feedback_boundaries()
         assert_eq!(values.len(), size);
         runner.sampler.feedback(&values).unwrap();
     }
-    assert_eq!(runner.sampler.get_diagnostics()["training_updates"], 1);
+    assert_eq!(runner.sampler.diagnostics()["training_updates"], 1);
     runner.queue.flush().await.unwrap();
 }
 
@@ -360,30 +351,4 @@ fn generation_limit_defaults_and_validation() {
     assert!(
         serde_json::from_value::<SamplerQueueTuning>(json!({"max_generation_size": 0})).is_err()
     );
-}
-
-#[tokio::test]
-async fn naive_snapshot_discards_retired_generation_setting() {
-    let mut runner = runner(0, 100, 1000);
-    let SamplerAggregatorSnapshot::NaiveMonteCarlo { mut raw } = runner.sampler.snapshot().unwrap()
-    else {
-        panic!()
-    };
-    raw["params"]["generation_batch_size"] = json!(1);
-    let mut restored = SamplerAggregatorSnapshot::NaiveMonteCarlo { raw }
-        .into_runtime(&Domain::rectangular(2, 0), json!({}))
-        .unwrap();
-    assert_eq!(
-        restored
-            .generate(37)
-            .unwrap()
-            .into_batch()
-            .unwrap()
-            .nr_samples,
-        37
-    );
-    let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = restored.snapshot().unwrap() else {
-        panic!()
-    };
-    assert!(raw["params"].get("generation_batch_size").is_none());
 }

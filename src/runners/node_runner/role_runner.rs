@@ -49,7 +49,11 @@ impl<S: crate::core::SamplerWorkerStore + Clone + Send + Sync + 'static> RoleRun
                 }
                 Ok(false)
             }
-            Err(RunnerError::Store(err)) if err.is_database_error() => Err(err),
+            Err(RunnerError::Store(err))
+                if err.is_database_error() || err.is_retry_activation() =>
+            {
+                Err(err)
+            }
             Err(err) => {
                 self.fail_task(&err.to_string()).await.store_err()?;
                 match err {

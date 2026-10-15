@@ -35,8 +35,8 @@ kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-event-evaluator"]
 cwd = "$resources/.."
 # GammaBoard supplies one empty point only to trigger native MG7 generation.
-domain = { continuous = { dims = 0 } }
-accumulator = "gammaloop"
+domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 0 } }
+output = { kind = "gammaloop" }
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
@@ -52,4 +52,4 @@ accumulator = "gammaloop"
 name = "generate-events"
 kind = "sample"
 stop_condition = { max_samples = 1 }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }

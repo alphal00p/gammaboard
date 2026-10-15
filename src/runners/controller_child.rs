@@ -1,6 +1,6 @@
 use crate::core::StoreResultExt;
 use crate::core::{
-    AggregationStore, ControlPlaneStore, DesiredAssignment, RegisteredNode, ResultSourceRef,
+    AggregationStore, AssignmentTarget, ControlPlaneStore, RegisteredNode, ResultSourceRef,
     RunReadStore, RunTaskState, RunTaskStore, StoreError, TaskMeasurementOutput, WorkerRole,
 };
 use crate::evaluation::AccumulatorState;
@@ -17,6 +17,26 @@ pub struct ChildTaskResult {
 }
 
 impl ChildTaskResult {
+    /// A published measurement can coexist with an active campaign child.
+    pub fn controller_output(&self) -> crate::core::ControllerChildOutput {
+        let failure_reason = self.task_failure_reason().or_else(|| match &self.output {
+            Some(TaskMeasurementOutput::Failed { reason }) => Some(reason.clone()),
+            _ => None,
+        });
+        crate::core::ControllerChildOutput {
+            child_run_id: Some(self.source.run_id),
+            status: if failure_reason.is_some() {
+                crate::core::ControllerChildState::Failed
+            } else {
+                self.task_state.into()
+            },
+            result_source: Some(self.source.clone()),
+            completed_samples_per_second: None,
+            measurement: self.output.clone(),
+            failure_reason,
+        }
+    }
+
     pub fn task_failure_reason(&self) -> Option<String> {
         task_failure_reason(
             self.task_state,
@@ -45,6 +65,39 @@ fn task_failure_reason(
     })
 }
 
+/// Release placements before publishing a terminal state. Pool ownership survives.
+pub async fn finish_controller(
+    store: &(impl ControlPlaneStore + RunTaskStore),
+    run_id: i32,
+    task_id: i64,
+    outcome: Result<(), &str>,
+) -> Result<bool, StoreError> {
+    if !apply_controller_assignment_plan(store, ControllerAssignmentPlan::new(run_id, Vec::new()))
+        .await?
+    {
+        return Ok(false);
+    }
+    match outcome {
+        Ok(()) => store.complete_run_task(task_id).await?,
+        Err(reason) => store.fail_run_task(task_id, reason).await?,
+    }
+    Ok(true)
+}
+
+/// Every controller observes children by their durable spawn label.
+pub async fn load_controller_children(
+    store: &impl RunReadStore,
+    run_id: i32,
+    task: &crate::core::RunTask,
+) -> Result<BTreeMap<String, crate::stores::RunProgress>, StoreError> {
+    Ok(store
+        .get_child_runs_for_task(run_id, task.id, task.task.kind_str())
+        .await?
+        .into_iter()
+        .filter_map(|run| run.spawn_label.clone().map(|label| (label, run)))
+        .collect())
+}
+
 #[derive(Debug, Clone)]
 pub struct ControllerAssignmentPlan {
     pub parent_run_id: i32,
@@ -67,7 +120,7 @@ impl ControllerAssignmentPlan {
 pub async fn apply_controller_assignment_plan(
     store: &impl ControlPlaneStore,
     mut plan: ControllerAssignmentPlan,
-) -> Result<(), StoreError> {
+) -> Result<bool, StoreError> {
     // Plan from one snapshot, then publish only actual changes in one transaction.
     // A stale snapshot is harmless: the next controller tick retries it.
     for (id, branch, controller) in store.worker_pool_branches(plan.parent_run_id).await? {
@@ -78,8 +131,7 @@ pub async fn apply_controller_assignment_plan(
     }
     let nodes = store.list_nodes(None).await?;
     let updates = controller_assignment_updates(&nodes, plan);
-    store.update_desired_assignments(&updates).await?;
-    Ok(())
+    store.update_desired_assignments(&updates).await
 }
 
 fn controller_assignment_updates(
@@ -89,68 +141,59 @@ fn controller_assignment_updates(
     let mut selected_seen = BTreeSet::new();
     // Compare placements at this controller's level. Preserve deeper placements
     // when their direct branch remains selected; only that branch schedules them.
-    let original = nodes;
-    let normalized = nodes
-        .iter()
-        .cloned()
-        .map(|mut node| {
-            if let Some(a) = node.desired_assignment.as_mut() {
-                a.run_id = plan.branches.get(&a.run_id).copied().unwrap_or(a.run_id);
-            }
-            node
-        })
-        .collect::<Vec<_>>();
-    let nodes = &normalized;
     let selected = plan
         .selected_child_run_ids
         .into_iter()
-        .filter(|run_id| plan.branches.contains_key(run_id) && selected_seen.insert(*run_id))
-        .collect::<Vec<_>>();
-    let reusable_assignments = nodes
-        .iter()
-        .filter_map(|node| node.desired_assignment.as_ref())
-        .filter(|assignment| {
-            assignment.run_id == plan.parent_run_id
-                || plan.branches.contains_key(&assignment.run_id)
-        })
-        .cloned()
+        .filter(|id| plan.branches.contains_key(id) && selected_seen.insert(*id))
         .collect::<Vec<_>>();
     let mut desired = nodes
         .iter()
         .filter_map(|node| {
-            node.desired_assignment
-                .as_ref()
-                .map(|a| (node.name.clone(), a.clone()))
+            node.desired_assignment.map(|mut target| {
+                target.run_id = plan
+                    .branches
+                    .get(&target.run_id)
+                    .copied()
+                    .unwrap_or(target.run_id);
+                (node.name.as_str(), target)
+            })
         })
         .collect::<BTreeMap<_, _>>();
-    for assignment in &reusable_assignments {
-        desired.remove(&assignment.node_name);
+    let reusable_assignments = desired
+        .iter()
+        .filter(|(_, target)| {
+            target.run_id == plan.parent_run_id || plan.branches.contains_key(&target.run_id)
+        })
+        .map(|(&name, &target)| (name, target))
+        .collect::<BTreeMap<_, _>>();
+    for name in reusable_assignments.keys() {
+        desired.remove(name);
     }
     if !selected.is_empty() {
         let selected_set = selected.iter().copied().collect::<BTreeSet<_>>();
         let mut activated = BTreeSet::new();
         // Keep samplers on children that are still selected, even when
         // priority order changes or another child leaves the selected set.
-        for assignment in &reusable_assignments {
+        for (&node_name, assignment) in &reusable_assignments {
             if assignment.role == WorkerRole::SamplerAggregator
                 && selected_set.contains(&assignment.run_id)
                 && (activated.insert(assignment.run_id)
                     || plan.controllers.contains(&assignment.run_id))
             {
-                desired.insert(assignment.node_name.clone(), assignment.clone());
+                desired.insert(node_name, *assignment);
             }
         }
         let mut sampler_nodes = reusable_assignments
             .iter()
-            .filter(|a| {
-                a.role == WorkerRole::SamplerAggregator && !desired.contains_key(&a.node_name)
+            .filter(|(name, a)| {
+                a.role == WorkerRole::SamplerAggregator && !desired.contains_key(*name)
             })
-            .map(|a| a.node_name.as_str())
+            .map(|(&name, _)| name)
             .collect::<Vec<_>>();
         let mut evaluator_nodes = reusable_assignments
             .iter()
-            .filter(|a| a.role == WorkerRole::Evaluator)
-            .map(|a| a.node_name.as_str())
+            .filter(|(_, a)| a.role == WorkerRole::Evaluator)
+            .map(|(&name, _)| name)
             .collect::<Vec<_>>();
         sampler_nodes.sort_unstable();
         evaluator_nodes.sort_unstable();
@@ -165,12 +208,10 @@ fn controller_assignment_updates(
             .zip(sampler_nodes.by_ref())
         {
             desired.insert(
-                node_name.to_owned(),
-                DesiredAssignment {
-                    node_name: node_name.to_owned(),
+                node_name,
+                AssignmentTarget {
                     role: WorkerRole::SamplerAggregator,
                     run_id,
-                    run_name: None,
                 },
             );
             activated.insert(run_id);
@@ -186,12 +227,10 @@ fn controller_assignment_updates(
             for (index, node_name) in sampler_nodes.enumerate() {
                 let run_id = nested[index % nested.len()];
                 desired.insert(
-                    node_name.to_owned(),
-                    DesiredAssignment {
-                        node_name: node_name.to_owned(),
+                    node_name,
+                    AssignmentTarget {
                         role: WorkerRole::SamplerAggregator,
                         run_id,
-                        run_name: None,
                     },
                 );
                 activated.insert(run_id);
@@ -202,12 +241,10 @@ fn controller_assignment_updates(
         if !activated.is_empty() {
             for (index, node_name) in evaluator_nodes.into_iter().enumerate() {
                 desired.insert(
-                    node_name.to_owned(),
-                    DesiredAssignment {
-                        node_name: node_name.to_owned(),
+                    node_name,
+                    AssignmentTarget {
                         role: WorkerRole::Evaluator,
                         run_id: activated[index % activated.len()],
-                        run_name: None,
                     },
                 );
             }
@@ -215,31 +252,27 @@ fn controller_assignment_updates(
     }
     // Retain pool ownership while waiting for a sampler or for capacity in
     // another child. Freeing these nodes would lose them on the next tick.
-    for assignment in &reusable_assignments {
+    for (&node_name, assignment) in &reusable_assignments {
         desired
-            .entry(assignment.node_name.clone())
-            .or_insert_with(|| DesiredAssignment {
+            .entry(node_name)
+            .or_insert_with(|| AssignmentTarget {
                 run_id: plan.parent_run_id,
-                run_name: None,
-                ..assignment.clone()
+                ..*assignment
             });
     }
-    original
+    nodes
         .iter()
         .filter_map(|node| {
-            let mut next = desired.remove(&node.name);
+            let mut next = desired.remove(node.name.as_str());
             if let (Some(before), Some(after)) = (&node.desired_assignment, &mut next)
                 && plan.branches.get(&before.run_id) == Some(&after.run_id)
             {
                 after.run_id = before.run_id;
             }
-            let target = |a: &DesiredAssignment| (a.role, a.run_id);
-            (node.desired_assignment.as_ref().map(target) != next.as_ref().map(target)).then(|| {
-                crate::core::NodeAssignmentUpdate {
-                    node_uuid: node.uuid.clone(),
-                    expected: node.desired_assignment.clone(),
-                    desired: next,
-                }
+            (node.desired_assignment != next).then(|| crate::core::NodeAssignmentUpdate {
+                node_uuid: node.uuid.clone(),
+                expected: node.desired_assignment,
+                desired: next,
             })
         })
         .collect()
@@ -407,6 +440,43 @@ pub async fn load_published_child_result(
 mod tests {
     use super::*;
 
+    #[test]
+    fn published_measurement_does_not_finish_an_active_child_or_hide_failure() {
+        let task = serde_json::from_value(serde_json::json!({
+            "id": 7, "run_id": 2, "name": "training", "sequence_nr": 1,
+            "state": "completed", "nr_produced_samples": 100, "nr_completed_samples": 100,
+            "created_at": "2026-10-09T00:00:00Z", "task_toml": "",
+            "task": {"kind": "sample", "stop_condition": {"max_samples": 100}}
+        }))
+        .unwrap();
+        let mut result = ChildTaskResult {
+            task_state: RunTaskState::Active,
+            source: ResultSourceRef {
+                run_id: 2,
+                task_id: 7,
+                snapshot_id: None,
+                sample_count: 100,
+            },
+            source_task: task,
+            output: Some(TaskMeasurementOutput::Completed { results: vec![] }),
+            accumulator: None,
+        };
+        assert_eq!(
+            result.controller_output().status,
+            crate::core::ControllerChildState::Active
+        );
+        result.task_state = RunTaskState::Failed;
+        result.output = Some(TaskMeasurementOutput::Failed {
+            reason: "later sampling task failed".into(),
+        });
+        let observed = result.controller_output();
+        assert_eq!(observed.status, crate::core::ControllerChildState::Failed);
+        assert_eq!(
+            observed.failure_reason.as_deref(),
+            Some("later sampling task failed")
+        );
+    }
+
     fn plan(parent: i32, managed: Vec<i32>, selected: Vec<i32>) -> ControllerAssignmentPlan {
         let mut plan = ControllerAssignmentPlan::new(parent, selected);
         plan.branches = managed.into_iter().map(|id| (id, id)).collect();
@@ -419,12 +489,7 @@ mod tests {
             uuid: name.into(),
             capabilities: Default::default(),
             pool_assignment: None,
-            desired_assignment: Some(DesiredAssignment {
-                node_name: name.into(),
-                role,
-                run_id,
-                run_name: None,
-            }),
+            desired_assignment: Some(AssignmentTarget { role, run_id }),
             current_assignment: None,
             last_seen: None,
         }
@@ -438,6 +503,23 @@ mod tests {
             node("e2", WorkerRole::Evaluator, 2),
         ];
         assert!(controller_assignment_updates(&nodes, plan(1, vec![2, 3], vec![2])).is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_placements_defer_controller_completion_and_failure() {
+        let store = crate::test_support::RecordingStore {
+            nodes: Some(vec![node("sampler", WorkerRole::SamplerAggregator, 1)]),
+            assignment_update_result: Some(false),
+            ..Default::default()
+        };
+        // The recording store rejects any terminal task write. A stale plan
+        // must leave the controller active so its next tick can retry cleanup.
+        assert!(!finish_controller(&store, 1, 7, Ok(())).await.unwrap());
+        assert!(
+            !finish_controller(&store, 1, 7, Err("child failed"))
+                .await
+                .unwrap()
+        );
     }
 
     #[test]

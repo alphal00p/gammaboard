@@ -1,11 +1,11 @@
-//! Recording store shared by queue and sampler tests. Unexpected calls fail loudly.
+//! Recording store shared by runtime and measurement tests. Unsupported calls fail loudly.
 use crate::core::{
-    AggregationStore, BatchClaim, BatchQueueCounts, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome,
+    AggregationStore, AssignmentTarget, BatchClaim, BatchQueueCounts, CompletedBatch,
+    ControlPlaneStore, EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome,
     RegisteredNode, RunReadStore, RunSampleProgress, RunStageSnapshot, RunTask, RunTaskInput,
     RunTaskStore, SamplerAggregatorPerformanceSnapshot, StoreError, WorkQueueStore,
 };
-use crate::sampling::{LatentBatch, LatentBatchPayload};
+use crate::sampling::LatentBatchPayload;
 use crate::stores::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
@@ -20,13 +20,19 @@ type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
 
 #[derive(Clone, Default)]
 pub(crate) struct RecordingStore {
-    inserts: RecordedInserts,
+    pub(crate) nodes: Option<Vec<RegisteredNode>>,
+    pub(crate) assignment_update_result: Option<bool>,
+    pub(crate) inserts: RecordedInserts,
     pub(crate) active_task: Arc<Mutex<Option<RunTask>>>,
-    first_insert_gate: Option<Arc<Notify>>,
+    pub(crate) first_insert_gate: Option<Arc<Notify>>,
     pub(crate) inserted: Arc<Notify>,
-    fetch_completed_calls: Arc<Mutex<usize>>,
+    pub(crate) fetch_completed_calls: Arc<Mutex<usize>>,
     pub(crate) completed_ids: Arc<Mutex<Vec<i64>>>,
     pub(crate) work_notifications: Arc<Mutex<usize>>,
+    pub(crate) tasks: Arc<Vec<RunTask>>,
+    pub(crate) current_accumulator: Option<JsonValue>,
+    pub(crate) latest_stage_snapshot: Option<TaskStageSnapshot>,
+    pub(crate) sampler_history: Arc<Vec<SamplerPerformanceHistoryEntry>>,
 }
 
 impl RecordingStore {
@@ -58,12 +64,11 @@ impl WorkQueueStore for RecordingStore {
         _task_id: i64,
         _requires_training_values: bool,
         batch_ids: &[i64],
-        batches: &[LatentBatch],
+        batches: &[crate::core::EvaluationBatch],
     ) -> Result<InsertBatchesOutcome, StoreError> {
-        let logical_weight = match &batches[0].payload {
+        let logical_weight = match &batches[0].samples.payload {
             LatentBatchPayload::IndexedBatch { weights, .. } => weights[0],
-            LatentBatchPayload::HavanaInference { .. }
-            | LatentBatchPayload::HavanaInferenceIndexed { .. } => 0.0,
+            LatentBatchPayload::HavanaInference { .. } => 0.0,
         };
         if logical_weight == 1.0
             && let Some(gate) = &self.first_insert_gate
@@ -212,7 +217,7 @@ impl AggregationStore for RecordingStore {
         &self,
         _run_id: i32,
     ) -> Result<Option<JsonValue>, StoreError> {
-        unreachable!("unused in test")
+        Ok(self.current_accumulator.clone())
     }
 
     async fn persist_task_result_snapshot(
@@ -310,7 +315,7 @@ impl RunTaskStore for RecordingStore {
     }
 
     async fn list_run_tasks(&self, _run_id: i32) -> Result<Vec<RunTask>, StoreError> {
-        unreachable!("unused in test")
+        Ok(self.tasks.as_ref().clone())
     }
 
     async fn load_run_task(&self, _task_id: i64) -> Result<Option<RunTask>, StoreError> {
@@ -396,7 +401,9 @@ impl ControlPlaneStore for RecordingStore {
         &self,
         _updates: &[crate::core::NodeAssignmentUpdate],
     ) -> Result<bool, crate::core::StoreError> {
-        unreachable!("unused in test")
+        Ok(self
+            .assignment_update_result
+            .expect("unexpected assignment update"))
     }
 
     async fn assign_worker_pool(
@@ -453,14 +460,14 @@ impl ControlPlaneStore for RecordingStore {
     async fn get_desired_assignment(
         &self,
         _node_name: &str,
-    ) -> Result<Option<DesiredAssignment>, StoreError> {
+    ) -> Result<Option<AssignmentTarget>, StoreError> {
         unreachable!("unused in test")
     }
 
     async fn list_desired_assignments(
         &self,
         _node_name: Option<&str>,
-    ) -> Result<Vec<DesiredAssignment>, StoreError> {
+    ) -> Result<std::collections::BTreeMap<String, AssignmentTarget>, StoreError> {
         unreachable!("unused in test")
     }
 
@@ -468,7 +475,7 @@ impl ControlPlaneStore for RecordingStore {
         &self,
         _node_name: Option<&str>,
     ) -> Result<Vec<RegisteredNode>, StoreError> {
-        unreachable!("unused in test")
+        Ok(self.nodes.clone().expect("unexpected node listing"))
     }
 
     async fn create_node_launch_request(
@@ -565,7 +572,7 @@ impl RunReadStore for RecordingStore {
         _after_snapshot_id: Option<i64>,
         _limit: i64,
     ) -> Result<Vec<TaskOutputSnapshot>, StoreError> {
-        unreachable!("unused in test")
+        Ok(Vec::new())
     }
 
     async fn get_latest_task_stage_snapshot(
@@ -573,7 +580,7 @@ impl RunReadStore for RecordingStore {
         _run_id: i32,
         _task_id: i64,
     ) -> Result<Option<TaskStageSnapshot>, StoreError> {
-        unreachable!("unused in test")
+        Ok(self.latest_stage_snapshot.clone())
     }
 
     async fn get_latest_task_stage_snapshot_id(
@@ -581,7 +588,10 @@ impl RunReadStore for RecordingStore {
         _run_id: i32,
         _task_id: i64,
     ) -> Result<Option<String>, StoreError> {
-        unreachable!("unused in test")
+        Ok(self
+            .latest_stage_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.id.clone()))
     }
 
     async fn get_runtime_logs(
@@ -621,6 +631,6 @@ impl RunReadStore for RecordingStore {
         _limit: i64,
         _worker_id: Option<&str>,
     ) -> Result<Vec<SamplerPerformanceHistoryEntry>, StoreError> {
-        unreachable!("unused in test")
+        Ok(self.sampler_history.as_ref().clone())
     }
 }

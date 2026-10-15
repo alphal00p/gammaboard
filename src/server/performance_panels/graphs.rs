@@ -3,12 +3,12 @@ use super::*;
 use crate::server::panels::{PlotPoint, PlotSeries, PlotXAxis};
 use std::collections::{BTreeMap, BTreeSet};
 
-fn identity(row: &Value, evaluator: bool) -> Option<(&str, &str, &str, &str)> {
-    let metrics = data(row, evaluator);
+fn identity(row: &Value) -> Option<(&str, &str, &str, &str)> {
+    let metrics = data(row);
     Some((
         row["worker_id"].as_str()?,
         metrics["node_uuid"].as_str()?,
-        epoch(row, evaluator)?,
+        epoch(row)?,
         metrics["task_id"].as_str()?,
     ))
 }
@@ -148,9 +148,7 @@ impl Graphs {
         let Some(previous) = self.previous.insert(key.clone(), row.clone()) else {
             return;
         };
-        if identity(&previous, evaluator).is_none()
-            || identity(&previous, evaluator) != identity(&row, evaluator)
-        {
+        if identity(&previous).is_none() || identity(&previous) != identity(&row) {
             self.groups.remove(&key);
             return;
         }

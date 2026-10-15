@@ -41,17 +41,21 @@ source_task = "sample"
                     ),
                     _ => ("random_search", "max_trials=1\nseed=5", ""),
                 };
+                let params = if params.is_empty() {
+                    String::new()
+                } else {
+                    format!("[optimizer.params]\n{params}")
+                };
                 format!(
                     r#"
 max_concurrent_trials = 2
 [optimizer]
 algorithm = "{algorithm}"
-[optimizer.params]
 {params}
 [objective]
 source_task = "sample"
 mode = "minimize"
-quantity = "central_value"
+selection = {{ kind = 'all_component_means' }}
 [parameters.bins]
 kind = "integer"
 min = 8
@@ -66,9 +70,9 @@ values = ["auto","none"]
             }
         };
         let measurement = if failed {
-            "{ metric = 'variance', component = 'missing' }"
+            "{ kind = 'metric', name = 'variance', component = 'missing' }"
         } else {
-            "'central_value'"
+            "{ kind = 'all_component_means' }"
         };
         let name = format!("search-{mode}");
         harness.add_run(&temp_config(&format!(
@@ -86,9 +90,9 @@ timing = {{ per_sample_seconds = 0.002 }}
 name = "sample"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
-measurement = {{ quantity = {measurement} }}
+measurement = {{ selection = {measurement} }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
+sampler = {{ config = {{ kind = "naive_monte_carlo" }} }}
 '''
 "#
         )));

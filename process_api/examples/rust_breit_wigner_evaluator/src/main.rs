@@ -22,7 +22,7 @@ fn main() {
             "initialize" => {
                 let params: Result<InitializeParams, _> = serde_json::from_value(request.params);
                 match params.and_then(|params| {
-                    if params.protocol != "gammaboard-jsonrpc-v4" {
+                    if params.protocol != "gammaboard-jsonrpc-v6" {
                         return Err(serde_json::Error::io(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             format!("unsupported protocol: {}", params.protocol),
@@ -34,7 +34,8 @@ fn main() {
                             format!("expected evaluator role, got {}", params.role),
                         )));
                     }
-                    if params.components.len() > 1 {
+                    let protocol::EvaluatorOutput::Values { components } = &params.output;
+                    if components != &["value"] {
                         return Err(serde_json::Error::io(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
                             "rust ragged-domain evaluator example returns exactly one component",
@@ -54,6 +55,9 @@ fn main() {
                     Ok(value) => Ok(value),
                     Err(error) => Err(error.to_string()),
                 }
+            }
+            "diagnostics" if evaluator.is_some() => {
+                Ok((serde_json::json!({"diagnostics": {}}), Vec::new()))
             }
             "eval_batch" => {
                 let params: Result<EvalBatchParams, _> = serde_json::from_value(request.params);
@@ -170,15 +174,6 @@ fn resolve_offsets(
 }
 
 fn domain_fixed_widths(domain: &serde_json::Value) -> (Option<usize>, Option<usize>) {
-    if let Some(continuous) = domain.get("continuous") {
-        return (
-            Some(0),
-            continuous
-                .get("dims")
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as usize),
-        );
-    }
     if let Some(rectangular) = domain.get("rectangular") {
         return (
             rectangular

@@ -6,10 +6,17 @@ from typing import Any
 
 
 @dataclass(slots=True)
-class SampleBatch:
+class Batch:
+    """Sample arrays returned by materializers and transforms."""
+
     xs_discrete: Any
     xs_continuous: Any
     weights: Any
+
+
+@dataclass(slots=True)
+class SampleBatch(Batch):
+    """A sampler draw, with optional feedback-window information."""
 
     # Remaining samples in this training window before this draw; None disables feedback.
     training_remaining: int | None = None
@@ -18,17 +25,3 @@ class SampleBatch:
 class GenerationStatus(Enum):
     WAITING = "waiting"
     FINISHED = "finished"
-
-
-@dataclass(slots=True)
-class MaterializedBatch:
-    xs_discrete: Any
-    xs_continuous: Any
-    weights: Any
-
-
-@dataclass(slots=True)
-class TransformedBatch:
-    xs_discrete: Any
-    xs_continuous: Any
-    weights: Any

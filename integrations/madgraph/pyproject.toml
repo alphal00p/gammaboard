@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "madgraph-gammaboard"
-version = "0.1.0"
+version = "0.2.0"
 description = "GammaBoard process evaluator wrapper for MadGraph7 Python matrix elements"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-  "gammaboard-process @ git+https://github.com/alphal00p/gammaboard.git@58486ade43bf7aeb7e8c402e4021f4b99d774796#subdirectory=process_api/python",
+  "gammaboard-process>=0.3.0,<0.4.0",
   "numpy",
 ]
 

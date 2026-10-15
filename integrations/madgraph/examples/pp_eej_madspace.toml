@@ -66,8 +66,8 @@ name = '$(run_name:"madgraph_pp_eej_madspace")'
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = "$(continuous_dims:7)" } }
-components = ["weight"]
+domain = { rectangular = { discrete_cardinalities = [], continuous_dims = "$(continuous_dims:7)" } }
+output = { kind = "values", components = ["weight"] }
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
@@ -91,6 +91,6 @@ training_projection = { kind = "component", name = "weight" }
 [[task_queue]]
 name = "sample"
 kind = "sample"
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = "all_component_means" } }
 stop_condition = { max_samples = "$(samples:100000)" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 4096 } }
+sampler = { config = { kind = "havana_training", seed = 0, bins = 64, samples_for_update = 4096 } }

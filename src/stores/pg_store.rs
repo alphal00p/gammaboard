@@ -5,16 +5,16 @@ mod run_spec;
 mod runtime_log;
 
 use super::queries;
+use crate::core::EvaluationBatch;
 use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{
-    AggregationStore, BatchClaim, BatchQueueCounts, CompletedBatch, ControlPlaneStore,
-    DesiredAssignment, EvaluatorPerformanceSnapshot, RegisteredNode, RunSampleProgress,
+    AggregationStore, AssignmentTarget, BatchClaim, BatchQueueCounts, CompletedBatch,
+    ControlPlaneStore, EvaluatorPerformanceSnapshot, RegisteredNode, RunSampleProgress,
     RunStageSnapshot, RunTask, RunTaskInput, RunTaskStore, SamplerAggregatorPerformanceSnapshot,
     StoreError, WorkQueueStore, WorkerRole, generated_task_name,
 };
 use crate::core::{IntegrationParams, RunSpec, SamplerQueueTuning, canonical_task_toml};
 use crate::evaluation::BatchResult;
-use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -244,18 +244,14 @@ fn parse_run_create_payload(integration_params: &JsonValue) -> Result<JsonValue,
 }
 
 fn decode_node_assignment(
-    node_name: &str,
     role: Option<String>,
     run_id: Option<i32>,
-    run_name: Option<String>,
     invalid_row_message: &str,
-) -> Result<Option<DesiredAssignment>, StoreError> {
+) -> Result<Option<AssignmentTarget>, StoreError> {
     match (role, run_id) {
-        (Some(role), Some(run_id)) => Ok(Some(DesiredAssignment {
-            node_name: node_name.to_string(),
+        (Some(role), Some(run_id)) => Ok(Some(AssignmentTarget {
             role: role.parse().map_err(store_err)?,
             run_id,
-            run_name,
         })),
         (None, None) => Ok(None),
         _ => Err(store_err(invalid_row_message)),
@@ -422,17 +418,15 @@ impl ControlPlaneStore for PgStore {
     async fn get_desired_assignment(
         &self,
         node_name: &str,
-    ) -> Result<Option<DesiredAssignment>, StoreError> {
+    ) -> Result<Option<AssignmentTarget>, StoreError> {
         let assignment = queries::get_desired_assignment(&self.pool, node_name)
             .await
             .map_err(map_sqlx)?;
         assignment
             .map(|row| {
-                Ok(DesiredAssignment {
-                    node_name: row.node_name,
+                Ok(AssignmentTarget {
                     role: row.role.parse().map_err(store_err)?,
                     run_id: row.run_id,
-                    run_name: None,
                 })
             })
             .transpose()
@@ -441,20 +435,21 @@ impl ControlPlaneStore for PgStore {
     async fn list_desired_assignments(
         &self,
         node_name: Option<&str>,
-    ) -> Result<Vec<DesiredAssignment>, StoreError> {
-        let rows = queries::list_desired_assignments(&self.pool, node_name)
+    ) -> Result<std::collections::BTreeMap<String, AssignmentTarget>, StoreError> {
+        queries::list_desired_assignments(&self.pool, node_name)
             .await
-            .map_err(map_sqlx)?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            out.push(DesiredAssignment {
-                node_name: row.node_name,
-                role: row.role.parse().map_err(store_err)?,
-                run_id: row.run_id,
-                run_name: None,
-            });
-        }
-        Ok(out)
+            .map_err(map_sqlx)?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.node_name,
+                    AssignmentTarget {
+                        role: row.role.parse().map_err(store_err)?,
+                        run_id: row.run_id,
+                    },
+                ))
+            })
+            .collect()
     }
 
     async fn list_nodes(&self, node_name: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError> {
@@ -464,17 +459,13 @@ impl ControlPlaneStore for PgStore {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let desired_assignment = decode_node_assignment(
-                &row.name,
                 row.desired_role,
                 row.desired_run_id,
-                row.desired_run_name,
                 "invalid node assignment row",
             )?;
             let current_assignment = decode_node_assignment(
-                &row.name,
                 row.current_role,
                 row.current_run_id,
-                row.current_run_name,
                 "invalid current node assignment row",
             )?;
             out.push(RegisteredNode {
@@ -482,10 +473,8 @@ impl ControlPlaneStore for PgStore {
                 uuid: row.uuid,
                 capabilities: serde_json::from_value(row.capabilities).unwrap_or_default(),
                 pool_assignment: decode_node_assignment(
-                    &row.name,
                     row.pool_role,
                     row.pool_run_id,
-                    row.pool_run_name,
                     "invalid node pool row",
                 )?,
                 desired_assignment,
@@ -662,7 +651,7 @@ impl ControlPlaneStore for PgStore {
                 sampler_snapshot: initial_stage_snapshot.sampler_snapshot.clone(),
                 observable_state: initial_stage_snapshot.observable_state.clone(),
                 evaluator: initial_stage_snapshot.evaluator.clone(),
-                sampler_aggregator: initial_stage_snapshot.sampler_aggregator.clone(),
+
                 batch_transforms: initial_stage_snapshot.batch_transforms.clone(),
             },
         )
@@ -797,7 +786,7 @@ impl WorkQueueStore for PgStore {
         task_id: i64,
         requires_training_values: bool,
         batch_ids: &[i64],
-        batches: &[LatentBatch],
+        batches: &[EvaluationBatch],
     ) -> Result<crate::core::InsertBatchesOutcome, StoreError> {
         queries::insert_batches(
             &self.pool,
@@ -880,7 +869,8 @@ impl WorkQueueStore for PgStore {
                 claim_token: claim_token.to_owned(),
                 task_id,
                 requires_training_values,
-                latent_batch,
+                accumulator: latent_batch.accumulator,
+                latent_batch: latent_batch.samples,
             },
         ))
     }
@@ -982,14 +972,16 @@ impl WorkQueueStore for PgStore {
         .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let result =
-                BatchResult::values_from_bytes(row.values.as_deref(), &row.batch_observable)
-                    .map_err(|err| {
-                        store_err(format!(
-                            "failed to deserialize batch result payload for batch_id={}: {err}",
-                            row.batch_id
-                        ))
-                    })?;
+            let result = BatchResult::training_values_from_bytes(
+                row.values.as_deref(),
+                &row.batch_observable,
+            )
+            .map_err(|err| {
+                store_err(format!(
+                    "failed to deserialize batch result payload for batch_id={}: {err}",
+                    row.batch_id
+                ))
+            })?;
 
             out.push(CompletedBatch {
                 batch_id: row.batch_id,
@@ -1352,9 +1344,7 @@ mod tests {
             7,
             integration_params.clone(),
             json!({
-                "continuous": {
-                    "dims": 1
-                }
+                "rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}
             }),
         )
         .expect("decode");
@@ -1412,9 +1402,7 @@ mod tests {
                 "evaluator": { "kind": "unit" }
             }),
             json!({
-                "continuous": {
-                    "dims": 0
-                }
+                "rectangular": {"discrete_cardinalities": [], "continuous_dims": 0}
             }),
         )
         .expect_err("missing params should fail");
@@ -1450,9 +1438,7 @@ mod tests {
                 }
             }),
             json!({
-                "continuous": {
-                    "dims": 0
-                }
+                "rectangular": {"discrete_cardinalities": [], "continuous_dims": 0}
             }),
         )
         .expect("missing root evaluator should be valid");
@@ -1514,7 +1500,7 @@ mod tests {
     fn parse_run_create_payload_accepts_kind_model() {
         let sanitized = parse_run_create_payload(&json!({
             "evaluator": { "kind": "unit" },
-            "sampler_aggregator": { "kind": "naive_monte_carlo" },
+            "sampler": { "kind": "naive_monte_carlo" },
             "parametrization": { "kind": "identity", "a": 1 }
         }))
         .expect("parse");
@@ -1523,7 +1509,7 @@ mod tests {
             sanitized,
             json!({
                 "evaluator": { "kind": "unit" },
-                "sampler_aggregator": { "kind": "naive_monte_carlo" },
+                "sampler": { "kind": "naive_monte_carlo" },
                 "parametrization": { "kind": "identity", "a": 1 }
             })
         );

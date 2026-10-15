@@ -1,22 +1,26 @@
 # Changelog
 
-## 0.2.0 - Unreleased
+## 0.3.0 — Unreleased
 
-- Fixed repeated campaign worker restarts caused by clearing and restoring
-  unchanged assignments on every controller tick; pool changes are now atomic.
-- Fixed campaign recovery when replacement workers register on different ticks
-  or an expired sampler still occupies its assignment slot.
+- Strict task/queue configuration, one tagged Symbolica source, common sampling
+  pipeline configuration, and shared stopping estimates in the runner/dashboard.
+- Explicit database, checkpoint, and queue compatibility checks; performance
+  schema 2 and coordinated SDK/integration dependency versions.
+- A dry-run run-definition converter and [upgrade guide](docs/upgrading-0.3.md).
 
-- Added persisted distributed sampler/evaluator execution with live dashboard
-  panels, provenance, and CPU-hour accounting.
-- Added parameter scans, hyperparameter tuning, and variance-directed
-  integration campaigns with persistent child runs and derived observables.
-- Added the `gammaboard-jsonrpc-v2` process runtime protocol and Python helpers
-  for evaluators, samplers, materializers, and batch transforms.
-- Added GammaLoop histogram support, complex observables, and optional MadGraph
-  and MADNIS integrations.
-- Consolidated local, ITPhlies, and UBELIX deployment workflows.
-- Added database backup/restore commands, explicit version reporting,
-  reproducible UBELIX revision selection, and release upgrade/ops CI coverage.
-- Simplified managed PostgreSQL to an explicit passwordless trust model;
-  `--postgres-trusted-network` limits remote trust to directly connected networks.
+- Distributed integration with persistent runs, worker pools, live results,
+  performance reporting, and allocated core-hour accounting.
+- Parameter scans, hyperparameter tuning, and campaigns combining independent
+  child estimates and compatible histograms.
+- GammaLoop, MadGraph, MadNIS, and custom process evaluators/samplers.
+- Shared local, ITPhlies, and UBELIX workflows; backup/restore and worker recreation.
+- Consolidated accumulator, measurement, sampler-state, and extension interfaces.
+  Scalar configuration remains shorthand for a one-component statistical vector.
+- Process protocol **v6**: explicit output layouts, shared batch types, mandatory
+  sampler restoration, and weighted observable feedback.
+- Whole-batch validation rejects invalid samples/overflow without publishing
+  partial results. Database disconnects and suspended submissions recover safely.
+
+**Upgrade:** a fresh database and matching workers are required. Old checkpoints
+and queue formats cannot be resumed. Export run definitions before resetting;
+see [deployment](docs/deployment.md#upgrading-this-revision).

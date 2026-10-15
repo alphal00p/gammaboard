@@ -2,7 +2,7 @@
 //! Bounded work, ordered generation feedback, and steady-state completion timing.
 use crate::{
     Domain, EvalBatchOptions,
-    core::{AccumulatorConfig, EvaluatorConfig, SamplerAggregatorConfig},
+    core::{AccumulatorConfig, EvaluatorConfig, SamplingConfig},
     evaluation::{AccumulatorState, BatchResult},
     sampling::LatentBatch,
 };
@@ -48,11 +48,11 @@ pub fn measure(config: Config) -> Result<Value> {
         "kind":"unit", "continuous_dims":6, "value_coordinate":0,
         "cpu_iterations_per_sample":config.cpu_iterations_per_sample
     }))?;
-    let definition: SamplerAggregatorConfig = serde_json::from_value(json!({
+    let definition: SamplingConfig = serde_json::from_value(json!({
         "kind":"naive_monte_carlo", "seed":1234,
         "training_window_samples":if config.feedback { 1_000_000_000_000_usize } else { 0 }
     }))?;
-    let mut sampler = definition.build(Domain::continuous(6), None, None, json!({}))?;
+    let mut sampler = definition.create(Domain::continuous(6), None, json!({}))?;
     let accumulator_config = AccumulatorConfig::scalar();
     let mut accumulator = AccumulatorState::from_config(&accumulator_config);
     let workers = config.evaluator_cpus.len();
@@ -120,12 +120,7 @@ pub fn measure(config: Config) -> Result<Value> {
         loop {
             while sent - retired < 2 * workers {
                 if cursor == config.generation_size {
-                    generation = Some(
-                        sampler
-                            .generate(config.generation_size)?
-                            .into_batch()?
-                            .build(),
-                    );
+                    generation = Some(sampler.generate(config.generation_size)?.into_batch()?);
                     cursor = 0;
                 }
                 let batch =
@@ -141,7 +136,7 @@ pub fn measure(config: Config) -> Result<Value> {
             pending.insert(id, result?);
             while let Some((result, seconds)) = pending.remove(&retired) {
                 accumulator.merge(result.accumulator)?;
-                if let Some(values) = result.values {
+                if let Some(values) = result.training_values {
                     feedback.extend(values);
                 }
                 retired += 1;
@@ -174,7 +169,7 @@ pub fn measure(config: Config) -> Result<Value> {
                             "evaluate_seconds":evaluate_seconds,
                             "evaluate_batches":evaluate_batches,
                             "mean_evaluate_batch_seconds":evaluate_seconds / evaluate_batches as f64,
-                            "sampler_diagnostics":sampler.get_diagnostics(),
+                            "sampler_diagnostics":sampler.diagnostics(),
                             "scope":"Native engines in a bounded in-memory pipeline; generation, partitioning, materialization, evaluation, accumulation and ordered generation feedback. One warmup generation; full-generation completion endpoints. Startup and final drain excluded."
                         }));
                     }

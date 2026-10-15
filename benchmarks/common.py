@@ -283,7 +283,7 @@ name = "measure"
 kind = "sample"
 stop_condition = {{ max_samples = 1000000000000 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 1234 }} }}
+sampler = {{ config = {{ kind = "naive_monte_carlo", seed = 1234 }} }}
 """
 
 
@@ -326,7 +326,7 @@ def activity(measurement):
     result = {}
     for collection, field, role in [
         ("evaluators", "metrics", "evaluator"),
-        ("samplers", "runtime_metrics", "sampler"),
+        ("samplers", "metrics", "sampler"),
     ]:
         start = {r["worker_id"]: r[field] for r in first[collection]}
         end_ids = [r["worker_id"] for r in last[collection]]
@@ -340,7 +340,7 @@ def activity(measurement):
         total = dict(elapsed_seconds=0.0, compute_seconds=0.0, io_seconds=0.0)
         for row in last[collection]:
             a, b = start[row["worker_id"]], row[field]
-            epoch = "epoch" if role == "evaluator" else "runner_epoch"
+            epoch = "epoch"
             if any(
                 a.get(k) is None or a.get(k) != b.get(k) for k in [epoch, "node_uuid", "task_id"]
             ):

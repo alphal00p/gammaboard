@@ -87,7 +87,7 @@ class SymbolicaHavanaSampler(Sampler):
         self.final_training_rate = float(final_training_rate)
         # Inference mode: sample from a frozen grid without updating it and
         # without needing evaluator training values. Set the run config's
-        # `requires_training_values = false` for an inference run.
+        # `training_remaining=None` on inference draws.
         self.inference = bool(inference)
         self.grid_path = grid_path
         self.save_path = save_path
@@ -340,7 +340,7 @@ class SymbolicaHavanaSampler(Sampler):
             "grid_b64": base64.b64encode(self.integrator.export_grid()).decode("ascii"),
         }
 
-    def get_diagnostics(self) -> dict[str, Any]:
+    def diagnostics(self) -> dict[str, Any]:
         _, _, chi_sq, _, _, processed = self.integrator.get_live_estimate()
         return {
             "inference": self.inference,

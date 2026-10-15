@@ -35,7 +35,7 @@ struct CampaignWorkers {
 impl CampaignWorkers {
     // ControlPlaneStore::list_nodes excludes expired leases.
     fn from_live_nodes(workers: &[crate::core::RegisteredNode]) -> Self {
-        let sampler_run = |assignment: Option<&crate::core::DesiredAssignment>| {
+        let sampler_run = |assignment: Option<&crate::core::AssignmentTarget>| {
             assignment
                 .filter(|assignment| assignment.role == crate::core::WorkerRole::SamplerAggregator)
                 .map(|assignment| assignment.run_id)
@@ -509,21 +509,19 @@ mod tests {
 
     #[test]
     fn selected_child_is_starting_until_a_live_sampler_is_active() {
-        use crate::core::{DesiredAssignment, RegisteredNode, WorkerRole};
+        use crate::core::{AssignmentTarget, RegisteredNode, WorkerRole};
         let mut child = child(None);
         child.selected = true;
-        let sampler = DesiredAssignment {
-            node_name: "sampler".into(),
+        let sampler = AssignmentTarget {
             role: WorkerRole::SamplerAggregator,
             run_id: 2,
-            run_name: None,
         };
         let mut node = RegisteredNode {
             name: "sampler".into(),
             uuid: "sampler".into(),
             capabilities: Default::default(),
             pool_assignment: None,
-            desired_assignment: Some(sampler.clone()),
+            desired_assignment: Some(sampler),
             current_assignment: None,
             last_seen: None,
         };
@@ -533,9 +531,9 @@ mod tests {
         };
         assert_eq!(status(&child, false, &[]), json!("waiting"));
         assert_eq!(status(&child, false, &[node.clone()]), json!("starting"));
-        node.current_assignment = Some(DesiredAssignment {
+        node.current_assignment = Some(AssignmentTarget {
             role: WorkerRole::Evaluator,
-            ..sampler.clone()
+            ..sampler
         });
         assert_eq!(
             status(&child, false, &[node.clone()]),

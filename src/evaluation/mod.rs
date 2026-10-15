@@ -1,18 +1,19 @@
 pub mod accumulator;
-pub mod batch;
-pub mod evaluator;
-pub mod traits;
+pub(crate) mod batch;
+pub(crate) mod evaluator;
+pub(crate) mod traits;
 
 pub use accumulator::{
-    Accumulator, AccumulatorMetricValue, AccumulatorState, EmptyAccumulatorState,
-    FullAccumulatorProgress, FullVectorAccumulatorState, GammaLoopAccumulatorDigest,
-    GammaLoopAccumulatorState, GammaLoopDiagnostics, IngestScalar, IngestVector,
-    NamedScalarAccumulator, ScalarAccumulatorState, SemanticAccumulatorKind,
-    VectorAccumulatorState, extract_accumulator_metric, extract_accumulator_metric_with_runtime,
-    relative_error,
+    Accumulator, AccumulatorState, EmptyAccumulatorState, FullAccumulatorProgress,
+    FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
+    GammaLoopDiagnostics, IngestScalar, IngestVector, NamedScalarAccumulator,
+    ScalarAccumulatorState, VectorAccumulatorState, extract_accumulator_metric,
+    extract_accumulator_metric_with_runtime, relative_error,
 };
-pub use batch::{Batch, BatchError, BatchResult, Point};
+pub use batch::{
+    Batch, BatchError, BatchResult, DiagnosticSample, Point, SampleEvaluation, WeightFactor,
+};
 pub use evaluator::{
-    GammaLoopParams, ProcessEvaluatorParams, SymbolicaParams, UnitEvaluatorParams,
+    GammaLoopParams, ProcessEvaluatorParams, ProcessOutput, SymbolicaParams, UnitEvaluatorParams,
 };
 pub use traits::{BatchTransform, EvalBatchOptions, Evaluator, Materializer, ingest_scalar_values};

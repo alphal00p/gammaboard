@@ -32,12 +32,19 @@ async fn worker_lifecycle() -> anyhow::Result<()> {
         .args(["node", "assign", "s", "evaluator", "99999"])
         .assert()
         .failure();
-    harness
+    let listed = harness
         .cli()
-        .args(["node", "list"])
+        .args(["--json", "node", "list"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("N/A"));
+        .get_output()
+        .stdout
+        .clone();
+    let nodes: Vec<gammaboard::core::RegisteredNode> = serde_json::from_slice(&listed)?;
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes.iter().all(|node| node.pool_assignment.is_none()
+        && node.desired_assignment.is_none()
+        && node.current_assignment.is_none()));
     harness
         .cli()
         .arg("run")
@@ -61,7 +68,7 @@ max_generation_size = 1024
 kind = "sample"
 stop_condition = { max_samples = 100000 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 "#,
     ));
     let run = harness.run_id("lifecycle").await?;

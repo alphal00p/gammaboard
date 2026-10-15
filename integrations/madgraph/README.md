@@ -32,7 +32,7 @@ python ../MadGraph7/madspace/install.py \
 python -m venv integrations/madgraph/.venv
 integrations/madgraph/.venv/bin/python -m pip install --upgrade pip
 integrations/madgraph/.venv/bin/python -m pip install --force-reinstall \
-  integrations/madgraph
+  ./process_api/python ./integrations/madgraph
 ```
 
 The development shell sets `MAKEFLAGS` to override the `/bin/bash` path
@@ -74,8 +74,8 @@ Use a vector accumulator with component `weight`.
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = 7 } }   # must equal MadSpaceState.random_dim
-components = ["weight"]
+domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 7 } }   # must equal MadSpaceState.random_dim
+output = { kind = "values", components = ["weight"] }
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
@@ -149,8 +149,8 @@ sample coordinates and owns native event generation:
 kind = "process_evaluator"
 command = ["$resources/../integrations/madgraph/.venv/bin/madgraph-gammaboard-event-evaluator"]
 cwd = "$resources/.."
-domain = { continuous = { dims = 0 } }
-accumulator = "gammaloop"
+domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 0 } }
+output = { kind = "gammaloop" }
 
 [evaluator.args]
 state_path = "integrations/madgraph/artifacts/pp_eej/mg7_state"
@@ -162,7 +162,7 @@ accumulator = "gammaloop"
 [[task_queue]]
 kind = "sample"
 stop_condition = { max_samples = 1 }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }
 ```
 
 [`examples/pp_eej_generate_events.toml`](examples/pp_eej_generate_events.toml)

@@ -2,10 +2,8 @@
 
 use bincode::config::{Configuration, standard};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use std::{borrow::Cow, collections::HashMap};
 
-use crate::core::AccumulatorConfig;
 use crate::evaluation::{Batch, BatchError, Point};
 use crate::utils::rng::SerializableMonteCarloRng;
 
@@ -15,14 +13,7 @@ pub(crate) const RNG_CHECKPOINT_STRIDE: usize = 1024;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatentBatch {
     pub nr_samples: usize,
-    pub accumulator: AccumulatorConfig,
-    pub payload: LatentBatchPayload,
-}
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LatentBatchSpec {
-    pub nr_samples: usize,
-    pub accumulator: AccumulatorConfig,
     pub payload: LatentBatchPayload,
 }
 
@@ -37,9 +28,6 @@ pub enum LatentBatchPayload {
         weights: Vec<f64>,
     },
     HavanaInference {
-        rng_state: SerializableMonteCarloRng,
-    },
-    HavanaInferenceIndexed {
         rng_states: Vec<SerializableMonteCarloRng>,
         offset: usize,
     },
@@ -48,7 +36,6 @@ pub enum LatentBatchPayload {
 #[derive(Debug, Serialize, Deserialize)]
 struct LatentBatchBinary<'a> {
     nr_samples: usize,
-    accumulator: Cow<'a, AccumulatorConfig>,
     payload: LatentBatchPayloadBinary<'a>,
 }
 
@@ -62,9 +49,6 @@ enum LatentBatchPayloadBinary<'a> {
         weights: Cow<'a, [f64]>,
     },
     HavanaInference {
-        rng_state: Cow<'a, SerializableMonteCarloRng>,
-    },
-    HavanaInferenceIndexed {
         rng_states: Cow<'a, [SerializableMonteCarloRng]>,
         offset: usize,
     },
@@ -164,7 +148,7 @@ impl IndexedBatchBuilder {
 
 impl LatentBatchPayload {
     pub fn from_batch(batch: &Batch) -> Self {
-        let mut builder = IndexedBatchBuilder::new(batch.size());
+        let mut builder = IndexedBatchBuilder::new(batch.len());
         for point in batch.points() {
             let sampler_weight = point
                 .factor_value("sampler_weight")
@@ -189,11 +173,9 @@ impl LatentBatchPayload {
                 &continuous_values,
                 &weights,
             ),
-            Self::HavanaInference { .. } | Self::HavanaInferenceIndexed { .. } => {
-                Err(BatchError::layout(
-                    "havana_inference latent payload must be materialized by a materializer",
-                ))
-            }
+            Self::HavanaInference { .. } => Err(BatchError::layout(
+                "havana_inference latent payload must be materialized by a materializer",
+            )),
         }
     }
 
@@ -212,35 +194,29 @@ impl LatentBatchPayload {
                 continuous_values,
                 weights,
             ),
-            Self::HavanaInference { .. } | Self::HavanaInferenceIndexed { .. } => {
-                Err(BatchError::layout(
-                    "havana_inference latent payload must be materialized by a materializer",
-                ))
-            }
+            Self::HavanaInference { .. } => Err(BatchError::layout(
+                "havana_inference latent payload must be materialized by a materializer",
+            )),
         }
     }
 }
 
-impl LatentBatchSpec {
+impl LatentBatch {
+    pub fn for_evaluation(
+        self,
+        accumulator: crate::core::AccumulatorConfig,
+    ) -> crate::core::EvaluationBatch {
+        crate::core::EvaluationBatch {
+            samples: self,
+            accumulator,
+        }
+    }
+
     pub fn from_batch(batch: &Batch) -> Self {
         Self {
-            nr_samples: batch.size(),
-            accumulator: AccumulatorConfig::scalar(),
+            nr_samples: batch.len(),
             payload: LatentBatchPayload::from_batch(batch),
         }
-    }
-
-    pub fn build(self) -> LatentBatch {
-        LatentBatch {
-            nr_samples: self.nr_samples,
-            accumulator: self.accumulator,
-            payload: self.payload,
-        }
-    }
-
-    pub fn with_accumulator_config(mut self, accumulator: AccumulatorConfig) -> Self {
-        self.accumulator = accumulator;
-        self
     }
 }
 
@@ -276,13 +252,12 @@ impl LatentBatch {
         if samples == 0 {
             return Err(BatchError::layout("generated batch slice is empty"));
         }
-        if let LatentBatchPayload::HavanaInferenceIndexed { rng_states, offset } = &self.payload {
+        if let LatentBatchPayload::HavanaInference { rng_states, offset } = &self.payload {
             let first = (offset + start) / RNG_CHECKPOINT_STRIDE;
             let last = (offset + end - 1) / RNG_CHECKPOINT_STRIDE;
             return Ok(Self {
                 nr_samples: samples,
-                accumulator: self.accumulator.clone(),
-                payload: LatentBatchPayload::HavanaInferenceIndexed {
+                payload: LatentBatchPayload::HavanaInference {
                     rng_states: rng_states
                         .get(first..=last)
                         .ok_or_else(|| BatchError::layout("missing RNG checkpoint"))?
@@ -319,7 +294,6 @@ impl LatentBatch {
         let coordinate_end = coordinate_start + layouts.iter().sum::<usize>();
         Ok(Self {
             nr_samples: samples,
-            accumulator: self.accumulator.clone(),
             payload: LatentBatchPayload::IndexedBatch {
                 discrete_signatures: signatures,
                 discrete_map: maps,
@@ -373,8 +347,7 @@ impl LatentBatch {
                     )));
                 }
             }
-            LatentBatchPayload::HavanaInference { .. } => {}
-            LatentBatchPayload::HavanaInferenceIndexed { rng_states, offset } => {
+            LatentBatchPayload::HavanaInference { rng_states, offset } => {
                 if *offset >= RNG_CHECKPOINT_STRIDE
                     || rng_states.len()
                         != self
@@ -392,17 +365,8 @@ impl LatentBatch {
         Ok(())
     }
 
-    pub fn into_json(&self) -> JsonValue {
-        serde_json::to_value(self).expect("LatentBatch serialization should never fail")
-    }
-
-    pub fn from_json(value: &JsonValue) -> Result<Self, BatchError> {
-        let latent: Self = serde_json::from_value(value.clone())?;
-        latent.validate_nr_samples()?;
-        Ok(latent)
-    }
-
-    pub fn to_bytes(&self) -> Result<Vec<u8>, BatchError> {
+    #[cfg(test)]
+    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>, BatchError> {
         let mut bytes = Vec::new();
         self.write_bytes(&mut bytes)?;
         Ok(bytes)
@@ -424,13 +388,8 @@ impl LatentBatch {
                 continuous_values: Cow::Borrowed(continuous_values),
                 weights: Cow::Borrowed(weights),
             },
-            LatentBatchPayload::HavanaInference { rng_state } => {
+            LatentBatchPayload::HavanaInference { rng_states, offset } => {
                 LatentBatchPayloadBinary::HavanaInference {
-                    rng_state: Cow::Borrowed(rng_state),
-                }
-            }
-            LatentBatchPayload::HavanaInferenceIndexed { rng_states, offset } => {
-                LatentBatchPayloadBinary::HavanaInferenceIndexed {
                     rng_states: Cow::Borrowed(rng_states),
                     offset: *offset,
                 }
@@ -439,7 +398,6 @@ impl LatentBatch {
         bincode::serde::encode_into_std_write(
             LatentBatchBinary {
                 nr_samples: self.nr_samples,
-                accumulator: Cow::Borrowed(&self.accumulator),
                 payload,
             },
             bytes,
@@ -448,11 +406,14 @@ impl LatentBatch {
         .map_err(|err| BatchError::layout(format!("invalid latent batch payload: {err}")))
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BatchError> {
-        let (latent, _): (LatentBatchBinary, usize) =
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, BatchError> {
+        let (latent, consumed): (LatentBatchBinary, usize) =
             bincode::serde::decode_from_slice(bytes, Self::binary_config()).map_err(|err| {
                 BatchError::layout(format!("invalid latent batch payload: {err}"))
             })?;
+        if consumed != bytes.len() {
+            return Err(BatchError::layout("trailing bytes after latent batch"));
+        }
         let payload = match latent.payload {
             LatentBatchPayloadBinary::IndexedBatch {
                 discrete_signatures,
@@ -467,13 +428,8 @@ impl LatentBatch {
                 continuous_values: continuous_values.into_owned(),
                 weights: weights.into_owned(),
             },
-            LatentBatchPayloadBinary::HavanaInference { rng_state } => {
+            LatentBatchPayloadBinary::HavanaInference { rng_states, offset } => {
                 LatentBatchPayload::HavanaInference {
-                    rng_state: rng_state.into_owned(),
-                }
-            }
-            LatentBatchPayloadBinary::HavanaInferenceIndexed { rng_states, offset } => {
-                LatentBatchPayload::HavanaInferenceIndexed {
                     rng_states: rng_states.into_owned(),
                     offset,
                 }
@@ -481,7 +437,6 @@ impl LatentBatch {
         };
         let restored = Self {
             nr_samples: latent.nr_samples,
-            accumulator: latent.accumulator.into_owned(),
             payload,
         };
         restored.validate_nr_samples()?;
@@ -540,7 +495,7 @@ fn decode_indexed_batch(
         )));
     }
 
-    Batch::new(points)
+    Ok(Batch::new(points))
 }
 
 #[cfg(test)]
@@ -550,15 +505,14 @@ mod tests {
 
     #[test]
     fn bulk_chunks_preserve_ragged_points_weights_and_order() {
-        let batch = Batch::from_points((0..11).map(|i| {
+        let batch = Batch::from_iter((0..11).map(|i| {
             Point::new(
                 vec![i as f64; i % 4],
                 vec![i as i64 % 3; i % 2],
                 1.0 + i as f64,
             )
-        }))
-        .unwrap();
-        let latent = LatentBatchSpec::from_batch(&batch).build();
+        }));
+        let latent = LatentBatch::from_batch(&batch);
         let chunks: Vec<_> = [(0, 1), (1, 4), (5, 4), (9, 2)]
             .into_iter()
             .map(|(start, size)| latent.slice(start, size).unwrap())
@@ -583,67 +537,59 @@ mod tests {
                     .cloned(),
             );
         }
-        assert_eq!(Batch::new(points).unwrap(), batch);
+        assert_eq!(Batch::new(points), batch);
     }
 
     #[test]
     fn latent_batch_roundtrips_batch_payload() {
-        let batch = Batch::from_points([
+        let batch = Batch::from_iter([
             Point::new(vec![0.5], Vec::new(), 1.0),
             Point::new(vec![1.5], Vec::new(), 1.0),
-        ])
-        .expect("batch creation");
-        let latent = LatentBatchSpec::from_batch(&batch).build();
-        let json = latent.into_json();
-        let restored = LatentBatch::from_json(&json).expect("latent batch");
+        ]);
+        let latent = LatentBatch::from_batch(&batch);
+        let json = serde_json::to_value(&latent).unwrap();
+        let restored: LatentBatch = serde_json::from_value(json).unwrap();
+        restored.validate_nr_samples().unwrap();
         assert_eq!(restored.nr_samples, 2);
         let restored_batch = restored.payload.as_batch().expect("batch payload");
         assert_eq!(restored_batch, batch);
     }
 
     #[test]
-    fn binary_encoding_preserves_existing_indexed_and_inference_payloads() {
-        let batch = Batch::from_points([
+    fn binary_encoding_roundtrips_materialized_and_inference_payloads() {
+        let batch = Batch::from_iter([
             Point::new(vec![0.5], Vec::new(), 1.0),
             Point::new(vec![1.5], Vec::new(), 2.0),
-        ])
-        .unwrap();
-        let indexed = LatentBatchSpec::from_batch(&batch).build();
+        ]);
+        let indexed = LatentBatch::from_batch(&batch);
         let inference = LatentBatch {
-            nr_samples: 4096,
-            accumulator: AccumulatorConfig::scalar(),
+            nr_samples: 1024,
             payload: LatentBatchPayload::HavanaInference {
-                rng_state: SerializableMonteCarloRng::new(42, 0),
+                rng_states: vec![SerializableMonteCarloRng::new(42, 0)],
+                offset: 0,
             },
         };
-        // Captured from the owned encoder before borrowing its arrays.
-        let indexed_bytes: &[u8] = &[
-            2, 1, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 2, 1, 1, 2, 0, 0, 0, 0, 0, 0, 224, 63, 0, 0, 0, 0,
-            0, 0, 248, 63, 2, 0, 0, 0, 0, 0, 0, 240, 63, 0, 0, 0, 0, 0, 0, 0, 64,
-        ];
-        let inference_bytes: &[u8] = &[
-            251, 0, 16, 1, 0, 0, 0, 0, 1, 253, 149, 110, 235, 47, 38, 50, 215, 189, 253, 3, 241,
-            102, 178, 51, 227, 239, 40, 253, 82, 159, 15, 19, 87, 103, 82, 71, 253, 148, 227, 74,
-            14, 255, 225, 28, 88,
-        ];
-        for (batch, bytes) in [(indexed, indexed_bytes), (inference, inference_bytes)] {
-            assert_eq!(batch.to_bytes().unwrap(), bytes);
-            assert_eq!(LatentBatch::from_bytes(bytes).unwrap(), batch);
+        for batch in [indexed, inference] {
+            let bytes = batch.to_bytes().unwrap();
+            assert_eq!(LatentBatch::from_bytes(&bytes).unwrap(), batch);
             let mut framed = vec![7, 8, 9];
             assert_eq!(batch.write_bytes(&mut framed).unwrap(), bytes.len());
             assert_eq!(&framed[..3], &[7, 8, 9]);
-            assert_eq!(&framed[3..], bytes);
+            assert_eq!(&framed[3..], &bytes);
+            assert!(LatentBatch::from_bytes(&framed[2..]).is_err());
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert!(LatentBatch::from_bytes(&trailing).is_err());
         }
     }
 
     #[test]
     fn latent_batch_roundtrips_binary_payload() {
-        let batch = Batch::from_points([
+        let batch = Batch::from_iter([
             Point::new(vec![0.5], Vec::new(), 1.0),
             Point::new(vec![1.5], Vec::new(), 1.0),
-        ])
-        .expect("batch creation");
-        let latent = LatentBatchSpec::from_batch(&batch).build();
+        ]);
+        let latent = LatentBatch::from_batch(&batch);
         let bytes = latent.to_bytes().expect("latent batch bytes");
         let restored = LatentBatch::from_bytes(&bytes).expect("latent batch");
         assert_eq!(restored, latent);
@@ -651,17 +597,17 @@ mod tests {
 
     #[test]
     fn latent_batch_roundtrips_heterogeneous_batch_payload() {
-        let batch = Batch::from_points([
+        let batch = Batch::from_iter([
             Point::new(vec![0.5, 1.5], vec![1, 2], 1.0),
             Point::new(vec![2.5], vec![1, 2], 2.0),
             Point::new(Vec::new(), vec![9], 3.0),
             Point::new(vec![4.5, 5.5, 6.5], Vec::new(), 4.0),
-        ])
-        .expect("batch creation");
-        let latent = LatentBatchSpec::from_batch(&batch).build();
+        ]);
+        let latent = LatentBatch::from_batch(&batch);
 
-        let json = latent.into_json();
-        let restored = LatentBatch::from_json(&json).expect("latent from json");
+        let json = serde_json::to_value(&latent).unwrap();
+        let restored: LatentBatch = serde_json::from_value(json).unwrap();
+        restored.validate_nr_samples().unwrap();
         let restored_batch = restored.payload.into_batch().expect("batch payload");
 
         assert_eq!(restored_batch, batch);
@@ -669,14 +615,13 @@ mod tests {
 
     #[test]
     fn latent_batch_deduplicates_discrete_signatures() {
-        let batch = Batch::from_points([
+        let batch = Batch::from_iter([
             Point::new(vec![0.5], vec![1, 2], 1.0),
             Point::new(vec![1.5, 2.5], vec![1, 2], 2.0),
             Point::new(vec![3.5], vec![7], 3.0),
             Point::new(vec![4.5], vec![1, 2], 4.0),
-        ])
-        .expect("batch creation");
-        let latent = LatentBatchSpec::from_batch(&batch).build();
+        ]);
+        let latent = LatentBatch::from_batch(&batch);
 
         let LatentBatchPayload::IndexedBatch {
             discrete_signatures,
@@ -700,7 +645,6 @@ mod tests {
     fn latent_batch_rejects_mismatched_nr_samples() {
         let latent = LatentBatch {
             nr_samples: 2,
-            accumulator: AccumulatorConfig::scalar(),
             payload: LatentBatchPayload::IndexedBatch {
                 discrete_signatures: vec![vec![1]],
                 discrete_map: vec![0],

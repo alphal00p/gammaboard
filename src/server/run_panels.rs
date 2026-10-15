@@ -88,36 +88,19 @@ fn panel_states(
         worker.current_run_id == Some(run.run_id)
             && worker.current_role == Some(WorkerRole::SamplerAggregator)
     });
-    let active_evaluator_count = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "active_evaluator_count"));
-    let target_pending_batches = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "target_pending_batches"));
-    let db_pending_batches = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "db_pending_batches"));
+    let metrics = active_sampler.and_then(|worker| worker.sampler_metrics.as_ref());
+    let active_evaluator_count = metrics.and_then(|m| m.active_evaluator_count);
+    let target_pending_batches = metrics.and_then(|m| m.target_pending_batches);
+    let db_pending_batches = metrics.and_then(|m| m.queue.db_pending_batches);
     let pending_shortfall = target_pending_batches
         .zip(db_pending_batches)
-        .map(|(target, pending)| target.saturating_sub(pending));
-    let local_pending_batches = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "local_pending_batches"));
-    let local_inflight_insert_batches = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "local_inflight_insert_batches"));
-    let local_inflight_insert_tasks = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "local_inflight_insert_tasks"));
-    let local_ready_processed_batches = active_sampler
-        .and_then(|worker| worker.sampler_engine_diagnostics.as_ref())
-        .and_then(|value| runner_diagnostic_i64(value, "local_ready_processed_batches"));
-    let current_batch_size = active_sampler
-        .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
-        .and_then(batch_size_current);
-    let current_batch_eval_ms = active_sampler
-        .and_then(|worker| worker.sampler_runtime_metrics.as_ref())
-        .and_then(batch_eval_ms_mean);
+        .map(|(target, pending)| target.saturating_sub(pending.max(0) as usize));
+    let local_pending_batches = metrics.map(|m| m.queue.local_pending_batches);
+    let local_inflight_insert_batches = metrics.map(|m| m.queue.local_inflight_insert_batches);
+    let local_inflight_insert_tasks = metrics.map(|m| m.queue.local_inflight_insert_tasks);
+    let local_ready_processed_batches = metrics.map(|m| m.queue.local_ready_processed_batches);
+    let current_batch_size = metrics.map(|m| m.batch_size_current);
+    let current_batch_eval_ms = metrics.and_then(|m| m.sampler.eval_ms_per_batch.mean);
     let panels = vec![
         key_value_panel(
             "run_identity",
@@ -263,34 +246,6 @@ fn panel_states(
 fn current_task_label(task: Option<&RunTask>) -> String {
     task.map(|task| format!("{} ({})", task.name, task.task.kind_str()))
         .unwrap_or_else(|| "none".to_string())
-}
-
-fn batch_size_current(metrics: &JsonValue) -> Option<usize> {
-    metrics
-        .as_object()
-        .and_then(|value| value.get("batch_size_current"))
-        .and_then(JsonValue::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-}
-
-fn batch_eval_ms_mean(metrics: &JsonValue) -> Option<f64> {
-    metrics
-        .as_object()
-        .and_then(|value| value.get("sampler"))
-        .and_then(JsonValue::as_object)
-        .and_then(|value| value.get("eval_ms_per_batch"))
-        .and_then(JsonValue::as_object)
-        .and_then(|value| value.get("mean"))
-        .and_then(JsonValue::as_f64)
-}
-
-fn runner_diagnostic_i64(metrics: &JsonValue, key: &str) -> Option<i64> {
-    metrics
-        .as_object()
-        .and_then(|value| value.get("runner"))
-        .and_then(JsonValue::as_object)
-        .and_then(|value| value.get(key))
-        .and_then(JsonValue::as_i64)
 }
 
 fn target_summary(target: Option<&JsonValue>) -> String {

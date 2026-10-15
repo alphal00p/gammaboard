@@ -24,19 +24,19 @@ name = "train-a"
 kind = "sample"
 stop_condition = { max_samples = 128 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8 } }
+sampler = { config = { kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8 } }
 
 [[task_queue]]
 name = "infer-a"
 kind = "sample"
 stop_condition = { max_samples = 128 }
-sampler_aggregator = { config = { kind = "havana_inference" } }
+sampler = { config = { kind = "havana_inference" }, from_stage = "train-a" }
 
 [[task_queue]]
 name = "naive-a"
 kind = "sample"
 stop_condition = { max_samples = 32 }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 
 [[task_queue]]
 kind = "image"
@@ -88,13 +88,13 @@ count = 8
 [[task_queue]]
 kind = "sample"
 stop_condition = { max_samples = 128 }
-sampler_aggregator = { from_name = "infer-a" }
+sampler = { from_name = "infer-a" }
 accumulator = { from_name = "infer-a" }
 
 [[task_queue]]
 kind = "sample"
 stop_condition = { max_samples = 128 }
-sampler_aggregator = { config = { kind = "havana_inference" } }
+sampler = { config = { kind = "havana_inference" } }
 "#
     .to_string();
 
@@ -138,7 +138,7 @@ sampler_aggregator = { config = { kind = "havana_inference" } }
 
     // Verify task 5 has the expected named source reference
     let t5_sampler_source: Option<String> = sqlx::query_scalar(
-        "SELECT task->'sampler_aggregator'->>'from_name' FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
+        "SELECT task->'sampler'->>'from_name' FROM run_tasks WHERE run_id = $1 AND sequence_nr = 5",
     )
     .bind(run_id)
     .fetch_one(&harness.pool)
@@ -197,13 +197,15 @@ async fn full_stack_cli_task_level_evaluator_switch_e2e() -> anyhow::Result<()> 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let config = temp_config(
-        r#"
-name = "task-level-evaluator-switch-e2e"
+        r#"name = "task-level-evaluator-switch-e2e"
 
 [evaluator]
 kind = "symbolica"
-expr = "1"
 args = ["x"]
+
+[evaluator.source]
+kind = "expression"
+expr = "1"
 
 [[task_queue]]
 name = "accumulator-a"
@@ -213,10 +215,21 @@ accumulator = "scalar"
 [[task_queue]]
 name = "sample-a"
 kind = "sample"
-stop_condition = { max_samples = 32 }
-evaluator = { config = { kind = "symbolica", expr = "1", args = ["x"] } }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 accumulator = "latest"
+
+[task_queue.stop_condition]
+max_samples = 32
+
+[task_queue.evaluator.config]
+kind = "symbolica"
+args = ["x"]
+
+[task_queue.evaluator.config.source]
+kind = "expression"
+expr = "1"
+
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
 
 [[task_queue]]
 name = "accumulator-b"
@@ -226,10 +239,19 @@ accumulator = "scalar"
 [[task_queue]]
 name = "sample-b"
 kind = "sample"
-stop_condition = { max_samples = 32 }
-evaluator = { config = { kind = "symbolica", expr = "2", args = ["x"] } }
-sampler_aggregator = "latest"
+sampler = "latest"
 accumulator = "latest"
+
+[task_queue.stop_condition]
+max_samples = 32
+
+[task_queue.evaluator.config]
+kind = "symbolica"
+args = ["x"]
+
+[task_queue.evaluator.config.source]
+kind = "expression"
+expr = "2"
 "#,
     );
 
@@ -300,10 +322,16 @@ accumulator = "latest"
         sum / count
     };
     assert_eq!(rows[0].0, "sample-a");
-    assert_eq!(rows[0].1.get("expr").and_then(JsonValue::as_str), Some("1"));
+    assert_eq!(
+        rows[0].1["source"].get("expr").and_then(JsonValue::as_str),
+        Some("1")
+    );
     assert!((mean(&rows[0].2) - 1.0).abs() < 1e-12);
     assert_eq!(rows[1].0, "sample-b");
-    assert_eq!(rows[1].1.get("expr").and_then(JsonValue::as_str), Some("2"));
+    assert_eq!(
+        rows[1].1["source"].get("expr").and_then(JsonValue::as_str),
+        Some("2")
+    );
     assert!((mean(&rows[1].2) - 2.0).abs() < 1e-12);
 
     harness.cleanup().await?;
@@ -398,7 +426,7 @@ timing = { per_sample_seconds = 0.1 }
 kind = "sample"
 stop_condition = { max_samples = 128 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 200
@@ -523,7 +551,7 @@ name = "sample"
 kind = "sample"
 stop_condition = {{ max_samples = 1024 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 42, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
+sampler = {{ config = {{ kind = "naive_monte_carlo", seed = 42, training_window_samples = {window}, generation_timing = {{ overhead_seconds = 0.0001 }}, update_timing = {{ overhead_seconds = 0.002 }} }} }}
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 20
 [sampler_aggregator_runner_params]
@@ -553,7 +581,7 @@ target_batch_eval_ms = 1.0
         }).await?;
         let progress = harness.run_sample_progress(run_id).await?;
         assert_eq!(progress, (1024, 1024));
-        let diagnostics: JsonValue = sqlx::query_scalar("SELECT engine_diagnostics FROM sampler_aggregator_performance_latest WHERE run_id=$1 ORDER BY created_at DESC LIMIT 1")
+        let diagnostics: JsonValue = sqlx::query_scalar("SELECT metrics->'engine_diagnostics' FROM sampler_aggregator_performance_latest WHERE run_id=$1 ORDER BY created_at DESC LIMIT 1")
             .bind(run_id).fetch_one(&harness.pool).await?;
         assert_eq!(diagnostics["synthetic"], true);
         assert_eq!(
@@ -606,13 +634,13 @@ name = "training"
 kind = "sample"
 stop_condition = { max_samples = 128 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 42, training_window_samples = 32 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 42, training_window_samples = 32 } }
 [[task_queue]]
 name = "sampling"
 kind = "sample"
 stop_condition = { max_samples = 64 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 43 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 43 } }
 [sampler_aggregator_runner_params]
 frontend_sync_interval_ms = 20
 min_tick_time_ms = 1
@@ -690,7 +718,7 @@ name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 100000000 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 1234 } }
 "#,
     );
     harness.add_run(&config);
@@ -725,7 +753,10 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
         .assert()
         .success();
     let value: JsonValue = serde_json::from_slice(&measured.get_output().stdout)?;
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(
+        value["schema_version"],
+        gammaboard::compatibility::PERFORMANCE_SCHEMA_VERSION
+    );
     assert_eq!(value["valid"], true, "{value}");
     assert!(value["completed_samples"].as_i64().unwrap() > 0);
     assert!(value["samples_per_second"].as_f64().unwrap() > 0.0);
@@ -737,7 +768,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
             > 0.0
     );
     let snapshot = value["snapshots"].as_array().unwrap().last().unwrap();
-    for (collection, field) in [("evaluators", "metrics"), ("samplers", "runtime_metrics")] {
+    for (collection, field) in [("evaluators", "metrics"), ("samplers", "metrics")] {
         let first = &value["snapshots"][0][collection][0][field]["busy"];
         let last = &snapshot[collection][0][field]["busy"];
         let seconds =
@@ -877,10 +908,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1234 } }
             (seconds * 1000.) as i64
         );
     }
-    assert_eq!(
-        snapshot["samplers"][0]["runtime_metrics"]["batch_size_current"],
-        64
-    );
+    assert_eq!(snapshot["samplers"][0]["metrics"]["batch_size_current"], 64);
     let history = harness
         .cli()
         .args([

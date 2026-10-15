@@ -1,71 +1,70 @@
+use crate::core::EngineError;
 use crate::core::EngineResultExt;
-use crate::core::{BuildError, EngineError};
 use crate::core::{LineRasterGeometry, PlaneRasterGeometry};
 use crate::evaluation::{Batch, Point};
-use crate::sampling::{
-    DiscreteSubspace, Generation, LatentBatchSpec, PdfPoint, SamplerAggregator,
-    SamplerAggregatorSnapshot,
-};
+use crate::sampling::{DiscreteSubspace, Generation, LatentBatch, PdfPoint, Sampler, SavedSampler};
 use crate::utils::domain::Domain;
 use num::Integer;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RasterPlaneSamplerParams {
-    pub geometry: PlaneRasterGeometry,
+#[serde(deny_unknown_fields)]
+pub struct RasterSamplerParams<G> {
+    pub geometry: G,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RasterLineSamplerParams {
-    pub geometry: LineRasterGeometry,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PdfAdaptationRasterPlaneSamplerParams {
-    pub geometry: PlaneRasterGeometry,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PdfAdaptationRasterLineSamplerParams {
-    pub geometry: LineRasterGeometry,
-}
+pub type RasterPlaneSamplerParams = RasterSamplerParams<PlaneRasterGeometry>;
+pub type RasterLineSamplerParams = RasterSamplerParams<LineRasterGeometry>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RasterPlaneSamplerSnapshot {
-    params: RasterPlaneSamplerParams,
+pub struct RasterSamplerSnapshot {
     next_index: usize,
     stride: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RasterLineSamplerSnapshot {
-    params: RasterLineSamplerParams,
-    next_index: usize,
-    stride: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PdfAdaptationRasterPlaneSamplerSnapshot {
-    params: PdfAdaptationRasterPlaneSamplerParams,
+pub struct PdfAdaptationRasterSnapshot {
     next_index: usize,
     stride: usize,
     ingested_samples: usize,
     output_state: PdfAdaptationImageOutputState,
     global_abs_integrand_norm: Option<f64>,
     global_pdf_norm: f64,
-    source_sampler_snapshot: SamplerAggregatorSnapshot,
+    source_sampler_snapshot: SavedSampler,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PdfAdaptationRasterLineSamplerSnapshot {
-    params: PdfAdaptationRasterLineSamplerParams,
-    next_index: usize,
-    stride: usize,
-    ingested_samples: usize,
-    output_state: PdfAdaptationImageOutputState,
-    global_abs_integrand_norm: Option<f64>,
-    global_pdf_norm: f64,
-    source_sampler_snapshot: SamplerAggregatorSnapshot,
+pub(crate) trait RasterGeometry: Clone + Send {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError>;
+    fn nr_points(&self) -> usize;
+    fn point_at(&self, index: usize) -> Vec<f64>;
+    fn discrete(&self) -> &[i64];
+}
+impl RasterGeometry for PlaneRasterGeometry {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
+        validate_plane_geometry(self, domain)
+    }
+    fn nr_points(&self) -> usize {
+        self.nr_points()
+    }
+    fn point_at(&self, index: usize) -> Vec<f64> {
+        self.point_at(index)
+    }
+    fn discrete(&self) -> &[i64] {
+        &self.discrete
+    }
+}
+impl RasterGeometry for LineRasterGeometry {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
+        validate_line_geometry(self, domain)
+    }
+    fn nr_points(&self) -> usize {
+        self.nr_points()
+    }
+    fn point_at(&self, index: usize) -> Vec<f64> {
+        self.point_at(index)
+    }
+    fn discrete(&self) -> &[i64] {
+        &self.discrete
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,48 +87,34 @@ fn default_pdf_global_norm() -> f64 {
     1.0
 }
 
-pub struct RasterPlaneSampler {
-    params: RasterPlaneSamplerParams,
+pub struct RasterSampler<G> {
+    params: RasterSamplerParams<G>,
     next_index: usize,
     stride: usize,
 }
+pub type RasterPlaneSampler = RasterSampler<PlaneRasterGeometry>;
+pub type RasterLineSampler = RasterSampler<LineRasterGeometry>;
 
-pub struct RasterLineSampler {
-    params: RasterLineSamplerParams,
-    next_index: usize,
-    stride: usize,
-}
-
-pub struct PdfAdaptationRasterPlaneSampler {
-    params: PdfAdaptationRasterPlaneSamplerParams,
+pub struct PdfAdaptationRasterSampler<G> {
+    params: RasterSamplerParams<G>,
     next_index: usize,
     stride: usize,
     ingested_samples: usize,
     output_state: PdfAdaptationImageOutputState,
     global_abs_integrand_norm: Option<f64>,
     global_pdf_norm: f64,
-    source_sampler_snapshot: SamplerAggregatorSnapshot,
-    source_sampler: Box<dyn SamplerAggregator>,
+    source_sampler_snapshot: SavedSampler,
+    source_sampler: Box<dyn Sampler>,
 }
+pub type PdfAdaptationRasterPlaneSampler = PdfAdaptationRasterSampler<PlaneRasterGeometry>;
+pub type PdfAdaptationRasterLineSampler = PdfAdaptationRasterSampler<LineRasterGeometry>;
 
-pub struct PdfAdaptationRasterLineSampler {
-    params: PdfAdaptationRasterLineSamplerParams,
-    next_index: usize,
-    stride: usize,
-    ingested_samples: usize,
-    output_state: PdfAdaptationImageOutputState,
-    global_abs_integrand_norm: Option<f64>,
-    global_pdf_norm: f64,
-    source_sampler_snapshot: SamplerAggregatorSnapshot,
-    source_sampler: Box<dyn SamplerAggregator>,
-}
-
-impl RasterPlaneSampler {
+impl<G: RasterGeometry> RasterSampler<G> {
     pub fn from_params_and_domain(
-        params: RasterPlaneSamplerParams,
+        params: RasterSamplerParams<G>,
         domain: &Domain,
-    ) -> Result<Self, BuildError> {
-        validate_plane_geometry(&params.geometry, domain)?;
+    ) -> Result<Self, EngineError> {
+        params.geometry.validate_domain(domain)?;
         let total_samples = params.geometry.nr_points();
         Ok(Self {
             params,
@@ -139,10 +124,11 @@ impl RasterPlaneSampler {
     }
 
     pub fn from_snapshot(
-        snapshot: RasterPlaneSamplerSnapshot,
+        params: RasterSamplerParams<G>,
+        snapshot: RasterSamplerSnapshot,
         domain: &Domain,
-    ) -> Result<Self, BuildError> {
-        let sampler = Self::from_params_and_domain(snapshot.params, domain)?;
+    ) -> Result<Self, EngineError> {
+        let sampler = Self::from_params_and_domain(params, domain)?;
         Ok(Self {
             next_index: snapshot.next_index,
             stride: snapshot.stride,
@@ -151,47 +137,20 @@ impl RasterPlaneSampler {
     }
 }
 
-impl RasterLineSampler {
-    pub fn from_params_and_domain(
-        params: RasterLineSamplerParams,
-        domain: &Domain,
-    ) -> Result<Self, BuildError> {
-        validate_line_geometry(&params.geometry, domain)?;
-        let total_samples = params.geometry.nr_points();
-        Ok(Self {
-            params,
-            next_index: 0,
-            stride: coprime_stride(total_samples),
-        })
-    }
-
-    pub fn from_snapshot(
-        snapshot: RasterLineSamplerSnapshot,
-        domain: &Domain,
-    ) -> Result<Self, BuildError> {
-        let sampler = Self::from_params_and_domain(snapshot.params, domain)?;
-        Ok(Self {
-            next_index: snapshot.next_index,
-            stride: snapshot.stride,
-            ..sampler
-        })
-    }
-}
-
-impl PdfAdaptationRasterPlaneSampler {
+impl<G: RasterGeometry> PdfAdaptationRasterSampler<G> {
     pub fn from_params_and_snapshot(
-        params: PdfAdaptationRasterPlaneSamplerParams,
-        source_sampler_snapshot: SamplerAggregatorSnapshot,
+        params: RasterSamplerParams<G>,
+        source_sampler_snapshot: SavedSampler,
         global_abs_integrand_norm: Option<f64>,
         domain: &Domain,
-    ) -> Result<Self, BuildError> {
-        validate_plane_geometry(&params.geometry, domain)?;
+    ) -> Result<Self, EngineError> {
+        params.geometry.validate_domain(domain)?;
         let total_samples = params.geometry.nr_points();
         let mut source_sampler = source_sampler_snapshot
             .clone()
-            .into_runtime(domain, serde_json::json!({}))?;
+            .restore(domain, serde_json::json!({}))?;
         let global_pdf_norm = source_sampler.global_pdf_norm().map_err(|err| {
-            BuildError::build(format!(
+            EngineError::build(format!(
                 "failed to read global pdf normalization from source sampler: {err}"
             ))
         })?;
@@ -209,62 +168,12 @@ impl PdfAdaptationRasterPlaneSampler {
     }
 
     pub fn from_snapshot(
-        snapshot: PdfAdaptationRasterPlaneSamplerSnapshot,
+        params: RasterSamplerParams<G>,
+        snapshot: PdfAdaptationRasterSnapshot,
         domain: &Domain,
-    ) -> Result<Self, BuildError> {
+    ) -> Result<Self, EngineError> {
         let sampler = Self::from_params_and_snapshot(
-            snapshot.params,
-            snapshot.source_sampler_snapshot,
-            snapshot.global_abs_integrand_norm,
-            domain,
-        )?;
-        Ok(Self {
-            next_index: snapshot.next_index,
-            stride: snapshot.stride,
-            ingested_samples: snapshot.ingested_samples,
-            output_state: snapshot.output_state,
-            global_pdf_norm: snapshot.global_pdf_norm,
-            ..sampler
-        })
-    }
-}
-
-impl PdfAdaptationRasterLineSampler {
-    pub fn from_params_and_snapshot(
-        params: PdfAdaptationRasterLineSamplerParams,
-        source_sampler_snapshot: SamplerAggregatorSnapshot,
-        global_abs_integrand_norm: Option<f64>,
-        domain: &Domain,
-    ) -> Result<Self, BuildError> {
-        validate_line_geometry(&params.geometry, domain)?;
-        let total_samples = params.geometry.nr_points();
-        let mut source_sampler = source_sampler_snapshot
-            .clone()
-            .into_runtime(domain, serde_json::json!({}))?;
-        let global_pdf_norm = source_sampler.global_pdf_norm().map_err(|err| {
-            BuildError::build(format!(
-                "failed to read global pdf normalization from source sampler: {err}"
-            ))
-        })?;
-        Ok(Self {
             params,
-            next_index: 0,
-            stride: coprime_stride(total_samples),
-            ingested_samples: 0,
-            output_state: PdfAdaptationImageOutputState::new(total_samples),
-            global_abs_integrand_norm,
-            global_pdf_norm,
-            source_sampler_snapshot,
-            source_sampler,
-        })
-    }
-
-    pub fn from_snapshot(
-        snapshot: PdfAdaptationRasterLineSamplerSnapshot,
-        domain: &Domain,
-    ) -> Result<Self, BuildError> {
-        let sampler = Self::from_params_and_snapshot(
-            snapshot.params,
             snapshot.source_sampler_snapshot,
             snapshot.global_abs_integrand_norm,
             domain,
@@ -306,7 +215,7 @@ impl PdfAdaptationImageOutputState {
 
 fn record_pdf_adaptation_values(
     output_state: &mut PdfAdaptationImageOutputState,
-    source_sampler: &mut dyn SamplerAggregator,
+    source_sampler: &mut dyn Sampler,
     canonical_indices: &[usize],
     training_values: &[f64],
     point_at: impl Fn(usize) -> PdfPoint,
@@ -342,7 +251,7 @@ fn record_pdf_adaptation_values(
 fn ingest_pdf_adaptation_values(
     ingested_samples: &mut usize,
     output_state: &mut PdfAdaptationImageOutputState,
-    source_sampler: &mut dyn SamplerAggregator,
+    source_sampler: &mut dyn Sampler,
     total_samples: usize,
     stride: usize,
     training_values: &[f64],
@@ -380,14 +289,14 @@ fn produce_raster_batch(
     point_at: impl Fn(usize) -> Vec<f64>,
     requested_samples: usize,
     sampler_name: &str,
-) -> Result<LatentBatchSpec, EngineError> {
+) -> Result<LatentBatch, EngineError> {
     let nr_samples = requested_samples.min(total_samples.saturating_sub(*next_index));
     if nr_samples == 0 {
         return Err(EngineError::engine(format!(
             "{sampler_name} cannot produce an empty batch"
         )));
     }
-    let batch = Batch::from_points((0..nr_samples).map(|row_idx| {
+    let batch = Batch::from_iter((0..nr_samples).map(|row_idx| {
         Point::new(
             point_at(permuted_raster_index(
                 *next_index + row_idx,
@@ -397,15 +306,14 @@ fn produce_raster_batch(
             discrete.to_vec(),
             1.0,
         )
-    }))
-    .engine_err()?;
+    }));
     *next_index += nr_samples;
-    Ok(LatentBatchSpec::from_batch(&batch))
+    Ok(LatentBatch::from_batch(&batch))
 }
 
-impl SamplerAggregator for RasterPlaneSampler {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        validate_plane_geometry(&self.params.geometry, domain)
+impl<G: RasterGeometry> Sampler for RasterSampler<G> {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
+        self.params.geometry.validate_domain(domain)
     }
 
     fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
@@ -420,10 +328,10 @@ impl SamplerAggregator for RasterPlaneSampler {
             &mut self.next_index,
             geometry.nr_points(),
             self.stride,
-            &geometry.discrete,
+            geometry.discrete(),
             |index| geometry.point_at(index),
             max_samples,
-            "raster plane sampler",
+            "raster sampler",
         )?;
         Ok(Generation::batch(batch, None))
     }
@@ -432,21 +340,18 @@ impl SamplerAggregator for RasterPlaneSampler {
         Ok(())
     }
 
-    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
-        Ok(SamplerAggregatorSnapshot::RasterPlane {
-            raw: serde_json::to_value(RasterPlaneSamplerSnapshot {
-                params: self.params.clone(),
-                next_index: self.next_index,
-                stride: self.stride,
-            })
-            .engine_err()?,
+    fn snapshot(&mut self) -> Result<serde_json::Value, EngineError> {
+        serde_json::to_value(RasterSamplerSnapshot {
+            next_index: self.next_index,
+            stride: self.stride,
         })
+        .engine_err()
     }
 }
 
-impl SamplerAggregator for RasterLineSampler {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        validate_line_geometry(&self.params.geometry, domain)
+impl<G: RasterGeometry> Sampler for PdfAdaptationRasterSampler<G> {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
+        self.params.geometry.validate_domain(domain)
     }
 
     fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
@@ -461,51 +366,10 @@ impl SamplerAggregator for RasterLineSampler {
             &mut self.next_index,
             geometry.nr_points(),
             self.stride,
-            &geometry.discrete,
+            geometry.discrete(),
             |index| geometry.point_at(index),
             max_samples,
-            "raster line sampler",
-        )?;
-        Ok(Generation::batch(batch, None))
-    }
-
-    fn feedback(&mut self, _training_values: &[f64]) -> Result<(), EngineError> {
-        Ok(())
-    }
-
-    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
-        Ok(SamplerAggregatorSnapshot::RasterLine {
-            raw: serde_json::to_value(RasterLineSamplerSnapshot {
-                params: self.params.clone(),
-                next_index: self.next_index,
-                stride: self.stride,
-            })
-            .engine_err()?,
-        })
-    }
-}
-
-impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        validate_plane_geometry(&self.params.geometry, domain)
-    }
-
-    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
-        if max_samples == 0 {
-            return Err(EngineError::invalid_input("max_samples must be positive"));
-        }
-        if self.next_index == self.params.geometry.nr_points() {
-            return Ok(Generation::Finished);
-        }
-        let geometry = &self.params.geometry;
-        let batch = produce_raster_batch(
-            &mut self.next_index,
-            geometry.nr_points(),
-            self.stride,
-            &geometry.discrete,
-            |index| geometry.point_at(index),
-            max_samples,
-            "pdf adaptation raster plane sampler",
+            "pdf adaptation raster sampler",
         )?;
         let training_remaining = geometry.nr_points() - self.next_index + batch.nr_samples;
         Ok(Generation::batch(batch, Some(training_remaining)))
@@ -520,8 +384,8 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
             geometry.nr_points(),
             self.stride,
             training_values,
-            |index| (geometry.discrete.clone(), geometry.point_at(index)),
-            "plane",
+            |index| (geometry.discrete().to_vec(), geometry.point_at(index)),
+            "raster",
         )
     }
 
@@ -546,116 +410,35 @@ impl SamplerAggregator for PdfAdaptationRasterPlaneSampler {
         .engine_err()
     }
 
-    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
-        Ok(SamplerAggregatorSnapshot::PdfAdaptationRasterPlane {
-            raw: serde_json::to_value(PdfAdaptationRasterPlaneSamplerSnapshot {
-                params: self.params.clone(),
-                next_index: self.next_index,
-                stride: self.stride,
-                ingested_samples: self.ingested_samples,
-                output_state: self.output_state.clone(),
-                global_abs_integrand_norm: self.global_abs_integrand_norm,
-                global_pdf_norm: self.global_pdf_norm,
-                source_sampler_snapshot: self.source_sampler_snapshot.clone(),
-            })
-            .engine_err()?,
+    fn snapshot(&mut self) -> Result<serde_json::Value, EngineError> {
+        serde_json::to_value(PdfAdaptationRasterSnapshot {
+            next_index: self.next_index,
+            stride: self.stride,
+            ingested_samples: self.ingested_samples,
+            output_state: self.output_state.clone(),
+            global_abs_integrand_norm: self.global_abs_integrand_norm,
+            global_pdf_norm: self.global_pdf_norm,
+            source_sampler_snapshot: self.source_sampler_snapshot.clone(),
         })
-    }
-}
-
-impl SamplerAggregator for PdfAdaptationRasterLineSampler {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
-        validate_line_geometry(&self.params.geometry, domain)
-    }
-
-    fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
-        if max_samples == 0 {
-            return Err(EngineError::invalid_input("max_samples must be positive"));
-        }
-        if self.next_index == self.params.geometry.nr_points() {
-            return Ok(Generation::Finished);
-        }
-        let geometry = &self.params.geometry;
-        let batch = produce_raster_batch(
-            &mut self.next_index,
-            geometry.nr_points(),
-            self.stride,
-            &geometry.discrete,
-            |index| geometry.point_at(index),
-            max_samples,
-            "pdf adaptation raster line sampler",
-        )?;
-        let training_remaining = geometry.nr_points() - self.next_index + batch.nr_samples;
-        Ok(Generation::batch(batch, Some(training_remaining)))
-    }
-
-    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let geometry = &self.params.geometry;
-        ingest_pdf_adaptation_values(
-            &mut self.ingested_samples,
-            &mut self.output_state,
-            self.source_sampler.as_mut(),
-            geometry.nr_points(),
-            self.stride,
-            training_values,
-            |index| (geometry.discrete.clone(), geometry.point_at(index)),
-            "line",
-        )
-    }
-
-    fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
-        self.source_sampler.pdf_batch(points)
-    }
-
-    fn discrete_pdf_batch(
-        &mut self,
-        subspaces: &[DiscreteSubspace],
-    ) -> Result<Vec<Option<f64>>, EngineError> {
-        self.source_sampler.discrete_pdf_batch(subspaces)
-    }
-
-    fn persisted_output(&mut self) -> Result<Option<serde_json::Value>, EngineError> {
-        serde_json::to_value(self.output_state.persisted_output(
-            self.ingested_samples,
-            self.global_abs_integrand_norm,
-            self.global_pdf_norm,
-        ))
-        .map(Some)
         .engine_err()
-    }
-
-    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
-        Ok(SamplerAggregatorSnapshot::PdfAdaptationRasterLine {
-            raw: serde_json::to_value(PdfAdaptationRasterLineSamplerSnapshot {
-                params: self.params.clone(),
-                next_index: self.next_index,
-                stride: self.stride,
-                ingested_samples: self.ingested_samples,
-                output_state: self.output_state.clone(),
-                global_abs_integrand_norm: self.global_abs_integrand_norm,
-                global_pdf_norm: self.global_pdf_norm,
-                source_sampler_snapshot: self.source_sampler_snapshot.clone(),
-            })
-            .engine_err()?,
-        })
     }
 }
 
 fn validate_plane_geometry(
     geometry: &PlaneRasterGeometry,
     domain: &Domain,
-) -> Result<(), BuildError> {
-    geometry.validate().map_err(BuildError::invalid_input)?;
+) -> Result<(), EngineError> {
+    geometry.validate().map_err(EngineError::invalid_input)?;
     let continuous_dims = domain
         .continuous_dims_at_discrete_path(&geometry.discrete)
         .map_err(|err| {
-            BuildError::incompatible(format!(
+            EngineError::incompatible(format!(
                 "plane geometry discrete path {:?} is not valid for domain: {err}",
                 geometry.discrete
             ))
         })?;
     if geometry.offset.len() != continuous_dims {
-        return Err(BuildError::incompatible(format!(
+        return Err(EngineError::incompatible(format!(
             "plane geometry continuous dimension mismatch: expected {}, got {}",
             continuous_dims,
             geometry.offset.len()
@@ -667,18 +450,18 @@ fn validate_plane_geometry(
 fn validate_line_geometry(
     geometry: &LineRasterGeometry,
     domain: &Domain,
-) -> Result<(), BuildError> {
-    geometry.validate().map_err(BuildError::invalid_input)?;
+) -> Result<(), EngineError> {
+    geometry.validate().map_err(EngineError::invalid_input)?;
     let continuous_dims = domain
         .continuous_dims_at_discrete_path(&geometry.discrete)
         .map_err(|err| {
-            BuildError::incompatible(format!(
+            EngineError::incompatible(format!(
                 "line geometry discrete path {:?} is not valid for domain: {err}",
                 geometry.discrete
             ))
         })?;
     if geometry.offset.len() != continuous_dims {
-        return Err(BuildError::incompatible(format!(
+        return Err(EngineError::incompatible(format!(
             "line geometry continuous dimension mismatch: expected {}, got {}",
             continuous_dims,
             geometry.offset.len()
@@ -714,12 +497,11 @@ pub(crate) fn coprime_stride(total_samples: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        PdfAdaptationRasterPlaneSampler, PdfAdaptationRasterPlaneSamplerParams, RasterLineSampler,
-        RasterLineSamplerParams, RasterPlaneSampler, RasterPlaneSamplerParams, coprime_stride,
-        permuted_raster_index,
+        PdfAdaptationRasterPlaneSampler, RasterLineSampler, RasterLineSamplerParams,
+        RasterPlaneSampler, RasterPlaneSamplerParams, coprime_stride, permuted_raster_index,
     };
-    use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplerAggregatorConfig};
-    use crate::sampling::SamplerAggregator;
+    use crate::core::{LineRasterGeometry, Linspace, PlaneRasterGeometry, SamplingConfig};
+    use crate::sampling::Sampler;
     use crate::utils::domain::{Domain, DomainBranch};
     use num::Integer;
 
@@ -761,14 +543,9 @@ mod tests {
             .and_then(|generated| generated.into_batch())
             .expect("first batch");
         let snapshot = sampler.snapshot().expect("snapshot");
-        let restored_snapshot = match snapshot {
-            crate::sampling::SamplerAggregatorSnapshot::RasterLine { raw } => {
-                serde_json::from_value(raw).expect("decode raster line snapshot")
-            }
-            other => panic!("unexpected snapshot kind: {other:?}"),
-        };
+        let restored_snapshot = serde_json::from_value(snapshot).expect("decode raster line state");
         let mut restored =
-            RasterLineSampler::from_snapshot(restored_snapshot, &domain).expect("restore");
+            RasterLineSampler::from_snapshot(params, restored_snapshot, &domain).expect("restore");
         let second_batch = restored
             .generate(3)
             .and_then(|generated| generated.into_batch())
@@ -891,17 +668,20 @@ mod tests {
     #[test]
     fn pdf_adaptation_raster_plane_delegates_pdf_to_source_sampler() {
         let domain = Domain::rectangular(2, 0);
-        let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
-            params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+        let source_config = SamplingConfig {
+            sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            },
             materializer: None,
-        }
-        .build(domain.clone(), None, None, serde_json::json!({}))
-        .expect("build source sampler")
-        .snapshot()
-        .expect("source snapshot");
+            transforms: None,
+        };
+        let mut source = source_config
+            .create(domain.clone(), None, serde_json::json!({}))
+            .unwrap();
+        let source_snapshot = source_config.snapshot(&mut *source).unwrap();
 
         let mut sampler = PdfAdaptationRasterPlaneSampler::from_params_and_snapshot(
-            PdfAdaptationRasterPlaneSamplerParams {
+            RasterPlaneSamplerParams {
                 geometry: PlaneRasterGeometry {
                     offset: vec![0.0, 0.0],
                     u_vector: vec![1.0, 0.0],
@@ -936,17 +716,20 @@ mod tests {
     #[test]
     fn pdf_adaptation_raster_plane_persists_integrand_and_pdf_images() {
         let domain = Domain::rectangular(2, 0);
-        let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
-            params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+        let source_config = SamplingConfig {
+            sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            },
             materializer: None,
-        }
-        .build(domain.clone(), None, None, serde_json::json!({}))
-        .expect("build source sampler")
-        .snapshot()
-        .expect("source snapshot");
+            transforms: None,
+        };
+        let mut source = source_config
+            .create(domain.clone(), None, serde_json::json!({}))
+            .unwrap();
+        let source_snapshot = source_config.snapshot(&mut *source).unwrap();
 
         let mut sampler = PdfAdaptationRasterPlaneSampler::from_params_and_snapshot(
-            PdfAdaptationRasterPlaneSamplerParams {
+            RasterPlaneSamplerParams {
                 geometry: PlaneRasterGeometry {
                     offset: vec![0.0, 0.0],
                     u_vector: vec![1.0, 0.0],
@@ -986,17 +769,20 @@ mod tests {
     #[test]
     fn pdf_adaptation_raster_plane_ignores_non_finite_training_values() {
         let domain = Domain::rectangular(2, 0);
-        let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
-            params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+        let source_config = SamplingConfig {
+            sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            },
             materializer: None,
-        }
-        .build(domain.clone(), None, None, serde_json::json!({}))
-        .expect("build source sampler")
-        .snapshot()
-        .expect("source snapshot");
+            transforms: None,
+        };
+        let mut source = source_config
+            .create(domain.clone(), None, serde_json::json!({}))
+            .unwrap();
+        let source_snapshot = source_config.snapshot(&mut *source).unwrap();
 
         let mut sampler = PdfAdaptationRasterPlaneSampler::from_params_and_snapshot(
-            PdfAdaptationRasterPlaneSamplerParams {
+            RasterPlaneSamplerParams {
                 geometry: PlaneRasterGeometry {
                     offset: vec![0.0, 0.0],
                     u_vector: vec![1.0, 0.0],
@@ -1036,17 +822,20 @@ mod tests {
     #[test]
     fn pdf_adaptation_raster_plane_uses_linspace_parameter_range() {
         let domain = Domain::rectangular(2, 0);
-        let source_snapshot = SamplerAggregatorConfig::NaiveMonteCarlo {
-            params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+        let source_config = SamplingConfig {
+            sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
+            },
             materializer: None,
-        }
-        .build(domain.clone(), None, None, serde_json::json!({}))
-        .expect("build source sampler")
-        .snapshot()
-        .expect("source snapshot");
+            transforms: None,
+        };
+        let mut source = source_config
+            .create(domain.clone(), None, serde_json::json!({}))
+            .unwrap();
+        let source_snapshot = source_config.snapshot(&mut *source).unwrap();
 
         let mut sampler = PdfAdaptationRasterPlaneSampler::from_params_and_snapshot(
-            PdfAdaptationRasterPlaneSamplerParams {
+            RasterPlaneSamplerParams {
                 geometry: PlaneRasterGeometry {
                     offset: vec![0.0, 0.0],
                     u_vector: vec![1.0, 0.0],

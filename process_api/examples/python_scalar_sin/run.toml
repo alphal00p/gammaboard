@@ -11,6 +11,7 @@ command = ["$resources/../process_api/examples/python_scalar_sin/.venv/bin/pytho
 cwd = "$resources/../process_api/examples/python_scalar_sin/src"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
+output = {kind = "values", components = ["value"]}
 
 [[task_queue]]
 name = "accumulator"
@@ -40,4 +41,4 @@ fixed_dims = { "0" = 1 }
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 100000 }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = 16, samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }
+sampler = { config = { kind = "havana_training", seed = 0, bins = 16, samples_for_update = 4096, initial_training_rate = 0.1, final_training_rate = 0.01 } }

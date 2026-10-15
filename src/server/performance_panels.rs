@@ -28,23 +28,18 @@ fn finite(value: &Value) -> Option<f64> {
     value.as_f64().filter(|v| v.is_finite() && *v >= 0.0)
 }
 
-fn data(row: &Value, evaluator: bool) -> &Value {
-    &row[if evaluator {
-        "metrics"
-    } else {
-        "runtime_metrics"
-    }]
+fn data(row: &Value) -> &Value {
+    &row["metrics"]
 }
 
-fn epoch(row: &Value, evaluator: bool) -> Option<&str> {
-    data(row, evaluator)[if evaluator { "epoch" } else { "runner_epoch" }].as_str()
+fn epoch(row: &Value) -> Option<&str> {
+    data(row)["epoch"].as_str()
 }
 
 fn matches_worker(row: &Value, node: &Value, snapshot: &PerformanceSnapshot) -> bool {
-    let evaluator = node["active_role"] == "evaluator";
-    let metrics = data(row, evaluator);
+    let metrics = data(row);
     row["worker_id"] == node["name"]
-        && epoch(row, evaluator).is_some()
+        && epoch(row).is_some()
         && metrics["node_uuid"].is_string()
         && metrics["node_uuid"] == node["uuid"]
         && snapshot.task_id.is_some()
@@ -60,8 +55,8 @@ struct Interval<'a> {
 
 impl Interval<'_> {
     fn delta(&self, pointer: &str) -> Option<f64> {
-        let first = data(self.first, self.evaluator).pointer(pointer)?;
-        let last = data(self.last, self.evaluator).pointer(pointer)?;
+        let first = data(self.first).pointer(pointer)?;
+        let last = data(self.last).pointer(pointer)?;
         if let (Some(a), Some(b)) = (first.as_i64(), last.as_i64()) {
             return b.checked_sub(a).filter(|v| *v >= 0).map(|v| v as f64);
         }
@@ -365,7 +360,7 @@ fn sampler_queue_panels(
     latest: &Value,
     now: DateTime<Utc>,
 ) {
-    let runtime = data(latest, false);
+    let runtime = data(latest);
     let q = &runtime["queue"];
     let claim_age = q["blocker"]["claimed_at"]
         .as_str()

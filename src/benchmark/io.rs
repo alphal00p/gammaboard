@@ -11,7 +11,7 @@ use crate::{
     evaluation::BatchResult,
     runners::busy_time::BusyTime,
     sampling::{LatentBatch, LatentBatchPayload},
-    stores::{PgStore, get_pg_pool},
+    stores::{PgStore, init_pg_store},
 };
 use anyhow::{Result, ensure};
 use rand::{Rng, SeedableRng};
@@ -131,7 +131,7 @@ fn queue_shape(
     (slots, bundle)
 }
 struct Prepared {
-    batches: Vec<LatentBatch>,
+    batches: Vec<crate::core::EvaluationBatch>,
     result: BatchResult,
     input_bytes: usize,
     feedback_bytes: usize,
@@ -144,7 +144,6 @@ fn prepare(size: usize, feedback: bool, bundle: usize) -> Result<Prepared> {
         "kind":"unit", "continuous_dims":6, "value_coordinate":0}))?;
     let latent = LatentBatch {
         nr_samples: size,
-        accumulator: AccumulatorConfig::scalar(),
         payload: LatentBatchPayload::IndexedBatch {
             discrete_signatures: vec![vec![]],
             discrete_map: vec![0; size],
@@ -161,11 +160,12 @@ fn prepare(size: usize, feedback: bool, bundle: usize) -> Result<Prepared> {
         },
     )?;
     ensure!(
-        !feedback || result.values.as_ref() == Some(&values),
+        !feedback || result.training_values.as_ref() == Some(&values),
         "prepared feedback differs from f(x)=x[0]"
     );
+    let latent = latent.for_evaluation(AccumulatorConfig::scalar());
     let input_bytes = latent.to_bytes()?.len();
-    let feedback_bytes = result.values_to_bytes()?.map_or(0, |v| v.len());
+    let feedback_bytes = result.training_values_to_bytes()?.map_or(0, |v| v.len());
     Ok(Prepared {
         batches: vec![latent; bundle],
         result,
@@ -319,8 +319,8 @@ async fn consumer(
     });
     while let Some(batch) = rx.recv().await {
         ensure!(
-            batch.latent_batch.nr_samples == prepared.batches[0].nr_samples
-                && batch.requires_training_values == prepared.result.values.is_some(),
+            batch.latent_batch.nr_samples == prepared.batches[0].samples.nr_samples
+                && batch.requires_training_values == prepared.result.training_values.is_some(),
             "unexpected input batch"
         );
         {
@@ -343,7 +343,7 @@ async fn consumer(
 
 pub async fn measure(database_url: &str, config: Config) -> Result<Value> {
     config.validate()?;
-    let control = PgStore::new(get_pg_pool(database_url, 2).await?);
+    let control = init_pg_store(database_url, 2).await?;
     let name = format!("io-benchmark-{}", uuid::Uuid::new_v4());
     let definition = runs::parse_run_add_config_toml(&format!(
         r#"
@@ -356,7 +356,7 @@ name = "measure"
 kind = "sample"
 stop_condition = {{ max_samples = 1000000000000 }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
+sampler = {{ config = {{ kind = "naive_monte_carlo" }} }}
 "#
     ))?;
     let run = runs::create_run(&control, definition).await?.run_id;
@@ -393,7 +393,7 @@ async fn run_case(
 ) -> Result<Value> {
     let sampler_runtime = IoRuntime::new(c.io_threads, c.sampler_cpus.clone())?;
     let evaluator_runtime = IoRuntime::new(c.evaluator_cpus.len(), c.evaluator_cpus.clone())?;
-    let sampler = PgStore::new(get_pg_pool(url, (c.insert_concurrency + 2) as u32).await?);
+    let sampler = init_pg_store(url, (c.insert_concurrency + 2) as u32).await?;
     let mut stores = Vec::new();
     for uuid in uuids {
         control
@@ -402,7 +402,7 @@ async fn run_case(
         control
             .set_current_assignment(uuid, WorkerRole::Evaluator, run)
             .await?;
-        stores.push(PgStore::new(get_pg_pool(url, 2).await?));
+        stores.push(init_pg_store(url, 2).await?);
     }
     let mut tasks = JoinSet::<Result<()>>::new();
     let p = Arc::new(Progress::default());
@@ -476,7 +476,7 @@ async fn run_case(
                                 .insert_batches(
                                     run,
                                     task,
-                                    data.result.values.is_some(),
+                                    data.result.training_values.is_some(),
                                     &ids,
                                     &data.batches,
                                 )
@@ -556,7 +556,8 @@ async fn run_case(
                     ensure!(
                         completed
                             .iter()
-                            .all(|b| b.result.values.is_some() == b.requires_training_values),
+                            .all(|b| b.result.training_values.is_some()
+                                == b.requires_training_values),
                         "missing feedback"
                     );
                     {

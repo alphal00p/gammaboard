@@ -137,7 +137,7 @@ the required state, use `resources/templates/runs/gammaloop.toml` for ttH
 training/inference or `integration-campaign-qft-like.toml` for a campaign.
 `resources/templates/runs/ghost_bump_madnis_apptainer.toml` uses the shared
 MADNIS runtime image under `resources/runtimes/madnis/`. The same cards work on
-local deployments with the corresponding dependencies. See [examples](docs/examples.md).
+local deployments with the corresponding dependencies. See [examples](docs/quickstart.md#examples).
 
 When the selected server config enables authentication, protected commands
 require `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`. The checked-in

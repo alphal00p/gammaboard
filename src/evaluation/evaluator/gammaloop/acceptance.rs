@@ -150,7 +150,7 @@ fn reference_maps_preserve_normalization_moments_and_channel_selection() {
         let config = params(true, sampled);
         let domain = GammaLoopEvaluator::resolve_domain_from_params(config.clone()).unwrap();
         let mut evaluator = GammaLoopEvaluator::from_params(config).unwrap();
-        assert_eq!(domain, evaluator.get_domain());
+        assert_eq!(domain, evaluator.domain());
         assert_eq!(
             evaluator.metadata()["sampling_channels"][0]["entries"]
                 .as_array()
@@ -176,7 +176,7 @@ fn reference_maps_preserve_normalization_moments_and_channel_selection() {
             });
             let result = evaluator
                 .eval_batch(
-                    &Batch::from_points(points).unwrap(),
+                    &Batch::from_iter(points),
                     &AccumulatorConfig::Gammaloop,
                     EvalBatchOptions {
                         require_training_values: false,
@@ -243,7 +243,7 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
         let unit = Point::new(point.continuous.clone(), point.discrete.clone(), 1.0);
         let unit = evaluator
             .eval_batch(
-                &Batch::new(vec![unit]).unwrap(),
+                &Batch::new(vec![unit]),
                 &AccumulatorConfig::Gammaloop,
                 options,
             )
@@ -255,7 +255,7 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
         expected.push(unit_state.real_mean() * point.total_weight());
         let weighted = evaluator
             .eval_batch(
-                &Batch::new(vec![point.clone()]).unwrap(),
+                &Batch::new(vec![point.clone()]),
                 &AccumulatorConfig::Gammaloop,
                 options,
             )
@@ -275,14 +275,20 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
         }
         singles.merge_in_place(weighted_state).unwrap();
     }
-    let batch = Batch::new(points).unwrap();
+    let batch = Batch::new(points);
     for mode in [
         AccumulatorConfig::Gammaloop,
         AccumulatorConfig::scalar(),
         AccumulatorConfig::Empty,
     ] {
         let result = evaluator.eval_batch(&batch, &mode, options).unwrap();
-        for (actual, expected) in result.values.as_ref().unwrap().iter().zip(&expected) {
+        for (actual, expected) in result
+            .training_values
+            .as_ref()
+            .unwrap()
+            .iter()
+            .zip(&expected)
+        {
             assert!(
                 (actual - expected).abs() < expected.abs() * 1e-10,
                 "{actual} != {expected}"
@@ -299,7 +305,7 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
     // A failed batch must not contaminate the next native observable batch.
     assert!(
         evaluator
-            .evaluate(&Batch::new(vec![Point::new(vec![], vec![0, 0], 1.0)]).unwrap())
+            .evaluate(&Batch::new(vec![Point::new(vec![], vec![0, 0], 1.0)]))
             .is_err()
     );
     let recovered = evaluator
@@ -370,7 +376,7 @@ fn quad_override_uses_native_stability_levels_and_preserves_the_reference_value(
             .iter()
             .all(|level| level.precision != Precision::Double)
     );
-    let batch = Batch::new(vec![Point::new(vec![0.5, 0.4, 0.6], vec![0, 0], 2.0)]).unwrap();
+    let batch = Batch::new(vec![Point::new(vec![0.5, 0.4, 0.6], vec![0, 0], 2.0)]);
     let expected = double.evaluate(&batch).unwrap();
     let actual = quad.evaluate(&batch).unwrap();
     let expected = GammaLoopEvaluator::project_result_value(&expected[0]);
