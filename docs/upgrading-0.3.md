@@ -112,6 +112,13 @@ stopping targets, transformed coordinates, and training feedback. Performance
 consumers must accept schema 2 and read sampler identity from `metrics.epoch` and
 `metrics.node_uuid`, replacing `runtime_metrics.runner_epoch`.
 
+Run lifecycle responses now include `completed` and `failed`; a live unassigned
+worker reports `idle` instead of `inactive`. Auth session responses include
+`auth_enabled`, so passwordless browser controls are not presented as login/logout.
+Campaign caps require the additive `202610150001_campaign_budgets.sql` migration
+and matching worker binaries. The cap counts logical samples across child stages,
+including queued draws; retries can repeat evaluator executions of those samples.
+
 Old queues, checkpoints, and numerical results are not converted. New checkpoint
 and queue readers reject unversioned/future data. Backups include database state,
 not referenced files; keep external snapshot artifacts immutable for as long as

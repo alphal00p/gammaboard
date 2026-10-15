@@ -129,6 +129,7 @@ pub struct SamplerAggregatorRunner<S> {
     base_queue_config: SamplerQueueConfig,
     last_task_config_refresh_at: Instant,
     waiting_for_campaign_budget: bool,
+    campaign_is_bounded: Option<bool>,
     busy: BusyTime,
     node_uuid: String,
     sampler_uptime_started_at: Instant,
@@ -405,6 +406,7 @@ where
 
         Ok(Self {
             waiting_for_campaign_budget: false,
+            campaign_is_bounded: None,
             run_id,
             epoch: uuid::Uuid::new_v4().to_string(),
             node_name: node_name.into(),
@@ -1187,15 +1189,23 @@ where
             if !self.queue.needs_generation(queue_before_produce).await? {
                 return Ok((0, true));
             }
-            let campaign_remaining = self
-                .store
-                .campaign_sample_allowance(self.run_id, self.task.id)
-                .await?
-                .map(|allowance| {
-                    allowance
-                        .saturating_sub(self.task.nr_produced_samples)
-                        .max(0) as usize
-                });
+            // Parentage and the controller definition are immutable. Ordinary
+            // runs pay this lookup once, rather than on every sampler draw.
+            let allowance = if self.campaign_is_bounded == Some(false) {
+                None
+            } else {
+                let value = self
+                    .store
+                    .campaign_sample_allowance(self.run_id, self.task.id)
+                    .await?;
+                self.campaign_is_bounded = Some(value.is_some());
+                value
+            };
+            let campaign_remaining = allowance.map(|allowance| {
+                allowance
+                    .saturating_sub(self.task.nr_produced_samples)
+                    .max(0) as usize
+            });
             if campaign_remaining == Some(0) {
                 // The controller grants another window after observing progress.
                 // Waiting for credits is not sampler exhaustion or a failed task.
