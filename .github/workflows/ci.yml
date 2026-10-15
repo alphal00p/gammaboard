@@ -46,6 +46,7 @@ jobs:
               -d gammaboard_db -f "$migration"
           done
           cargo test --locked --test pg_store_integration -- --ignored
+          cargo test --locked --test cluster_store -- --ignored --test-threads=2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -135,6 +136,8 @@ jobs:
         run: |
           python -m py_compile ops/ubelix/ubelix.py
           bash -n ops/ubelix/build/common.sh
+          bash -n ops/ubelix/build/service-build.sh
+          bash -n ops/ubelix/build/smoke.sh
           bash -n ops/ubelix/build/build.sbatch
           bash -n ops/ubelix/build/gammaboard.sbatch
           bash -n ops/ubelix/build/gammaloop.sbatch

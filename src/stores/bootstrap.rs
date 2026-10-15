@@ -69,10 +69,10 @@ pub async fn check_database_compatibility(pool: &Pool<Postgres>) -> Result<(), s
             _ => error,
         }
     })?;
-    if version != Some(crate::compatibility::MODEL_VERSION as i32) {
+    if version != Some(crate::compatibility::DATABASE_MODEL_VERSION as i32) {
         return Err(sqlx::Error::Protocol(format!(
             "incompatible GammaBoard database model {version:?}; this executable requires {}; use matching server and workers",
-            crate::compatibility::MODEL_VERSION
+            crate::compatibility::DATABASE_MODEL_VERSION
         )));
     }
     Ok(())

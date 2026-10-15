@@ -14,67 +14,7 @@
 
 set -euo pipefail
 umask 077
-
 PRIVATE_ENV="${HOME}/.config/gammaboard/slurm.env"
-if [[ -f "${PRIVATE_ENV}" ]]; then
-  # Load per-user secrets and cluster-local overrides without tracking them in git.
-  source "${PRIVATE_ENV}"
-fi
-
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
-IMAGE_PATH="${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
-SLURM_LOG_DIR="${WORKSPACE_ROOT}/logs/slurm/control"
-SINGLE_NODE="${GAMMABOARD_SINGLE_NODE:-0}"
-case "${SINGLE_NODE}" in
-  0) SERVER_CFG="${WORKSPACE_ROOT}/ops/config/server.toml" ;;
-  1) SERVER_CFG="${WORKSPACE_ROOT}/ops/config/server-single-node.toml" ;;
-  *) echo "GAMMABOARD_SINGLE_NODE must be 0 or 1: ${SINGLE_NODE}" >&2; exit 1 ;;
-esac
-DB_PORT="5400"
-FRONTEND_PORT="8080"
-PORT_OFFSET="${GAMMABOARD_PORT_OFFSET:-0}"
-if ! [[ "${PORT_OFFSET}" =~ ^[0-9]+$ ]]; then
-  echo "GAMMABOARD_PORT_OFFSET must be a non-negative integer: ${PORT_OFFSET}" >&2
-  exit 1
-fi
-FRONTEND_PORT="$((FRONTEND_PORT + PORT_OFFSET))"
-if (( DB_PORT + PORT_OFFSET > 65535 || FRONTEND_PORT > 65535 )); then
-  echo "port offset overflows frontend or Postgres port: ${PORT_OFFSET}" >&2
-  exit 1
-fi
-DB_DATA_DIR="${WORKSPACE_ROOT}/resources/db/postgres"
-DB_SOCKET_DIR="${WORKSPACE_ROOT}/resources/db/socket"
-
-mkdir -p "${SLURM_LOG_DIR}" "${DB_SOCKET_DIR}"
-mkdir -p "${DB_DATA_DIR}"
-chmod 700 "${DB_DATA_DIR}"
-
-if [[ ! -f "${IMAGE_PATH}" ]]; then
-  echo "missing image: ${IMAGE_PATH}" >&2
-  exit 1
-fi
-if [[ ! -f "${SERVER_CFG}" ]]; then
-  echo "missing server config: ${SERVER_CFG}" >&2
-  exit 1
-fi
-echo "node: ${HOSTNAME}"
-echo "workspace_root: ${WORKSPACE_ROOT}"
-echo "frontend_url: http://${HOSTNAME}:${FRONTEND_PORT}"
-echo "single_node: ${SINGLE_NODE}"
-
-postgres_args=()
-if [[ "${SINGLE_NODE}" == "0" ]]; then
-  postgres_args+=(--postgres-trusted-network)
-fi
-
-RESUME_ARGS=()
-if [[ "${GAMMABOARD_RESUME_WORKERS:-0}" == "1" ]]; then RESUME_ARGS+=(--resume-workers); fi
-exec env -u PGTZ -u PGOPTIONS \
-APPTAINERENV_LANG="${APPTAINERENV_LANG:-C.UTF-8}" \
-APPTAINERENV_LC_ALL="${APPTAINERENV_LC_ALL:-C.UTF-8}" \
-APPTAINERENV_TZ="${APPTAINERENV_TZ:-Etc/UTC}" \
-apptainer exec -B "${WORKSPACE_ROOT}" "${IMAGE_PATH}" \
-  gammaboard --resource-root "${WORKSPACE_ROOT}/resources" \
-  --port-offset "${PORT_OFFSET}" \
-  "${postgres_args[@]}" \
-  deploy --server-config "${SERVER_CFG}" "${RESUME_ARGS[@]}"
+if [[ -f "$PRIVATE_ENV" ]]; then source "$PRIVATE_ENV"; fi
+MANIFEST="${GAMMABOARD_MANIFEST:?deployment recipe required}"
+exec python3 "$(dirname "$MANIFEST")/launcher/ubelix.py" run-control --manifest "$MANIFEST"

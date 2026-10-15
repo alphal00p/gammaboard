@@ -90,6 +90,10 @@ runtime images contain task dependencies. Rebuild workers with the matching
 matching binds. Normal builds include Symbolica licensing; builds made with
 `NO_SYMBOLICA_OEM_LICENSE=1` require a regular runtime license.
 
+For external launch leases, per-worker receipts, and deployment/build fencing, see
+the [cluster launch contract](cluster-launches.md). UBELIX pins immutable images
+and private configuration snapshots per deployment.
+
 ## Upgrading this revision
 
 Use the [compatibility policy](compatibility.md) to match binaries, SDKs, generated

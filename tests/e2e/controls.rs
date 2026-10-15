@@ -826,7 +826,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     let claim_response = http_post_json(
         &server_url,
         "/api/node-launch-requests/claim-external",
-        json!({}),
+        json!({"launcher_id":"e2e-launcher"}),
         Some(&cookie),
     )
     .await?;
@@ -838,22 +838,20 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     );
     assert_eq!(claim_body["request"]["state"].as_str(), Some("starting"));
 
-    let workers = json!([
-        { "node_name": "queued-w-1", "job_id": "test-job-1" },
-        { "node_name": "queued-w-2", "job_id": "test-job-2" }
-    ]);
-    let progress_response = http_post_json(
-        &server_url,
-        &format!("/api/node-launch-requests/{request_id}/progress"),
-        json!({
-            "state": "starting",
-            "started_count": 2,
-            "result": { "workers": workers }
-        }),
-        Some(&cookie),
-    )
-    .await?;
-    assert_eq!(progress_response.status(), reqwest::StatusCode::OK);
+    let token = claim_body["request"]["lease_token"].as_str().unwrap();
+    for (name, job_id) in [("queued-w-1", "101"), ("queued-w-2", "102")] {
+        for state in ["submitting", "submitted"] {
+            let response = http_post_json(
+                &server_url,
+                &format!("/api/node-launch-requests/{request_id}/progress"),
+                json!({"lease_token":token,"node_name":name,"state":state,
+                    "job_id":(state=="submitted").then_some(job_id)}),
+                Some(&cookie),
+            )
+            .await?;
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+        }
+    }
 
     harness.start_nodes(&["queued-w-1", "queued-w-2"]).await?;
     harness

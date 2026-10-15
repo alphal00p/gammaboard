@@ -1,1130 +1,569 @@
 #!/usr/bin/env python3
+"""Deployment-scoped cluster control. Run on a login node with Python 3.11+."""
 from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import suppress
 import json
 import os
-import re
-import shlex
+from pathlib import Path
+import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable
+import uuid
 
-WORKSPACE_ROOT = os.environ.get(
-    "GAMMABOARD_WORKSPACE_ROOT",
-    str(Path(__file__).resolve().parent),
-)
-JOB_PREFIX = "gb"
-CONTROL_JOB_NAME = f"{JOB_PREFIX}-ctl"
-SINGLE_NODE_JOB_NAME = f"{JOB_PREFIX}-single"
-WORKER_JOB_NAME = f"{JOB_PREFIX}-wrk"
-CONTROL_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/control.sbatch"
-WORKER_SBATCH = f"{WORKSPACE_ROOT}/ops/slurm/worker.sbatch"
-GB_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaboard.sbatch"
-GL_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/gammaloop.sbatch"
-APPTAINER_BUILD_SBATCH = f"{WORKSPACE_ROOT}/ops/build/build.sbatch"
-IMAGE_PATH = f"{WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif"
-FRONTEND_PORT = 8080
-DB_PORT = 5400
-DEFAULT_SSH_HOST = "submit03.unibe.ch"
-DEFAULT_CONTROL_TIME = "00:20:00"
+from gbops.deployment import Deployments, digest, tag, write_json, job_name, owns
+from gbops.slurm import Slurm, SchedulerError, run
+
+WORKSPACE_ROOT = os.environ.get('GAMMABOARD_WORKSPACE_ROOT', str(Path(__file__).resolve().parent))
+SBATCH_OPTIONS = {name: '--' + name.replace('_', '-') for name in
+                  ('account', 'partition', 'qos', 'wckey', 'reservation', 'gres', 'gpus',
+                   'cpus_per_task', 'mem', 'mem_per_cpu', 'time', 'constraint', 'nodelist', 'exclude')}
 
 
-def shifted_port(base: int, port_offset: int, label: str) -> int:
-    port = base + port_offset
-    if port > 65535:
-        raise SystemExit(
-            f"{label} overflow with port_offset={port_offset} (base={base})"
-        )
-    return port
-
-
-def port_offset_from_env() -> int:
-    value = os.environ.get("GAMMABOARD_PORT_OFFSET", "0")
-    try:
-        port_offset = int(value)
-    except ValueError as err:
-        raise SystemExit(
-            f"GAMMABOARD_PORT_OFFSET must be a non-negative integer: {value}"
-        ) from err
-    if port_offset < 0:
-        raise SystemExit(
-            f"GAMMABOARD_PORT_OFFSET must be a non-negative integer: {value}"
-        )
-    return port_offset
-
-
-def frontend_port(port_offset: int | None = None) -> int:
-    resolved = port_offset if port_offset is not None else port_offset_from_env()
-    return shifted_port(FRONTEND_PORT, resolved, "frontend port")
-
-
-def db_port(port_offset: int | None = None) -> int:
-    resolved = port_offset if port_offset is not None else port_offset_from_env()
-    return shifted_port(DB_PORT, resolved, "postgres port")
-
-
-@dataclass(frozen=True)
-class Job:
-    id: str
-    name: str
-    state: str
-    node: str
-
-
-def run(
-    args: list[str], *, env: dict[str, str] | None = None, check: bool = True
-) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        args,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-    )
-    if check and result.returncode != 0:
-        command = " ".join(shlex.quote(arg) for arg in args)
-        message = f"command failed with exit status {result.returncode}: {command}"
-        if result.stderr.strip():
-            message += f"\nstderr:\n{result.stderr.strip()}"
-        if result.stdout.strip():
-            message += f"\nstdout:\n{result.stdout.strip()}"
-        raise RuntimeError(message)
-    return result
-
-
-def http_opener_without_proxies() -> urllib.request.OpenerDirector:
+def opener():
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def ensure_dirs() -> None:
-    for rel in (
-        "logs/slurm/build",
-        "logs/slurm/control",
-        "logs/slurm/workers",
-    ):
-        os.makedirs(os.path.join(WORKSPACE_ROOT, rel), exist_ok=True)
-
-
-def parse_job_id(output: str) -> str:
-    match = re.search(r"Submitted batch job\s+(\d+)", output)
-    if not match:
-        raise SystemExit(f"failed to parse sbatch output: {output.strip()}")
-    return match.group(1)
-
-
-def active_jobs(name: str | None = None, prefix: str | None = None) -> list[Job]:
-    result = run(
-        ["squeue", "-h", "-u", os.environ.get("USER", ""), "-o", "%i|%j|%T|%N"],
-        check=False,
-    )
-    jobs: list[Job] = []
-    for line in result.stdout.splitlines():
-        parts = line.split("|", 3)
-        if len(parts) != 4:
-            continue
-        job = Job(
-            id=parts[0].strip(),
-            name=parts[1].strip(),
-            state=parts[2].strip(),
-            node=parts[3].strip(),
-        )
-        if name is not None and job.name != name:
-            continue
-        if prefix is not None and not job.name.startswith(prefix):
-            continue
-        jobs.append(job)
-    return jobs
-
-
-def require_single_control() -> Job:
-    jobs = active_jobs(name=CONTROL_JOB_NAME)
-    if not jobs:
-        raise SystemExit(f"no active control job named {CONTROL_JOB_NAME}")
-    if len(jobs) > 1:
-        for job in jobs:
-            print(f"{job.id}\t{job.name}\t{job.state}\t{job.node}", file=sys.stderr)
-        raise SystemExit(f"multiple active control jobs named {CONTROL_JOB_NAME}")
-    return jobs[0]
-
-
-def wait_for_job_node(job_id: str, timeout: int = 180, *, verbose: bool = False) -> str:
-    deadline = time.monotonic() + timeout
-    next_status = 0.0
-    while time.monotonic() < deadline:
-        result = run(["squeue", "-h", "-j", job_id, "-o", "%N"], check=False)
-        node = result.stdout.strip()
-        if node and node != "(null)":
-            return node
-        now = time.monotonic()
-        if verbose and now >= next_status:
-            print(f"waiting for Slurm node assignment for job {job_id}")
-            next_status = now + 10
-        time.sleep(2)
-    raise SystemExit(f"timed out waiting for Slurm node assignment for job {job_id}")
-
-
-def slurm_log_paths(job_name: str, job_id: str) -> tuple[str, str]:
-    base = os.path.join(WORKSPACE_ROOT, "logs/slurm/control")
-    return (
-        os.path.join(base, f"{job_name}-{job_id}.out"),
-        os.path.join(base, f"{job_name}-{job_id}.err"),
-    )
-
-
-def job_is_active(job_id: str) -> bool:
-    result = run(["squeue", "-h", "-j", job_id, "-o", "%i"], check=False)
-    return any(line.strip() == job_id for line in result.stdout.splitlines())
-
-
-def status_lines() -> list[str]:
-    control_jobs = active_jobs(name=CONTROL_JOB_NAME)
-    single_node_jobs = active_jobs(name=SINGLE_NODE_JOB_NAME)
-    worker_jobs = active_jobs(name=WORKER_JOB_NAME)
-    lines: list[str] = []
-    if control_jobs:
-        for job in control_jobs:
-            lines.append(f"control     {job.id:<8} {job.state:<10} {job.node or '-'}")
-    else:
-        lines.append("control     -        not-running -")
-    if single_node_jobs:
-        for job in single_node_jobs:
-            lines.append(f"single-node {job.id:<8} {job.state:<10} {job.node or '-'}")
-    else:
-        lines.append("single-node -        not-running -")
-    lines.append(f"workers     {len(worker_jobs)}")
-    for job in worker_jobs:
-        lines.append(f"worker      {job.id:<8} {job.state:<10} {job.node or '-'}")
-    return lines
-
-
-class LiveStatusPrinter:
-    def __init__(self) -> None:
-        self.enabled = sys.stdout.isatty()
-        self.rendered_lines = 0
-
-    def clear(self) -> None:
-        if not self.enabled or self.rendered_lines == 0:
-            return
-        for _ in range(self.rendered_lines):
-            sys.stdout.write("\r\033[2K\033[1A")
-        sys.stdout.write("\r\033[2K")
-        sys.stdout.flush()
-        self.rendered_lines = 0
-
-    def print_event(self, line: str) -> None:
-        self.clear()
-        print(line)
-
-    def render(self, lines: list[str]) -> None:
-        if not self.enabled:
-            for line in lines:
-                print(line)
-            return
-        self.clear()
-        for line in lines:
-            print(line)
-        self.rendered_lines = len(lines)
-
-
-def wait_for_http(
-    url: str,
-    timeout: int = 180,
-    *,
-    verbose: bool = False,
-    job: Job | None = None,
-    on_status: Callable[[str], None] | None = None,
-) -> None:
-    deadline = time.monotonic() + timeout
-    next_status = 0.0
-    last_error = ""
-    opener = http_opener_without_proxies()
-    while time.monotonic() < deadline:
-        if job is not None and not job_is_active(job.id):
-            raise SystemExit(
-                f"{job.name} job {job.id} exited before frontend became ready"
-            )
-        try:
-            with opener.open(url, timeout=3) as response:
-                status = getattr(response, "status", None) or response.getcode()
-            if on_status is not None:
-                on_status(f"http_ready status={status} url={url}")
-            return
-        except (OSError, urllib.error.URLError) as err:
-            last_error = str(err)
-            now = time.monotonic()
-            if verbose and now >= next_status:
-                print(f"waiting for frontend at {url}; last_error={last_error}")
-                next_status = now + 10
-            time.sleep(2)
-    raise SystemExit(f"timed out waiting for {url}; last_error={last_error}")
-
-
-def api_url(control_node: str, path: str, *, port_offset: int | None = None) -> str:
-    # Server API binds to loopback on compute nodes; access it through nginx.
-    return f"http://{control_node}:{frontend_port(port_offset)}/api{path}"
-
-
-def ssh_target() -> str:
-    if os.environ.get("SSH_TARGET"):
-        return os.environ["SSH_TARGET"]
-    user = (
-        os.environ.get("SSH_USER")
-        or os.environ.get("USER")
-        or os.environ.get("LOGNAME")
-    )
-    if not user:
-        raise SystemExit("failed to infer SSH user; set SSH_USER or SSH_TARGET")
-    host = os.environ.get("SSH_HOST") or DEFAULT_SSH_HOST
-    return f"{user}@{host}"
-
-
-def tunnel_command(control_node: str, local_port: int, *, port_offset: int) -> str:
-    return f"ssh -N -L {local_port}:{control_node}:{frontend_port(port_offset)} {ssh_target()}"
-
-
-def copy_to_clipboard_osc52(text: str) -> bool:
-    if not sys.stdout.isatty():
-        return False
-    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
-    try:
-        sys.stdout.write(f"\033]52;c;{encoded}\a")
-        sys.stdout.flush()
-        return True
-    except OSError:
-        return False
-
-
-def database_url(control_node: str, *, port_offset: int | None = None) -> str:
-    return f"postgresql://postgres@{control_node}:{db_port(port_offset)}/gammaboard_db"
-
-
-def login(
-    control_node: str, admin_password: str, *, port_offset: int | None = None
-) -> str | None:
-    data = json.dumps({"password": admin_password}).encode()
-    request = urllib.request.Request(
-        api_url(control_node, "/auth/login", port_offset=port_offset),
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with http_opener_without_proxies().open(request, timeout=5) as response:
-            cookie = response.headers.get("Set-Cookie", "")
-    except urllib.error.HTTPError as err:
-        if err.code == 401:
-            raise SystemExit(
-                "API login failed (401 Unauthorized). "
-                "Set --admin-password or GAMMABOARD_ADMIN_PASSWORD."
-            ) from err
-        raise
-    return cookie.split(";", 1)[0] if cookie else None
-
-
-def admin_password(args: argparse.Namespace) -> str:
-    return (
-        getattr(args, "admin_password", None)
-        or os.environ.get("GAMMABOARD_ADMIN_PASSWORD")
-        or ""
-    )
-
-
-def api_request_json(
-    control_node: str,
-    path: str,
-    *,
-    method: str = "POST",
-    payload: dict | None = None,
-    cookie: str | None = None,
-    port_offset: int | None = None,
-) -> dict:
-    headers = {"Content-Type": "application/json"}
-    if cookie:
-        headers["Cookie"] = cookie
-    request = urllib.request.Request(
-        api_url(control_node, path, port_offset=port_offset),
-        data=json.dumps(payload or {}).encode(),
-        headers=headers,
-        method=method,
-    )
-    with http_opener_without_proxies().open(request, timeout=10) as response:
-        body = response.read().decode("utf-8")
-    return json.loads(body) if body else {}
-
-
-def post(
-    control_node: str,
-    path: str,
-    *,
-    cookie: str | None = None,
-    port_offset: int | None = None,
-) -> None:
-    api_request_json(control_node, path, cookie=cookie, port_offset=port_offset)
-
-
-def parse_hms(value: str) -> str:
-    if not re.fullmatch(r"\d{2}:\d{2}:\d{2}", value):
-        raise argparse.ArgumentTypeError("expected HH:MM:SS")
+def shifted_port(base, offset):
+    value = base + offset
+    if not 0 < value <= 65535: raise ValueError('port out of range')
     return value
 
 
-def parse_port_offset(value: str) -> int:
-    try:
-        port_offset = int(value)
-    except ValueError as err:
-        raise argparse.ArgumentTypeError("expected non-negative integer") from err
-    if port_offset < 0:
-        raise argparse.ArgumentTypeError("expected non-negative integer")
-    shifted_port(FRONTEND_PORT, port_offset, "frontend port")
-    shifted_port(DB_PORT, port_offset, "postgres port")
-    return port_offset
+def database_url(node, offset):
+    return f'postgresql://postgres@{node}:{shifted_port(5400, offset)}/gammaboard_db'
 
 
-def submit_singleton_job(
-    job_name: str, time_limit: str, *, port_offset: int, single_node: bool = False, resume_workers: bool = False
-) -> Job:
-    jobs = active_jobs(name=job_name)
-    if len(jobs) == 1:
-        return jobs[0]
-    if len(jobs) > 1:
-        for job in jobs:
-            print(f"{job.id}\t{job.name}\t{job.state}\t{job.node}", file=sys.stderr)
-        raise SystemExit(f"multiple active jobs named {job_name}")
-
-    ensure_dirs()
-    env = os.environ.copy()
-    env["GAMMABOARD_PORT_OFFSET"] = str(port_offset)
-    env["GAMMABOARD_WORKSPACE_ROOT"] = WORKSPACE_ROOT
-    env["GAMMABOARD_SINGLE_NODE"] = "1" if single_node else "0"
-    env["GAMMABOARD_RESUME_WORKERS"] = "1" if resume_workers else "0"
-    result = run(
-        [
-            "sbatch",
-            "--chdir",
-            WORKSPACE_ROOT,
-            "--job-name",
-            job_name,
-            "--time",
-            time_limit,
-            CONTROL_SBATCH,
-        ],
-        env=env,
-    )
-    job_id = parse_job_id(result.stdout)
-    return Job(id=job_id, name=job_name, state="SUBMITTED", node="")
+def tunnel_command(node, local_port, offset):
+    target = os.environ.get('SSH_TARGET') or f'{os.environ.get("SSH_USER", os.environ.get("USER", ""))}@{os.environ.get("SSH_HOST", "submit03.unibe.ch")}'
+    return f'ssh -N -L {local_port}:{node}:{shifted_port(8080, offset)} {target}'
 
 
-def submit_control(time_limit: str, *, port_offset: int, resume_workers: bool = False) -> Job:
-    return submit_singleton_job(
-        CONTROL_JOB_NAME, time_limit, port_offset=port_offset, resume_workers=resume_workers
-    )
+class Api:
+    def __init__(self, manifest, node, password=''):
+        self.base = f'http://{node}:{8080 + manifest["port_offset"]}/api'
+        self.password = password
+        self.cookie = None
+        health = self.request('/health', method='GET')
+        if health.get('deployment_id') != manifest['id'] or health.get('build_id') != manifest['image']['build_info']['build_id']:
+            raise RuntimeError('API identity does not match the selected deployment')
+        self.login()
+
+    def login(self):
+        request = urllib.request.Request(self.base + '/auth/login', data=json.dumps({'password': self.password}).encode(), headers={'Content-Type': 'application/json'})
+        with opener().open(request, timeout=10) as response:
+            self.cookie = response.headers.get('Set-Cookie', '').split(';')[0]
+
+    def request(self, path, payload=None, method='POST'):
+        headers = {'Content-Type': 'application/json'}
+        if self.cookie: headers['Cookie'] = self.cookie
+        request = urllib.request.Request(self.base + path, data=None if method == 'GET' else json.dumps(payload or {}).encode(), headers=headers, method=method)
+        with opener().open(request, timeout=10) as response:
+            return json.load(response)
 
 
-def submit_single_node(time_limit: str, *, port_offset: int, resume_workers: bool = False) -> Job:
-    return submit_singleton_job(
-        SINGLE_NODE_JOB_NAME, time_limit, port_offset=port_offset, single_node=True, resume_workers=resume_workers
-    )
+def launch_groups_for_request(request):
+    groups = request.get('args', {}).get('groups')
+    if not isinstance(groups, list) or not groups:
+        raise ValueError('external launches require nonempty args.groups; recreate old requests')
+    specs = {}
+    for group in groups:
+        names = group.get('node_names')
+        count = group.get('count')
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1 or not isinstance(names, list) or len(names) != count:
+            raise ValueError('each group requires its reserved node_names and positive count')
+        config, caps = group.get('config'), group.get('capabilities')
+        if not isinstance(config, dict) or not isinstance(caps, dict):
+            raise ValueError('group requires server-normalized config and capabilities')
+        if any(key in config for key in ('gpu', 'cores', 'cpus', 'nr_cores', 'cpus-per-task')):
+            raise ValueError('launcher received a noncanonical resource configuration')
+        for name in names:
+            if not isinstance(name, str) or not name or name in specs: raise ValueError('invalid/duplicate reserved worker name')
+            specs[name] = {'node_name': name, 'config': config, 'capabilities': caps,
+                           'max_start_failures': group.get('max_start_failures', 3)}
+    return specs
 
 
-def claim_launch_request(
-    control_node: str, cookie: str | None, *, port_offset: int | None = None
-) -> dict | None:
-    response = api_request_json(
-        control_node,
-        "/node-launch-requests/claim-external",
-        cookie=cookie,
-        port_offset=port_offset,
-    )
-    request = response.get("request")
-    return request if isinstance(request, dict) else None
+def sbatch_args_from_config(config):
+    return [f'{option}={config[key]}' for key, option in SBATCH_OPTIONS.items() if key in config]
 
 
-def update_launch_request(
-    control_node: str,
-    cookie: str | None,
-    request_id: int,
-    state: str,
-    started_count: int,
-    result: dict,
-    error: str | None = None,
-    port_offset: int | None = None,
-) -> None:
-    api_request_json(
-        control_node,
-        f"/node-launch-requests/{int(request_id)}/progress",
-        payload={
-            "state": state,
-            "started_count": started_count,
-            "result": result,
-            "error": error,
-        },
-        cookie=cookie,
-        port_offset=port_offset,
-    )
+class Lease:
+    def __init__(self, api, request):
+        self.api, self.request = api, request
+        self.stop, self.lost = threading.Event(), threading.Event()
 
-
-def capabilities_from_args(args: dict) -> dict[str, int]:
-    raw = args.get("capabilities") or {}
-    if not isinstance(raw, dict):
-        raise RuntimeError("launch request args.capabilities must be an object")
-    capabilities: dict[str, int] = {}
-    for key, value in raw.items():
-        key = str(key).strip()
-        if not key:
-            raise RuntimeError("launch request capability key must not be empty")
-        amount = int(value)
-        if amount < 0:
-            raise RuntimeError(f"launch request capability {key} must be non-negative")
-        capabilities[key] = amount
-    return capabilities
-
-
-def gpu_count_from_gres(gres: str) -> int | None:
-    if gres.strip() == "gpu":
-        return 1
-    for raw_segment in gres.split(","):
-        segment = raw_segment.strip()
-        if not segment.startswith("gpu:"):
-            continue
-        parts = segment.split(":")
-        try:
-            return int(parts[-1])
-        except ValueError:
-            return 1
-    return None
-
-
-def gpu_gres_from_value(value: object) -> str | None:
-    if isinstance(value, bool):
-        return "gpu:rtx4090:1" if value else None
-    if isinstance(value, int):
-        return f"gpu:rtx4090:{value}" if value > 0 else None
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return None
-        if raw.startswith("gpu:"):
-            return raw
-        if raw.isdigit():
-            count = int(raw)
-            return f"gpu:rtx4090:{count}" if count > 0 else None
-        return f"gpu:{raw}"
-    return None
-
-
-def derive_capabilities_from_config(config: dict) -> dict[str, int]:
-    capabilities: dict[str, int] = {}
-    for key, value in config.items():
-        if key == "gpu":
-            gpu_gres = gpu_gres_from_value(value)
-            if gpu_gres is not None:
-                gpu_count = gpu_count_from_gres(gpu_gres)
-                if gpu_count is not None:
-                    capabilities["gpu"] = gpu_count
-            continue
-        if key in ("cores", "nr_cores", "cpus", "cpus_per_task", "cpus-per-task"):
-            if isinstance(value, int):
-                capabilities["cpus"] = value
-            continue
-        if isinstance(value, bool):
-            capabilities[key] = 1 if value else 0
-        elif isinstance(value, int):
-            capabilities[key] = value
-    gres = config.get("gres")
-    if isinstance(gres, str):
-        gpu_count = gpu_count_from_gres(gres)
-        if gpu_count is not None:
-            capabilities["gpu"] = gpu_count
-    if "gpu" not in capabilities:
-        gpus = config.get("gpus")
-        if isinstance(gpus, int) and gpus > 0:
-            capabilities["gpu"] = gpus
-    return {key: value for key, value in capabilities.items() if value >= 0}
-
-
-def capabilities_from_group(group: dict) -> dict[str, int]:
-    config = group.get("config") or {}
-    if not isinstance(config, dict):
-        raise RuntimeError("launch request group config must be an object")
-    return derive_capabilities_from_config(config)
-
-
-def launch_groups_for_request(request: dict) -> list[dict]:
-    request_id = int(request["id"])
-    args = request.get("args") or {}
-    if not isinstance(args, dict):
-        args = {}
-    groups = args.get("groups")
-    if isinstance(groups, list) and groups:
-        normalized: list[dict] = []
-        next_index_by_prefix: dict[str, int] = {}
-        for group in groups:
-            if not isinstance(group, dict):
-                raise RuntimeError("launch request args.groups entries must be objects")
-            count = int(group.get("count") or 0)
-            if count <= 0:
-                raise RuntimeError("launch request group count must be positive")
-            prefix = str(group.get("name_prefix") or "w").strip() or "w"
-            max_start_failures = int(group.get("max_start_failures") or 3)
-            config = group.get("config") or {}
-            if not isinstance(config, dict):
-                raise RuntimeError("launch request group config must be an object")
-            capabilities = capabilities_from_group(group)
-            start_index = next_index_by_prefix.get(prefix, 1)
-            node_names = [
-                f"{prefix}-{request_id}-{index}"
-                for index in range(start_index, start_index + count)
-            ]
-            if "node_names" in group:
-                node_names = group["node_names"]
-                if not isinstance(node_names, list) or len(node_names) != count or not all(isinstance(n, str) and n for n in node_names):
-                    raise RuntimeError("launch request group node_names must match count")
-            next_index_by_prefix[prefix] = start_index + count
-            for node_name in node_names:
-                normalized.append(
-                    {
-                        "node_name": node_name,
-                        "max_start_failures": max_start_failures,
-                        "config": config,
-                        "capabilities": capabilities,
-                    }
-                )
-        return normalized
-
-    count = int(request.get("requested_count") or 0)
-    if count <= 0:
-        raise RuntimeError("launch request requested zero workers")
-    requested_names = args.get("node_names")
-    if isinstance(requested_names, list):
-        names = [str(name).strip() for name in requested_names if str(name).strip()]
-        if len(names) >= count:
-            node_names = names[:count]
-        else:
-            node_names = []
-    else:
-        node_names = []
-    if not node_names:
-        prefix = (
-            str(request.get("name_prefix") or args.get("name_prefix") or "w").strip()
-            or "w"
-        )
-        node_names = [f"{prefix}-{request_id}-{i}" for i in range(1, count + 1)]
-    max_start_failures = int(args.get("max_start_failures") or 3)
-    return [
-        {
-            "node_name": node_name,
-            "max_start_failures": max_start_failures,
-            "config": {},
-            "capabilities": capabilities_from_args(args),
-        }
-        for node_name in node_names
-    ]
-
-
-SBATCH_CONFIG_OPTIONS = {
-    "account": "--account",
-    "partition": "--partition",
-    "qos": "--qos",
-    "wckey": "--wckey",
-    "reservation": "--reservation",
-    "gres": "--gres",
-    "gpus": "--gpus",
-    "cpus_per_task": "--cpus-per-task",
-    "cpus-per-task": "--cpus-per-task",
-    "mem": "--mem",
-    "mem_per_cpu": "--mem-per-cpu",
-    "mem-per-cpu": "--mem-per-cpu",
-    "time": "--time",
-    "constraint": "--constraint",
-    "nodelist": "--nodelist",
-    "exclude": "--exclude",
-}
-
-
-def normalize_sbatch_config(config: dict) -> dict:
-    normalized_config = dict(config)
-    if "cpus_per_task" not in normalized_config and "cpus-per-task" not in normalized_config:
-        for key in ("cores", "nr_cores", "cpus"):
-            if key in normalized_config:
-                normalized_config["cpus_per_task"] = normalized_config[key]
-                break
-    return normalized_config
-
-
-def sbatch_args_from_config(config: dict) -> list[str]:
-    sbatch_args: list[str] = []
-    normalized_config = normalize_sbatch_config(config)
-    gpu_value = normalized_config.get("gpu")
-    gpu_gres = gpu_gres_from_value(gpu_value)
-    if gpu_gres is not None and "gres" not in normalized_config and "gpus" not in normalized_config:
-        normalized_config["gres"] = gpu_gres
-    gres = normalized_config.get("gres")
-    if (
-        isinstance(gres, str)
-        and gpu_count_from_gres(gres) is not None
-        and "partition" not in normalized_config
-    ):
-        normalized_config["partition"] = "gpu"
-    for key, option in SBATCH_CONFIG_OPTIONS.items():
-        if key not in normalized_config:
-            continue
-        value = normalized_config[key]
-        if value is None or value is False:
-            continue
-        if value is True:
-            sbatch_args.append(option)
-        else:
-            sbatch_args.append(f"{option}={value}")
-    return sbatch_args
-
-
-def parse_capability(raw: str) -> tuple[str, int]:
-    if "=" not in raw:
-        raise argparse.ArgumentTypeError("capability must use KEY=VALUE")
-    key, value = raw.split("=", 1)
-    key = key.strip()
-    if not key:
-        raise argparse.ArgumentTypeError("capability key must not be empty")
-    try:
-        amount = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            f"capability value must be an integer: {error}"
-        ) from error
-    if amount < 0:
-        raise argparse.ArgumentTypeError("capability value must be non-negative")
-    return key, amount
-
-
-def submit_worker(
-    node_name: str,
-    control_node: str,
-    *,
-    control_job_id: str,
-    port_offset: int | None = None,
-    max_start_failures: int = 3,
-    capabilities: dict[str, int] | None = None,
-    config: dict | None = None,
-) -> str:
-    resolved_port_offset = (
-        port_offset if port_offset is not None else port_offset_from_env()
-    )
-    ensure_dirs()
-    env = os.environ.copy()
-    capability_args = []
-    for key, value in sorted((capabilities or {}).items()):
-        capability_args.extend(["--capability", f"{key}={int(value)}"])
-    env.update(
-        {
-            "NODE_NAME": node_name,
-            "NODE_MAX_START_FAILURES": str(max_start_failures),
-            "GAMMABOARD_DATABASE_URL": database_url(
-                control_node, port_offset=resolved_port_offset
-            ),
-            "GAMMABOARD_IMAGE": IMAGE_PATH,
-            "GAMMABOARD_WORKSPACE_ROOT": WORKSPACE_ROOT,
-            "CONTROL_JOB_ID": control_job_id,
-            "NODE_CAPABILITIES": " ".join(shlex.quote(arg) for arg in capability_args),
-        }
-    )
-    result = run(
-        [
-            "sbatch",
-            "--chdir",
-            WORKSPACE_ROOT,
-            "--job-name",
-            WORKER_JOB_NAME,
-            *sbatch_args_from_config(config or {}),
-            WORKER_SBATCH,
-        ],
-        env=env,
-    )
-    return parse_job_id(result.stdout)
-
-
-def resolve_launch_requests(
-    control: Job,
-    control_node: str,
-    cookie: str | None,
-    *,
-    max_requests: int | None = None,
-    on_launch: Callable[[str], None] | None = None,
-    port_offset: int | None = None,
-) -> int:
-    resolved_port_offset = (
-        port_offset if port_offset is not None else port_offset_from_env()
-    )
-    resolved = 0
-    while max_requests is None or resolved < max_requests:
-        request = claim_launch_request(
-            control_node, cookie, port_offset=resolved_port_offset
-        )
-        if request is None:
-            break
-
-        request_id = int(request["id"])
-        launch_specs = launch_groups_for_request(request)
-        submitted: list[dict] = []
-        try:
-            if not launch_specs:
-                raise RuntimeError("launch request requested zero workers")
-            for spec in launch_specs:
-                node_name = spec["node_name"]
-                job_id = submit_worker(
-                    node_name,
-                    control_node,
-                    control_job_id=control.id,
-                    port_offset=resolved_port_offset,
-                    max_start_failures=spec["max_start_failures"],
-                    capabilities=spec["capabilities"],
-                    config=spec["config"],
-                )
-                submitted.append(
-                    {
-                        "node_name": node_name,
-                        "job_id": job_id,
-                        "config": spec["config"],
-                        "capabilities": spec["capabilities"],
-                    }
-                )
-                message = f"launch_request={request_id}\tnode={node_name}\tjob={job_id}"
-                if on_launch is not None:
-                    on_launch(message)
-                else:
-                    print(message)
-            update_launch_request(
-                control_node,
-                cookie,
-                request_id,
-                "starting",
-                len(submitted),
-                {"workers": submitted},
-                port_offset=resolved_port_offset,
-            )
-        except Exception as err:
-            try:
-                update_launch_request(
-                    control_node,
-                    cookie,
-                    request_id,
-                    "failed",
-                    len(submitted),
-                    {"workers": submitted},
-                    str(err),
-                    port_offset=resolved_port_offset,
-                )
-            finally:
-                print(f"launch_request={request_id}\tfailed={err}", file=sys.stderr)
-        resolved += 1
-    return resolved
-
-
-def watch_launch_requests(
-    args: argparse.Namespace, control: Job, control_node: str
-) -> None:
-    print(
-        f"watching launch requests on {control_node}; Ctrl-C stops only this launcher"
-    )
-    cookie = login(control_node, admin_password(args), port_offset=args.port_offset)
-    try:
-        while True:
-            resolved = resolve_launch_requests(
-                control, control_node, cookie, port_offset=args.port_offset
-            )
-            if args.once:
-                print(f"resolved_requests={resolved}")
+    def heartbeat(self):
+        while not self.stop.wait(20):
+            try: self.api.request(f'/node-launch-requests/{self.request["id"]}/lease', {'lease_token': self.request['lease_token']})
+            except Exception:
+                self.lost.set()
                 return
-            time.sleep(args.poll_seconds)
-    except KeyboardInterrupt:
-        print("launcher stopped")
+
+    def __enter__(self):
+        self.thread = threading.Thread(target=self.heartbeat, daemon=True)
+        self.thread.start()
+        return self
+
+    def check(self):
+        if self.lost.is_set(): raise RuntimeError('launcher lease could not be renewed; reconciliation required')
+
+    def update(self, name, state, job_id=None, error=None):
+        self.check()
+        self.api.request(f'/node-launch-requests/{self.request["id"]}/progress',
+                         {'lease_token': self.request['lease_token'], 'node_name': name,
+                          'state': state, 'job_id': job_id, 'error': error})
+
+    def __exit__(self, *_):
+        self.stop.set()
+        self.thread.join(timeout=12)
+        with suppress(Exception):
+            self.api.request(f'/node-launch-requests/{self.request["id"]}/lease',
+                             {'lease_token': self.request['lease_token'], 'release': True})
 
 
-def command_up(args: argparse.Namespace) -> None:
-    port_offset = args.port_offset
-    job = (
-        submit_single_node(args.time, port_offset=port_offset, resume_workers=args.resume_workers)
-        if args.single_node
-        else submit_control(args.time, port_offset=port_offset, resume_workers=args.resume_workers)
-    )
-    print(f"{'single_node_job_id' if args.single_node else 'control_job_id'}={job.id}")
-    node = wait_for_job_node(job.id, args.startup_timeout, verbose=True)
-    print(f"control_node={node}")
-    tunnel = tunnel_command(node, args.local_port, port_offset=port_offset)
-    print(f"tunnel={tunnel}")
-    if args.copy:
-        print(
-            f"copied_to_clipboard={'true' if copy_to_clipboard_osc52(tunnel) else 'false'}"
-        )
-    wait_for_http(
-        f"http://{node}:{frontend_port(port_offset)}",
-        args.startup_timeout,
-        verbose=True,
-        job=job,
-        on_status=print,
-    )
-    print("frontend_ready=true")
+def submit_worker(manifest, node, spec, worker, slurm):
+    directory = Path(manifest['workspace']) / 'deployments' / manifest['id']
+    recipe = directory / 'workers' / f'{worker["submission_key"]}.json'
+    write_json(recipe, {'manifest': str(directory / 'manifest.json'), 'database_node': node, **spec})
+    env = dict(os.environ, GAMMABOARD_WORKSPACE_ROOT=manifest['workspace'], GAMMABOARD_WORKER_SPEC=str(recipe),
+               GAMMABOARD_MANIFEST=str(directory / 'manifest.json'))
+    return slurm.submit(directory / 'launcher/worker.sbatch',
+                        name=job_name(manifest, worker["submission_key"]), comment=tag(manifest, worker['submission_key']),
+                        workspace=manifest['workspace'], env=env, options=sbatch_args_from_config(spec['config']))
+
+
+def resolve_launch_requests(manifest, node, api, slurm, owner=None):
+    deployments = Deployments(manifest['workspace'], manifest['port_offset'])
+    with deployments.locked():
+        current = deployments.load()
+        if current['id'] != manifest['id'] or current['state'] in ('stopping', 'stopped'):
+            raise RuntimeError('deployment is stopping or has been replaced')
+        return reconcile_launch_requests(manifest, node, api, slurm, owner)
+
+
+def reconcile_launch_requests(manifest, node, api, slurm, owner=None):
+    """One fair pass. A missing ambiguous submission is never automatically repeated."""
+    owner = owner or uuid.uuid4().hex
+    seen = set()
+    while True:
+        request = api.request('/node-launch-requests/claim-external', {'launcher_id': owner}).get('request')
+        if request is None: return len(seen)
+        with Lease(api, request) as lease:
+            if request['id'] in seen: return len(seen)
+            seen.add(request['id'])
+            specs = launch_groups_for_request(request)
+            for worker in request['workers']:
+                lease.check()
+                name, state = worker['node_name'], worker['state']
+                if state in ('connected', 'failed', 'canceled'): continue
+                if worker.get('registered'):
+                    lease.update(name, 'connected', worker.get('job_id'))
+                    continue
+                if state == 'pending':
+                    spec = specs[name]
+                    # Validate all local inputs before committing submission intent.
+                    sbatch_args_from_config(spec['config'])
+                    lease.update(name, 'submitting')
+                    job_id = submit_worker(manifest, node, spec, worker, slurm)
+                    lease.update(name, 'submitted', job_id)
+                    print(f'request={request["id"]} node={name} job={job_id}')
+                elif state == 'submitting':
+                    matches = slurm.find(tag(manifest, worker['submission_key']), manifest['created_at'][:10])
+                    if len(matches) == 1:
+                        job = matches[0]
+                        lease.update(name, 'submitted', job.id)
+                        if job.terminal: lease.update(name, 'failed', job.id, f'Slurm job ended before registration: {job.state}')
+                    else:
+                        print(f'request={request["id"]} node={name}: submission uncertain ({len(matches)} matching jobs); reconcile before retry', file=sys.stderr)
+                elif state == 'submitted':
+                    job = slurm.lookup(worker['job_id'], manifest['created_at'][:10])
+                    if job and not owns(job, manifest, worker['submission_key']):
+                        raise RuntimeError('scheduler job identity does not match the worker reservation')
+                    if job and job.terminal:
+                        lease.update(name, 'failed', job.id, f'Slurm job ended before registration: {job.state}')
+
+
+def control_job(manifest, slurm):
+    if not manifest.get('control_job_id'): return None
+    job = slurm.lookup(manifest['control_job_id'], manifest['created_at'][:10])
+    if job and not owns(job, manifest, 'control'): raise RuntimeError('control job belongs to another deployment')
+    return job
+
+
+def require_deployment(args, slurm):
+    deployments = Deployments(WORKSPACE_ROOT, args.port_offset)
+    manifest = deployments.load()
+    if not manifest: raise RuntimeError('no deployment recorded for this workspace/offset')
+    return deployments, manifest
+
+
+def up(args, slurm):
+    deployments = Deployments(WORKSPACE_ROOT, args.port_offset)
+    image = deployments.selected_image(args.image)
+    config = deployments.configuration(args.single_node, args.local_port, args.server_config, args.runtime_config)
+    with deployments.locked():
+        manifest = deployments.load()
+        if manifest and manifest['state'] == 'stopped':
+            manifest = None
+        if manifest:
+            if manifest.get('control_job_id'):
+                job = control_job(manifest, slurm)
+                if job is None: raise RuntimeError('control status is unknown; refusing to create another deployment')
+                if job.terminal:
+                    if any(owns(worker, manifest) for worker in slurm.active()):
+                        raise RuntimeError('old deployment still has active jobs; run down before replacing it')
+                    manifest = None
+            elif manifest['control_submission'] == 'submitting':
+                matches = slurm.find(tag(manifest, 'control'), manifest['created_at'][:10])
+                if len(matches) != 1: raise RuntimeError('control submission uncertain; use resolve-control after checking Slurm')
+                manifest['control_job_id'] = matches[0].id
+                manifest['control_submission'] = 'submitted'
+                deployments.save(manifest)
+                if matches[0].terminal:
+                    if any(owns(worker, manifest) for worker in slurm.active()):
+                        raise RuntimeError('old deployment still has active jobs; run down before replacing it')
+                    manifest = None
+        if manifest and manifest['state'] == 'stopping':
+            raise RuntimeError('deployment is stopping; wait for its jobs to finish')
+        if manifest is not None and (manifest['single_node'] != args.single_node or manifest['config_hash'] != config['hash'] or manifest['image']['sha256'] != image['sha256']):
+            raise RuntimeError('active deployment has different image/configuration; stop it before starting the replacement')
+        if manifest and args.resume_workers and not manifest['resume_workers']:
+            raise RuntimeError('--resume-workers is a startup setting; stop the active deployment before enabling it')
+        if manifest is None: manifest = deployments.create(image, config, args.single_node, args.resume_workers)
+        if manifest['control_submission'] == 'prepared':
+            manifest['control_submission'] = 'submitting'
+            deployments.save(manifest)
+            for name in ('control', 'workers', 'build'):
+                (deployments.workspace / 'logs/slurm' / name).mkdir(parents=True, exist_ok=True)
+            env = dict(os.environ, GAMMABOARD_WORKSPACE_ROOT=str(deployments.workspace),
+                       GAMMABOARD_MANIFEST=str(deployments.root / manifest['id'] / 'manifest.json'))
+            manifest['control_job_id'] = slurm.submit(deployments.root / manifest['id'] / 'launcher/control.sbatch',
+                name=job_name(manifest, "control"), comment=tag(manifest, 'control'),
+                workspace=deployments.workspace, env=env, options=[f'--time={args.time}'])
+            manifest['control_submission'] = 'submitted'
+            deployments.save(manifest)
+    print(f'deployment={manifest["id"]} control_job={manifest["control_job_id"]}')
+    node, api = wait_ready(manifest, slurm, args.startup_timeout, args.admin_password)
+    with deployments.locked():
+        current = deployments.load()
+        if current['id'] != manifest['id'] or current['state'] in ('stopping', 'stopped'):
+            raise RuntimeError('deployment stopped or was replaced during startup')
+        current['state'] = 'running'
+        deployments.save(current)
+    tunnel = tunnel_command(node, args.local_port, args.port_offset)
+    print(f'tunnel={tunnel}')
+    if args.copy and sys.stdout.isatty():
+        sys.stdout.write('\033]52;c;' + base64.b64encode(tunnel.encode()).decode() + '\a')
+    if args.resume_workers and not args.single_node:
+        resolve_launch_requests(manifest, node, api, slurm)
     if args.watch:
-        print(f"watching {job.name} job; Ctrl-C stops only this launcher")
-        status_printer = LiveStatusPrinter()
+        watch(manifest, node, api, slurm, args.poll_seconds)
+
+
+def wait_ready(manifest, slurm, timeout, password):
+    deadline, last = time.monotonic() + timeout, 'not started'
+    while time.monotonic() < deadline:
         try:
-            cookie: str | None = None
-            can_resolve_requests = False
-            if not args.single_node:
-                try:
-                    cookie = login(node, admin_password(args), port_offset=port_offset)
-                    can_resolve_requests = True
-                except SystemExit as err:
-                    print(
-                        f"warning: {err}; continuing watch without launch-request resolution",
-                        file=sys.stderr,
-                    )
-            while job_is_active(job.id):
-                if can_resolve_requests:
-                    resolve_launch_requests(
-                        job,
-                        node,
-                        cookie,
-                        on_launch=status_printer.print_event,
-                        port_offset=port_offset,
-                    )
-                status_printer.render(status_lines())
-                time.sleep(args.poll_seconds)
-            status_printer.clear()
-        except KeyboardInterrupt:
-            status_printer.clear()
-            print("launcher stopped")
+            job = control_job(manifest, slurm)
+            if job and job.terminal: raise RuntimeError(f'control job ended: {job.state}')
+            if job and job.node:
+                try: return job.node, Api(manifest, job.node, password)
+                except (OSError, urllib.error.URLError) as error: last = str(error)
+        except SchedulerError as error: last = str(error)
+        time.sleep(2)
+    raise RuntimeError(f'deployment not ready within timeout ({last}); it remains recorded; down can cancel a pending job')
 
 
-def command_down(args: argparse.Namespace) -> None:
-    port_offset = args.port_offset
-    deploy_jobs = active_jobs(name=CONTROL_JOB_NAME) + active_jobs(
-        name=SINGLE_NODE_JOB_NAME
-    )
-    if not deploy_jobs:
-        raise SystemExit(f"no active {CONTROL_JOB_NAME} or {SINGLE_NODE_JOB_NAME} job")
-    if len(deploy_jobs) > 1:
-        for job in deploy_jobs:
-            print(f"{job.id}\t{job.name}\t{job.state}\t{job.node}", file=sys.stderr)
-        raise SystemExit(
-            "multiple active deploy jobs; cancel the unwanted job explicitly or retry when only one remains"
-        )
+def down(args, slurm):
+    deployments, manifest = require_deployment(args, slurm)
+    with deployments.locked():
+        manifest = deployments.load()
+        if manifest['state'] == 'stopped': return
+        if not manifest.get('control_job_id'):
+            if manifest['control_submission'] == 'prepared':
+                manifest['state'] = 'stopped'
+                deployments.save(manifest)
+                return
+            matches = slurm.find(tag(manifest, 'control'), manifest['created_at'][:10])
+            if len(matches) != 1: raise RuntimeError('control submission uncertain; use resolve-control')
+            manifest['control_job_id'] = matches[0].id
+            deployments.save(manifest)
+        job = control_job(manifest, slurm)
+        if job is None: raise RuntimeError('control status unknown; no jobs canceled')
+        manifest['state'] = 'stopping'
+        deployments.save(manifest)
+        if job.terminal or job.state == 'PENDING':
+            slurm.cancel([w.id for w in slurm.active() if owns(w, manifest) and w.id != job.id])
+            if not job.terminal: slurm.cancel([job.id])
+        else:
+            if not job.node: raise RuntimeError('control has no reachable node yet; retry once its state is known')
+            api = Api(manifest, job.node, args.admin_password)
+            api.request('/admin/workers/suspend')
+            deadline = time.monotonic() + args.worker_timeout
+            while True:
+                workers = [w for w in slurm.active() if owns(w, manifest) and w.id != job.id]
+                if not workers or time.monotonic() >= deadline: break
+                time.sleep(2)
+            slurm.cancel([w.id for w in workers])
+            time.sleep(args.control_grace_seconds)
+            slurm.cancel([job.id])
+        if not any(owns(w, manifest) for w in slurm.active()):
+            final = control_job(manifest, slurm)
+            if final and final.terminal: manifest['state'] = 'stopped'
+        deployments.save(manifest)
+        print(f'shutdown requested for deployment={manifest["id"]}')
 
-    job = deploy_jobs[0]
-    node = wait_for_job_node(job.id, args.startup_timeout)
-    print(f"job_id={job.id}")
-    print(f"job_name={job.name}")
-    print(f"control_node={node}")
 
+def watch(manifest, node, api, slurm, interval, once=False):
+    delay = interval
+    while True:
+        try:
+            job = control_job(manifest, slurm)
+            if job and job.terminal: return
+            if job is None: raise SchedulerError('control status unknown')
+            if not manifest['single_node']: resolve_launch_requests(manifest, node, api, slurm)
+            if once: return
+            delay = interval
+        except urllib.error.HTTPError as error:
+            if error.code == 401: api.login()
+            else: print(f'launcher retry: {error}', file=sys.stderr)
+            if once: raise
+            delay = min(60, max(interval, delay * 2))
+        except (OSError, SchedulerError, RuntimeError) as error:
+            if once: raise
+            print(f'launcher retry: {error}', file=sys.stderr)
+            delay = min(60, max(interval, delay * 2))
+        time.sleep(delay)
+
+
+def container_command(manifest, command, gpu=False):
+    image = manifest['image']
+    for name in ('server', 'runtime'):
+        if digest(manifest[name + '_config']) != manifest[name + '_digest']: raise RuntimeError('deployment configuration snapshot was modified')
+    if digest(image['path']) != image['sha256']: raise RuntimeError('pinned image was modified')
+    env = dict(os.environ)
+    env.update({'APPTAINERENV_GAMMABOARD_DEPLOYMENT_ID': manifest['id'],
+                'APPTAINERENV_TZ': 'Etc/UTC', 'APPTAINERENV_LANG': 'C.UTF-8', 'APPTAINERENV_LC_ALL': 'C.UTF-8'})
+    args = ['apptainer', 'exec', '--cleanenv', '--bind', manifest['workspace']]
+    if gpu: args += ['--nv']
+    return [*args, image['path'], *command], env
+
+
+def read_manifest(path):
+    manifest = json.loads(Path(path).read_text())
+    if manifest.get('version') != 1: raise ValueError('unsupported deployment manifest')
+    return manifest
+
+
+def run_control(args):
+    manifest = read_manifest(args.manifest)
+    command = ['gammaboard', '--runtime-config', manifest['runtime_config'], '--resource-root', manifest['workspace'] + '/resources', '--port-offset', str(manifest['port_offset'])]
+    if not manifest['single_node']: command += ['--postgres-trusted-network']
+    command += ['deploy', '--server-config', manifest['server_config']]
+    if manifest['resume_workers']: command += ['--resume-workers']
+    for origin in manifest['origins']: command += ['--allowed-origin', origin]
+    command, env = container_command(manifest, command)
+    os.execvpe(command[0], command, env)
+
+
+def run_worker(args, slurm):
+    spec = json.loads(Path(args.spec).read_text())
+    manifest = read_manifest(spec['manifest'])
+    caps = spec['capabilities']
+    command = ['gammaboard', '--database-url', database_url(spec['database_node'], manifest['port_offset']),
+               '--resource-root', manifest['workspace'] + '/resources', 'node', 'run', '--name', spec['node_name'],
+               '--max-start-failures', str(spec['max_start_failures'])]
+    for name, count in sorted(caps.items()): command += ['--capability', f'{name}={count}']
+    command, env = container_command(manifest, command, gpu=caps.get('gpu', 0) > 0)
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT): signal.signal(sig, lambda *_: stop.set())
+    worker = subprocess.Popen(command, env=env)
     try:
-        cookie = login(node, admin_password(args), port_offset=port_offset)
-        post(node, "/admin/workers/suspend", cookie=cookie, port_offset=port_offset)
-        print("saved active workers and requested shutdown through API")
-    except Exception as err:
-        raise SystemExit(f"could not save workers before shutdown: {err}") from err
-
-    if job.name == CONTROL_JOB_NAME:
-        deadline = time.monotonic() + args.worker_timeout
-        while time.monotonic() < deadline:
-            workers = active_jobs(name=WORKER_JOB_NAME)
-            if not workers:
-                break
-            print(f"waiting for workers to exit: {len(workers)} active")
-            time.sleep(5)
-
-        workers = active_jobs(name=WORKER_JOB_NAME)
-        if workers:
-            print(
-                f"canceling remaining workers: {', '.join(worker.id for worker in workers)}"
-            )
-            run(["scancel", *[worker.id for worker in workers]], check=False)
-
-    time.sleep(args.control_grace_seconds)
-    print(f"canceling {job.name} job {job.id}")
-    run(["scancel", job.id], check=False)
+        while worker.poll() is None and not stop.wait(5):
+            try:
+                job = control_job(manifest, slurm)
+                if job and job.terminal: stop.set()
+            except SchedulerError as error:
+                print(f'scheduler status unavailable; keeping worker alive: {error}', file=sys.stderr)
+    finally:
+        if worker.poll() is None:
+            worker.terminate()
+            try: worker.wait(timeout=55)
+            except subprocess.TimeoutExpired:
+                worker.kill(); worker.wait()
+    return worker.returncode
 
 
-def command_status(_: argparse.Namespace) -> None:
-    for line in status_lines():
-        print(line)
+def resolve_control(args, slurm):
+    deployments, manifest = require_deployment(args, slurm)
+    with deployments.locked():
+        manifest = deployments.load()
+        if manifest.get('control_job_id'): raise ValueError('control already has a recorded job')
+        matches = slurm.find(tag(manifest, 'control'), manifest['created_at'][:10])
+        if args.job_id:
+            job = slurm.lookup(args.job_id, manifest['created_at'][:10])
+            if not job or not owns(job, manifest, 'control'): raise ValueError('job identity does not match this deployment')
+            manifest['control_job_id'], manifest['control_submission'] = job.id, 'submitted'
+        else:
+            if matches: raise ValueError('matching Slurm jobs exist; cannot confirm absence')
+            manifest['control_submission'] = 'prepared'
+        deployments.save(manifest)
 
 
-def command_submit_workers(args: argparse.Namespace) -> None:
-    control = require_single_control()
-    control_node = wait_for_job_node(control.id)
-    cookie = login(control_node, admin_password(args), port_offset=args.port_offset)
-    config = dict(args.capabilities)
-    toml = f"[[groups]]\ncount = {args.count}\nname_prefix = {json.dumps(args.prefix)}\nmax_start_failures = {args.max_start_failures}\n[groups.config]\n"
-    toml += "\n".join(f"{json.dumps(k)} = {json.dumps(v)}" for k, v in config.items())
-    response = api_request_json(control_node, "/node-launch-requests", method="POST", cookie=cookie,
-                                payload={"toml":toml}, port_offset=args.port_offset)
-    print(f"request_id={response['request']['id']}")
-    resolve_launch_requests(control, control_node, cookie, port_offset=args.port_offset)
+def resolve_submission(args, slurm):
+    deployments, _ = require_deployment(args, slurm)
+    with deployments.locked():
+        manifest = deployments.load()
+        if manifest['state'] in ('stopping', 'stopped'):
+            raise RuntimeError('deployment is stopping')
+        return repair_submission(args, slurm, manifest)
 
 
-def command_watch_requests(args: argparse.Namespace) -> None:
-    control = require_single_control()
-    control_node = wait_for_job_node(control.id, args.startup_timeout)
-    watch_launch_requests(args, control, control_node)
+def repair_submission(args, slurm, manifest):
+    job = control_job(manifest, slurm)
+    if not job or job.terminal or not job.node: raise RuntimeError('selected deployment is not running')
+    api = Api(manifest, job.node, args.admin_password)
+    request = api.request('/node-launch-requests/claim-external',
+                          {'launcher_id': uuid.uuid4().hex, 'request_id': args.request_id}).get('request')
+    if not request: raise RuntimeError('request is finished or another launcher holds its lease; stop the watcher and wait for lease expiry')
+    with Lease(api, request) as lease:
+        worker = next((w for w in request['workers'] if w['node_name'] == args.node), None)
+        if not worker or worker['state'] != 'submitting' or worker.get('registered'):
+            raise ValueError('only an unregistered ambiguous submission can be resolved')
+        expected = tag(manifest, worker['submission_key'])
+        if args.job_id:
+            found = slurm.lookup(args.job_id, manifest['created_at'][:10])
+            if not found or not owns(found, manifest, worker['submission_key']):
+                raise ValueError('job does not match this worker submission')
+            lease.update(args.node, 'submitted', found.id)
+            if found.terminal: lease.update(args.node, 'failed', found.id, 'resolved job already ended before registration')
+        else:
+            if slurm.find(expected, manifest['created_at'][:10]): raise ValueError('matching Slurm jobs exist; refusing retry')
+            lease.update(args.node, 'pending', error='operator confirmed no submission')
+    print('submission resolved; the watcher can continue')
 
 
-def command_build(args: argparse.Namespace) -> None:
-    ensure_dirs()
-    env = os.environ.copy()
-    env["GAMMABOARD_WORKSPACE_ROOT"] = WORKSPACE_ROOT
-    if args.build_kind == "gammaboard":
-        env["GAMMABOARD_REVISION"] = args.revision
-        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GB_BUILD_SBATCH], env=env)
-    elif args.build_kind == "gammaloop":
-        env["GAMMALOOP_REVISION"] = args.revision
-        result = run(["sbatch", "--chdir", WORKSPACE_ROOT, GL_BUILD_SBATCH], env=env)
-    elif args.build_kind == "apptainer":
-        result = run(
-            [
-                "sbatch",
-                "--chdir",
-                WORKSPACE_ROOT,
-                APPTAINER_BUILD_SBATCH,
-                args.output,
-                args.def_file,
-            ],
-            env=env,
-        )
-    else:
-        raise SystemExit(f"unknown build kind: {args.build_kind}")
-    print(result.stdout.strip())
+def main(argv=None):
+    args = parser().parse_args(argv)
+    slurm = Slurm()
+    try:
+        if args.command == 'run-control': run_control(args); return
+        if args.command == 'run-worker': return run_worker(args, slurm)
+        if args.command == 'up': up(args, slurm)
+        elif args.command == 'down': down(args, slurm)
+        elif args.command == 'resolve-control': resolve_control(args, slurm)
+        elif args.command == 'resolve-submission': resolve_submission(args, slurm)
+        elif args.command == 'build':
+            workspace = Path(WORKSPACE_ROOT).resolve()
+            (workspace / 'logs/slurm/build').mkdir(parents=True, exist_ok=True)
+            env = dict(os.environ, GAMMABOARD_WORKSPACE_ROOT=str(workspace))
+            if args.build_kind == 'apptainer':
+                script = workspace / 'ops/build/build.sbatch'
+                options = [str(script), args.output, args.def_file]
+            else:
+                env['GAMMABOARD_REVISION' if args.build_kind == 'gammaboard' else 'GAMMALOOP_REVISION'] = args.revision
+                options = [str(workspace / 'ops/build' / f'{args.build_kind}.sbatch')]
+            print(run(['sbatch', '--parsable', '--chdir', str(workspace), *options], env=env).stdout.strip())
+        else:
+            _, manifest = require_deployment(args, slurm)
+            job = control_job(manifest, slurm)
+            if args.command == 'status':
+                print(json.dumps({'deployment': manifest['id'], 'control': None if job is None else job.__dict__,
+                    'state': manifest['state'], 'image': manifest['image']['path'],
+                    'image_sha256': manifest['image']['sha256'], 'build_id': manifest['image']['build_info']['build_id'],
+                    'workers': [j.__dict__ for j in slurm.active() if owns(j, manifest) and j.id != manifest['control_job_id']]}, indent=2))
+                return
+            if not job or job.terminal or not job.node: raise RuntimeError('selected deployment is not running')
+            api = Api(manifest, job.node, args.admin_password)
+            if args.command == 'submit-workers':
+                from gbops.deployment import toml_dump
+                config = dict(args.capabilities)
+                toml = f'[[groups]]\ncount={args.count}\nname_prefix={json.dumps(args.prefix)}\nmax_start_failures={args.max_start_failures}\n[groups.config]\n' + toml_dump(config)
+                print(json.dumps(api.request('/node-launch-requests', {'toml': toml})))
+            watch(manifest, job.node, api, slurm, args.poll_seconds, once=args.command == 'submit-workers' or args.once)
+    except KeyboardInterrupt:
+        print('launcher stopped; recorded submissions remain recoverable')
+    except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
+        raise SystemExit(str(error)) from error
 
 
-def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description=(
-            "UBELIX launcher for GammaBoard. Run all commands on a UBELIX login node."
-        )
-    )
-    sub = p.add_subparsers(dest="command", required=True)
-
-    up = sub.add_parser("up", help="submit or reuse a deploy job")
-    up.add_argument(
-        "--watch",
-        action="store_true",
-        help="block and print status until the deploy job exits",
-    )
-    up.add_argument(
-        "--time",
-        type=parse_hms,
-        default=DEFAULT_CONTROL_TIME,
-        help="Slurm walltime for a newly submitted deploy job (HH:MM:SS)",
-    )
-    up.add_argument(
-        "--single-node",
-        action="store_true",
-        help="run control and local workers in one Slurm allocation",
-    )
-    up.add_argument("--resume-workers", action="store_true", help="recreate workers saved at graceful shutdown")
-    up.add_argument("--local-port", type=int, default=8080)
-    up.add_argument("--port-offset", type=parse_port_offset, default=0)
-    up.add_argument("--startup-timeout", type=int, default=180)
-    up.add_argument("--poll-seconds", type=int, default=15)
-    up.add_argument(
-        "--copy",
-        action="store_true",
-        help="copy the SSH tunnel command to the clipboard if supported",
-    )
-    up.add_argument(
-        "--admin-password",
-        default=None,
-        help="dashboard admin password (or set GAMMABOARD_ADMIN_PASSWORD)",
-    )
-    up.set_defaults(func=command_up)
-
-    down = sub.add_parser("down", help="gracefully stop nodes, then cancel remaining jobs")
-    down.add_argument("--startup-timeout", type=int, default=60)
-    down.add_argument("--port-offset", type=parse_port_offset, default=0)
-    down.add_argument("--worker-timeout", type=int, default=60)
-    down.add_argument("--control-grace-seconds", type=int, default=5)
-    down.add_argument(
-        "--admin-password",
-        default=None,
-        help="dashboard admin password (or set GAMMABOARD_ADMIN_PASSWORD)",
-    )
-    down.set_defaults(func=command_down)
-
-    status = sub.add_parser("status", help="show active deploy and worker jobs")
-    status.set_defaults(func=command_status)
-
-    workers = sub.add_parser("submit-workers", help="submit N separate worker jobs")
-    workers.add_argument("--count", type=int, required=True)
-    workers.add_argument("--prefix", default="w")
-    workers.add_argument("--port-offset", type=parse_port_offset, default=0)
-    workers.add_argument("--max-start-failures", type=int, default=3)
-    workers.add_argument(
-        "--capability",
-        dest="capabilities",
-        action="append",
-        default=[],
-        type=parse_capability,
-        metavar="KEY=VALUE",
-    )
-    workers.set_defaults(func=command_submit_workers)
-
-    watch_requests = sub.add_parser(
-        "watch-requests",
-        help="resolve pending DB node launch requests into Slurm worker jobs",
-    )
-    watch_requests.add_argument(
-        "--once", action="store_true", help="resolve current pending requests and exit"
-    )
-    watch_requests.add_argument("--startup-timeout", type=int, default=60)
-    watch_requests.add_argument("--port-offset", type=parse_port_offset, default=0)
-    watch_requests.add_argument("--poll-seconds", type=int, default=5)
-    watch_requests.add_argument(
-        "--admin-password",
-        default=None,
-        help="dashboard admin password (or set GAMMABOARD_ADMIN_PASSWORD)",
-    )
-    watch_requests.set_defaults(func=command_watch_requests)
-
-    build = sub.add_parser("build", help="submit a build job")
-    build_sub = build.add_subparsers(dest="build_kind", required=True)
-
-    build_gammaboard = build_sub.add_parser(
-        "gammaboard", help="submit the GammaBoard image build"
-    )
-    build_gammaboard.add_argument(
-        "--revision", default="HEAD", help="Git commit, tag, branch, or ref to build"
-    )
-    build_gammaboard.set_defaults(func=command_build)
-
-    build_gammaloop = build_sub.add_parser(
-        "gammaloop", help="submit the GammaLoop image build"
-    )
-    build_gammaloop.add_argument(
-        "--revision", default="HEAD", help="Git commit, tag, branch, or ref to build"
-    )
-    build_gammaloop.set_defaults(func=command_build)
-
-    build_apptainer = build_sub.add_parser(
-        "apptainer", help="submit a generic Apptainer build"
-    )
-    build_apptainer.add_argument("output", help="output .sif path")
-    build_apptainer.add_argument("def_file", help="Apptainer definition file")
-    build_apptainer.set_defaults(func=command_build)
+def positive(value):
+    n = int(value)
+    if n <= 0: raise argparse.ArgumentTypeError('must be positive')
+    return n
 
 
+def port(value):
+    n = positive(value)
+    if n > 65535: raise argparse.ArgumentTypeError("port out of range")
+    return n
+
+
+def offset(value):
+    n = int(value)
+    if not 0 <= n <= 65535 - 8080: raise argparse.ArgumentTypeError('port offset out of range')
+    return n
+
+
+def parse_capability(value):
+    key, separator, raw = value.partition('=')
+    if not separator or not key: raise argparse.ArgumentTypeError('capability must use KEY=VALUE')
+    return key, positive(raw)
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    commands = p.add_subparsers(dest='command', required=True)
+    for name in ('up', 'down', 'status', 'submit-workers', 'watch-requests', 'resolve-control', 'resolve-submission'):
+        cmd = commands.add_parser(name)
+        cmd.add_argument('--port-offset', type=offset, default=0)
+        cmd.add_argument('--admin-password', default=os.environ.get('GAMMABOARD_ADMIN_PASSWORD', ''))
+        if name == 'up':
+            cmd.add_argument('--time', default='00:20:00')
+            cmd.add_argument('--single-node', action='store_true')
+            cmd.add_argument('--resume-workers', action='store_true')
+            cmd.add_argument('--local-port', type=port, default=8080)
+            cmd.add_argument('--startup-timeout', type=positive, default=180)
+            cmd.add_argument('--poll-seconds', type=positive, default=5)
+            cmd.add_argument('--watch', action='store_true')
+            cmd.add_argument('--copy', action='store_true')
+            cmd.add_argument('--image', help='immutable image metadata JSON; defaults to images/gammaboard/current.json')
+            cmd.add_argument('--server-config', help='private server override TOML')
+            cmd.add_argument('--runtime-config', help='private runtime override TOML')
+        elif name == 'down':
+            cmd.add_argument('--worker-timeout', type=int, default=60)
+            cmd.add_argument('--control-grace-seconds', type=int, default=5)
+        elif name in ('submit-workers', 'watch-requests'):
+            cmd.add_argument('--poll-seconds', type=positive, default=5)
+            cmd.add_argument('--once', action='store_true')
+            if name == 'submit-workers':
+                cmd.add_argument('--count', type=positive, required=True)
+                cmd.add_argument('--prefix', default='w')
+                cmd.add_argument('--max-start-failures', type=int, default=3)
+                cmd.add_argument('--capability', dest='capabilities', action='append', default=[], type=parse_capability)
+        elif name in ('resolve-control', 'resolve-submission'):
+            if name == 'resolve-submission':
+                cmd.add_argument('request_id', type=positive)
+                cmd.add_argument('node')
+            choice = cmd.add_mutually_exclusive_group(required=True)
+            choice.add_argument('--job-id')
+            choice.add_argument('--not-submitted', action='store_true', help='confirm, after checking Slurm, that no job was submitted')
+    build = commands.add_parser('build').add_subparsers(dest='build_kind', required=True)
+    for name in ('gammaboard', 'gammaloop', 'apptainer'):
+        cmd = build.add_parser(name)
+        if name == 'apptainer': cmd.add_argument('output'); cmd.add_argument('def_file')
+        else: cmd.add_argument('--revision', default='HEAD')
+    commands.add_parser('run-control').add_argument('--manifest', required=True)
+    commands.add_parser('run-worker').add_argument('--spec', required=True)
     return p
 
 
-def main() -> None:
-    args = parser().parse_args()
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    sys.exit(main())

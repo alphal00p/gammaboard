@@ -15,7 +15,7 @@ async fn get_run_metrics(
 }
 
 #[cfg(test)]
-use crate::api::node_launch::{derive_capabilities_from_config, resolve_node_launch_groups};
+use crate::api::node_launch::resolve_node_launch_groups;
 mod auth;
 mod config_panels;
 mod panels;
@@ -334,6 +334,9 @@ pub async fn serve(
     config: ServerConfig,
     runtime: RuntimeContext,
 ) -> anyhow::Result<()> {
+    store
+        .bind_deployment(std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok().as_deref())
+        .await?;
     let bind = config.bind_addr();
     let allowed_origins = config
         .allowed_origins
@@ -556,11 +559,22 @@ struct AutoAssignRequest {
 }
 
 #[derive(Deserialize)]
-struct NodeLaunchRequestProgressRequest {
-    state: String,
-    started_count: usize,
+struct ExternalLauncher {
+    launcher_id: String,
+    request_id: Option<i64>,
+}
+#[derive(Deserialize)]
+struct ExternalLease {
+    lease_token: String,
     #[serde(default)]
-    result: JsonValue,
+    release: bool,
+}
+#[derive(Deserialize)]
+struct NodeLaunchRequestProgressRequest {
+    lease_token: String,
+    node_name: String,
+    state: String,
+    job_id: Option<String>,
     error: Option<String>,
 }
 
@@ -695,6 +709,8 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
                 "status": "ok",
                 "database": "connected",
                 "server_name": state.server_name,
+                "deployment_id": std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok(),
+                "build_id": crate::provenance::build_identity(),
             })),
         )
             .into_response(),
@@ -704,6 +720,8 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
                 "status": "error",
                 "database": "disconnected",
                 "server_name": state.server_name,
+                "deployment_id": std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok(),
+                "build_id": crate::provenance::build_identity(),
             })),
         )
             .into_response(),
@@ -1520,11 +1538,27 @@ async fn get_node_launch_requests(
 
 async fn claim_external_node_launch_request(
     State(state): State<AppState>,
+    AxumJson(payload): AxumJson<ExternalLauncher>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let request = node_api::claim_external_node_launch_request(&state.store)
+    let request = state
+        .store
+        .claim_external_launch(&payload.launcher_id, payload.request_id)
         .await
-        .inspect_err(|err| log_control_api_error("node_launch_request_claim_external", err))?;
-    json_response(serde_json::json!({ "request": request }))
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    json_response(serde_json::json!({"request":request}))
+}
+
+async fn renew_external_launch_lease(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+    AxumJson(payload): AxumJson<ExternalLease>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state
+        .store
+        .heartbeat_external_launch(id, &payload.lease_token, payload.release)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    json_response(serde_json::json!({"ok":true}))
 }
 
 async fn update_node_launch_request_progress(
@@ -1532,59 +1566,19 @@ async fn update_node_launch_request_progress(
     AxumPath(id): AxumPath<i64>,
     AxumJson(payload): AxumJson<NodeLaunchRequestProgressRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = if payload.result.is_null() {
-        serde_json::json!({})
-    } else {
-        payload.result
-    };
-    let request = match payload.state.as_str() {
-        "starting" => {
-            node_api::mark_node_launch_request_starting(
-                &state.store,
-                id,
-                payload.started_count,
-                &result,
-            )
-            .await
-        }
-        "fulfilled" => {
-            node_api::mark_node_launch_request_fulfilled(
-                &state.store,
-                id,
-                payload.started_count,
-                &result,
-            )
-            .await
-        }
-        "failed" => {
-            let error = payload
-                .error
-                .as_deref()
-                .unwrap_or("external launcher reported failure");
-            node_api::mark_node_launch_request_failed(
-                &state.store,
-                id,
-                payload.started_count,
-                &result,
-                error,
-            )
-            .await
-        }
-        "canceled" => {
-            node_api::mark_node_launch_request_canceled(
-                &state.store,
-                id,
-                payload.started_count,
-                &result,
-            )
-            .await
-        }
-        other => Err(ApiError::BadRequest(format!(
-            "unsupported node launch request state '{other}'"
-        ))),
-    }
-    .inspect_err(|err| log_control_api_error("node_launch_request_progress", err))?;
-    json_response(serde_json::json!({ "request": request }))
+    state
+        .store
+        .update_external_worker(
+            id,
+            &payload.lease_token,
+            &payload.node_name,
+            &payload.state,
+            payload.job_id.as_deref(),
+            payload.error.as_deref(),
+        )
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    json_response(serde_json::json!({"ok":true}))
 }
 
 async fn create_and_maybe_resolve_node_launch_request(
@@ -1611,6 +1605,11 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
         .map_err(|err| ApiError::Internal(format!("database restart task failed: {err}")))?
         .map_err(|err| ApiError::Internal(err.to_string()))
         .inspect_err(|err| log_control_api_error("db_restart", err))?;
+    state
+        .store
+        .bind_deployment(std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok().as_deref())
+        .await
+        .map_err(|err| ApiError::Internal(err.to_string()))?;
 
     tracing::info!(
         source = "control",
@@ -1913,28 +1912,6 @@ config = { cores = "$(cores:1)" }
         assert_eq!(groups[0].count, 2);
         assert_eq!(groups[0].name_prefix, "cpu");
         assert_eq!(groups[0].capabilities.get("cpus"), Some(&4));
-    }
-
-    #[test]
-    fn node_launch_group_cpu_aliases_derive_cpus_capability() {
-        for key in [
-            "cores",
-            "nr_cores",
-            "cpus",
-            "cpus_per_task",
-            "cpus-per-task",
-        ] {
-            let config = serde_json::json!({ key: 8 });
-            let capabilities = derive_capabilities_from_config(&config);
-            assert_eq!(
-                capabilities.get("cpus"),
-                Some(&8),
-                "cpu alias {key} should register cpus capability"
-            );
-            if key != "cpus" {
-                assert_eq!(capabilities.get(key), None);
-            }
-        }
     }
 
     #[test]

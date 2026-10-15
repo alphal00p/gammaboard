@@ -4,7 +4,7 @@ CREATE TABLE gammaboard_compatibility (
     singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
     model_version INTEGER NOT NULL
 );
-INSERT INTO gammaboard_compatibility (singleton, model_version) VALUES (true, 1);
+INSERT INTO gammaboard_compatibility (singleton, model_version) VALUES (true, 2);
 
 -- Runs are the top-level integration records.
 CREATE TABLE runs (
@@ -220,6 +220,8 @@ CREATE TABLE run_sampler_checkpoints (
 -- Node control plane, runtime logs, and worker performance history.
 CREATE TABLE nodes (
     name TEXT PRIMARY KEY,
+    deployment_id TEXT,
+    build_id TEXT,
     uuid TEXT NOT NULL,
     lease_expires_at TIMESTAMPTZ NOT NULL,
     desired_run_id INT REFERENCES runs(id) ON DELETE SET NULL,
@@ -364,7 +366,10 @@ CREATE TABLE node_launch_requests (
     name_prefix TEXT,
     args JSONB NOT NULL DEFAULT '{}'::jsonb,
     result JSONB NOT NULL DEFAULT '{}'::jsonb,
-    error TEXT
+    error TEXT,
+    launcher_token TEXT,
+    launcher_owner TEXT,
+    launcher_lease_expires_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_node_launch_requests_state_created
@@ -514,3 +519,47 @@ BEGIN
 EXCEPTION WHEN feature_not_supported THEN
     RAISE WARNING 'PostgreSQL lacks LZ4 support; batch input compression is unchanged';
 END $$;
+
+-- Durable child allowances include completed, queued and locally buffered draws.
+-- Only the campaign controller may increase them, under its task row lock.
+CREATE TABLE campaign_sample_budgets (
+    child_run_id INT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    campaign_task_id BIGINT NOT NULL REFERENCES run_tasks(id) ON DELETE CASCADE,
+    granted_samples BIGINT NOT NULL DEFAULT 0 CHECK (granted_samples >= 0)
+);
+CREATE INDEX idx_campaign_sample_budgets_task ON campaign_sample_budgets(campaign_task_id);
+
+
+CREATE TABLE external_worker_launches (
+    request_id BIGINT NOT NULL REFERENCES node_launch_requests(id) ON DELETE CASCADE,
+    node_name TEXT NOT NULL,
+    submission_key TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','submitting','submitted','connected','failed','canceled')),
+    job_id TEXT,
+    error TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (request_id,node_name)
+);
+
+CREATE TABLE gammaboard_deployment (
+    singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+    deployment_id TEXT NOT NULL,
+    build_id TEXT NOT NULL
+);
+
+-- Guard direct database clients, including older binaries that omit these fields.
+CREATE FUNCTION enforce_worker_build() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE expected gammaboard_deployment%ROWTYPE;
+BEGIN
+    IF NEW.uuid <> '' AND NEW.lease_expires_at > clock_timestamp() THEN
+        PERFORM pg_advisory_xact_lock_shared(71809242);
+        SELECT * INTO expected FROM gammaboard_deployment WHERE singleton;
+        IF FOUND AND (NEW.deployment_id IS DISTINCT FROM expected.deployment_id
+                      OR NEW.build_id IS DISTINCT FROM expected.build_id) THEN
+            RAISE EXCEPTION 'worker deployment/build identity does not match the active deployment';
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER nodes_build_guard BEFORE INSERT OR UPDATE OF uuid,lease_expires_at ON nodes
+FOR EACH ROW EXECUTE FUNCTION enforce_worker_build();

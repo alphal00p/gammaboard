@@ -138,7 +138,7 @@ batch settings. Selection accounts for available samplers, so a lone sampler
 rotates through pilots. Unused credits are reclaimed only after a child queue
 completes. A campaign waits for final-stage progress publication before declaring
 success. A genuinely insufficient cap fails explicitly without overshooting.
-The additive migration is `202610150001_campaign_budgets.sql`; deploy matching
+The campaign reservation schema is now part of the single model-2 baseline; use a fresh database and deploy matching
 controllers and workers. This cannot undo work an older deployment already ran.
 
 The UI findings are addressed as follows:

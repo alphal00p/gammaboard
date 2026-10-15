@@ -13,15 +13,18 @@ gammaboard run validate run.toml --probe
 | --- | --- |
 | GammaBoard and Python SDK package | 0.3 |
 | Process protocol | `gammaboard-jsonrpc-v6` |
-| Database model / sampler checkpoint / saved sampler envelope | 1 |
+| Database model | 2 |
+| Sampler checkpoint / saved sampler envelope | 1 |
 | Queue envelope | `GBQ` followed by byte `0x01` |
 | Performance responses | 2 |
 
 These versions identify separate contracts. Unknown configuration fields and
 unsupported protocol/state versions fail explicitly. The version checks protect
-persisted data; they are not adapters for older formats. Database migrations
-within this model include `202610150001_campaign_budgets.sql` for durable campaign
-allowances.
+persisted data; they are not adapters for older formats. The single baseline
+`202610080001_initial_schema.sql` includes campaign reservations, durable external
+launch leases/receipts, and deployment/build fencing. It is for fresh databases;
+previous migration checksums and model-1 databases are intentionally unsupported.
+No incremental migration or compatibility adapter is retained.
 
 Use matching server, worker, SDK, and integration revisions. Stop all components
 before an incompatible upgrade. Preserve the old executable, environments,

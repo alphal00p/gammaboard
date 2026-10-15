@@ -217,7 +217,7 @@ async fn startup_rejects_unversioned_and_future_database_models() {
     .unwrap();
     assert!(gammaboard::init_pg_store(url.as_str(), 1).await.is_err());
     sqlx::query(&format!(
-        "UPDATE {schema}.gammaboard_compatibility SET model_version=1"
+        "UPDATE {schema}.gammaboard_compatibility SET model_version=2"
     ))
     .execute(store.pool())
     .await
@@ -2053,15 +2053,20 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         .await
         .unwrap();
     let name = format!("{prefix}-1");
-    let result = serde_json::json!({"workers": [{"node_name": name}]});
-    sqlx::query(
-        "UPDATE node_launch_requests SET state='starting',started_count=1,result=$2 WHERE id=$1",
-    )
-    .bind(request_id)
-    .bind(&result)
-    .execute(store.pool())
-    .await
-    .unwrap();
+    let claim = store
+        .claim_external_launch("history-test", Some(request_id))
+        .await
+        .unwrap()
+        .unwrap();
+    let token = claim["lease_token"].as_str().unwrap();
+    store
+        .update_external_worker(request_id, token, &name, "submitting", None, None)
+        .await
+        .unwrap();
+    store
+        .update_external_worker(request_id, token, &name, "submitted", Some("123"), None)
+        .await
+        .unwrap();
     // Submission alone does not fulfill a request.
     let requests = store.list_node_launch_requests().await.unwrap();
     assert_eq!(
@@ -2112,6 +2117,11 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         .unwrap();
     assert_eq!(node_count, 1);
     // A replacement's live lease cannot fulfill an earlier, incomplete attempt.
+    sqlx::query("UPDATE external_worker_launches SET state='submitted' WHERE request_id=$1")
+        .bind(request_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
     sqlx::query("UPDATE node_launch_requests SET state='starting' WHERE id=$1")
         .bind(request_id)
         .execute(store.pool())

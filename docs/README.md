@@ -10,6 +10,7 @@
 | Understand or implement sampling/evaluation interfaces | [Execution specification](execution-model.md) |
 | Connect an external process worker | [Process guide](../process_api/README.md) · [Wire protocol](../process_api/protocol.md) |
 | Match versions and persisted formats | [Compatibility](compatibility.md) |
+| Implement an external cluster launcher | [Launch leases and deployment identity](cluster-launches.md) |
 
 Cluster-specific commands: [UBELIX](../ops/ubelix/README.md) and
 [ITPhlies](../ops/itphlies/README.md).

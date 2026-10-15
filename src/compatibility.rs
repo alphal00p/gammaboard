@@ -1,6 +1,9 @@
 //! Versions of persisted contracts, independent of the package release number.
 use serde::{Deserialize, Deserializer};
 
+/// Fresh database schema; checkpoint and queue formats have independent versions.
+pub const DATABASE_MODEL_VERSION: u32 = 2;
+
 pub const MODEL_VERSION: u32 = 1;
 pub const PERFORMANCE_SCHEMA_VERSION: u32 = 2;
 pub(crate) const QUEUE_MAGIC: &[u8; 4] = b"GBQ\x01";
