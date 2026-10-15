@@ -89,6 +89,10 @@ install pointing at a different checkout. Container images and remote worker
 environments must be rebuilt too. The sibling glNIS repository needs its 0.2
 adapter update and the 0.3 SDK.
 
+Build release wheels from a clean checkout. Ignored `build/` directories reused
+across revisions can retain outdated Python modules despite a new package version;
+verify the installed exports and protocol, not only package metadata.
+
 Samplers implement `generate(max_samples)`, `feedback(values)`, `snapshot()`, and
 `from_snapshot(...)`. `generate` returns `SampleBatch`, `WAITING`, or `FINISHED`;
 `training_remaining` declares the feedback window before that draw. Feedback

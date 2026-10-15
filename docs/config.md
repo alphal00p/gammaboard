@@ -140,6 +140,12 @@ outside this model. Campaigns follow each child's latest publishing sample stage
 error convergence waits for final publishing stages. Compatible histograms are
 combined; incompatible layouts are reported as omitted.
 
+The campaign's `max_total_samples` is a stop threshold checked when child progress
+is observed, not a reservation of samples before generation. In-flight work and
+fast child batches can overshoot it. A budget exhausted before every child has a
+usable published result fails the campaign. Allow room for every child's pilot
+and for queued work; use suitable child batch sizes when budgets are small.
+
 The default allocation favors expected variance reduction per second
 (`weighted variance × throughput / samples`) after pilot coverage.
 `largest_variance` ignores cost. Increase `min_samples_per_child` or

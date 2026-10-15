@@ -2,6 +2,9 @@
 
 ## 0.3.0 — Unreleased
 
+See the [validation and risk report](docs/validation/2026-10-15-consolidation.md)
+for tested workflows, fixes found in the dashboard, and remaining limitations.
+
 - Strict task/queue configuration, one tagged Symbolica source, common sampling
   pipeline configuration, and shared stopping estimates in the runner/dashboard.
 - Explicit database, checkpoint, and queue compatibility checks; performance
