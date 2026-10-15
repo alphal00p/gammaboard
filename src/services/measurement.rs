@@ -342,7 +342,7 @@ mod tests {
                 },
                 measurement: None,
                 evaluator: None,
-                sampler_aggregator: None,
+                sampler: None,
                 accumulator: None,
                 queue_tuning: None,
                 batch_transforms: None,

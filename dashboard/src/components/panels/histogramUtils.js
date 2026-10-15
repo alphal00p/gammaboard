@@ -1,6 +1,6 @@
 import { asArray } from "../../utils/collections";
 import { formatCompactNumber, formatScientific } from "../../utils/formatters";
-import { FULL_ZOOM, isObject, normalizeZoomRange, readYZoomFromPanelValue, readZoomFromPanelValue } from "./panelView";
+import { FULL_ZOOM, isObject, normalizeZoomRange } from "./panelView";
 
 export const HISTOGRAM_SORT_CANONICAL = "canonical";
 export const HISTOGRAM_SORT_BY_VALUE = "by_value";
@@ -63,11 +63,8 @@ export const histogramSignColorFromRaw = (rawValue) => {
   return HISTOGRAM_ZERO_COLOR;
 };
 
-export const readHistogramBundleSelectedValue = (value) => {
-  if (typeof value === "string") return value;
-  if (isObject(value) && typeof value.selected_histogram === "string") return value.selected_histogram;
-  return null;
-};
+export const readHistogramBundleSelectedValue = (value) =>
+  isObject(value) && typeof value.selected_histogram === "string" ? value.selected_histogram : null;
 
 export const readHistogramBundleView = (value) => {
   if (!isObject(value)) return {};
@@ -76,12 +73,12 @@ export const readHistogramBundleView = (value) => {
 
 export const readHistogramZoomFromPanelValue = (value, fallback = FULL_ZOOM) => {
   const view = readHistogramBundleView(value);
-  return normalizeZoomRange(view.zoom) || readZoomFromPanelValue(value, fallback);
+  return normalizeZoomRange(view.zoom) || fallback;
 };
 
 export const readHistogramYZoomFromPanelValue = (value, fallback = FULL_ZOOM) => {
   const view = readHistogramBundleView(value);
-  return normalizeZoomRange(view.y_zoom) || readYZoomFromPanelValue(value, fallback);
+  return normalizeZoomRange(view.y_zoom) || fallback;
 };
 
 export const readHistogramScaleFromPanelValue = (value, axis, fallback = "linear") => {
@@ -98,7 +95,7 @@ export const readHistogramViewIdFromPanelValue = (value, histogramName = null) =
   if (typeof histogramName === "string" && typeof byHistogram[histogramName] === "string") {
     return byHistogram[histogramName];
   }
-  return typeof view.selected_view === "string" ? view.selected_view : null;
+  return null;
 };
 
 export const normalizeHistogramMode = (value) => (value === HISTOGRAM_MODE_CDF ? HISTOGRAM_MODE_CDF : HISTOGRAM_MODE_PDF);
@@ -113,7 +110,6 @@ export const writeHistogramBundlePanelValue = (
     yScale = undefined,
     showRelativeError = undefined,
     showRatio = undefined,
-    selectedView = undefined,
     selectedViewByHistogram = undefined,
     histogramMode = undefined,
     sortModeByHistogram = undefined,
@@ -128,7 +124,6 @@ export const writeHistogramBundlePanelValue = (
   if (yScale !== undefined) nextView.y_scale = yScale === "log" ? "log" : "linear";
   if (showRelativeError !== undefined) nextView.show_relative_error = Boolean(showRelativeError);
   if (showRatio !== undefined) nextView.show_ratio = Boolean(showRatio);
-  if (selectedView !== undefined) nextView.selected_view = typeof selectedView === "string" ? selectedView : null;
   if (isObject(selectedViewByHistogram)) {
     nextView.selected_view_by_histogram = {
       ...(isObject(nextView.selected_view_by_histogram) ? nextView.selected_view_by_histogram : {}),

@@ -862,8 +862,7 @@ pub enum RunTaskSpec {
         stop_condition: SampleStopCondition,
         measurement: Option<TaskMeasurementSpec>,
         evaluator: Option<EvaluatorSourceSpec>,
-        #[serde(rename = "sampler")]
-        sampler_aggregator: Option<SamplerSourceSpec>,
+        sampler: Option<SamplerSourceSpec>,
         accumulator: Option<AccumulatorSourceSpec>,
         queue_tuning: Option<SamplerQueueTuning>,
         batch_transforms: Option<Vec<BatchTransformConfig>>,
@@ -878,14 +877,12 @@ pub enum RunTaskSpec {
     },
     PdfAdaptationImage {
         geometry: PlaneRasterGeometry,
-        #[serde(rename = "sampler")]
-        sampler_aggregator: Option<SamplerSourceSpec>,
+        sampler: Option<SamplerSourceSpec>,
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PdfAdaptationPlotLine {
         geometry: LineRasterGeometry,
-        #[serde(rename = "sampler")]
-        sampler_aggregator: Option<SamplerSourceSpec>,
+        sampler: Option<SamplerSourceSpec>,
         batch_transforms: Option<Vec<BatchTransformConfig>>,
     },
     PlotLine {
@@ -936,7 +933,7 @@ impl RunTaskSpec {
             Self::SetAccumulator { accumulator } => accumulator.validate(),
             Self::Sample {
                 stop_condition,
-                sampler_aggregator:
+                sampler:
                     Some(SamplerSourceSpec::Config {
                         config: SamplingConfig { sampler: crate::core::SamplerConfig::HavanaTraining { .. }, .. },
                     }),
@@ -949,7 +946,7 @@ impl RunTaskSpec {
                 stop_condition,
                 measurement,
                 evaluator,
-                sampler_aggregator,
+                sampler,
                 accumulator,
                 queue_tuning,
                 ..
@@ -961,7 +958,7 @@ impl RunTaskSpec {
                 if let Some(source) = evaluator {
                     source.validate_ref("evaluator")?;
                 }
-                if let Some(source) = sampler_aggregator {
+                if let Some(source) = sampler {
                     source.validate_ref("sampler")?;
                 }
                 if let Some(source) = accumulator {
@@ -986,15 +983,15 @@ impl RunTaskSpec {
             }
             Self::PdfAdaptationImage {
                 geometry,
-                sampler_aggregator,
+                sampler,
                 ..
             } => {
                 geometry.validate()?;
-                if let Some(source) = sampler_aggregator {
+                if let Some(source) = sampler {
                     match source {
                         SamplerSourceSpec::Config { .. } | SamplerSourceSpec::FromStage { .. } => {
                             return Err(
-                                "pdf_adaptation_image sampler_aggregator must be omitted, \"latest\", or { from_name = ... }"
+                                "pdf_adaptation_image sampler must be omitted, \"latest\", or { from_name = ... }"
                                     .to_string(),
                             );
                         }
@@ -1005,15 +1002,15 @@ impl RunTaskSpec {
             }
             Self::PdfAdaptationPlotLine {
                 geometry,
-                sampler_aggregator,
+                sampler,
                 ..
             } => {
                 geometry.validate()?;
-                if let Some(source) = sampler_aggregator {
+                if let Some(source) = sampler {
                     match source {
                         SamplerSourceSpec::Config { .. } | SamplerSourceSpec::FromStage { .. } => {
                             return Err(
-                                "pdf_adaptation_plot_line sampler_aggregator must be omitted, \"latest\", or { from_name = ... }"
+                                "pdf_adaptation_plot_line sampler must be omitted, \"latest\", or { from_name = ... }"
                                     .to_string(),
                             );
                         }
@@ -1180,15 +1177,9 @@ impl RunTaskSpec {
 
     pub fn sample_sampler_source(&self) -> Option<SourceRefSpec> {
         let source = match self {
-            Self::Sample {
-                sampler_aggregator, ..
-            }
-            | Self::PdfAdaptationImage {
-                sampler_aggregator, ..
-            }
-            | Self::PdfAdaptationPlotLine {
-                sampler_aggregator, ..
-            } => sampler_aggregator,
+            Self::Sample { sampler, .. }
+            | Self::PdfAdaptationImage { sampler, .. }
+            | Self::PdfAdaptationPlotLine { sampler, .. } => sampler,
             _ => return None,
         };
         match source {
@@ -1206,7 +1197,7 @@ impl RunTaskSpec {
     pub fn sample_sampler_config(&self) -> Option<SamplingConfig> {
         match self {
             Self::Sample {
-                sampler_aggregator:
+                sampler:
                     Some(
                         SamplerSourceSpec::Config { config }
                         | SamplerSourceSpec::FromStage { config, .. },
@@ -1864,7 +1855,7 @@ mod tests {
             },
             measurement: None,
             evaluator: None,
-            sampler_aggregator: Some(SamplerSourceSpec::Config {
+            sampler: Some(SamplerSourceSpec::Config {
                 config: SamplingConfig {
                     sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                         params: NaiveMonteCarloSamplerParams::default(),
@@ -2173,7 +2164,7 @@ max = 1.0
                 },
                 measurement: None,
                 evaluator: None,
-                sampler_aggregator: None,
+                sampler: None,
                 accumulator: None,
                 queue_tuning: None,
                 batch_transforms: None,
@@ -2197,7 +2188,7 @@ max = 1.0
             },
             measurement: None,
             evaluator: None,
-            sampler_aggregator: None,
+            sampler: None,
             accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
@@ -2212,7 +2203,7 @@ max = 1.0
             },
             measurement: None,
             evaluator: None,
-            sampler_aggregator: Some(SamplerSourceSpec::Latest("latest".to_string())),
+            sampler: Some(SamplerSourceSpec::Latest("latest".to_string())),
             accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
@@ -2227,7 +2218,7 @@ max = 1.0
             stop_condition: SampleStopCondition::default(),
             measurement: None,
             evaluator: None,
-            sampler_aggregator: Some(SamplerSourceSpec::Config {
+            sampler: Some(SamplerSourceSpec::Config {
                 config: SamplingConfig {
                     sampler: crate::core::SamplerConfig::HavanaTraining {
                         params: HavanaSamplerParams::default(),
@@ -2367,7 +2358,7 @@ max = 1.0
                     v_linspace: linspace.clone(),
                     discrete: Vec::new(),
                 },
-                sampler_aggregator: None,
+                sampler: None,
                 batch_transforms: None,
             },
             RunTaskSpec::PdfAdaptationPlotLine {
@@ -2377,7 +2368,7 @@ max = 1.0
                     linspace,
                     discrete: Vec::new(),
                 },
-                sampler_aggregator: None,
+                sampler: None,
                 batch_transforms: None,
             },
         ] {
@@ -2386,16 +2377,12 @@ max = 1.0
                 task.new_accumulator_config().unwrap(),
                 Some(AccumulatorConfig::Empty)
             );
-            let (RunTaskSpec::PdfAdaptationImage {
-                sampler_aggregator, ..
-            }
-            | RunTaskSpec::PdfAdaptationPlotLine {
-                sampler_aggregator, ..
-            }) = &mut task
+            let (RunTaskSpec::PdfAdaptationImage { sampler, .. }
+            | RunTaskSpec::PdfAdaptationPlotLine { sampler, .. }) = &mut task
             else {
                 unreachable!()
             };
-            *sampler_aggregator = Some(SamplerSourceSpec::Config {
+            *sampler = Some(SamplerSourceSpec::Config {
                 config: SamplingConfig {
                     sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                         params: NaiveMonteCarloSamplerParams::default(),

@@ -1062,7 +1062,7 @@ task_queue = [{
         let tasks = &parsed.integration().unwrap().task_queue;
         let RunTaskSpec::Sample {
             stop_condition,
-            sampler_aggregator: Some(SamplerSourceSpec::Config { config }),
+            sampler: Some(SamplerSourceSpec::Config { config }),
             ..
         } = &tasks[0].task
         else {
@@ -1595,7 +1595,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
 
         let tasks = &config.integration().unwrap().task_queue;
         let RunTaskSpec::Sample {
-            sampler_aggregator: Some(SamplerSourceSpec::Config { config }),
+            sampler: Some(SamplerSourceSpec::Config { config }),
             ..
         } = &tasks[0].task
         else {
@@ -1622,7 +1622,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
                 },
                 measurement: None,
                 evaluator: None,
-                sampler_aggregator: Some(SamplerSourceSpec::Config {
+                sampler: Some(SamplerSourceSpec::Config {
                     config: SamplingConfig {
                         sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                             params: NaiveMonteCarloSamplerParams::default(),
@@ -1758,7 +1758,7 @@ discrete_dims = 0
                     },
                     measurement: None,
                     evaluator: None,
-                    sampler_aggregator: Some(SamplerSourceSpec::Config {
+                    sampler: Some(SamplerSourceSpec::Config {
                         config: SamplingConfig {
                             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                                 params: NaiveMonteCarloSamplerParams::default(),

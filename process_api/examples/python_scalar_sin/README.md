@@ -24,4 +24,4 @@ The worker entrypoint is:
 same shape: implement the class, then call `run_evaluator(MyEvaluator)`.
 
 `SinIntegrand` demonstrates ordinary and structured logging. For log filtering,
-see [logging and shutdown](../../README.md#logging-and-shutdown).
+see [logging and shutdown](../../protocol.md#notifications-logs-and-shutdown).

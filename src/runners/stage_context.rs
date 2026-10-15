@@ -231,7 +231,7 @@ where
     } else if matches!(
         &task.task,
         crate::core::RunTaskSpec::Sample {
-            sampler_aggregator: Some(crate::core::tasks::StageSourceSpec::FromStage { .. }),
+            sampler: Some(crate::core::tasks::StageSourceSpec::FromStage { .. }),
             ..
         }
     ) {

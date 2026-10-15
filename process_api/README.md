@@ -1,16 +1,17 @@
-# External evaluators and samplers
+# External process workers
 
-Install the Python SDK from the same GammaBoard revision as the server:
+Use the Python SDK from the same revision as GammaBoard:
 
 ```bash
-pip install ./process_api/python
+python -m pip install ./process_api/python
 ```
 
-Use **gammaboard-jsonrpc-v6** for every worker. Non-Python implementations use the
-[wire contract](protocol.md). Examples: [NumPy evaluator](examples/python_scalar_sin/README.md),
-[Havana sampler](examples/python_sampler_symbolica_havana/README.md),
-[Rust/Apptainer evaluator](examples/rust_breit_wigner_evaluator/README.md), and
-[GammaLoop observable evaluator](examples/python_gammaloop_observable/run.toml).
+| Reference | Contents |
+| --- | --- |
+| [Execution model](../docs/execution-model.md) | Full sampler → materializer → transforms → evaluator → feedback contract, ownership, weights, budgets, and recovery |
+| [Wire protocol](protocol.md) | JSON-RPC v6 framing, every role/method, binary arrays, and errors |
+| [Python interfaces](python/src/gammaboard_process/abc.py) | Typed callbacks and their defaults |
+| [Batch types](python/src/gammaboard_process/batches.py) | `Batch`, `SampleBatch`, `WAITING`, and `FINISHED` |
 
 ## Configure a worker
 
@@ -31,63 +32,40 @@ statistical or full-vector accumulation with matching components. Use
 `output = { kind = "gammaloop" }` for native observable bundles.
 Commands may launch a local executable or an explicit container invocation.
 
-## Python callbacks
+## Entrypoints
 
-Entrypoints call `run_evaluator(MyClass)`, `run_sampler(MyClass)`,
-`run_materializer(MyClass)`, or `run_batch_transform(MyClass)`. Inheritance from
-SDK base classes is optional. The [typed interfaces](python/src/gammaboard_process/abc.py)
-and [batch types](python/src/gammaboard_process/batches.py) are the reference.
-
-Fresh constructors receive `discrete_cardinalities`, `continuous_dims`, and
-expanded `args`; samplers also receive `evaluator_metadata`. Python wrappers
-support homogeneous fixed-width layouts. Callback inputs own writable NumPy
-storage and may be retained without affecting later requests.
-
-| Role | Callback and result |
-| --- | --- |
-| Evaluator | `eval(xs_discrete, xs_continuous)` → unweighted array or component-name mapping |
-| Observable evaluator | `eval_gammaloop(xs_discrete, xs_continuous, weights, *, require_training_values)` → `GammaLoopBatchResult` |
-| Sampler | `generate(max_samples)` → `SampleBatch`, `WAITING`, or `FINISHED` |
-| Materializer | `materialize_batch(latent_batch)` → `Batch` |
-| Transform | `transform_batch(xs_discrete, xs_continuous, weights)` → `Batch` |
-
-Rust applies weights/projection for ordinary values. Observable callbacks apply
-supplied weights exactly once to state and requested feedback. Invalid values,
-shapes, or overflowing moments reject the whole batch. JSON must be finite.
-`metadata()` and `diagnostics()` are methods returning JSON-safe data.
-
-## Sampler feedback and restoration
-
-A draw contains 1..`max_samples` samples. `training_remaining` is `None` for
-inference or the remaining training-window size **including this draw**. It must
-be at least the draw size. The runtime splits draws into evaluator batches and
-calls `feedback(values)` once per feedback-bearing draw, in original generation
-and sample order, with one already-weighted scalar per sample.
-
-Draws, evaluator batches, and training windows are independent. `WAITING` waits
-for outstanding feedback; the sampler decides when to update its model.
-`FINISHED` stops generation while pending work drains. Private training buffers
-belong to the sampler; the runtime keeps split cursors and partial feedback.
-
-`snapshot()` must return non-null JSON containing all private state needed for
-pending feedback. Restoration requires:
+A worker module imports its class and calls the matching runner:
 
 ```python
-@classmethod
-def from_snapshot(cls, *, snapshot, discrete_cardinalities, continuous_dims,
-                  init_args, evaluator_metadata=None): ...
+from gammaboard_process import run_evaluator
+from my_evaluator import MyEvaluator
+
+if __name__ == "__main__":
+    run_evaluator(MyEvaluator)
 ```
 
-Construction config is stored separately by GammaBoard. External files must be
-immutable, durable, and available to resumed workers; snapshots do not copy them.
-Optional sampler callbacks: `pdf`/`discrete_pdf` (default `None`), `global_pdf_norm`
-(default `1.0`), `persisted_output` (default `None`), and `diagnostics` (default `{}`).
+Use `run_sampler`, `run_materializer`, or `run_batch_transform` for the other roles.
+The SDK owns framing and NumPy conversion; subclasses of the SDK base classes are
+optional. The [Python interface table](../docs/execution-model.md#python-interfaces-and-process-boundaries)
+defines constructor arguments, callback signatures, shapes, and restoration.
 
-## Logging and shutdown
+## Working examples
+
+- [NumPy evaluator](examples/python_scalar_sin/README.md): ordinary scalar/vector values.
+- [Havana sampler](examples/python_sampler_symbolica_havana/README.md): adaptive draws,
+  feedback, snapshots, and inference.
+- [GammaLoop observable evaluator](examples/python_gammaloop_observable/src/demo_evaluator.py):
+  weighted native observable state and optional training values.
+- [Rust/Apptainer evaluator](examples/rust_breit_wigner_evaluator/README.md): a direct
+  wire implementation, including ragged coordinate layouts.
+
+## Logs and lifecycle
 
 Stdout belongs to the protocol. The SDK redirects `print` to logs; use
 `gammaboard_process.log(message, level="info")` for structured levels.
 `GAMMABOARD_LOG_LEVEL` filters worker messages; runtime `tracing.db_gammaboard_level`
 filters persistence. Direct stderr is recorded at warning level.
-On shutdown GammaBoard closes stdin, waits the grace period, then sends SIGTERM
-and, after five seconds, SIGKILL to the process group if needed.
+
+A process can be restarted or receive replayed work. Keep numerical behavior
+independent of prior evaluator/materializer/transform calls, and include all
+sampler-private pending state in snapshots. See [failure and recovery semantics](../docs/execution-model.md#tasks-checkpoints-and-failures).

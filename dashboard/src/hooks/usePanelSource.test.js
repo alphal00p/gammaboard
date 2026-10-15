@@ -36,7 +36,7 @@ describe("usePanelSource", () => {
   });
   test("refetches after applying stored panel values for a new source", async () => {
     window.localStorage.setItem(
-      "gammaboard.panel-values.source",
+      "gammaboard.panel-values.v1.source",
       JSON.stringify({
         mode: "log",
       }),

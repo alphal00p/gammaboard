@@ -86,7 +86,7 @@ export const heatmapLegendGradient = (zmin, zmax, mode) => {
 // to zero. Neither should leak into another metric or a linear color scale.
 export const readHeatmapColorLimits = (value, metricMode, colorScale = "zero_centered") => {
   const limits = value?.colorLimits;
-  return limits && limits.metricMode === metricMode && (limits?.colorScale || "zero_centered") === colorScale ? limits : null;
+  return limits && limits.metricMode === metricMode && limits.colorScale === colorScale ? limits : null;
 };
 
 export const writeHeatmapColorLimit = (value, metricMode, side, limit, colorScale = "zero_centered") => ({
@@ -97,6 +97,5 @@ export const writeHeatmapColorLimit = (value, metricMode, side, limit, colorScal
 export const resetHeatmapColorLimits = (value) => {
   const next = { ...value };
   delete next.colorLimits;
-  delete next.spread;
   return next;
 };

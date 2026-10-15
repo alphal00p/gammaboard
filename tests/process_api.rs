@@ -55,7 +55,10 @@ fn process_api_roundtrips() -> Result {
         &directory.path().join("sampler.json"),
     ))?;
     let mut evaluator = evaluator.build()?;
-    let mut sampler = sampler.create(domain, None, json!({}))?;
+    let metadata = evaluator.metadata();
+    assert_eq!(metadata, json!({"space":"coordinates", "dims":6}));
+    let mut sampler = sampler.create(domain, None, metadata.clone())?;
+    assert_eq!(sampler.snapshot()?["evaluator_metadata"], metadata);
     let mut count = 0;
     let mut total = 0.;
     for size in [1, 17, 4096] {

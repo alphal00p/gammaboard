@@ -92,11 +92,8 @@ matching binds. Normal builds include Symbolica licensing; builds made with
 
 ## Upgrading this revision
 
-Follow the [0.3 upgrade guide](upgrading-0.3.md) for definition conversion, SDK
-installation, compatibility checks, and verification before recreating runs.
-
-The consolidated schema, saved states, and process v6 require a fresh database.
-Export needed run TOML and back up the old deployment first. Stop all components,
-reset with `gammaboard db reset --yes`, then restart matching binaries/workers and
-recreate runs. Old snapshots cannot be resumed; external artifacts are not migrated.
-See [backup and recovery](operations.md#backup-and-recovery).
+Use the [compatibility policy](compatibility.md) to match binaries, SDKs, generated
+physics states, and persisted formats. Incompatible models require a fresh database;
+there is no definition/state converter. Preserve the old deployment and backup,
+then recreate runs from current validated templates. See
+[backup and recovery](operations.md#backup-and-recovery) for operator commands.

@@ -451,8 +451,6 @@ fn offsets_total_len(
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessConfig, ProcessSampler};
-    use crate::sampling::Sampler;
     use crate::utils::domain::Domain;
     use serde_json::json;
 
@@ -554,32 +552,5 @@ mod tests {
             invalid[binary.len() - 8..].copy_from_slice(&weight.to_le_bytes());
             assert!(super::decode_generation(&domain, 100, &response, &invalid).is_err());
         }
-    }
-
-    #[test]
-    fn process_sampler_initialize_receives_evaluator_metadata() {
-        let python =
-            std::env::var("GAMMABOARD_TEST_PYTHON").unwrap_or_else(|_| "python3".to_string());
-        let params = ProcessConfig {
-            shutdown_grace_seconds: 30,
-            command: vec![
-                python,
-                "-u".to_string(),
-                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/json_worker.py").to_string(),
-                "sampler".to_string(),
-            ],
-            cwd: None,
-            args: json!({}),
-        };
-        let metadata = json!({"space": "momentum", "loop_count": 2});
-        let mut sampler = ProcessSampler::from_params_and_domain(
-            params,
-            &Domain::continuous(6),
-            metadata.clone(),
-        )
-        .expect("process sampler should initialize");
-
-        let raw = sampler.snapshot().expect("snapshot");
-        assert_eq!(raw.pointer("/evaluator_metadata"), Some(&metadata));
     }
 }

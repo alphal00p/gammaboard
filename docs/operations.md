@@ -98,15 +98,10 @@ Graceful pause/stop saves sampler state, accumulator, pending feedback, and prog
 together. A crash restores that boundary and replays later work: live progress may
 roll back, and evaluation/callbacks may run again. Invalid checkpoints fail visibly.
 
-Accepted samples and ordered training feedback remain consistent with the restored
-history. Claim tokens reject superseded results; an abandoned submission transaction
-releases its locks after a fixed 30-second idle timeout. These guarantees assume a
-healthy durable database and restorable sampler state, not arbitrary storage
-corruption or irreversible external side effects.
-
-External sampler artifacts must remain immutable and accessible while referenced
-by any checkpoint/stage. GammaBoard stores references, not file contents or versions;
-an overwritten MadNIS model cannot be repaired by restoring database JSON.
+The [execution specification](execution-model.md#tasks-checkpoints-and-failures)
+defines claim fencing, ordered feedback, rollback, replay, and external artifact
+requirements. It is the interface contract for custom workers. An abandoned
+submission transaction releases its locks after a fixed 30-second idle timeout.
 
 ## Troubleshooting
 

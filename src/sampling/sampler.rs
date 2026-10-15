@@ -61,7 +61,8 @@ impl SavedSampler {
 pub trait Sampler: Send {
     fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError>;
     /// Generate at most `max_samples` samples (a positive per-draw limit).
-    /// The runtime caps this by queue tuning and the remaining task budget.
+    /// The runtime caps this by queue tuning, the remaining task budget, and
+    /// any durable campaign allowance. See docs/execution-model.md.
     /// Draws may be smaller, e.g. at a training boundary, but never empty.
     /// The limit can change between draws without changing feedback boundaries.
     fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError>;

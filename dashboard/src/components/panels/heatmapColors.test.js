@@ -44,16 +44,16 @@ describe("linear heatmap colors", () => {
     expect(heatmapLegendGradient(-11, -8, "linear")).toMatch(/^linear-gradient\(to top, #440154, .*#fde725\)$/);
   });
 
-  test("supports independent bounds of either sign and ignores invalid or legacy limits", () => {
+  test("supports independent bounds of either sign and ignores invalid or incomplete limits", () => {
     expect(buildScalarHeatmapScale([-11, -8], "linear", { max: -9 })).toEqual({ zmin: -11, zmax: -9 });
     expect(buildScalarHeatmapScale([2, 8], "linear", { min: 4 })).toEqual({ zmin: 4, zmax: 8 });
     for (const limits of [{ min: 8, max: 2 }, { min: 4, max: 4 }, { min: NaN, max: Infinity }]) {
       expect(buildScalarHeatmapScale([2, 8], "linear", limits)).toEqual({ zmin: 2, zmax: 8 });
     }
-    const legacy = { colorLimits: { metricMode: "log10_integrand", min: -11, max: 0 } };
-    expect(readHeatmapColorLimits(legacy, "log10_integrand", "linear")).toBeNull();
-    expect(readHeatmapColorLimits(legacy, "log10_integrand", "zero_centered")).toEqual(legacy.colorLimits);
-    const next = writeHeatmapColorLimit(legacy, "log10_integrand", "max", -9, "linear");
+    const incomplete = { colorLimits: { metricMode: "log10_integrand", min: -11, max: 0 } };
+    expect(readHeatmapColorLimits(incomplete, "log10_integrand", "linear")).toBeNull();
+    expect(readHeatmapColorLimits(incomplete, "log10_integrand", "zero_centered")).toBeNull();
+    const next = writeHeatmapColorLimit(incomplete, "log10_integrand", "max", -9, "linear");
     expect(readHeatmapColorLimits(next, "log10_integrand", "linear")).toEqual({
       metricMode: "log10_integrand", colorScale: "linear", max: -9,
     });
@@ -115,7 +115,7 @@ describe("zero-centered heatmap colors", () => {
   });
 
   test("keeps limits independent and resets them without losing the view", () => {
-    const initial = { zoom: { start: 25, end: 75 }, spread: 3 };
+    const initial = { zoom: { start: 25, end: 75 } };
     const minOnly = writeHeatmapColorLimit(initial, "log10_pdf", "min", -4);
     expect(buildScalarHeatmapScale([-8, 1], "zero_centered", minOnly.colorLimits)).toEqual({ zmin: -4, zmax: 1 });
     const both = writeHeatmapColorLimit(minOnly, "log10_pdf", "max", 0.25);

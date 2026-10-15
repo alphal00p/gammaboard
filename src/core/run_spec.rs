@@ -390,8 +390,6 @@ pub enum EvaluatorConfig {
     },
 }
 
-impl EvaluatorConfig {}
-
 /// Complete sampling pipeline. Algorithm state belongs to the sampler; the
 /// runtime owns materialization and coordinate transforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]

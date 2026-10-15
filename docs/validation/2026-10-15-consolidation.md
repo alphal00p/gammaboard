@@ -1,5 +1,8 @@
 # Consolidation validation and risk assessment — 2026-10-15
 
+This is a dated validation record. Current behavior and interfaces are specified
+in the [execution model](../execution-model.md) and [compatibility policy](../compatibility.md).
+
 The review covers the uncommitted consolidation originally based on `f2a3911`,
 the 0.3 compatibility work, and fixes found while using the deployed dashboard.
 The initial consolidation is committed as `f4e7a21`; subsequent commits preserve
@@ -27,8 +30,9 @@ large-scale performance/recovery comparison.
 - Database, checkpoint, and queue compatibility checks reject unsupported formats.
   Performance responses use schema 2. Historical migrations were replaced by a
   fresh baseline, and operator documentation was consolidated.
-- A separate-output definition converter and an [upgrade guide](../upgrading-0.3.md)
-  describe the breaking changes. Checkpoints and numerical results are not migrated.
+- The initial consolidation included a definition converter. The later cleanup
+  removed it; [current compatibility policy](../compatibility.md) requires current
+  definitions and matching state formats. Checkpoints/results are not migrated.
 
 ## Validation
 

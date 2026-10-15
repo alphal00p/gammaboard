@@ -317,7 +317,7 @@ fn build_task_summary_entries(
         }
         RunTaskSpec::Sample {
             stop_condition,
-            sampler_aggregator,
+            sampler,
             accumulator,
             ..
         } => {
@@ -334,7 +334,7 @@ fn build_task_summary_entries(
             entries.push(key_value(
                 "sampler",
                 "Sampler",
-                sampler_source_label(sampler_aggregator.as_ref()),
+                sampler_source_label(sampler.as_ref()),
             ));
             entries.push(key_value(
                 "accumulator",
@@ -391,7 +391,7 @@ fn build_task_summary_entries(
         }
         RunTaskSpec::PdfAdaptationImage {
             geometry,
-            sampler_aggregator,
+            sampler,
             batch_transforms,
         } => {
             entries.push(key_value(
@@ -412,7 +412,7 @@ fn build_task_summary_entries(
                 "Sampler Source",
                 source_ref_label(task.task.sample_sampler_source()),
             ));
-            if let Some(label) = sampler_source_override_label(sampler_aggregator.as_ref()) {
+            if let Some(label) = sampler_source_override_label(sampler.as_ref()) {
                 entries.push(key_value("sampler", "Sampler", label));
             }
             if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
@@ -421,7 +421,7 @@ fn build_task_summary_entries(
         }
         RunTaskSpec::PdfAdaptationPlotLine {
             geometry,
-            sampler_aggregator,
+            sampler,
             batch_transforms,
         } => {
             entries.push(key_value(
@@ -435,7 +435,7 @@ fn build_task_summary_entries(
                 "Sampler Source",
                 source_ref_label(task.task.sample_sampler_source()),
             ));
-            if let Some(label) = sampler_source_override_label(sampler_aggregator.as_ref()) {
+            if let Some(label) = sampler_source_override_label(sampler.as_ref()) {
                 entries.push(key_value("sampler", "Sampler", label));
             }
             if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
@@ -1099,7 +1099,7 @@ mod tests {
             },
             measurement: None,
             evaluator: None,
-            sampler_aggregator: None,
+            sampler: None,
             accumulator: None,
             queue_tuning: None,
             batch_transforms: None,
@@ -1309,7 +1309,7 @@ mod tests {
                     },
                     discrete: vec![],
                 },
-                sampler_aggregator: None,
+                sampler: None,
                 batch_transforms: None,
             },
             RunTaskSpec::PdfAdaptationPlotLine {
@@ -1323,7 +1323,7 @@ mod tests {
                     },
                     discrete: vec![],
                 },
-                sampler_aggregator: None,
+                sampler: None,
                 batch_transforms: None,
             },
         ];

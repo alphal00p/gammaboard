@@ -17,26 +17,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn partial_training_groups_survive_checkpoint_roundtrips() {
-        let mut state = GenerationBuffer::default();
-        state.record_draw(5);
-        state.record_draw(2);
-        assert_eq!(state.accept_training_values(&[0.0, 1.0]).unwrap(), None);
-        let encoded = serde_json::to_value(&state).unwrap();
-        let mut restored: GenerationBuffer = serde_json::from_value(encoded).unwrap();
-        assert_eq!(
-            restored.accept_training_values(&[2.0, 3.0, 4.0]).unwrap(),
-            Some(vec![0.0, 1.0, 2.0, 3.0, 4.0])
-        );
-        assert!(restored.accept_training_values(&[5.0, 6.0, 7.0]).is_err());
-        assert_eq!(
-            restored.accept_training_values(&[5.0, 6.0]).unwrap(),
-            Some(vec![5.0, 6.0])
-        );
-        assert!(restored.is_empty());
-    }
-
-    #[test]
     fn ragged_draw_restores_its_split_cursor_and_feedback_metadata() {
         use crate::evaluation::{Batch, Point};
         use crate::sampling::LatentBatch;
@@ -50,6 +30,7 @@ mod tests {
             .buffer_draw(LatentBatch::from_batch(&original), Some(12))
             .unwrap();
         state.record_draw(9);
+        state.record_draw(2);
         let mut chunks = state.take_batches(2, 2).unwrap();
         assert!(state.accept_training_values(&[0.0, 1.0]).unwrap().is_none());
         let snapshot = serde_json::to_value(state).unwrap();
@@ -77,6 +58,11 @@ mod tests {
         assert_eq!(
             restored.accept_training_values(&[7.0, 8.0]).unwrap(),
             Some((0..9).map(|i| i as f64).collect())
+        );
+        assert!(restored.accept_training_values(&[9.0, 10.0, 11.0]).is_err());
+        assert_eq!(
+            restored.accept_training_values(&[9.0, 10.0]).unwrap(),
+            Some(vec![9.0, 10.0])
         );
         assert!(!restored.has_outstanding());
         restored.finished = true;

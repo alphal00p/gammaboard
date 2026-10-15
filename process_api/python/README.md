@@ -1,15 +1,9 @@
-# GammaBoard Process API
+# GammaBoard process SDK
 
-Python helpers for implementing GammaBoard process evaluators, samplers, batch
-transforms, and materializers over the `gammaboard-jsonrpc-v6` protocol.
+Python interfaces and runners for evaluators, samplers, materializers, and batch
+transforms using `gammaboard-jsonrpc-v6`. Install with `pip install .` from this
+directory, in the environment that contains your worker's scientific dependencies.
 
-- `Evaluator.eval` returns unweighted values; `GammaLoopEvaluator.eval_gammaloop`
-  returns weighted observable state and requested feedback.
-- `Sampler.generate` returns `SampleBatch`, `WAITING`, or `FINISHED`.
-- `Materializer.materialize_batch` and `BatchTransform.transform_batch` return
-  the same `Batch` type.
-- Evaluator metadata and worker diagnostics use `metadata()` and `diagnostics()`.
-  Samplers may also override `global_pdf_norm()` and `persisted_output()`.
-
-See the [process API documentation](../README.md) in the GammaBoard repository
-for protocol details and examples.
+See the [process guide](../README.md) for setup and examples, the
+[execution specification](../../docs/execution-model.md) for callback and recovery
+semantics, and the [wire contract](../protocol.md) for non-Python implementations.

@@ -73,7 +73,8 @@ class Sampler(ABC):
         """Return a SampleBatch with 1..max_samples samples, WAITING or FINISHED.
 
         max_samples is a positive per-draw limit supplied by queue tuning and
-        capped by the remaining task budget. It can change between calls. Set the batch's
+        capped by the remaining task budget and campaign allowance. It can change
+        between calls. Set the batch's
         training_remaining to the ungenerated training window size to request
         one feedback value per sample. Evaluator splitting is runtime-owned.
         """

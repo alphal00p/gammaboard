@@ -9,7 +9,8 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
   pipeline configuration, and shared stopping estimates in the runner/dashboard.
 - Explicit database, checkpoint, and queue compatibility checks; performance
   schema 2 and coordinated SDK/integration dependency versions.
-- A dry-run run-definition converter and [upgrade guide](docs/upgrading-0.3.md).
+- A [complete execution specification](docs/execution-model.md) and strict current-format
+  interfaces. Retired conversion tooling and saved-view adapters were removed.
 
 - Distributed integration with persistent runs, worker pools, live results,
   performance reporting, and allocated core-hour accounting.

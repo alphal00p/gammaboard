@@ -65,7 +65,7 @@ pub async fn check_database_compatibility(pool: &Pool<Postgres>) -> Result<(), s
     ).fetch_optional(pool).await.map_err(|error| {
         match &error {
             sqlx::Error::Database(db) if db.code().as_deref() == Some("42P01") =>
-                sqlx::Error::Protocol("incompatible GammaBoard database: missing model version; back up/export with the old executable, then initialize a fresh database (see docs/upgrading-0.3.md)".into()),
+                sqlx::Error::Protocol("incompatible GammaBoard database: missing model version; back up/export with the old executable, then initialize a fresh database (see docs/compatibility.md)".into()),
             _ => error,
         }
     })?;

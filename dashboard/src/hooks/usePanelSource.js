@@ -12,7 +12,7 @@ const emptyState = Object.freeze({
 });
 
 const asObject = (value) => (isPlainObject(value) ? value : {});
-const PANEL_VALUES_STORAGE_PREFIX = "gammaboard.panel-values.";
+const PANEL_VALUES_STORAGE_PREFIX = "gammaboard.panel-values.v1.";
 const canUseStorage = () => typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 const storageKeyForSource = (sourceId) => `${PANEL_VALUES_STORAGE_PREFIX}${sourceId}`;
 const readStoredPanelValues = (sourceId) => {

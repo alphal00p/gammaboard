@@ -30,6 +30,7 @@ default passwordless deployment on a trusted network.
 
 - [Setup and examples](docs/quickstart.md)
 - [Run and task configuration](docs/config.md)
+- [Sampling, evaluation, feedback, and recovery specification](docs/execution-model.md)
 - [Deployment, access, and capacity](docs/deployment.md)
 - [Daily operation, performance, and recovery](docs/operations.md)
 - [Benchmarks and plots](docs/benchmarking.md)
