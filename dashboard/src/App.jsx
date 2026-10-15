@@ -32,7 +32,7 @@ const LoadingPanel = ({ label = "Loading..." }) => (
 );
 
 const DashboardHeader = () => {
-  const { authenticated, busy, ready, requestLogin, logout } = useAuth();
+  const { authenticated, authEnabled = true, busy, ready, requestLogin, logout } = useAuth();
 
   return (
     <Box sx={{ mb: 3, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 2 }}>
@@ -50,16 +50,16 @@ const DashboardHeader = () => {
       <Stack direction="row" spacing={1} alignItems="center">
         <Chip
           color={authenticated ? "success" : "default"}
-          label={authenticated ? "Operator mode" : ready ? "Read-only" : "Checking session"}
+          label={authenticated ? (authEnabled ? "Operator mode" : "Operator mode · no password") : ready ? (authEnabled ? "Read-only" : "Read-only in this browser") : "Checking session"}
           variant={authenticated ? "filled" : "outlined"}
         />
         {authenticated ? (
           <Button onClick={logout} disabled={busy}>
-            Log Out
+            {authEnabled ? "Log Out" : "Switch to read-only"}
           </Button>
         ) : (
           <Button onClick={() => requestLogin()} disabled={!ready || busy}>
-            Log In
+            {authEnabled ? "Log In" : "Enable controls"}
           </Button>
         )}
       </Stack>

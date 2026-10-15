@@ -177,7 +177,7 @@ fn build_performance_response(
         PanelKind::Table,
         table_panel_with_payload(
             "busy_rates",
-            ["Role", "Compute busy (%)", "I/O active (%)"]
+            ["Role", "Compute wall time (%)", "I/O wall time (%)"]
                 .map(String::from)
                 .to_vec(),
             vec![
@@ -231,7 +231,7 @@ fn build_performance_response(
                 ),
                 key_value(
                     "process_rss",
-                    "Current GammaBoard Process RSS",
+                    "Current GammaBoard RSS (excludes Python/GPU)",
                     (memory_count > 0).then(|| format_bytes_human(rss)),
                 ),
                 key_value(
@@ -318,8 +318,8 @@ fn build_performance_response(
             "evaluator_diagnostics",
             [
                 "Worker",
-                "Compute busy (%)",
-                "I/O active (%)",
+                "Compute wall time (%)",
+                "I/O wall time (%)",
                 "Submitted samples (boundary estimate)",
                 "Evaluate (µs/sample)",
                 "Materialize (µs/sample)",

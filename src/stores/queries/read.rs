@@ -45,6 +45,8 @@ struct RunProgressBaseRow {
     integration_params: Option<JsonValue>,
     domain: Option<JsonValue>,
     active_task_id: Option<i64>,
+    failed_tasks: bool,
+    completed_tasks: bool,
     target: Option<JsonValue>,
     nr_produced_samples: i64,
     nr_completed_samples: i64,
@@ -74,7 +76,11 @@ impl RunProgressBaseRow {
         };
         // An active task remains resumable while paused; assignments determine
         // whether its runtime is actually running or draining.
-        let lifecycle_state = if self.desired_assignment_count > 0 {
+        let lifecycle_state = if self.failed_tasks {
+            RunLifecycleState::Failed
+        } else if self.completed_tasks {
+            RunLifecycleState::Completed
+        } else if self.desired_assignment_count > 0 {
             RunLifecycleState::Running
         } else if batch_stats.claimed_batches > 0 || self.active_worker_count > 0 {
             RunLifecycleState::Pausing
@@ -226,7 +232,7 @@ impl From<RegisteredWorkerRow> for RegisteredWorkerEntry {
         let status = if value.current_role.is_some() {
             WorkerStatus::Active
         } else {
-            WorkerStatus::Inactive
+            WorkerStatus::Idle
         };
         Self {
             node_name: value.node_name,
@@ -273,7 +279,7 @@ impl From<RegisteredWorkerSummaryRow> for RegisteredWorkerSummary {
         let status = if value.current_role.is_some() {
             WorkerStatus::Active
         } else {
-            WorkerStatus::Inactive
+            WorkerStatus::Idle
         };
         Self {
             node_name: value.node_name,
@@ -366,18 +372,22 @@ fn run_progress_sql(run_where_clause: &str) -> String {
             COALESCE(r.integration_params, '{{}}'::jsonb) as integration_params,
             r.point_spec as domain,
             active_task.id as active_task_id,
+            COALESCE(task_cpu.failed_tasks, false) AS failed_tasks,
+            COALESCE(task_cpu.completed_tasks, false) AS completed_tasks,
             r.target,
             r.nr_produced_samples,
             r.nr_completed_samples,
             COALESCE(task_cpu.cpu_seconds, 0.0)::DOUBLE PRECISION AS cpu_seconds,
             r.sampler_runner_uptime_ms,
             r.started_at,
-            r.completed_at,
+            CASE WHEN task_cpu.completed_tasks THEN COALESCE(r.completed_at,task_cpu.completed_at) END AS completed_at,
             r.batches_completed
         FROM runs r
         LEFT JOIN assignment_stats a ON r.id = a.run_id
         LEFT JOIN (
-            SELECT run_id, SUM(task_cpu_seconds(id, cpu_seconds)) AS cpu_seconds
+            SELECT run_id, SUM(task_cpu_seconds(id, cpu_seconds)) AS cpu_seconds,
+                bool_or(state='failed') AS failed_tasks, bool_and(state='completed') AS completed_tasks,
+                max(completed_at) AS completed_at
             FROM run_tasks
             GROUP BY run_id
         ) task_cpu ON r.id = task_cpu.run_id
@@ -624,6 +634,8 @@ fn apply_child_run_totals(runs: &mut [RunProgress]) {
                 completed = completed.saturating_add(child_completed);
                 cpu_seconds += child_cpu_seconds;
                 lifecycle = match (lifecycle, child_lifecycle) {
+                    (RunLifecycleState::Completed, _) => RunLifecycleState::Completed,
+                    (RunLifecycleState::Failed, _) => RunLifecycleState::Failed,
                     (RunLifecycleState::Running, _) | (_, RunLifecycleState::Running) => {
                         RunLifecycleState::Running
                     }

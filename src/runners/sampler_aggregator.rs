@@ -128,6 +128,7 @@ pub struct SamplerAggregatorRunner<S> {
     queue: SamplerQueue<S>,
     base_queue_config: SamplerQueueConfig,
     last_task_config_refresh_at: Instant,
+    waiting_for_campaign_budget: bool,
     busy: BusyTime,
     node_uuid: String,
     sampler_uptime_started_at: Instant,
@@ -403,6 +404,7 @@ where
         );
 
         Ok(Self {
+            waiting_for_campaign_budget: false,
             run_id,
             epoch: uuid::Uuid::new_v4().to_string(),
             node_name: node_name.into(),
@@ -734,10 +736,16 @@ where
             .produce_ms
             .observe_duration(produce_started.elapsed());
 
-        self.flush_aggregation(false).await?;
+        // Credit allocation depends on observed completions. Publish a drained
+        // window immediately instead of idling for the normal dashboard timer.
+        let publish_budget_window = self.waiting_for_campaign_budget
+            && ingest_stats.completed_samples_delta > 0
+            && queue_before_produce.open() == 0
+            && !self.runtime_state.generation.has_outstanding();
+        self.flush_aggregation(publish_budget_window).await?;
 
         let progress_sync_started = Instant::now();
-        self.flush_progress_sync(false).await?;
+        self.flush_progress_sync(publish_budget_window).await?;
         self.window_state
             .progress_sync_ms
             .observe_duration(progress_sync_started.elapsed());
@@ -774,6 +782,7 @@ where
             .diagnostics_snapshot()
             .and_then(|snapshot| snapshot.active_evaluator_count);
         if !self.runtime_state.generation.finished
+            && !self.waiting_for_campaign_budget
             && no_progress_is_terminal(
                 stop_status.reached,
                 open_batch_count,
@@ -1161,6 +1170,7 @@ where
         &mut self,
         queue_before_produce: crate::core::BatchQueueCounts,
     ) -> Result<(usize, bool), RunnerError> {
+        self.waiting_for_campaign_budget = false;
         if self.runtime_state.accumulator_checkpoint_state
             == AccumulatorCheckpointState::WaitingForInitialRoundTrip
         {
@@ -1177,12 +1187,28 @@ where
             if !self.queue.needs_generation(queue_before_produce).await? {
                 return Ok((0, true));
             }
+            let campaign_remaining = self
+                .store
+                .campaign_sample_allowance(self.run_id, self.task.id)
+                .await?
+                .map(|allowance| {
+                    allowance
+                        .saturating_sub(self.task.nr_produced_samples)
+                        .max(0) as usize
+                });
+            if campaign_remaining == Some(0) {
+                // The controller grants another window after observing progress.
+                // Waiting for credits is not sampler exhaustion or a failed task.
+                self.waiting_for_campaign_budget = true;
+                return Ok((0, true));
+            }
             let max_samples = self
                 .params
                 .queue
                 .max_generation_size
                 .get()
-                .min(budget.unwrap_or(usize::MAX));
+                .min(budget.unwrap_or(usize::MAX))
+                .min(campaign_remaining.unwrap_or(usize::MAX));
             let started = Instant::now();
             let generated = {
                 let _compute = self.busy.compute();

@@ -1183,6 +1183,26 @@ impl AggregationStore for PgStore {
 
 #[async_trait::async_trait]
 impl RunTaskStore for PgStore {
+    async fn allocate_campaign_samples(
+        &self,
+        task_id: i64,
+        requests: &[(i32, i64)],
+    ) -> Result<std::collections::BTreeMap<i32, i64>, StoreError> {
+        queries::allocate_campaign_samples(&self.pool, task_id, requests)
+            .await
+            .map_err(map_sqlx)
+    }
+
+    async fn campaign_sample_allowance(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<i64>, StoreError> {
+        queries::campaign_sample_allowance(&self.pool, run_id, task_id)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn append_run_tasks(
         &self,
         run_id: i32,

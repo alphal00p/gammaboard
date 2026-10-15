@@ -131,7 +131,7 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
         deleteReason={!editable ? "This queue is managed by its parent run." : task.state !== "pending" ? "Only pending tasks can be deleted." : null} />} />}
     {(selectedTask || isIntegration) && <TaskOutputPanel title={isIntegration ? "Selected Task Output" : "Run Output"}
       key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} onSelectRun={onSelectRun} />}
-    <RunInfo runId={run.run_id} />
+    <RunInfo runId={run.run_id} refreshKey={taskList.map((task) => `${task.id}:${task.state}`).join(",")} />
     {editor && <TomlActionDialog open title={editor.title} label="Task TOML"
       submitLabel={editor.taskId ? "Save changes" : "Append tasks"} initialValue={editor.value}
       submitDisabled={Boolean(editor.taskId) && !canSave} exportName={editor.name || "task"}

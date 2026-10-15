@@ -711,15 +711,25 @@ fn point_value(point: Option<&crate::evaluation::batch::DiagnosticSample>) -> Js
     }
 }
 
+fn diagnostic_ratio(value: f64) -> JsonValue {
+    if value.is_infinite() && value.is_sign_positive() {
+        json!("∞")
+    } else if value.is_finite() {
+        json!(value)
+    } else {
+        json!("undefined")
+    }
+}
+
 fn base_estimate_summary_entries(
     accumulator: &AccumulatorState,
     run_target: Option<VectorTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     match accumulator {
-        AccumulatorState::Empty(_) => vec![key_value("count", "Count", 0)],
+        AccumulatorState::Empty(_) => vec![key_value("count", "Samples in this accumulator", 0)],
         AccumulatorState::Vector(state) => {
             let mut entries = vec![
-                key_value("count", "Count", state.sample_count()),
+                key_value("count", "Samples in this accumulator", state.sample_count()),
                 key_value("projection_rsd", "Projection RSD", state.rsd()),
                 key_value("projection_ess", "Projection ESS", state.ess()),
                 estimate_entry(
@@ -731,7 +741,7 @@ fn base_estimate_summary_entries(
                 key_value(
                     "projection_signal_to_noise",
                     "Projection Mean(|x|)^2 / abs_err^2",
-                    state.signal_to_noise(),
+                    diagnostic_ratio(state.signal_to_noise()),
                 ),
             ];
             for component in &state.components {

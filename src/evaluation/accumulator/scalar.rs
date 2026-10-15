@@ -407,8 +407,10 @@ fn variance_stderr_from_sums(
 }
 
 fn signal_to_noise_ratio(mean_abs: f64, abs_err: f64) -> f64 {
-    if abs_err <= 0.0 {
-        0.0
+    if abs_err == 0.0 && mean_abs > 0.0 {
+        f64::INFINITY
+    } else if abs_err <= 0.0 {
+        f64::NAN
     } else {
         (mean_abs * mean_abs) / (abs_err * abs_err)
     }
@@ -482,6 +484,13 @@ fn merge_negative_extrema(
 mod tests {
     use super::ScalarAccumulatorState;
     use crate::evaluation::Point;
+
+    #[test]
+    fn zero_error_ratio_distinguishes_constant_signal_from_undefined_zero() {
+        assert_eq!(super::signal_to_noise_ratio(1.0, 0.0), f64::INFINITY);
+        assert!(super::signal_to_noise_ratio(0.0, 0.0).is_nan());
+        assert_eq!(super::signal_to_noise_ratio(2.0, 0.5), 16.0);
+    }
 
     #[test]
     fn ess_uses_absolute_weighted_contributions_and_includes_zero_samples() {

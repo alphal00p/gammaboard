@@ -141,10 +141,14 @@ fn panel_states(
             "run_progress",
             vec![
                 key_value("tasks", "Run Tasks", tasks.len()),
-                key_value("produced", "Produced Samples", run.nr_produced_samples),
+                key_value(
+                    "produced",
+                    "Produced Samples (this run, all tasks)",
+                    run.nr_produced_samples,
+                ),
                 key_value(
                     "completed",
-                    "Completed Samples",
+                    "Completed Samples (all tasks and children)",
                     run.nr_completed_samples_including_children,
                 ),
                 key_value(

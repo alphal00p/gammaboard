@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunLifecycleState {
+    Completed,
+    Failed,
     Running,
     Pausing,
     Paused,
@@ -15,6 +17,8 @@ pub enum RunLifecycleState {
 impl RunLifecycleState {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
             Self::Running => "running",
             Self::Pausing => "pausing",
             Self::Paused => "paused",
@@ -26,14 +30,14 @@ impl RunLifecycleState {
 #[serde(rename_all = "snake_case")]
 pub enum WorkerStatus {
     Active,
-    Inactive,
+    Idle,
 }
 
 impl WorkerStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
-            Self::Inactive => "inactive",
+            Self::Idle => "idle",
         }
     }
 }

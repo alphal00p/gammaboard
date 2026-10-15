@@ -9,8 +9,9 @@ glNIS adapter is committed through `f711db7`.
 
 The result is suitable for controlled deployments with a fresh database and
 matching binaries/SDKs. It is not an in-place upgrade of an existing deployment.
-Production confidence remains limited by the campaign budget behavior below,
-unvalidated native mapping combinations, and the absence of a long-duration,
+The campaign budget defect and UI findings were addressed in the follow-up below.
+Production confidence remains limited by unvalidated native mapping combinations
+and the absence of a long-duration,
 large-scale performance/recovery comparison.
 
 ## What changed
@@ -119,39 +120,50 @@ normalization mistakes; they do not establish general statistical calibration.
 5. **Recovery evidence upload failed.** Server log filenames now replace colons,
    which GitHub artifact upload rejects.
 
-## Remaining behavior and risk
+## Follow-up: campaign cap and UI findings
 
-**Campaign budgets are not hard caps.** A valid 512-sample campaign produced
-4,096 samples in one fast child before observation, then failed because the other
-child had no usable result. With a 16,384 threshold, the same signed campaign
-completed correctly. Allocation windows govern scheduling decisions, not sample
-reservations. This behavior is now documented in [configuration](../config.md#controllers).
-Strict resource caps require reservation/in-flight accounting or explicit child
-batch/budget constraints. The post-progress check also exists in the baseline;
-the baseline binary was not separately run for this case.
+The original 512-sample campaign consuming 4,096 samples was a budget-enforcement
+bug. It is fixed by durable per-child reservations acquired before generation.
+The sum of reservations cannot exceed the campaign cap, even with concurrent
+controllers. A reservation includes completed, queued, and buffered samples across
+all child stages. Recovery reuses logical sample slots; evaluator retries can
+still execute a slot more than once. This is a sample cap, not a CPU-time cap.
 
-Other observed surprises:
+Pilot grants are bounded independently of oversized scheduling windows and child
+batch settings. Selection accounts for available samplers, so a lone sampler
+rotates through pilots. Unused credits are reclaimed only after a child queue
+completes. A campaign waits for final-stage progress publication before declaring
+success. A genuinely insufficient cap fails explicitly without overshooting.
+The additive migration is `202610150001_campaign_budgets.sql`; deploy matching
+controllers and workers. This cannot undo work an older deployment already ran.
 
-- Completed or failed task queues can show run lifecycle **paused**. Live idle
-  workers show **inactive**. Those labels describe scheduling, not success/death.
-- Task lists, summaries, and plots poll independently and can briefly disagree.
-  The cross-stage publication defect above is fixed; ordinary display lag remains.
-- Scalar shorthand is displayed as a vector accumulator, and a selected task's
-  sample count can differ from the cumulative run total.
-- Canvas-backed SVG exports contain an embedded PNG. They are not editable vector
-  plots; JSON export retains the data for independent rendering.
-- In passwordless mode, logout only makes the client view read-only; it does not
-  revoke server authorization. The login dialog still requires a nonempty password
-  field even though authentication is disabled. This remains a usability issue.
-- The zero-error signal-to-noise-style diagnostic displays 0 rather than infinity;
-  an empty reporting interval briefly displayed negative zero nanoseconds. These
-  are diagnostic presentation edge cases, not changes to the stored integral.
-- Compute/I/O busy percentages are occupied wall time, can overlap, and are not
-  CPU utilization. Process RSS excludes external Python workers and GPUs.
-- Settings displayed derived allowed origins twice; this was cosmetic.
-- Failed launch requests remain visible as audit history. Forwarded browser origins
-  must be explicitly allowed; the two observed Codex localhost origins were added
-  and verified to return HTTP 200.
+The UI findings are addressed as follows:
+
+- Completed and failed queues display those outcomes; live unassigned workers
+  display **idle**. Worker placement and queue results remain separate concepts.
+- Summaries and selected outputs refresh on task state changes and display update
+  times. Aborted requests cannot replace newer data. Live sections still use
+  separate requests, so their timestamps describe the observed state.
+- Scalar shorthand displays **scalar (one vector component)**. Labels distinguish
+  accumulator samples, samples across this run's tasks, and totals with children.
+- ECharts SVG exports render actual vector paths, including stacked histogram
+  panels. Raster heatmaps export **PNG**. JSON remains available for the data.
+- Passwordless deployments offer **Switch to read-only** / **Enable controls**;
+  the browser preference survives reload. There is no password prompt or claim
+  of server-side logout in this mode. Password-protected login remains unchanged.
+- A positive signal with zero error displays **∞**; zero divided by zero displays
+  **undefined**. Negative zero is normalized in numeric presentation.
+- Activity labels identify wall time; RSS labels explicitly exclude Python/GPU
+  memory. Compute and I/O can overlap.
+- Settings deduplicate allowed origins. Failed launches appear in collapsed audit
+  history with completed/canceled attempts, rather than the outstanding queue.
+
+Follow-up validation includes the original cap scenario with one and two samplers,
+a scheduling window larger than the cap, concurrent database grants, replay,
+unused-credit reclamation, prior-stage accounting, and final-stage publication.
+The frontend has 149 passing tests, including actual SVG-content checks and both
+passwordless and authenticated control flows. Browser evidence and final command
+logs use the `budget-` prefix in the artifact directory below.
 
 ## What the tests do not establish
 
@@ -179,8 +191,10 @@ Other observed surprises:
   contracts do not establish cluster operation.
 
 The next production gate should be matched native physics-state validation,
-controlled throughput/memory comparison, and a longer recovery soak. If a strict
-campaign cap matters, address its reservation semantics before relying on it.
+controlled throughput/memory comparison, and a longer recovery soak. The campaign cap defect is fixed; the remaining gates are coverage requirements,
+not demonstrated defects. Local throughput and recovery studies can be run here;
+representative physics states, GPU hardware and cluster access are needed for the
+corresponding production checks.
 
 Local evidence, screenshots, exported figures, installed wheels, configurations,
 and browser action records are under

@@ -47,7 +47,7 @@ pub(super) async fn get_settings_overview(
             "auth_enabled": state.auth.is_some(),
             "allow_local_node_spawn": state.allow_local_node_spawn,
             "allowed_origins": state.allowed_origins.iter()
-                .filter_map(|origin| origin.to_str().ok()).collect::<Vec<_>>(),
+                .filter_map(|origin| origin.to_str().ok()).collect::<std::collections::BTreeSet<_>>(),
         },
     }))
 }

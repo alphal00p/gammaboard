@@ -13,6 +13,109 @@ static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn campaign_grants_are_atomic_durable_and_include_prior_stages() {
+    let (_guard, store) = locked_test_store().await;
+    let (parent, parent_task, _, _) = reliability_fixture(&store, 0).await;
+    let (left, left_task, _, _) = reliability_fixture(&store, 0).await;
+    let (right, right_task, _, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("UPDATE run_tasks SET task=$2 WHERE id=$1").bind(parent_task)
+        .bind(serde_json::json!({"kind":"integration_campaign","stop_condition":{"max_total_samples":512}}))
+        .execute(store.pool()).await.unwrap();
+    sqlx::query("UPDATE runs SET parent_run_id=$1,parent_task_id=$2 WHERE id=ANY($3)")
+        .bind(parent)
+        .bind(parent_task)
+        .bind(vec![left, right])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .campaign_sample_allowance(left, left_task)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    let left_request = [(left, 4096)];
+    let right_request = [(right, 4096)];
+    let (a, b) = tokio::join!(
+        store.allocate_campaign_samples(parent_task, &left_request),
+        store.allocate_campaign_samples(parent_task, &right_request)
+    );
+    a.unwrap();
+    b.unwrap();
+    let reopened = PgStore::new(store.pool().clone());
+    let grants = reopened
+        .allocate_campaign_samples(parent_task, &[])
+        .await
+        .unwrap();
+    assert_eq!(grants.values().sum::<i64>(), 512);
+    assert_eq!(
+        store
+            .campaign_sample_allowance(left, left_task)
+            .await
+            .unwrap(),
+        Some(grants[&left])
+    );
+    // Replay after recovery uses the existing allowance, never another charge.
+    let replay = reopened
+        .allocate_campaign_samples(parent_task, &[(left, 4096), (right, 4096)])
+        .await
+        .unwrap();
+    assert_eq!(replay, grants);
+    let (winner, winner_task, loser, loser_task) = if grants[&left] > 0 {
+        (left, left_task, right, right_task)
+    } else {
+        (right, right_task, left, left_task)
+    };
+    store
+        .update_run_task_progress(winner_task, 32, 32)
+        .await
+        .unwrap();
+    store.complete_run_task(winner_task).await.unwrap();
+    let finished = store.get_run_progress(winner).await.unwrap().unwrap();
+    assert_eq!(
+        finished.lifecycle_state,
+        gammaboard::stores::RunLifecycleState::Completed
+    );
+    assert!(finished.completed_at.is_some());
+    let reused = store
+        .allocate_campaign_samples(parent_task, &[(loser, 4096)])
+        .await
+        .unwrap();
+    assert_eq!(reused[&winner], 32);
+    assert_eq!(reused[&loser], 480);
+    store
+        .update_run_task_progress(loser_task, 16, 16)
+        .await
+        .unwrap();
+    store.complete_run_task(loser_task).await.unwrap();
+    let task = store.list_run_tasks(loser).await.unwrap().remove(0).task;
+    let next = store
+        .append_run_tasks(
+            loser,
+            &[RunTaskInput {
+                name: Some("inference".into()),
+                task,
+            }],
+        )
+        .await
+        .unwrap()[0]
+        .id;
+    assert_eq!(
+        store.campaign_sample_allowance(loser, next).await.unwrap(),
+        Some(464)
+    );
+    let pending = store.get_run_progress(loser).await.unwrap().unwrap();
+    assert_ne!(
+        pending.lifecycle_state,
+        gammaboard::stores::RunLifecycleState::Completed
+    );
+    assert!(pending.completed_at.is_none());
+    store.remove_run(parent).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn activating_a_new_stage_never_exposes_the_previous_live_accumulator() {
     use gammaboard::core::AggregationStore;
     let (_guard, store) = locked_test_store().await;

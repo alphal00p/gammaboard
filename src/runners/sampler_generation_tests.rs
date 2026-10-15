@@ -58,6 +58,37 @@ fn draw_count(runner: &mut SamplerAggregatorRunner<RecordingStore>) -> usize {
 }
 
 #[tokio::test]
+async fn campaign_allowance_bounds_buffered_draws_and_waits_for_another_window() {
+    let mut runner = runner(0, 32_768, 40_000);
+    *runner.store.campaign_allowance.lock().unwrap() = Some(32);
+    runner.produce(BatchQueueCounts::default()).await.unwrap();
+    assert_eq!(
+        runner.task.nr_produced_samples + runner.runtime_state.generation.pending_samples() as i64,
+        32
+    );
+    runner.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
+    runner.produce(BatchQueueCounts::default()).await.unwrap();
+    assert_eq!(runner.task.nr_produced_samples, 32);
+    assert_eq!(
+        runner.produce(BatchQueueCounts::default()).await.unwrap().0,
+        0
+    );
+    assert!(runner.waiting_for_campaign_budget);
+    assert!(
+        !runner
+            .check_tick_terminal_state(BatchQueueCounts::default(), 0, 0, true)
+            .unwrap()
+    );
+    *runner.store.campaign_allowance.lock().unwrap() = Some(48);
+    runner.produce(BatchQueueCounts::default()).await.unwrap();
+    assert_eq!(
+        runner.task.nr_produced_samples + runner.runtime_state.generation.pending_samples() as i64,
+        48
+    );
+    runner.queue.flush().await.unwrap();
+}
+
+#[tokio::test]
 async fn persistence_reports_execution_time_returned_by_the_operation() {
     let mut runner = runner(100, 100, 100);
     runner

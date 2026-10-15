@@ -20,6 +20,7 @@ type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
 
 #[derive(Clone, Default)]
 pub(crate) struct RecordingStore {
+    pub(crate) campaign_allowance: Arc<Mutex<Option<i64>>>,
     pub(crate) nodes: Option<Vec<RegisteredNode>>,
     pub(crate) assignment_update_result: Option<bool>,
     pub(crate) inserts: RecordedInserts,
@@ -306,6 +307,22 @@ impl AggregationStore for RecordingStore {
 
 #[async_trait]
 impl RunTaskStore for RecordingStore {
+    async fn allocate_campaign_samples(
+        &self,
+        _task_id: i64,
+        _requests: &[(i32, i64)],
+    ) -> Result<std::collections::BTreeMap<i32, i64>, StoreError> {
+        unreachable!("unused in test")
+    }
+
+    async fn campaign_sample_allowance(
+        &self,
+        _run_id: i32,
+        _task_id: i64,
+    ) -> Result<Option<i64>, StoreError> {
+        Ok(*self.campaign_allowance.lock().unwrap())
+    }
+
     async fn append_run_tasks(
         &self,
         _run_id: i32,

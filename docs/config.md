@@ -140,11 +140,20 @@ outside this model. Campaigns follow each child's latest publishing sample stage
 error convergence waits for final publishing stages. Compatible histograms are
 combined; incompatible layouts are reported as omitted.
 
-The campaign's `max_total_samples` is a stop threshold checked when child progress
-is observed, not a reservation of samples before generation. In-flight work and
-fast child batches can overshoot it. A budget exhausted before every child has a
-usable published result fails the campaign. Allow room for every child's pilot
-and for queued work; use suitable child batch sizes when budgets are small.
+The campaign's `max_total_samples` is a hard cap on logical samples generated
+across all child tasks, including training and plotting. The controller reserves
+small, durable child allowances before sampling; completed, queued and buffered
+samples all consume that allowance. `allocation_window_samples` bounds each new
+allocation window. Child task/batch limits cannot override the campaign cap.
+Unused allowances are reclaimed only after a child's queue has completed.
+
+A campaign waits for reserved work to publish before stopping at its cap. If the
+cap is too small to reach every child's final publishing stage, it fails with an
+explicit budget-exhausted reason. Error targets can stop a campaign earlier.
+Retries and checkpoint replay reuse the same logical sample slots: this cap does
+not limit repeated evaluator executions or CPU time. Pause/resume and sampler
+recovery retain the durable allowances. Deploy matching controller and worker
+binaries; an older worker does not implement these reservations.
 
 The default allocation favors expected variance reduction per second
 (`weighted variance × throughput / samples`) after pilot coverage.

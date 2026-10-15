@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { usePanelSource } from "./usePanelSource";
 
 const selectPanelResponse = {
@@ -25,6 +25,15 @@ const selectPanelResponse = {
 };
 
 describe("usePanelSource", () => {
+  beforeEach(() => localStorage.clear());
+  test("a task state change refreshes a source whose polling had stopped", async () => {
+    const fetchPanels = vi.fn(async () => selectPanelResponse);
+    const { rerender } = renderHook(({ refreshKey }) => usePanelSource({ fetchPanels, refreshKey }),
+      { initialProps: { refreshKey: "pending" } });
+    await waitFor(() => expect(fetchPanels).toHaveBeenCalledOnce());
+    rerender({ refreshKey: "active" });
+    await waitFor(() => expect(fetchPanels).toHaveBeenCalledTimes(2));
+  });
   test("refetches after applying stored panel values for a new source", async () => {
     window.localStorage.setItem(
       "gammaboard.panel-values.source",

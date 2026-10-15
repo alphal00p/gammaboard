@@ -1266,6 +1266,7 @@ const ScalarImageHeatmapPanel = ({
           <Typography variant="subtitle1">{title}</Typography>
           <Stack direction="row" spacing={2} alignItems="center">
             <FigureExportActions
+              imageFormat="png"
               baseName={panelId || title || "image2d"}
               payload={{
                 panel_id: panelId,

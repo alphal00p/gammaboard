@@ -1,9 +1,9 @@
-import { Alert, Box } from "@mui/material";
+import { Alert, Box, Typography } from "@mui/material";
 import PanelCollection from "./panels/PanelCollection";
 import { useRunPanels } from "../hooks/useRunPanels";
 
-const RunInfo = ({ runId }) => {
-  const { panelSpecs, panelStates, error } = useRunPanels({ runId, pollMs: 5000 });
+const RunInfo = ({ runId, refreshKey }) => {
+  const { panelSpecs, panelStates, error, lastUpdate } = useRunPanels({ runId, refreshKey });
 
   if (runId == null) return null;
 
@@ -19,7 +19,8 @@ const RunInfo = ({ runId }) => {
     return null;
   }
 
-  return <PanelCollection title="Run Summary" panelSpecs={panelSpecs} panelStates={panelStates} />;
+  return <><Typography variant="caption" color="text.secondary">Run totals across tasks · updated {lastUpdate || "pending"}</Typography>
+    <PanelCollection title="Run Summary" panelSpecs={panelSpecs} panelStates={panelStates} /></>;
 };
 
 export default RunInfo;

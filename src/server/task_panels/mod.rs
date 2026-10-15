@@ -709,7 +709,11 @@ fn sampler_config_label(config: &SamplingConfig) -> &'static str {
 }
 
 fn accumulator_label(config: &AccumulatorConfig) -> &'static str {
-    config.kind_str()
+    if *config == AccumulatorConfig::scalar() {
+        "scalar (one vector component)"
+    } else {
+        config.kind_str()
+    }
 }
 
 fn plot_accumulator_label(kind: crate::core::PlotAccumulatorKind) -> &'static str {

@@ -32,8 +32,8 @@ const LaunchTable = ({ requests, label }) => (
 );
 
 export default function NodeLaunchQueue({ requests }) {
-  const outstanding = requests.filter((request) => !["fulfilled", "canceled"].includes(request.state));
-  const history = requests.filter((request) => ["fulfilled", "canceled"].includes(request.state));
+  const outstanding = requests.filter((request) => !["fulfilled", "canceled", "failed"].includes(request.state));
+  const history = requests.filter((request) => ["fulfilled", "canceled", "failed"].includes(request.state));
   return (
     <>
       {outstanding.length ? (
@@ -48,7 +48,7 @@ export default function NodeLaunchQueue({ requests }) {
           </AccordionSummary>
           <AccordionDetails>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Recent fulfilled and canceled requests. Fulfilled means all requested workers connected;
+              Recent fulfilled, canceled, and failed requests. Failures here are past launch attempts. Fulfilled means all requested workers connected;
               current worker health is shown in the node list. Resumed workers keep their names.
             </Typography>
             <LaunchTable requests={history} label="node launch history" />

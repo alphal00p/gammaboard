@@ -344,6 +344,21 @@ pub enum TaskQueueChange {
 
 #[async_trait]
 pub trait RunTaskStore: Send + Sync {
+    /// Durable per-child reservations. Requested totals include all child stages.
+    async fn allocate_campaign_samples(
+        &self,
+        task_id: i64,
+        requests: &[(i32, i64)],
+    ) -> Result<std::collections::BTreeMap<i32, i64>, StoreError>;
+
+    /// This task's share of its child's reservation, excluding other stages.
+    /// None means that the run is not subject to a campaign cap.
+    async fn campaign_sample_allowance(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<i64>, StoreError>;
+
     /// Apply only if the queue definitions still match those used for validation.
     async fn apply_task_queue_change(
         &self,

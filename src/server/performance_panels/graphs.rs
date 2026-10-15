@@ -216,10 +216,20 @@ impl Graphs {
         let [ec, ei, sc, si, rates] = self.bins;
         let mut busy = Vec::new();
         for (id, label, color, bins) in [
-            ("evaluator-compute", "Evaluator compute busy", "#005f73", ec),
-            ("evaluator-io", "Evaluator I/O active", "#ee9b00", ei),
-            ("sampler-compute", "Sampler compute busy", "#7c3aed", sc),
-            ("sampler-io", "Sampler I/O active", "#e76f51", si),
+            (
+                "evaluator-compute",
+                "Evaluator compute wall time",
+                "#005f73",
+                ec,
+            ),
+            ("evaluator-io", "Evaluator I/O wall time", "#ee9b00", ei),
+            (
+                "sampler-compute",
+                "Sampler compute wall time",
+                "#7c3aed",
+                sc,
+            ),
+            ("sampler-io", "Sampler I/O wall time", "#e76f51", si),
         ] {
             let mut line = series(id, label, color);
             finish(&mut line, bins);
@@ -228,7 +238,7 @@ impl Graphs {
         let mut rate = series("accepted-rate", "Accepted samples / s", "#0a9396");
         finish(&mut rate, rates);
         for (id, label, series, percent) in [
-            ("busy_history", "Compute and I/O activity (%)", busy, true),
+            ("busy_history", "Compute and I/O wall time (%)", busy, true),
             (
                 "accepted_rate_history",
                 "Accepted samples / s",

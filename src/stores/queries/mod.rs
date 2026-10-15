@@ -1,4 +1,5 @@
 mod aggregation;
+mod campaign_budget;
 mod control_plane;
 mod read;
 mod run_spec;
@@ -7,6 +8,7 @@ mod tasks;
 mod work_queue;
 
 pub(crate) use aggregation::*;
+pub(crate) use campaign_budget::*;
 pub(crate) use control_plane::*;
 pub(crate) use read::*;
 pub(crate) use run_spec::*;

@@ -1,4 +1,4 @@
-import { Alert } from "@mui/material";
+import { Alert, Typography } from "@mui/material";
 import PanelCollection from "./panels/PanelCollection";
 import { useTaskOutput } from "../hooks/useTaskOutput";
 
@@ -8,10 +8,11 @@ const TaskOutputPanel = ({
   title = "Selected Task Output",
   onSelectRun = null,
 }) => {
-  const { panelSpecs, panelStates, panelValues, setPanelValue, error } = useTaskOutput({
+  const { panelSpecs, panelStates, panelValues, setPanelValue, error, lastUpdate } = useTaskOutput({
     runId,
     taskId: task?.id ?? null,
-    pollMs: 3000,
+    pollMs: 2000,
+    refreshKey: task?.state,
     panelLimit: 500,
   });
 
@@ -26,6 +27,8 @@ const TaskOutputPanel = ({
   if (panelSpecs.length === 0) return null;
 
   return (
+    <>
+    <Typography variant="caption" color="text.secondary">Output for {task.name} · updated {lastUpdate || "pending"}. Live sections refresh separately.</Typography>
     <PanelCollection
       title={title}
       panelSpecs={panelSpecs}
@@ -34,6 +37,7 @@ const TaskOutputPanel = ({
       onPanelValueChange={setPanelValue}
       onSelectRun={onSelectRun}
     />
+    </>
   );
 };
 

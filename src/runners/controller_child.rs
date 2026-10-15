@@ -406,6 +406,10 @@ pub async fn load_published_child_result(
         None => load_child_task_result(store, run_id, &final_task.name).await?,
     };
     let ready = result.source.task_id == final_task.id
+        // Live accumulator publication can precede its progress sync. Do not
+        // finish a campaign while that final stage still appears to have done
+        // no work in the task snapshot used for budget accounting.
+        && final_task.nr_completed_samples > 1
         && matches!(
             final_task.state,
             RunTaskState::Active | RunTaskState::Completed

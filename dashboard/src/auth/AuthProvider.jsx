@@ -4,6 +4,7 @@ import { fetchSession, login as loginRequest, logout as logoutRequest } from "..
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
+  const [authEnabled, setAuthEnabled] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [allowLocalNodeSpawn, setAllowLocalNodeSpawn] = useState(true);
   const [sessionError, setSessionError] = useState(null);
@@ -16,7 +17,8 @@ export const AuthProvider = ({ children }) => {
     setReady(false);
     try {
       const response = await fetchSession();
-      setAuthenticated(response?.authenticated === true);
+      setAuthEnabled(response?.auth_enabled !== false);
+      setAuthenticated(response?.authenticated === true && (response?.auth_enabled !== false || sessionStorage.getItem("gammaboard.readOnly") !== "true"));
       setAllowLocalNodeSpawn(response?.allow_local_node_spawn !== false);
       setSessionError(null);
       setError(null);
@@ -36,8 +38,13 @@ export const AuthProvider = ({ children }) => {
 
   const requestLogin = useCallback(() => {
     setError(null);
+    if (!authEnabled) {
+      sessionStorage.removeItem("gammaboard.readOnly");
+      setAuthenticated(true);
+      return;
+    }
     setDialogOpen(true);
-  }, []);
+  }, [authEnabled]);
 
   const login = useCallback(async (password) => {
     setBusy(true);
@@ -59,17 +66,19 @@ export const AuthProvider = ({ children }) => {
   const logout = useCallback(async () => {
     setBusy(true);
     try {
-      await logoutRequest();
+      if (authEnabled) await logoutRequest();
+      else sessionStorage.setItem("gammaboard.readOnly", "true");
       setAuthenticated(false);
       setError(null);
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [authEnabled]);
 
   const value = useMemo(
     () => ({
       authenticated,
+      authEnabled,
       allowLocalNodeSpawn,
       ready,
       sessionError,
@@ -84,6 +93,7 @@ export const AuthProvider = ({ children }) => {
     }),
     [
       authenticated,
+      authEnabled,
       allowLocalNodeSpawn,
       ready,
       sessionError,
