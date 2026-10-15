@@ -371,6 +371,8 @@ pub trait RunTaskStore: Send + Sync {
         queue_tuning: Option<SamplerQueueTuning>,
     ) -> Result<RunTask, StoreError>;
     async fn load_active_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
+    /// Activate the next task atomically. A new sampling/plotting stage clears
+    /// the previous live accumulator; durable stage history remains available.
     async fn activate_next_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
     async fn update_run_task_progress(
         &self,

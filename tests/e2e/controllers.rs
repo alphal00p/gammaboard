@@ -1,6 +1,78 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL and Python"]
+async fn campaign_waits_for_the_new_publishing_stage_to_initialize() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let python = std::env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into());
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/json_worker.py")
+        .display()
+        .to_string();
+    let child = format!(
+        r#"
+name = "publication-child"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+[[task_queue]]
+name = "training"
+kind = "sample"
+publish_result = false
+stop_condition = {{ max_samples = 32 }}
+accumulator = {{ config = "scalar" }}
+sampler = {{ config = {{ kind = "naive_monte_carlo" }} }}
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = {{ max_samples = 32 }}
+accumulator = {{ config = "scalar" }}
+evaluator = {{ config = {{ kind = "unit", continuous_dims = 1, value_coordinate = 0 }} }}
+sampler = {{ config = {{ kind = "process_sampler", command = [{python:?}, "-u", {fixture:?}, "sampler"], args = {{ initialize_delay_seconds = 2.0 }} }} }}
+"#
+    );
+    let parent = format!(
+        r#"
+kind = "integration_campaign"
+name = "publication-parent"
+stop_condition = {{ max_total_samples = 1024, absolute_error = 1e-12 }}
+allocation = {{ min_samples_per_child = 8, allocation_window_samples = 8 }}
+[[children]]
+name = "only"
+run = '''{child}'''
+"#
+    );
+    harness.add_run(&temp_config(&parent));
+    let run = harness.run_id("publication-parent").await?;
+    harness
+        .start_nodes(&["publication-parent", "publication-s", "publication-e"])
+        .await?;
+    harness
+        .cli()
+        .args(["node", "auto-assign", &run.to_string()])
+        .assert()
+        .success();
+    wait_for_task_state(&harness, run, "completed", Duration::from_secs(30)).await?;
+    let result: JsonValue =
+        sqlx::query_scalar("SELECT measurement_output FROM run_tasks WHERE run_id=$1")
+            .bind(run)
+            .fetch_one(&harness.pool)
+            .await?;
+    let samples: i64 = sqlx::query_scalar("SELECT COALESCE(sum(t.nr_completed_samples),0)::bigint FROM run_tasks t JOIN runs r ON r.id=t.run_id WHERE r.parent_run_id=$1 AND t.name='inference'")
+        .bind(run).fetch_one(&harness.pool).await?;
+    harness.cleanup().await?;
+    assert!(
+        samples > 0,
+        "campaign converged before inference published anything"
+    );
+    assert_eq!(
+        result["results"][0]["value"], 0.5,
+        "training's constant-one result leaked into inference"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;

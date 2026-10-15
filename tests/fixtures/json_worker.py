@@ -1,6 +1,6 @@
-"""Independent JSON-only wire peer for materializer, transform, and metadata tests."""
+"""Independent wire peer for materializer, transform, sampler, and metadata tests."""
 
-import json, sys
+import json, struct, sys, time
 
 def read_frame():
     content_length = None
@@ -18,13 +18,14 @@ def read_frame():
             content_length = int(value.strip())
     return json.loads(sys.stdin.buffer.read(content_length))
 
-def send_result(req_id, result):
+def send_result(req_id, result, binary=b""):
     body = json.dumps(
         {"jsonrpc": "2.0", "id": req_id, "result": result},
         separators=(",", ":"),
     ).encode("utf-8")
-    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\nBinary-Length: {len(binary)}\r\n\r\n".encode("ascii"))
     sys.stdout.buffer.write(body)
+    sys.stdout.buffer.write(binary)
     sys.stdout.buffer.flush()
 
 
@@ -68,9 +69,22 @@ while True:
             raise ValueError(f"unknown method: {method}")
     elif mode == "sampler":
         if method == "initialize":
+            time.sleep(float((params.get("args") or {}).get("initialize_delay_seconds", 0)))
             state["evaluator_metadata"] = params.get("evaluator_metadata")
             send_result(req.get("id"), {"ok": True})
+        elif method == "generate":
+            count = params["max_samples"]
+            binary = struct.pack("<" + "d" * (2 * count), *([0.5] * count + [1.0] * count))
+            send_result(req.get("id"), {"kind": "batch", "nr_samples": count, "training_remaining": None}, binary)
         elif method == "snapshot":
             send_result(req.get("id"), {"snapshot": state})
+        elif method == "persisted_output":
+            send_result(req.get("id"), {"output": None})
+        elif method == "global_pdf_norm":
+            send_result(req.get("id"), {"norm": 1.0})
+        elif method == "diagnostics":
+            send_result(req.get("id"), {"diagnostics": {}})
+        elif method in ("pdf", "discrete_pdf"):
+            send_result(req.get("id"), {"values": None})
         else:
             send_result(req.get("id"), {"ok": True})

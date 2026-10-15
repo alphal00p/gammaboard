@@ -13,6 +13,79 @@ static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn activating_a_new_stage_never_exposes_the_previous_live_accumulator() {
+    use gammaboard::core::AggregationStore;
+    let (_guard, store) = locked_test_store().await;
+    let (run, first, node, _) = reliability_fixture(&store, 0).await;
+    let mut previous =
+        gammaboard::AccumulatorState::from_config(&gammaboard::AccumulatorConfig::scalar());
+    if let gammaboard::AccumulatorState::Vector(vector) = &mut previous {
+        for _ in 0..2 {
+            vector
+                .ingest_vector(&[42.0], &Point::new(vec![], vec![], 1.0))
+                .unwrap();
+        }
+    }
+    let previous = previous.to_json().unwrap();
+    sqlx::query("UPDATE runs SET current_observable=$2 WHERE id=$1")
+        .bind(run)
+        .bind(&previous)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store
+        .persist_task_result_snapshot(run, first, &previous)
+        .await
+        .unwrap();
+    store.update_run_task_progress(first, 2, 2).await.unwrap();
+    store.complete_run_task(first).await.unwrap();
+    let task = store.list_run_tasks(run).await.unwrap().remove(0).task;
+    store
+        .append_run_tasks(
+            run,
+            &[RunTaskInput {
+                name: Some("fresh-stage".into()),
+                task,
+            }],
+        )
+        .await
+        .unwrap();
+    let active = store.activate_next_run_task(run).await.unwrap().unwrap();
+    let initial = store.load_current_accumulator(run).await.unwrap();
+    // Polling an already active/exhausted queue must not clear a valid publication.
+    sqlx::query("UPDATE runs SET current_observable=$2 WHERE id=$1")
+        .bind(run)
+        .bind(&previous)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.activate_next_run_task(run).await.unwrap().is_none());
+    let unchanged = store.load_current_accumulator(run).await.unwrap();
+    let history: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM persisted_observable_snapshots WHERE run_id=$1 AND task_id=$2",
+    )
+    .bind(run)
+    .bind(first)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+    assert_eq!(active.nr_completed_samples, 0);
+    assert!(
+        initial.is_none(),
+        "a new active stage exposed the previous stage's result"
+    );
+    assert_eq!(unchanged, Some(previous));
+    assert_eq!(history, 1, "completed-stage history must remain available");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn startup_rejects_unversioned_and_future_database_models() {
     let (_guard, store) = locked_test_store().await;
     let schema = format!("compatibility_test_{}", rand::random::<u64>());
