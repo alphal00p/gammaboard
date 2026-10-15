@@ -27,9 +27,9 @@ default = ["gammaloop"]
 gammaloop = ["dep:gammalooprs", "dep:gammaloop_api"]
 
 [dependencies]
-gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "40616e5051ff887e50bb959185ee99a18386fba3", package = "gammalooprs", optional = true }
+gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammalooprs", optional = true }
 
-gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "40616e5051ff887e50bb959185ee99a18386fba3", package = "gammaloop-api", default-features = false, features = ["cli", "no_pyo3"], optional = true }
+gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammaloop-api", default-features = false, features = ["cli"], optional = true }
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
 rand = { package = "rand", version = "0.9" }
