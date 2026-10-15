@@ -21,6 +21,7 @@ vi.mock("./services/api", () => ({
   fetchNodeLaunchRequests: vi.fn(),
   fetchServerStatus: vi.fn(),
   shutdownControlProcess: vi.fn(),
+  createRun: vi.fn(),
 }));
 
 describe("App Component", () => {
@@ -67,6 +68,26 @@ describe("App Component", () => {
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
     expect(await screen.findByText(/No runs available/i)).toBeInTheDocument();
   });
+
+  test("a delayed created-run refresh preserves a newly opened management draft", async () => {
+    api.fetchSession.mockResolvedValue({ authenticated: true });
+    api.createRun.mockResolvedValue({ run_id: 2, run_name: "new-run" });
+    await renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "New run" }));
+    fireEvent.change(await screen.findByLabelText("Run TOML"), { target: { value: 'name="new-run"' } });
+    fireEvent.click(screen.getByRole("button", { name: "Create run" }));
+    await waitFor(() => expect(screen.queryByLabelText("Run TOML")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Management" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Request Nodes" }));
+    const draft = '[[groups]]\ncount=3\nname_prefix="unsaved"';
+    fireEvent.change(await screen.findByLabelText("Node Launch TOML"), { target: { value: draft } });
+    const requests = api.fetchRuns.mock.calls.length;
+    api.fetchRuns.mockResolvedValue({ items: [{ run_id: 2, run_name: "new-run", kind: "integration" }], nextOffset: null });
+    await waitFor(() => expect(api.fetchRuns.mock.calls.length).toBeGreaterThan(requests), { timeout: 6000 });
+    await act(async () => {});
+    expect(screen.getByText("Management").closest('[role="tab"]')).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("Node Launch TOML")).toHaveValue(draft);
+  }, 10000);
   test("checks browser access before fetching workspaces and recovers after retry", async () => {
     const message = "Browser origin http://localhost:39491 is not allowed. Restart with --allowed-origin 'http://localhost:39491'";
     api.fetchSession.mockRejectedValueOnce(Object.assign(new Error(message), { status: 403 }));

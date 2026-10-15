@@ -92,13 +92,20 @@ function AppContent() {
     if (pendingRunSelection == null) return;
     if (!runList.some((run) => run.run_id === pendingRunSelection)) return;
     setSelectedRun(pendingRunSelection);
-    setMode("runs");
     setPendingRunSelection(null);
   }, [pendingRunSelection, runList]);
 
   const selectRunIncludingChildren = useCallback((runId) => {
+    // Navigate when requested, not when a later poll finally contains the run.
+    // The user may open another workspace (and an unsaved draft) in between.
+    setMode("runs");
     setShowChildRuns(true);
     setPendingRunSelection(runId);
+  }, []);
+
+  const selectRun = useCallback((runId) => {
+    setPendingRunSelection(null);
+    setSelectedRun(runId);
   }, []);
 
   return (
@@ -119,7 +126,7 @@ function AppContent() {
           <RunsWorkspace
             runs={runList}
             selectedRun={selectedRun}
-            setSelectedRun={setSelectedRun}
+            setSelectedRun={selectRun}
             showChildRuns={showChildRuns}
             setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}
@@ -144,7 +151,7 @@ function AppContent() {
             runs={runList}
             workers={workersData.workers}
             selectedRun={selectedRun}
-            setSelectedRun={setSelectedRun}
+            setSelectedRun={selectRun}
             showChildRuns={showChildRuns}
             setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}
