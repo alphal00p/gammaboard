@@ -236,7 +236,8 @@ pub async fn resolve_local_requests(
     store: &PgStore,
     runtime: &RuntimeContext,
 ) -> Result<(), ApiError> {
-    let binary = std::env::current_exe().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let binary =
+        crate::runtime_context::self_executable().map_err(|e| ApiError::Internal(e.to_string()))?;
     while let Some((id, args)) = store
         .claim_local_worker_launch()
         .await

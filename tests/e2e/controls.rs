@@ -1,5 +1,71 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn local_launch_survives_removing_the_running_executable_path() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let original = harness.bin_path.clone();
+    let executable = harness.artifacts.join(".replaceable-gammaboard");
+    if std::fs::hard_link(&original, &executable).is_err() {
+        std::fs::copy(&original, &executable)?;
+    }
+    harness.bin_path = executable.clone();
+    let server = harness.start_server().await?;
+    harness.bin_path = original;
+    let cookie = login_cookie(&server).await?;
+    std::fs::remove_file(&executable)?;
+    let response = http_post_json(
+        &server,
+        "/api/nodes/auto-run",
+        json!({"count":1,"name_prefix":"replaced"}),
+        Some(&cookie),
+    )
+    .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    anyhow::ensure!(status.is_success(), "launch after unlink failed: {body}");
+    let response: JsonValue = serde_json::from_str(&body)?;
+    let node = response["node_names"][0].as_str().unwrap().to_owned();
+    harness
+        .wait_for(
+            "worker registered after executable replacement",
+            Duration::from_secs(15),
+            || async {
+                Ok(sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM nodes WHERE name=$1 AND lease_expires_at>now())",
+                )
+                .bind(&node)
+                .fetch_one(&harness.pool)
+                .await?)
+            },
+        )
+        .await?;
+    http_post_json(
+        &server,
+        &format!("/api/nodes/{node}/stop"),
+        json!({}),
+        Some(&cookie),
+    )
+    .await?
+    .error_for_status()?;
+    harness
+        .wait_for(
+            "replacement worker stopped",
+            Duration::from_secs(15),
+            || async {
+                Ok(!sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM nodes WHERE name=$1 AND lease_expires_at>now())",
+                )
+                .bind(&node)
+                .fetch_one(&harness.pool)
+                .await?)
+            },
+        )
+        .await?;
+    harness.cleanup().await
+}
+
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_server_queue_tuning_update_applies_to_active_sample_task() -> anyhow::Result<()>
