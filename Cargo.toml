@@ -28,6 +28,7 @@ default = ["gammaloop"]
 gammaloop = ["dep:gammalooprs", "dep:gammaloop_api"]
 
 [dependencies]
+sha2 = "0.10"
 gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammalooprs", optional = true }
 
 gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammaloop-api", default-features = false, features = ["cli"], optional = true }

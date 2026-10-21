@@ -4,7 +4,7 @@ CREATE TABLE gammaboard_compatibility (
     singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
     model_version INTEGER NOT NULL
 );
-INSERT INTO gammaboard_compatibility (singleton, model_version) VALUES (true, 2);
+INSERT INTO gammaboard_compatibility (singleton, model_version) VALUES (true, 3);
 
 -- Runs are the top-level integration records.
 CREATE TABLE runs (

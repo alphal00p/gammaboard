@@ -1,6 +1,7 @@
 pub mod accumulator;
 pub(crate) mod batch;
 pub(crate) mod evaluator;
+pub mod stratification;
 pub(crate) mod traits;
 
 pub use accumulator::{

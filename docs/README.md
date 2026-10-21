@@ -14,3 +14,6 @@
 
 Cluster-specific commands: [UBELIX](../ops/ubelix/README.md) and
 [ITPhlies](../ops/itphlies/README.md).
+
+[Stratification example and A/B results](../benchmarks/stratification/README.md):
+scaled output-space Voronoi cells with Symbolica and Havana.

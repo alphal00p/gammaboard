@@ -19,6 +19,17 @@ pub trait Evaluator: Send {
         json!({})
     }
 
+    /// Unweighted, sample-major values used by runtime-owned evaluation modifiers.
+    fn eval_values(
+        &mut self,
+        _batch: &Batch,
+        _components: &[String],
+    ) -> Result<Vec<f64>, EngineError> {
+        Err(EngineError::invalid_input(
+            "this evaluator does not expose per-sample values for stratification",
+        ))
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,

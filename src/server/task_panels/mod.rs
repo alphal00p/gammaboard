@@ -1092,6 +1092,7 @@ mod tests {
 
     fn inherited_vector_sample_task() -> RunTaskSpec {
         RunTaskSpec::Sample {
+            estimator: crate::core::Estimator::Pooled,
             publish_result: true,
             stop_condition: crate::core::SampleStopCondition {
                 max_samples: Some(10),

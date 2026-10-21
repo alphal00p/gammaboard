@@ -798,6 +798,35 @@ impl Evaluator for GammaLoopEvaluator {
         serde_json::to_value(&self.metadata).unwrap_or_else(|_| json!({}))
     }
 
+    fn eval_values(
+        &mut self,
+        batch: &Batch,
+        components: &[String],
+    ) -> Result<Vec<f64>, EngineError> {
+        let results = self.evaluate(batch)?;
+        if components == ["real".to_string(), "imag".to_string()] {
+            Ok(results
+                .iter()
+                .flat_map(|result| {
+                    let value = Self::project_result_value(result);
+                    [value.re, value.im]
+                })
+                .collect())
+        } else if components == ["value".to_string()] {
+            Ok(results
+                .iter()
+                .map(|result| {
+                    self.training_projection
+                        .project(Self::project_result_value(result))
+                })
+                .collect())
+        } else {
+            Err(EngineError::invalid_input(
+                "GammaLoop values require value or real/imag components",
+            ))
+        }
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,

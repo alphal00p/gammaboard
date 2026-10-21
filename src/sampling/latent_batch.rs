@@ -207,6 +207,7 @@ impl LatentBatch {
         accumulator: crate::core::AccumulatorConfig,
     ) -> crate::core::EvaluationBatch {
         crate::core::EvaluationBatch {
+            stratification: None,
             samples: self,
             accumulator,
         }

@@ -394,6 +394,8 @@ pub enum EvaluatorConfig {
 /// runtime owns materialization and coordinate transforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stratification: Option<super::StratificationConfig>,
     #[serde(flatten)]
     pub sampler: SamplerConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]

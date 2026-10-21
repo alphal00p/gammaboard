@@ -101,6 +101,18 @@ class Sampler(ABC):
         """Restore all private state needed for pending feedback from a non-null snapshot."""
         raise NotImplementedError("override from_snapshot(...) to support sampler restore")
 
+    @classmethod
+    def from_stage(cls, *, source_state: Any, source_args: dict[str, Any],
+                   init_args: dict[str, Any], discrete_cardinalities: list[int],
+                   continuous_dims: int, evaluator_metadata: Any = None) -> Self:
+        """Transfer a trained proposal into a fresh stage; no pending feedback/counters.
+
+        Exact restoration is from_snapshot. Stratified inference assumes independent
+        draws from a frozen proposal and exact normalized discrete_pdf probabilities.
+        No capability declaration certifies those statistical assumptions.
+        """
+        raise NotImplementedError("sampler does not support stage handoff")
+
     def pdf(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
         return None
 

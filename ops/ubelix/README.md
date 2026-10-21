@@ -166,7 +166,7 @@ control status remain errors; retry after inspecting scheduler availability.
 
 The helper never deletes database directories. Use GammaBoard's `db backup` and
 `db restore` for maintenance; see [operations](docs/operations.md). This revision
-requires a fresh model-2 database, not an in-place upgrade from the prior schema.
+requires a fresh model-3 database, not an in-place upgrade from the prior schema.
 The database rejects worker registrations and lease renewals with a different
 deployment/build identity and refuses cohort replacement while workers are live.
 

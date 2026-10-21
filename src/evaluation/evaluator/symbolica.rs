@@ -9,8 +9,7 @@ use crate::utils::domain::Domain;
 use crate::{
     Batch, BatchResult, EngineError,
     core::AccumulatorConfig,
-    evaluation::{AccumulatorState, IngestScalar},
-    evaluation::{EvalBatchOptions, Evaluator, ingest_scalar_values},
+    evaluation::{EvalBatchOptions, Evaluator},
     resources::resolve_resource_path,
     runtime_context::evaluator_tmp_dir,
 };
@@ -30,13 +29,14 @@ use symbolica::{
 use tempfile::TempDir;
 
 pub struct SymbolicaEngine {
-    eval: CompiledComplexEvaluator,
+    eval: Vec<CompiledComplexEvaluator>,
+    vector_components: Option<Vec<String>>,
     _parsed_expr: Option<Atom>,
     _expr: Option<String>,
     _constants: BTreeMap<String, toml::Value>,
     args: Vec<String>,
     input_plan: Vec<SymbolicaInputSlot>,
-    _artifacts_dir: Option<TempDir>,
+    _artifacts_dir: Vec<TempDir>,
 }
 
 impl SymbolicaEngine {
@@ -50,13 +50,14 @@ impl SymbolicaEngine {
         artifacts_dir: Option<TempDir>,
     ) -> Self {
         SymbolicaEngine {
-            eval,
+            eval: vec![eval],
+            vector_components: None,
             _parsed_expr,
             _expr,
             _constants,
             args,
             input_plan,
-            _artifacts_dir: artifacts_dir,
+            _artifacts_dir: artifacts_dir.into_iter().collect(),
         }
     }
 }
@@ -71,6 +72,12 @@ pub struct SymbolicaParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SymbolicaSource {
+    Expressions {
+        components: Vec<String>,
+        exprs: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        constants: BTreeMap<String, toml::Value>,
+    },
     Expression {
         expr: String,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -111,6 +118,42 @@ impl SymbolicaEngine {
         }
 
         match params.source {
+            SymbolicaSource::Expressions {
+                components,
+                exprs,
+                constants,
+            } => {
+                if components.is_empty() || components.len() != exprs.len() {
+                    return Err(EngineError::invalid_input(
+                        "Symbolica vector components and expressions must be nonempty and have equal lengths",
+                    ));
+                }
+                AccumulatorConfig::vector(
+                    components.clone(),
+                    crate::core::TrainingProjection::Norm,
+                )
+                .validate()
+                .map_err(EngineError::invalid_input)?;
+                let mut engines = exprs
+                    .into_iter()
+                    .map(|expr| {
+                        Self::from_params(SymbolicaParams {
+                            args: params.args.clone(),
+                            source: SymbolicaSource::Expression {
+                                expr,
+                                constants: constants.clone(),
+                            },
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut engine = engines.remove(0);
+                engine.vector_components = Some(components);
+                for extra in engines {
+                    engine.eval.extend(extra.eval);
+                    engine._artifacts_dir.extend(extra._artifacts_dir);
+                }
+                Ok(engine)
+            }
             SymbolicaSource::Expression { expr, constants } => {
                 // Keep these plain parser calls unless updating Symbolica requires
                 // default-namespace parsing for generated benchmark expressions.
@@ -401,12 +444,11 @@ impl Evaluator for SymbolicaEngine {
         Domain::continuous(self.args.len())
     }
 
-    fn eval_batch(
+    fn eval_values(
         &mut self,
         batch: &Batch,
-        accumulator: &AccumulatorConfig,
-        options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError> {
+        components: &[String],
+    ) -> Result<Vec<f64>, EngineError> {
         let width = self.args.len();
         let mut continuous = Vec::with_capacity(batch.len() * self.input_plan.len());
         for (sample_idx, point) in batch.points().iter().enumerate() {
@@ -434,76 +476,71 @@ impl Evaluator for SymbolicaEngine {
             }
         }
 
-        let mut observable_state = AccumulatorState::from_config(accumulator);
-
-        let mut out = vec![SymbolicaComplex::new(0.0, 0.0); batch.len()];
-        self.eval
-            .evaluate_batch(batch.len(), &continuous, &mut out)
-            .map_err(|err| EngineError::Eval(err.to_string()))?;
-        let has_imaginary_part = out.iter().any(|value| value.im != 0.0);
-
-        // Multi-component (real/imag) accumulators take the vector path; a
-        // single-component vector is scalar sugar and falls through below.
-        if matches!(&observable_state, AccumulatorState::Vector(vector) if vector.components.len() >= 2)
-            || matches!(
-                &observable_state,
-                AccumulatorState::FullVector(full_vector)
-                    if full_vector.components == ["real".to_string(), "imag".to_string()]
-            )
-        {
-            let mut training_values = options
-                .require_training_values
-                .then(|| Vec::with_capacity(batch.len()));
-            match &mut observable_state {
-                AccumulatorState::Vector(vector) => {
-                    for (idx, point) in batch.points().iter().enumerate() {
-                        let value = out[idx];
-                        let projected = vector
-                            .ingest_vector(&[value.re, value.im], point)
-                            .map_err(|err| EngineError::eval(format!("sample {idx}: {err}")))?;
-                        if let Some(training_values) = training_values.as_mut() {
-                            training_values.push(projected * point.total_weight());
-                        }
-                    }
-                }
-                AccumulatorState::FullVector(full_vector) => {
-                    for (idx, point) in batch.points().iter().enumerate() {
-                        let value = out[idx];
-                        let weight = point.total_weight().abs();
-                        full_vector.push_vector(&[value.re * weight, value.im * weight])?;
-                    }
-                    training_values = None;
-                }
-                _ => unreachable!(),
-            }
-            return Ok(BatchResult::new(training_values, observable_state));
+        let mut outputs = Vec::with_capacity(self.eval.len());
+        for evaluator in &mut self.eval {
+            let mut out = vec![SymbolicaComplex::new(0.0, 0.0); batch.len()];
+            evaluator
+                .evaluate_batch(batch.len(), &continuous, &mut out)
+                .map_err(|e| EngineError::eval(e.to_string()))?;
+            outputs.push(out);
         }
-
-        if has_imaginary_part {
-            return Err(EngineError::eval(
-                "complex symbolica expression requires a vector or full_vector accumulator with components [\"real\", \"imag\"]",
+        let mut values = Vec::with_capacity(batch.len() * components.len());
+        if let Some(names) = &self.vector_components {
+            if components != names {
+                return Err(EngineError::invalid_input(
+                    "Symbolica vector component layout mismatch",
+                ));
+            }
+            for i in 0..batch.len() {
+                for output in &outputs {
+                    if output[i].im != 0.0 {
+                        return Err(EngineError::eval(
+                            "named Symbolica vector expressions must be real",
+                        ));
+                    }
+                    values.push(output[i].re);
+                }
+            }
+        } else if components == ["real".to_string(), "imag".to_string()] {
+            for value in &outputs[0] {
+                values.extend([value.re, value.im]);
+            }
+        } else if components == ["value".to_string()] {
+            for value in &outputs[0] {
+                if value.im != 0.0 {
+                    return Err(EngineError::eval(
+                        "complex symbolica expression requires real/imag components",
+                    ));
+                }
+                values.push(value.re);
+            }
+        } else {
+            return Err(EngineError::invalid_input(
+                "invalid Symbolica output components",
             ));
         }
+        Ok(values)
+    }
 
-        let out_re = out.iter().map(|value| value.re).collect::<Vec<_>>();
-        let scalar_accumulator: &mut dyn IngestScalar = match &mut observable_state {
-            AccumulatorState::Empty(accumulator) => accumulator,
-            AccumulatorState::Vector(accumulator) => accumulator,
-            AccumulatorState::FullVector(accumulator) => accumulator,
-            other => {
-                return Err(EngineError::eval(format!(
-                    "symbolica evaluator does not support accumulator kind {}",
-                    other.kind_str()
-                )));
-            }
-        };
-        let weighted_values = ingest_scalar_values(
-            &out_re,
-            batch.points(),
-            options.require_training_values,
-            scalar_accumulator,
-        )?;
-        Ok(BatchResult::new(weighted_values, observable_state))
+    fn eval_batch(
+        &mut self,
+        batch: &Batch,
+        accumulator: &AccumulatorConfig,
+        options: EvalBatchOptions,
+    ) -> Result<BatchResult, EngineError> {
+        let components = accumulator
+            .components()
+            .unwrap_or(&["value".to_string()])
+            .to_vec();
+        let values = self.eval_values(batch, &components)?;
+        crate::evaluation::stratification::accumulate_values(
+            batch,
+            &components,
+            &values,
+            accumulator,
+            options,
+            None,
+        )
     }
 }
 

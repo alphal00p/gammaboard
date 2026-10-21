@@ -106,6 +106,7 @@ pub struct SamplerAggregatorRunner<S> {
     task: RunTask,
     sampler: Box<dyn Sampler>,
     observable_state: AccumulatorState,
+    evaluation_plan: Option<crate::core::StratificationPlan>,
     evaluator_config: EvaluatorConfig,
     sampler_config: SamplingConfig,
     batch_transforms: Vec<BatchTransformConfig>,
@@ -352,8 +353,8 @@ where
         node_name: impl Into<String>,
         node_uuid: impl Into<String>,
         mut task: RunTask,
-        sampler: Box<dyn Sampler>,
-        observable_state: AccumulatorState,
+        mut sampler: Box<dyn Sampler>,
+        mut observable_state: AccumulatorState,
         evaluator_config: EvaluatorConfig,
         sampler_config: SamplingConfig,
         batch_transforms: Vec<BatchTransformConfig>,
@@ -363,6 +364,87 @@ where
         run_progress: RunSampleProgress,
         resume_snapshot: Option<SamplerAggregatorCheckpoint>,
     ) -> Result<Self, StoreError> {
+        let stratified = matches!(
+            &task.task,
+            crate::core::RunTaskSpec::Sample {
+                estimator: crate::core::Estimator::Stratified,
+                ..
+            }
+        );
+        let evaluation_plan = match &sampler_config.stratification {
+            Some(partition) => {
+                let config = observable_state.config();
+                partition
+                    .validate_accumulator(&config)
+                    .map_err(|e| StoreError::store(e.to_string()))?;
+                evaluator_config
+                    .validate_accumulator_config(&config)
+                    .map_err(|e| StoreError::store(e.to_string()))?;
+                let plan = if let AccumulatorState::Stratified(state) = &observable_state {
+                    if !stratified
+                        || resume_snapshot.is_none()
+                        || &state.plan.partition != partition
+                    {
+                        return Err(StoreError::store(
+                            "incompatible stratification accumulator handoff",
+                        ));
+                    }
+                    state.plan.clone()
+                } else {
+                    if stratified
+                        && (resume_snapshot.is_some()
+                            || observable_state.sample_count() != 0
+                            || !matches!(
+                                &task.task,
+                                crate::core::RunTaskSpec::Sample {
+                                    accumulator: Some(
+                                        crate::core::tasks::StageSourceSpec::Config { .. }
+                                    ),
+                                    ..
+                                }
+                            ))
+                    {
+                        return Err(StoreError::store(
+                            "stratified inference requires an explicit fresh accumulator",
+                        ));
+                    }
+                    let probabilities = if stratified {
+                        let queries = (0..partition.centers().len())
+                            .map(|k| DiscreteSubspace {
+                                fixed_dims: std::collections::BTreeMap::from([(0, k as i64)]),
+                            })
+                            .collect::<Vec<_>>();
+                        Some(sampler.discrete_pdf_batch(&queries).map_err(|e|StoreError::store(e.to_string()))?.into_iter().collect::<Option<Vec<_>>>().ok_or_else(||StoreError::store("sampler must provide exact discrete probabilities for stratification"))?)
+                    } else {
+                        None
+                    };
+                    crate::core::StratificationPlan {
+                        proposal_id: uuid::Uuid::new_v4().to_string(),
+                        partition: partition.clone(),
+                        probabilities,
+                        components: config.components().unwrap().to_vec(),
+                    }
+                };
+                plan.validate()
+                    .map_err(|e| StoreError::store(e.to_string()))?;
+                if stratified && !matches!(observable_state, AccumulatorState::Stratified(_)) {
+                    observable_state = AccumulatorState::Stratified(Box::new(
+                        crate::evaluation::accumulator::StratifiedAccumulatorState::new(
+                            plan.clone(),
+                            config,
+                        )
+                        .map_err(|e| StoreError::store(e.to_string()))?,
+                    ));
+                }
+                Some(plan)
+            }
+            None if stratified || matches!(observable_state, AccumulatorState::Stratified(_)) => {
+                return Err(StoreError::store(
+                    "stratified estimation requires a matching sampling partition",
+                ));
+            }
+            None => None,
+        };
         let io = SamplerIo::new(params.io_threads)?;
         let mut runtime_state;
         let queue_checkpoint;
@@ -413,6 +495,7 @@ where
             task,
             sampler,
             observable_state,
+            evaluation_plan,
             evaluator_config,
             sampler_config,
             batch_transforms,
@@ -581,9 +664,11 @@ where
             Some(self.completed_samples_per_second),
         )
         .map_err(RunnerError::Engine)?;
-        let min_samples_reached = stop_condition
-            .min_samples
-            .is_none_or(|target| self.task.nr_completed_samples >= target);
+        let coverage_ready = !matches!(&self.observable_state, AccumulatorState::Stratified(s) if !s.error_coverage_ready());
+        let min_samples_reached = coverage_ready
+            && stop_condition
+                .min_samples
+                .is_none_or(|target| self.task.nr_completed_samples >= target);
         if min_samples_reached
             && (stop_condition.absolute_error.is_some() || stop_condition.relative_error.is_some())
             && projected.is_none()
@@ -934,7 +1019,15 @@ where
             .observable_state
             .to_json()
             .map_err(RunnerError::Engine)?;
-        let snapshot = if persist_snapshot {
+        let snapshot = if persist_snapshot
+            && matches!(self.observable_state, AccumulatorState::Stratified(_))
+        {
+            Some(
+                self.observable_state
+                    .to_persistent_json()
+                    .map_err(RunnerError::Engine)?,
+            )
+        } else if persist_snapshot {
             Some(
                 self.sampler
                     .persisted_output()
@@ -1294,7 +1387,11 @@ where
         self.queue.ingest(
             batches
                 .into_iter()
-                .map(|batch| batch.for_evaluation(accumulator.clone()))
+                .map(|batch| {
+                    let mut work = batch.for_evaluation(accumulator.clone());
+                    work.stratification = self.evaluation_plan.clone();
+                    work
+                })
                 .collect(),
             requires_feedback,
         );
@@ -1490,8 +1587,9 @@ mod tests {
             output_snapshot_id: None,
             batches_completed: 0,
             sampler_snapshot: SavedSampler {
-                version: 1,
+                version: crate::compatibility::MODEL_VERSION,
                 config: crate::core::SamplingConfig {
+                    stratification: None,
                     sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                         params: Default::default(),
                     },

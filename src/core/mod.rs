@@ -1,3 +1,5 @@
+pub mod stratification;
+pub use stratification::{Estimator, StratificationConfig, StratificationPlan};
 pub mod checkpoint;
 pub use checkpoint::{SamplerAggregatorCheckpoint, SamplerQueueCheckpoint};
 pub mod batch_ids;

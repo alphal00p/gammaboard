@@ -669,6 +669,7 @@ mod tests {
     fn pdf_adaptation_raster_plane_delegates_pdf_to_source_sampler() {
         let domain = Domain::rectangular(2, 0);
         let source_config = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                 params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
             },
@@ -717,6 +718,7 @@ mod tests {
     fn pdf_adaptation_raster_plane_persists_integrand_and_pdf_images() {
         let domain = Domain::rectangular(2, 0);
         let source_config = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                 params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
             },
@@ -770,6 +772,7 @@ mod tests {
     fn pdf_adaptation_raster_plane_ignores_non_finite_training_values() {
         let domain = Domain::rectangular(2, 0);
         let source_config = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                 params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
             },
@@ -823,6 +826,7 @@ mod tests {
     fn pdf_adaptation_raster_plane_uses_linspace_parameter_range() {
         let domain = Domain::rectangular(2, 0);
         let source_config = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                 params: crate::sampling::NaiveMonteCarloSamplerParams::default(),
             },

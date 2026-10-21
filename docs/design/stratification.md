@@ -1,6 +1,7 @@
 # Stratification implementation plan
 
-Status: proposed, before implementation. Prepared 2026-10-21.
+Status: implemented on the stratification branch; validation and A/B evidence are
+in `benchmarks/stratification/`. Prepared 2026-10-21.
 
 ## Agreed estimator and scope
 
@@ -50,6 +51,16 @@ materialization/transforms, so the partition travels with `SavedSampler`. Fields
 - Axis placement is fixed as the new outermost axis in v1; no arbitrary-axis
   configuration or independent-per-axis factorization is required.
 
+For output vector f and centre c_k, the classification distance is
+`distance(f,c_k) = sqrt(sum_j ((f_j-c_kj)/scales_j)^2)`. Equivalently, divide
+both the output and every centre by the same component scales, then use ordinary
+Euclidean distance. This is a weighted norm of their difference, not normalization
+of centres to unit length. Centres remain specified in the original output units.
+Larger scales reduce a component's influence on classification. Scales do not
+change evaluated values, integration weights, accumulated observables or the target
+integral. They are fixed with the partition through training and inference.
+For scalar output, a shared positive scale cannot change the nearest centre.
+
 Add `estimator = "pooled" | "stratified"` to sample tasks, default `pooled`.
 Training uses the partition with pooled statistics and normally
 `publish_result = false`; final inference explicitly selects `stratified`.
@@ -65,7 +76,7 @@ publish_result = false
 estimator = "pooled"
 stop_condition = { max_samples = 100000 }
 accumulator = { config = "scalar" }
-sampler = { config = { kind = "havana_training", stratification = { centers = [[-1.0], [1.0]] } } }
+sampler = { config = { kind = "havana_training", stratification = { kind = "voronoi", centers = [[-1.0], [1.0]] } } }
 
 [[task_queue]]
 name = "inference"
@@ -87,11 +98,14 @@ Retain `generate(max_samples)` and its complete `weights` arrays. Reuse
 must represent true normalized marginal masses of the frozen sampling distribution,
 including marginalization over the original discrete coordinates.
 
-Add an explicit sampler declaration of independent, stationary inference sampling
-(native implementation properties; process sampler initialization response). An
-unknown declaration, unavailable PDF, nonpositive/nonfinite mass, or a table whose
-sum is not one within a defined floating-point tolerance fails before generation.
-The declaration is a contract, not a statistical test of a black-box sampler.
+Treat independent samples from a frozen proposal and exact discrete probabilities
+as documented statistical assumptions. Do not add a sampler-properties method or
+capability handshake to certify these guarantees. Violating these assumptions can
+invalidate reported uncertainty and, depending on the violation, bias the estimate.
+Documentation must state these limits explicitly. Unavailable PDF information,
+nonpositive/nonfinite masses, or a table whose sum is not one within a defined
+floating-point tolerance still fail before generation: these are inputs needed
+to construct the estimator, not declarations of statistical guarantees.
 If full coverage requires a probability floor, it must be applied by the sampler
 to its actual proposal and weights before querying the masses; the runtime must
 never repair zero masses merely by modifying the reported probability table.
@@ -107,7 +121,8 @@ and are not re-queried from a later sampler state during result ingestion.
 1. **Configuration, domains and contract**
    - Update `src/core/run_spec.rs`, `src/core/tasks.rs`, `src/utils/domain.rs`,
      `src/sampling/sampler.rs` and configuration validation.
-   - Introduce typed partition/estimator/plan definitions and sampler properties.
+   - Introduce typed partition/estimator/plan definitions and document their
+     statistical assumptions without adding guarantee flags.
    - Keep separate physical evaluator and lifted sampling domains. Original
      physical channel indices and evaluator metadata remain meaningful.
    - Define validation and handoff rules before adding execution paths.
@@ -125,14 +140,14 @@ and are not re-queried from a later sampler state during result ingestion.
 
 3. **Frozen inference handoff and probabilities**
    - Extend `src/runners/stage_context.rs` and `src/sampling/sampler_aggregator/`.
-   - Inherit the partition, restore the trained proposal, verify frozen independent
-     sampling, query all K masses, and freeze the runtime plan.
+   - Inherit the partition, restore the trained proposal, query and validate all K
+     masses, and freeze the runtime plan. Document the required independent,
+     stationary sampling behavior instead of requiring a capability declaration.
    - Cover naive Monte Carlo and Havana first. Process samplers use the same
-     probability queries and declare capabilities through the Python/Rust protocol.
-   - Process samplers currently support checkpoint restoration but not stage
-     handoff. Add an explicit optional `from_stage` SDK hook and distinct
-     initialization `stage_source` payload, mutually exclusive with recovery
-     `snapshot`. Transfer the trained model into fresh inference state without
+     probability queries and documented assumptions through the Python/Rust protocol.
+   - Process samplers use an explicit optional `from_stage` SDK hook and tagged
+     `fresh` / `restore` / `from_stage` initialization. Transfer the trained model
+     into fresh inference state without
      carrying training counters or pending feedback. Unsupported adapters fail
      explicitly; never reinterpret checkpoint recovery as an inference handoff.
    - Preserve complete generation weights; the runner owns conditional conversion.
@@ -165,9 +180,9 @@ and are not re-queried from a later sampler state during result ingestion.
      retain the project's fresh-database policy rather than add migration adapters.
 
 6. **Process SDK, metrics, UI and documentation**
-   - Update `process_api/protocol.md`, Python sampler initialization/capabilities,
+   - Update `process_api/protocol.md`, Python sampler initialization/handoff,
      protocol fixtures and examples together. Revise the wire protocol to v7 for
-     explicit stage handoff/capability semantics; update all in-repository producers
+     explicit stage handoff semantics; update all in-repository producers
      and consumers together, with no old-version compatibility shim.
    - Ordinary evaluator value arrays and sampler full-weight arrays keep their
      meaning. Materializer/transform contracts preserve labels through the runtime.
@@ -185,7 +200,7 @@ and are not re-queried from a later sampler state during result ingestion.
    - Statistical repeated-run tests compare empirical estimator covariance with
      reported covariance; include a poorly matched conditional sampler where
      stratification is not assumed to improve efficiency.
-   - Invalid/zero/non-normalized/unavailable probabilities, unsupported samplers,
+   - Invalid/zero/non-normalized/unavailable probabilities, unsupported handoffs,
      changed partitions, nonfinite output, empty/undersampled strata and zero hits.
    - Vary generation/batch sizes, worker completion order and restart boundaries;
      verify identical accepted counts/moments and no duplication on retry.
@@ -203,4 +218,5 @@ and are not re-queried from a later sampler state during result ingestion.
 - Learned centres, arbitrary classification projections, or adaptive inference:
   separate changes with their own estimator and recovery requirements.
 
-The first code changes begin only after this plan has been presented for review.
+The implementation retains the documented statistical assumptions; no sampler
+guarantee flags or capability handshake were introduced.

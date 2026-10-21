@@ -73,6 +73,7 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
     })
     .unwrap();
     let mut sampler = SamplingConfig {
+        stratification: None,
         sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
             params: NaiveMonteCarloSamplerParams {
                 seed: 1234,

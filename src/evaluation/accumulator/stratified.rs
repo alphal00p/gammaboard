@@ -1,0 +1,426 @@
+//! Independent stratum estimates with stable parallel covariance accumulation.
+use crate::core::{
+    AccumulatorConfig, AccumulatorMetricName, AccumulatorMetricSelector, EngineError,
+    MeasurementResult, StratificationPlan, TrainingProjection,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StratumMoments {
+    pub attempts: u64,
+    pub matches: u64,
+    pub mean: Vec<f64>,
+    pub m2: Vec<f64>,
+}
+impl StratumMoments {
+    fn new(width: usize) -> Self {
+        Self {
+            attempts: 0,
+            matches: 0,
+            mean: vec![0.; width],
+            m2: vec![0.; width * width],
+        }
+    }
+    fn push(&mut self, values: &[f64], matched: bool) -> Result<(), EngineError> {
+        if values.len() != self.mean.len() || values.iter().any(|v| !v.is_finite()) {
+            return Err(EngineError::eval("invalid stratified contribution"));
+        }
+        let n = self
+            .attempts
+            .checked_add(1)
+            .ok_or_else(|| EngineError::eval("stratum count overflow"))?;
+        let delta = values
+            .iter()
+            .zip(&self.mean)
+            .map(|(x, m)| x - m)
+            .collect::<Vec<_>>();
+        let next = self
+            .mean
+            .iter()
+            .zip(&delta)
+            .map(|(m, d)| m + d / n as f64)
+            .collect::<Vec<_>>();
+        let width = next.len();
+        let mut m2 = self.m2.clone();
+        for i in 0..width {
+            for j in 0..width {
+                m2[i * width + j] += delta[i] * (values[j] - next[j]);
+            }
+        }
+        if next.iter().chain(&m2).any(|v| !v.is_finite()) {
+            return Err(EngineError::eval("stratified moment overflow"));
+        }
+        self.attempts = n;
+        self.matches += u64::from(matched);
+        self.mean = next;
+        self.m2 = m2;
+        Ok(())
+    }
+    fn merge(&mut self, other: &Self) -> Result<(), EngineError> {
+        if other.attempts == 0 {
+            return Ok(());
+        }
+        if self.attempts == 0 {
+            *self = other.clone();
+            return Ok(());
+        }
+        let n = self
+            .attempts
+            .checked_add(other.attempts)
+            .ok_or_else(|| EngineError::eval("stratum count overflow"))?;
+        let a = self.attempts as f64;
+        let b = other.attempts as f64;
+        let delta = other
+            .mean
+            .iter()
+            .zip(&self.mean)
+            .map(|(r, l)| r - l)
+            .collect::<Vec<_>>();
+        let width = self.mean.len();
+        for i in 0..width {
+            self.mean[i] += delta[i] * b / n as f64;
+            for j in 0..width {
+                self.m2[i * width + j] +=
+                    other.m2[i * width + j] + delta[i] * delta[j] * (a / n as f64) * b;
+            }
+        }
+        self.attempts = n;
+        self.matches += other.matches;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StratifiedAccumulatorState {
+    pub plan: StratificationPlan,
+    pub config: AccumulatorConfig,
+    pub strata: Vec<StratumMoments>,
+}
+impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Saved {
+            plan: StratificationPlan,
+            config: AccumulatorConfig,
+            strata: Vec<StratumMoments>,
+        }
+        let saved = Saved::deserialize(deserializer)?;
+        let state = Self {
+            plan: saved.plan,
+            config: saved.config,
+            strata: saved.strata,
+        };
+        state.validate().map_err(serde::de::Error::custom)?;
+        Ok(state)
+    }
+}
+
+impl StratifiedAccumulatorState {
+    pub fn new(plan: StratificationPlan, config: AccumulatorConfig) -> Result<Self, EngineError> {
+        plan.validate()?;
+        plan.partition.validate_accumulator(&config)?;
+        if plan.probabilities.is_none() {
+            return Err(EngineError::invalid_input(
+                "stratified accumulator needs frozen probabilities",
+            ));
+        }
+        if config.components() != Some(plan.components.as_slice()) {
+            return Err(EngineError::invalid_input(
+                "stratification component mismatch",
+            ));
+        }
+        let width = plan.components.len()
+            + usize::from(matches!(
+                &config,
+                AccumulatorConfig::Vector {
+                    training_projection: TrainingProjection::Norm,
+                    ..
+                }
+            ));
+        let strata = vec![StratumMoments::new(width); plan.partition.centers().len()];
+        Ok(Self {
+            plan,
+            config,
+            strata,
+        })
+    }
+    pub fn push(
+        &mut self,
+        label: usize,
+        values: &[f64],
+        weight: f64,
+        matched: bool,
+    ) -> Result<(), EngineError> {
+        if values.len() != self.plan.components.len()
+            || label >= self.strata.len()
+            || !weight.is_finite()
+            || weight <= 0.0
+        {
+            return Err(EngineError::eval(
+                "invalid stratum label, weight or output width",
+            ));
+        }
+        let mut contribution = values.to_vec();
+        if matches!(
+            &self.config,
+            AccumulatorConfig::Vector {
+                training_projection: TrainingProjection::Norm,
+                ..
+            }
+        ) {
+            contribution.push(values.iter().fold(0.0_f64, |n, v| n.hypot(*v)));
+        }
+        let p = self
+            .plan
+            .probabilities
+            .as_ref()
+            .expect("validated inference plan")[label];
+        for x in &mut contribution {
+            *x *= weight * p;
+        }
+        self.strata[label].push(&contribution, matched)
+    }
+    pub fn sample_count(&self) -> i64 {
+        self.strata.iter().map(|s| s.attempts as i64).sum()
+    }
+    pub fn validate(&self) -> Result<(), EngineError> {
+        let expected = Self::new(self.plan.clone(), self.config.clone())?;
+        if self.strata.len() != expected.strata.len() {
+            return Err(EngineError::eval("incomplete stratum state"));
+        }
+        let width = expected.strata[0].mean.len();
+        let mut count = 0u64;
+        for s in &self.strata {
+            if s.mean.len() != width
+                || s.m2.len() != width * width
+                || s.matches > s.attempts
+                || s.mean.iter().chain(&s.m2).any(|v| !v.is_finite())
+            {
+                return Err(EngineError::eval("invalid stratum moments"));
+            }
+            count = count
+                .checked_add(s.attempts)
+                .filter(|n| *n <= i64::MAX as u64)
+                .ok_or_else(|| EngineError::eval("stratum count overflow"))?;
+        }
+        Ok(())
+    }
+    pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
+        self.validate()?;
+        other.validate()?;
+        if self.plan != other.plan || self.config != other.config {
+            return Err(EngineError::eval("incompatible stratification plans"));
+        }
+        let mut merged = self.clone();
+        for (a, b) in merged.strata.iter_mut().zip(&other.strata) {
+            a.merge(b)?;
+        }
+        merged.validate()?;
+        *self = merged;
+        Ok(())
+    }
+    pub fn mean(&self) -> Option<Vec<f64>> {
+        if self.strata.iter().any(|s| s.attempts == 0) {
+            return None;
+        }
+        let mut mean = vec![0.; self.strata[0].mean.len()];
+        for s in &self.strata {
+            for (a, b) in mean.iter_mut().zip(&s.mean) {
+                *a += b;
+            }
+        }
+        Some(mean)
+    }
+    pub fn covariance(&self) -> Option<Vec<f64>> {
+        if self.strata.iter().any(|s| s.attempts < 2) {
+            return None;
+        }
+        let mut covariance = vec![0.; self.strata[0].m2.len()];
+        for s in &self.strata {
+            let divisor = (s.attempts as f64) * (s.attempts - 1) as f64;
+            for (a, b) in covariance.iter_mut().zip(&s.m2) {
+                *a += b / divisor;
+            }
+        }
+        Some(covariance)
+    }
+    pub fn metric(&self, selector: &AccumulatorMetricSelector) -> Option<MeasurementResult> {
+        let index = match selector.component.as_deref() {
+            None | Some("training_projection") => match &self.config {
+                AccumulatorConfig::Vector {
+                    training_projection: TrainingProjection::Norm,
+                    ..
+                } => self.plan.components.len(),
+                AccumulatorConfig::Vector {
+                    training_projection: TrainingProjection::Component { name },
+                    ..
+                } => self.plan.components.iter().position(|n| n == name)?,
+                _ => return None,
+            },
+            Some(name) => self.plan.components.iter().position(|n| n == name)?,
+        };
+        let mean = self.mean()?[index];
+        let error = self
+            .covariance()
+            .map(|c| c[index * self.strata[0].mean.len() + index].max(0.).sqrt());
+        let value = match selector.name {
+            AccumulatorMetricName::Mean => mean,
+            AccumulatorMetricName::Error => error?,
+            AccumulatorMetricName::RelativeError => super::relative_error(mean, error?),
+            // Pooled sample variance/ESS/absolute moments do not describe this estimator.
+            _ => return None,
+        };
+        Some(MeasurementResult {
+            name: selector.name,
+            component: Some(
+                selector
+                    .component
+                    .clone()
+                    .unwrap_or_else(|| "training_projection".into()),
+            ),
+            value,
+            uncertainty: if selector.name == AccumulatorMetricName::Mean {
+                error
+            } else {
+                None
+            },
+            sample_count: self.sample_count(),
+        })
+    }
+    pub fn error_coverage_ready(&self) -> bool {
+        self.strata
+            .iter()
+            .all(|s| s.attempts >= 32 && s.matches >= 2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::StratificationConfig;
+    fn empty() -> StratifiedAccumulatorState {
+        let plan = StratificationPlan {
+            proposal_id: "fixture".into(),
+            partition: StratificationConfig::Voronoi {
+                centers: vec![vec![1., 2.], vec![-1., -2.]],
+                scales: None,
+            },
+            probabilities: Some(vec![0.25, 0.75]),
+            components: vec!["x".into(), "y".into()],
+        };
+        StratifiedAccumulatorState::new(
+            plan,
+            AccumulatorConfig::vector(vec!["x".into(), "y".into()], TrainingProjection::Norm),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn empty_hit_history_cannot_trigger_error_convergence() {
+        let mut state = empty();
+        for _ in 0..64 {
+            state.push(0, &[0., 0.], 4., false).unwrap();
+            state.push(1, &[0., 0.], 4. / 3., false).unwrap();
+        }
+        assert!(state.covariance().is_some());
+        assert!(!state.error_coverage_ready());
+        for _ in 0..2 {
+            state.push(0, &[1., 2.], 4., true).unwrap();
+            state.push(1, &[-1., -2.], 4. / 3., true).unwrap();
+        }
+        assert!(state.error_coverage_ready());
+    }
+    #[test]
+    fn unequal_probabilities_misses_and_parallel_covariance_are_normalized_once() {
+        let mut whole = empty();
+        let mut merged = empty();
+        assert!(whole.mean().is_none());
+        assert!(whole.covariance().is_none());
+        for (label, value, weight, matched) in [
+            (0, [1., 2.], 4., true),
+            (0, [0., 0.], 4., false),
+            (1, [-1., -2.], 4. / 3., true),
+            (1, [0., 0.], 4. / 3., false),
+        ] {
+            whole.push(label, &value, weight, matched).unwrap();
+            let mut one = empty();
+            one.push(label, &value, weight, matched).unwrap();
+            merged.merge(one).unwrap();
+        }
+        assert_eq!(whole.sample_count(), 4);
+        assert_eq!(whole.strata[0].matches, 1);
+        assert_eq!(whole.mean(), merged.mean());
+        assert_eq!(whole.covariance(), merged.covariance());
+        let mean = whole.mean().unwrap();
+        assert_eq!(&mean[..2], &[0., 0.]);
+        let covariance = whole.covariance().unwrap();
+        assert!((covariance[0] - 0.5).abs() < 1e-14);
+        assert!((covariance[1] - 1.).abs() < 1e-14);
+        assert!((covariance[4] - 2.).abs() < 1e-14);
+        let roundtrip: StratifiedAccumulatorState =
+            serde_json::from_str(&serde_json::to_string(&whole).unwrap()).unwrap();
+        roundtrip.validate().unwrap();
+        assert_eq!(roundtrip.covariance(), whole.covariance());
+        let mut incompatible = empty();
+        incompatible.plan.probabilities = Some(vec![0.5, 0.5]);
+        let before = serde_json::to_value(&whole).unwrap();
+        assert!(whole.merge(incompatible).is_err());
+        assert_eq!(serde_json::to_value(&whole).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod calibration_tests {
+    use super::*;
+    use crate::core::StratificationConfig;
+    use rand::{Rng, SeedableRng};
+    #[test]
+    fn reported_variance_matches_repeated_independent_sampling_with_misses() {
+        let mut rng = rand_xoshiro::Xoshiro256StarStar::seed_from_u64(81917);
+        let p = [0.2, 0.8];
+        let acceptance = 0.85;
+        let plan = StratificationPlan {
+            proposal_id: "calibration".into(),
+            partition: StratificationConfig::Voronoi {
+                centers: vec![vec![-1.], vec![1.]],
+                scales: None,
+            },
+            probabilities: Some(p.to_vec()),
+            components: vec!["value".into()],
+        };
+        let mut means = Vec::new();
+        let mut variances = Vec::new();
+        for _ in 0..512 {
+            let mut state =
+                StratifiedAccumulatorState::new(plan.clone(), AccumulatorConfig::scalar()).unwrap();
+            for _ in 0..2048 {
+                let k = usize::from(rng.random::<f64>() >= p[0]);
+                let matched = rng.random::<f64>() < acceptance;
+                let value = if matched {
+                    if k == 0 { -1. } else { 1. }
+                } else {
+                    0.
+                };
+                let conditional_density = 2. * if matched { acceptance } else { 1. - acceptance };
+                state
+                    .push(k, &[value], 1. / (p[k] * conditional_density), matched)
+                    .unwrap();
+            }
+            means.push(state.mean().unwrap()[0]);
+            variances.push(state.covariance().unwrap()[0]);
+        }
+        let mean = means.iter().sum::<f64>() / means.len() as f64;
+        let empirical =
+            means.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (means.len() - 1) as f64;
+        let predicted = variances.iter().sum::<f64>() / variances.len() as f64;
+        assert!(
+            (0.75..1.25).contains(&(empirical / predicted)),
+            "empirical {empirical}, predicted {predicted}"
+        );
+        assert!(
+            mean.abs() < 4. * (empirical / means.len() as f64).sqrt(),
+            "unexpected bias {mean}"
+        );
+    }
+}

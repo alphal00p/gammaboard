@@ -12,10 +12,10 @@ gammaboard run validate run.toml --probe
 | Contract | Current version |
 | --- | --- |
 | GammaBoard and Python SDK package | 0.3 |
-| Process protocol | `gammaboard-jsonrpc-v6` |
-| Database model | 2 |
-| Sampler checkpoint / saved sampler envelope | 1 |
-| Queue envelope | `GBQ` followed by byte `0x01` |
+| Process protocol | `gammaboard-jsonrpc-v7` |
+| Database model | 3 |
+| Sampler checkpoint / saved sampler envelope | 2 |
+| Queue envelope | `GBQ` followed by byte `0x02` |
 | Performance responses | 2 |
 
 These versions identify separate contracts. Unknown configuration fields and
@@ -23,7 +23,7 @@ unsupported protocol/state versions fail explicitly. The version checks protect
 persisted data; they are not adapters for older formats. The single baseline
 `202610080001_initial_schema.sql` includes campaign reservations, durable external
 launch leases/receipts, and deployment/build fencing. It is for fresh databases;
-previous migration checksums and model-1 databases are intentionally unsupported.
+previous migration checksums and model-1/model-2 databases are intentionally unsupported.
 No incremental migration or compatibility adapter is retained.
 
 Use matching server, worker, SDK, and integration revisions. Stop all components
@@ -57,3 +57,8 @@ Dashboard view preferences use the current `gammaboard.panel-values.v1.` storage
 namespace. Retired unversioned preferences are ignored, so zoom/selection/color
 preferences reset once after this cleanup. Numerical results and run definitions
 are unaffected.
+
+Stratification adds frozen probability plans and per-stratum accumulator state.
+Protocol v7 uses explicit `fresh`, `restore`, and `from_stage` sampler initialization.
+Use matching workers and recreate databases for this revision; no older state or
+protocol adapters are provided.

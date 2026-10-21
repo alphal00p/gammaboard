@@ -555,12 +555,15 @@ where
                     task_id
                 )))
             })?;
-        materializer.validate_domain(&self.domain).map_err(|err| {
-            EvaluatorRunnerError::Store(StoreError::store(format!(
-                "failed to validate materializer domain for task {}: {err}",
-                task_id
-            )))
-        })?;
+        let sampling_domain = resolved.sampler.config().sampling_domain(&self.domain)?;
+        materializer
+            .validate_domain(&sampling_domain)
+            .map_err(|err| {
+                EvaluatorRunnerError::Store(StoreError::store(format!(
+                    "failed to validate materializer domain for task {}: {err}",
+                    task_id
+                )))
+            })?;
         Ok(TaskRuntimeContext {
             evaluator_config: resolved.evaluator_config,
             materializer,
@@ -777,10 +780,24 @@ where
                     .materialize_batch(&claimed.latent_batch)
                     .map_err(EvaluatorRunnerError::Engine)
             })?;
+            let labels = if let Some(plan) = &claimed.stratification {
+                let (physical, strata) =
+                    crate::evaluation::stratification::physical_batch(batch, plan)?;
+                batch = physical;
+                Some(strata)
+            } else {
+                None
+            };
             for transform in &mut self.current_batch_transforms {
                 batch = Self::call_with_panic_guard("batch_transform.apply", || {
                     transform.apply(batch).map_err(EvaluatorRunnerError::Engine)
                 })?;
+            }
+            if batch.len() != claimed.latent_batch.nr_samples {
+                return Err(EngineError::eval(
+                    "materializers and transforms must preserve sample count",
+                )
+                .into());
             }
             self.domain.validate_batch(&batch).map_err(|err| {
                 EngineError::engine(format!(
@@ -791,6 +808,20 @@ where
             crate::runners::activity::set("evaluating");
             let started = Instant::now();
             let result = Self::call_with_panic_guard("evaluator.eval_batch", || {
+                if let Some(plan) = &claimed.stratification {
+                    let values = self.evaluator.eval_values(&batch, &plan.components)?;
+                    return crate::evaluation::stratification::accumulate_values(
+                        &batch,
+                        &plan.components,
+                        &values,
+                        &claimed.accumulator,
+                        EvalBatchOptions {
+                            require_training_values: claimed.requires_training_values,
+                        },
+                        Some((plan, labels.as_deref().expect("stratum labels"))),
+                    )
+                    .map_err(EvaluatorRunnerError::Engine);
+                }
                 self.evaluator
                     .eval_batch(
                         &batch,

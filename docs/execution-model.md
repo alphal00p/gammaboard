@@ -359,3 +359,57 @@ speak the current protocol. EOF closes a worker; the host waits its configured
 grace period, then terminates the process group if necessary. Protocol framing,
 role-specific methods, logging, and binary layouts are fully specified in the
 [wire contract](../process_api/protocol.md).
+
+## Scaled Voronoi stratification
+
+This is a sampling-pipeline option for integration tasks; campaigns, scans and
+tuning use it through their child integration definitions. It is not a run kind.
+See [the configuration example](../resources/templates/runs/tetrahedron-stratified.toml).
+
+`sampler.config.stratification = { kind = "voronoi", centers = [...], scales = [...] }`
+defines one outer categorical coordinate. Centres are distinct finite vectors in
+unweighted evaluator-output units. Scales default to ones and must be positive.
+Classification minimizes `sqrt(sum_j ((f_j-c_kj)/scales_j)^2)`; ties choose the
+lowest centre index. Rescaling affects only classification, not the integral.
+
+The sampler and materializer see the lifted domain. After materialization the
+runtime separates the stratum label, applies physical transforms, and evaluates
+the original coordinates once. Ordinary scalar/vector outputs are validated,
+classified and gated before accumulation. A miss has zero contribution and zero
+training feedback but still counts as an attempted sample and consumes budget.
+Process evaluators returning opaque native observable bundles cannot use this
+modifier; native GammaLoop scalar/real-imag value output can.
+
+Training uses `estimator = "pooled"` and full-weight projected feedback. Final
+inference uses `estimator = "stratified"`, a supported sampler handoff and an
+explicit fresh accumulator configuration. The partition is inherited from the
+training source and cannot change during handoff. With joint sampler weight
+`W = 1 / (p_k q(x|k))` including subsequent transform factors, inference accumulates
+`Z_k = p_k W F(k,x)`. Per-stratum attempted counts, means and central cross moments
+merge using parallel Welford updates. The final mean is the sum of stratum means;
+its covariance is the sum of `sample_covariance_k / n_k`. Component errors are
+square roots of its diagonal. Norm training projection remains a separate scalar
+observable: its mean is the integral of the norm, not the norm of the vector mean.
+
+Before inference generates work, the runtime validates exact finite positive
+masses summing to one within `1e-12`. It does not renormalize guessed probabilities
+or impose probability floors afterward. The immutable plan includes component
+layout, partition, probabilities and a proposal identity; batches/checkpoints
+carry it and incompatible accumulator merges fail. Recovery restores the same
+plan without querying a newer proposal. A new inference stage gets a new identity
+and fresh statistics. The runtime relies on independent frozen sampling as a
+documented assumption, not a capability handshake.
+
+An unsampled stratum makes the combined estimate unavailable; fewer than two
+attempts makes uncertainty unavailable. Error-based stopping additionally waits
+for at least 32 attempts and two matches per stratum, while fixed budgets remain
+hard limits.
+Zero matches are reported explicitly: even many zero observations do not establish
+that a stratum's integral is zero. Error bars assume finite second moments and may
+be unreliable before rare large contributions have been sampled. Quotas, adaptive
+inference and correlated/QMC error estimation are outside this implementation.
+
+Task panels show stratum attempts, matches, probabilities, component estimates,
+errors and zero-hit warnings. Pooled ESS, RSD and variance metrics are unavailable
+for this estimator rather than reported with an inappropriate formula. Combined
+means/errors feed the normal measurement and controller paths.

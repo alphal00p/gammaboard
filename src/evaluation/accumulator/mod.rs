@@ -10,7 +10,9 @@ mod gammaloop_diagnostics;
 mod gammaloop_statistics;
 pub(crate) mod metrics;
 mod scalar;
+mod stratified;
 mod vector;
+pub use stratified::{StratifiedAccumulatorState, StratumMoments};
 
 use crate::core::{AccumulatorConfig, EngineError, RunSpec};
 use crate::evaluation::batch::Point;
@@ -83,6 +85,7 @@ pub trait Accumulator: Clone + Serialize + DeserializeOwned {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AccumulatorState {
+    Stratified(Box<StratifiedAccumulatorState>),
     Empty(EmptyAccumulatorState),
     Vector(VectorAccumulatorState),
     Gammaloop(GammaLoopAccumulatorState),
@@ -149,6 +152,7 @@ impl AccumulatorState {
 
     pub fn kind_str(&self) -> &'static str {
         match self {
+            Self::Stratified(_) => "stratified",
             Self::Empty(_) => "empty",
             Self::Vector(_) => "vector",
             Self::Gammaloop(_) => "gammaloop",
@@ -158,6 +162,7 @@ impl AccumulatorState {
 
     pub fn config(&self) -> AccumulatorConfig {
         match self {
+            Self::Stratified(state) => state.config.clone(),
             Self::Empty(_) => AccumulatorConfig::Empty,
             Self::Vector(state) => AccumulatorConfig::Vector {
                 components: state
@@ -181,6 +186,7 @@ impl AccumulatorState {
 
     pub(crate) fn validate_values(&self) -> Result<(), EngineError> {
         match self {
+            Self::Stratified(state) => state.validate(),
             Self::Empty(_) => Ok(()),
             Self::Vector(state) => state.validate(),
             Self::Gammaloop(state) => state.validate_values(),
@@ -207,6 +213,7 @@ impl AccumulatorState {
 
     pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
         match (self, other) {
+            (Self::Stratified(left), Self::Stratified(right)) => left.merge(*right),
             (Self::Empty(left), Self::Empty(right)) => Accumulator::merge(left, right),
             (Self::Vector(left), Self::Vector(right)) => Accumulator::merge(left, right),
             (Self::Gammaloop(left), Self::Gammaloop(right)) => left.merge_in_place(right),
@@ -221,6 +228,7 @@ impl AccumulatorState {
 
     pub fn sample_count(&self) -> i64 {
         match self {
+            Self::Stratified(state) => state.sample_count(),
             Self::Empty(accumulator) => accumulator.sample_count(),
             Self::Vector(accumulator) => accumulator.sample_count(),
             Self::Gammaloop(accumulator) => accumulator.sample_count(),
@@ -240,6 +248,7 @@ impl AccumulatorState {
 
     pub fn to_persistent_json(&self) -> Result<JsonValue, EngineError> {
         match self {
+            Self::Stratified(_) => self.to_json(),
             Self::Empty(accumulator) => accumulator.to_persistent_json(),
             Self::Vector(accumulator) => accumulator.to_persistent_json(),
             Self::Gammaloop(accumulator) => accumulator.to_persistent_json(),
@@ -249,6 +258,7 @@ impl AccumulatorState {
 
     pub fn to_digest_json(&self, run_spec: &RunSpec) -> Result<JsonValue, EngineError> {
         match self {
+            Self::Stratified(_) => self.to_json(),
             Self::Empty(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Vector(accumulator) => accumulator.to_digest_json(run_spec),
             Self::Gammaloop(accumulator) => accumulator.to_digest_json(run_spec),

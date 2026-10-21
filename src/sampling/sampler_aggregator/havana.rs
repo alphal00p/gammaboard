@@ -863,6 +863,7 @@ mod tests {
             .expect("produce pending batch");
 
         let snapshot = crate::core::SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaTraining {
                 params: params.clone(),
             },
@@ -951,6 +952,7 @@ mod tests {
             .expect("ingest training batch");
 
         let snapshot = crate::core::SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaTraining {
                 params: params.clone(),
             },
@@ -1140,6 +1142,7 @@ mod tests {
             .expect("ingest training batch");
 
         let snapshot = crate::core::SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaTraining {
                 params: params.clone(),
             },
@@ -1156,6 +1159,7 @@ mod tests {
         .expect("build inference sampler");
 
         let raw = crate::core::SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaInference {
                 params: Default::default(),
             },
@@ -1201,6 +1205,7 @@ mod tests {
                 .expect("ingest training weights");
 
             let training_snapshot = crate::core::SamplingConfig {
+                stratification: None,
                 sampler: crate::core::SamplerConfig::HavanaTraining {
                     params: params.clone(),
                 },
@@ -1227,6 +1232,7 @@ mod tests {
                     let handoff = StageHandoffOwned {
                         sampler_snapshot: Some(
                             crate::core::SamplingConfig {
+                                stratification: None,
                                 sampler: crate::core::SamplerConfig::HavanaInference {
                                     params: Default::default(),
                                 },
@@ -1263,6 +1269,7 @@ mod tests {
             let handoff = StageHandoffOwned {
                 sampler_snapshot: Some(
                     crate::core::SamplingConfig {
+                        stratification: None,
                         sampler: crate::core::SamplerConfig::HavanaInference {
                             params: Default::default(),
                         },

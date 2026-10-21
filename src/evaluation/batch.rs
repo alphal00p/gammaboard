@@ -195,7 +195,9 @@ impl BatchResult {
         // an independent native integration (e.g. a one-trigger MadGraph run).
         if matches!(
             self.accumulator,
-            AccumulatorState::Vector(_) | AccumulatorState::FullVector(_)
+            AccumulatorState::Vector(_)
+                | AccumulatorState::FullVector(_)
+                | AccumulatorState::Stratified(_)
         ) && self.accumulator.sample_count() != nr_samples as i64
         {
             return Err(crate::core::EngineError::eval(format!(

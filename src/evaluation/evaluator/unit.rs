@@ -118,12 +118,16 @@ impl Evaluator for UnitEvaluator {
         self.domain.clone()
     }
 
-    fn eval_batch(
+    fn eval_values(
         &mut self,
         batch: &Batch,
-        accumulator: &AccumulatorConfig,
-        options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError> {
+        components: &[String],
+    ) -> Result<Vec<f64>, EngineError> {
+        if components != ["value".to_string()] {
+            return Err(EngineError::invalid_input(
+                "unit evaluator requires value component",
+            ));
+        }
         self.eval_batches_total = self.eval_batches_total.saturating_add(1);
         if self.should_fail_on_batch(self.eval_batches_total) {
             return Err(EngineError::eval(format!(
@@ -131,7 +135,6 @@ impl Evaluator for UnitEvaluator {
                 self.eval_batches_total
             )));
         }
-        let mut observable_state = AccumulatorState::from_config(accumulator);
         // Hash batch endpoints and size: stable across worker assignment/retries.
         let mut key = batch.len() as u64;
         for point in batch
@@ -163,6 +166,17 @@ impl Evaluator for UnitEvaluator {
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         };
+        Ok(values)
+    }
+
+    fn eval_batch(
+        &mut self,
+        batch: &Batch,
+        accumulator: &AccumulatorConfig,
+        options: EvalBatchOptions,
+    ) -> Result<BatchResult, EngineError> {
+        let values = self.eval_values(batch, &["value".into()])?;
+        let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = ingest_scalar_values(
             &values,
             batch.points(),

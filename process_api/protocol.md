@@ -1,6 +1,6 @@
-# Process wire protocol v6
+# Process wire protocol v7
 
-This is the complete transport contract for `gammaboard-jsonrpc-v6`. The
+This is the complete transport contract for `gammaboard-jsonrpc-v7`. The
 [execution specification](../docs/execution-model.md) defines sampling, weighting,
 feedback ordering, and recovery semantics. The [process guide](README.md) covers
 SDK setup. The protocol has four roles: `evaluator`, `sampler`, `materializer`,
@@ -14,7 +14,7 @@ stdout. Each process handles one synchronous request at a time. Every request ha
 that `id` and contains exactly one of `result` or `error`:
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":"gammaboard-jsonrpc-v6","role":"sampler","domain":{"rectangular":{"discrete_cardinalities":[],"continuous_dims":2}},"args":{},"evaluator_metadata":{},"snapshot":null}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":"gammaboard-jsonrpc-v7","role":"sampler","domain":{"rectangular":{"discrete_cardinalities":[],"continuous_dims":2}},"args":{},"evaluator_metadata":{},"initialization":{"kind":"fresh"}}}
 ```
 
 ```json
@@ -53,7 +53,7 @@ All roles receive:
 
 | Parameter | Meaning |
 | --- | --- |
-| `protocol` | Exactly `gammaboard-jsonrpc-v6` |
+| `protocol` | Exactly `gammaboard-jsonrpc-v7` |
 | `role` | One of the four role strings above |
 | `domain` | The structural domain described below |
 | `args` | User construction arguments, as a JSON object |
@@ -63,13 +63,40 @@ Additional parameters:
 | Role | Parameters |
 | --- | --- |
 | Evaluator | `output: {kind:"values", components:["value",...]}` or `{kind:"gammaloop"}` |
-| Sampler | `evaluator_metadata`: JSON from the evaluator; `snapshot`: null for fresh construction or non-null private sampler state for restoration |
+| Sampler | `evaluator_metadata`: JSON from the evaluator; `initialization`: tagged `fresh`, `restore`, or `from_stage` object |
 | Materializer / transform | No additional initialization fields |
 
 All roles return `{"ok":true}` without binary data. Evaluators can additionally
 return `metadata`, which GammaBoard forwards to sampler initialization. An absent
 metadata field means `{}`. Evaluator components are ordered, unique names; their
 order fixes the component axis in returned value arrays.
+
+
+Sampler initialization is exactly one of:
+
+```json
+{"kind":"fresh"}
+{"kind":"restore","state":{"...":"private checkpoint"}}
+{"kind":"from_stage","source_state":{"...":"trained model"},"source_args":{}}
+```
+
+`restore` preserves RNG state, counters and pending feedback. `from_stage` passes
+an earlier sampler's private state and source arguments to the destination's
+explicit handoff hook; destination `args` configure the new stage. The adapter
+transfers the learned proposal into fresh counters/feedback state. An unsupported
+handoff fails explicitly. The Python hooks are `from_snapshot` and `from_stage`.
+No nullable `snapshot` initialization fallback remains in v7.
+
+For stratification, the sampler receives a domain with a new outer categorical
+axis, while ordinary evaluator callbacks receive their original physical domain.
+`discrete_pdf` queries fixing only that outer coordinate must return its exact
+normalized marginal probability, integrating out all remaining coordinates.
+These are the sampler's selection probabilities, not observed frequencies or
+Voronoi-region volumes. They must agree with the full weights from `generate`.
+The runtime queries them once when frozen inference starts and checkpoints them.
+It assumes independent draws from that frozen distribution; inaccurate masses,
+ongoing adaptation or correlated draws can bias estimates or invalidate errors.
+No capability flags certify these statistical assumptions.
 
 ## Domains and sample arrays
 

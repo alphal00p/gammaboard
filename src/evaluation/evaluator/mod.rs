@@ -79,7 +79,12 @@ impl EvaluatorConfig {
                     validate_value_accumulator(self.kind_str(), config, components)
                 }
             },
-            Self::Symbolica { .. } => validate_symbolica_accumulator(self.kind_str(), config),
+            Self::Symbolica { params } => match &params.source {
+                symbolica::SymbolicaSource::Expressions { components, .. } => {
+                    validate_value_accumulator(self.kind_str(), config, components)
+                }
+                _ => validate_symbolica_accumulator(self.kind_str(), config),
+            },
             Self::Unit { .. } if matches!(config, AccumulatorConfig::Empty) => Ok(()),
             Self::Unit { .. } => {
                 validate_value_accumulator(self.kind_str(), config, &["value".into()])

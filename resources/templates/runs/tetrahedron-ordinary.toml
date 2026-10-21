@@ -1,0 +1,42 @@
+# 1D vector integral of a smooth tetrahedron-like path; exact integral [0,0,0].
+# f(x)=x, with x(t) lingering near the four tetrahedron corners.
+name = "tetrahedron-ordinary"
+
+[evaluator]
+kind = "symbolica"
+args = ["t"]
+[evaluator.source]
+kind = "expressions"
+components = ["x", "y", "z"]
+exprs = [
+  "(exp(16*cos(2*pi*t))-1)/(exp(16*cos(2*pi*t))+1)",
+  "(exp(16*sin(2*pi*t))-1)/(exp(16*sin(2*pi*t))+1)",
+  "((exp(16*cos(2*pi*t))-1)/(exp(16*cos(2*pi*t))+1))*((exp(16*sin(2*pi*t))-1)/(exp(16*sin(2*pi*t))+1))",
+]
+
+[[task_queue]]
+name = "train"
+kind = "sample"
+estimator = "pooled"
+publish_result = false
+stop_condition = { max_samples = 131_072 }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = 10000
+bins = 64
+samples_for_update = 4096
+initial_training_rate = 0.5
+final_training_rate = 0.1
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "pooled"
+# Fixed budget for the A/B experiment; no error-dependent stopping.
+stop_condition = { max_samples = 131_072 }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+[task_queue.sampler]
+from_stage = "train"
+[task_queue.sampler.config]
+kind = "havana_inference"
+seed = 100000

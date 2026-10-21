@@ -191,14 +191,30 @@ class _SamplerWorker:
             restore = getattr(self.target, "from_snapshot", None)
             if not callable(restore) or getattr(restore, "__isabstractmethod__", False):
                 raise TypeError("sampler class must implement from_snapshot for recovery")
-            self.sampler = instantiate_user_object(
-                self.target,
-                discrete_cardinalities=discrete_cardinalities,
-                continuous_dims=continuous_dims,
-                init_args=self.sampler_args,
-                snapshot=params.get("snapshot"),
-                evaluator_metadata=self.evaluator_metadata,
-            )
+            initialization = params.get("initialization")
+            if not isinstance(initialization, dict):
+                raise ValueError("sampler initialization requires a tagged initialization object")
+            kind = initialization.get("kind")
+            common = dict(discrete_cardinalities=discrete_cardinalities,
+                          continuous_dims=continuous_dims, init_args=self.sampler_args,
+                          evaluator_metadata=self.evaluator_metadata)
+            if kind == "from_stage":
+                if initialization.get("source_state") is None or not isinstance(initialization.get("source_args"), dict):
+                    raise ValueError("from_stage requires non-null source_state and object source_args")
+                handoff = getattr(self.target, "from_stage", None)
+                if not callable(handoff):
+                    raise TypeError("sampler does not support from_stage")
+                self.sampler = handoff(source_state=initialization["source_state"],
+                                       source_args=initialization["source_args"], **common)
+            elif kind in ("fresh", "restore"):
+                snapshot = initialization.get("state")
+                if kind == "restore" and snapshot is None:
+                    raise ValueError("restore requires non-null state")
+                if kind == "fresh" and "state" in initialization:
+                    raise ValueError("fresh initialization must not contain state")
+                self.sampler = instantiate_user_object(self.target, snapshot=snapshot, **common)
+            else:
+                raise ValueError(f"unsupported sampler initialization kind: {kind!r}")
             self.discrete_cardinalities = discrete_cardinalities
             self.continuous_dims = continuous_dims
             return {"ok": True}

@@ -91,6 +91,7 @@ pub struct NodeLaunchRequest {
 /// Runtime-owned work: a sample slice plus its resolved accumulator configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvaluationBatch {
+    pub stratification: Option<super::StratificationPlan>,
     pub samples: LatentBatch,
     pub accumulator: super::AccumulatorConfig,
 }
@@ -114,6 +115,13 @@ impl EvaluationBatch {
             bincode::config::standard(),
         )
         .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?;
+        bincode::serde::encode_into_std_write(
+            serde_json::to_string(&self.stratification)
+                .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?,
+            bytes,
+            bincode::config::standard(),
+        )
+        .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?;
         self.samples.write_bytes(bytes)?;
         Ok(bytes.len() - start)
     }
@@ -129,15 +137,22 @@ impl EvaluationBatch {
         let (accumulator, consumed) =
             bincode::serde::decode_from_slice(bytes, bincode::config::standard())
                 .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?;
+        let (plan, plan_bytes): (String, usize) =
+            bincode::serde::decode_from_slice(&bytes[consumed..], bincode::config::standard())
+                .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?;
+        let stratification = serde_json::from_str(&plan)
+            .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?;
         Ok(Self {
+            stratification,
             accumulator,
-            samples: LatentBatch::from_bytes(&bytes[consumed..])?,
+            samples: LatentBatch::from_bytes(&bytes[consumed + plan_bytes..])?,
         })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct BatchClaim {
+    pub stratification: Option<super::StratificationPlan>,
     pub batch_id: i64,
     pub claim_token: String,
     pub task_id: i64,

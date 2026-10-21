@@ -217,7 +217,7 @@ async fn startup_rejects_unversioned_and_future_database_models() {
     .unwrap();
     assert!(gammaboard::init_pg_store(url.as_str(), 1).await.is_err());
     sqlx::query(&format!(
-        "UPDATE {schema}.gammaboard_compatibility SET model_version=2"
+        "UPDATE {schema}.gammaboard_compatibility SET model_version=3"
     ))
     .execute(store.pool())
     .await
@@ -551,6 +551,7 @@ async fn active_task_accumulates_declared_cpu_time() {
             &[RunTaskInput {
                 name: Some("sample".to_string()),
                 task: RunTaskSpec::Sample {
+                    estimator: gammaboard::core::Estimator::Pooled,
                     publish_result: true,
                     stop_condition: SampleStopCondition {
                         max_samples: Some(1),
@@ -836,6 +837,7 @@ async fn task_measurement_output_round_trips() {
             &[RunTaskInput {
                 name: Some("sample".to_string()),
                 task: RunTaskSpec::Sample {
+                    estimator: gammaboard::core::Estimator::Pooled,
                     publish_result: true,
                     stop_condition: SampleStopCondition {
                         max_samples: Some(10),
@@ -2277,8 +2279,9 @@ async fn checkpoint_and_stage_publish_atomically() {
         .await
         .unwrap();
     let sampler = SavedSampler {
-        version: 1,
+        version: gammaboard::compatibility::MODEL_VERSION,
         config: gammaboard::core::SamplingConfig {
+            stratification: None,
             sampler: gammaboard::core::SamplerConfig::NaiveMonteCarlo {
                 params: Default::default(),
             },
@@ -2290,7 +2293,7 @@ async fn checkpoint_and_stage_publish_atomically() {
     let observable = AccumulatorState::empty_scalar();
     // A current-format checkpoint at the empty initial boundary.
     let saved = json!({
-        "format_version":1, "completed_samples":0, "task_id":task, "output_snapshot_id":null, "batches_completed":0,
+        "format_version":gammaboard::compatibility::MODEL_VERSION, "completed_samples":0, "task_id":task, "output_snapshot_id":null, "batches_completed":0,
         "sampler_snapshot":sampler, "observable_state":observable,
         "runtime_state":{
             "produced_batches_total":0, "produced_samples_total":0,
@@ -2696,8 +2699,9 @@ async fn campaign_stall_checkpoint_jsonb_number_roundtrip_preserves_recovery() {
     };
     observable.ingest_vector(&[1.0], &point).unwrap();
     let checkpoint: SamplerAggregatorCheckpoint = serde_json::from_value(json!({
-        "format_version":1, "completed_samples": 1, "task_id": task, "output_snapshot_id": null, "batches_completed": 1,
-        "sampler_snapshot": SavedSampler { version: 1, config: gammaboard::core::SamplingConfig { sampler: gammaboard::core::SamplerConfig::NaiveMonteCarlo { params: Default::default() }, materializer: None, transforms: None }, state: json!({"seed": 1}) },
+        "format_version":gammaboard::compatibility::MODEL_VERSION, "completed_samples": 1, "task_id": task, "output_snapshot_id": null, "batches_completed": 1,
+        "sampler_snapshot": SavedSampler { version: gammaboard::compatibility::MODEL_VERSION, config: gammaboard::core::SamplingConfig {
+stratification: None, sampler: gammaboard::core::SamplerConfig::NaiveMonteCarlo { params: Default::default() }, materializer: None, transforms: None }, state: json!({"seed": 1}) },
         "observable_state": AccumulatorState::Vector(observable),
         "runtime_state": {
             "produced_batches_total": 3, "produced_samples_total": 3,
@@ -2756,8 +2760,9 @@ async fn campaign_stall_checkpoint_jsonb_number_roundtrip_preserves_recovery() {
     );
     let mut changed = loaded.clone();
     changed.sampler_snapshot = SavedSampler {
-        version: 1,
+        version: gammaboard::compatibility::MODEL_VERSION,
         config: gammaboard::core::SamplingConfig {
+            stratification: None,
             sampler: gammaboard::core::SamplerConfig::NaiveMonteCarlo {
                 params: Default::default(),
             },

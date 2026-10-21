@@ -189,3 +189,21 @@ replacements = { samples = 10000, center = 0.5 }
 # stop_condition = { max_samples = "$(samples:1000)" }
 # source = { kind = "expression", expr = "(x - $(center:0.0))^2" }
 ```
+
+## Stratified inference
+
+Use `estimator = "pooled"` (default) while training a pipeline with
+`sampler.config.stratification.kind = "voronoi"`. Set its output-space `centers`
+and optional positive component `scales`. The inference task selects
+`estimator = "stratified"`, `from_stage = "train"`, and an explicit fresh
+`accumulator = { config = ... }`. No user probability table is accepted.
+The frozen sampler supplies it through `discrete_pdf`. See the
+[execution contract](execution-model.md#scaled-voronoi-stratification) and the
+[tetrahedron run](../resources/templates/runs/tetrahedron-stratified.toml).
+
+Symbolica can evaluate named real vectors using
+`source = { kind = "expressions", components = ["x", "y", "z"], exprs = ["t", "2*t", "-t"] }`.
+The accumulator component order must agree. Existing `kind = "expression"`
+retains scalar or complex real/imag output. Stratification currently requires a
+statistical scalar/vector accumulator, not `full_vector` or an opaque observable
+bundle. Raster and PDF-inspection tasks retain their existing semantics.

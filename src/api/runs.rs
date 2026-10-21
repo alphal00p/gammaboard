@@ -1,10 +1,10 @@
 use crate::api::{ApiError, toml_template};
-use crate::core::IntegrationParams;
 use crate::core::traits::TaskQueueChange;
 use crate::core::{
     AccumulatorConfig, AggregationStore, ControlPlaneStore, EvaluatorConfig, RunTask, RunTaskInput,
     RunTaskState, RunTaskStore, SamplerQueueTuning, SourceRefSpec,
 };
+use crate::core::{IntegrationParams, SamplingConfig};
 use crate::preprocess::{IntegrationDefinition, RunDefinition, prepare_run};
 use crate::provenance::RunProvenance;
 use crate::stores::RunProgress;
@@ -208,13 +208,35 @@ pub fn validate_run(config: RunDefinition, probe: bool) -> Result<RunValidation,
                 .sample_sampler_config()
                 .or_else(|| task.task.sampler_config())
             {
-                let _runtime = sampler
-                    .create(domain.clone(), None, evaluator.metadata())
-                    .map_err(|err| {
-                        ApiError::BadRequest(format!("task_queue[{index}].sampler probe: {err}"))
-                    })?;
-                let materializer = sampler.build_materializer(&domain, None)?;
-                materializer.validate_domain(&domain)?;
+                let needs_handoff = matches!(
+                    &sampler.sampler,
+                    crate::core::SamplerConfig::HavanaInference { .. }
+                        | crate::core::SamplerConfig::PdfAdaptationRasterPlane { .. }
+                        | crate::core::SamplerConfig::PdfAdaptationRasterLine { .. }
+                ) || matches!(
+                    &task.task,
+                    crate::core::RunTaskSpec::Sample {
+                        sampler: Some(crate::core::tasks::StageSourceSpec::FromStage { .. }),
+                        ..
+                    }
+                );
+                if !needs_handoff {
+                    let _runtime = sampler
+                        .create(
+                            domain.clone(),
+                            task.task
+                                .nr_expected_samples()
+                                .and_then(|n| usize::try_from(n).ok()),
+                            evaluator.metadata(),
+                        )
+                        .map_err(|err| {
+                            ApiError::BadRequest(format!(
+                                "task_queue[{index}].sampler probe: {err}"
+                            ))
+                        })?;
+                    let materializer = sampler.build_materializer(&domain, None)?;
+                    materializer.validate_domain(&sampler.sampling_domain(&domain)?)?;
+                }
             }
             for transform in task.task.batch_transforms_config().unwrap_or_default() {
                 transform.build(&domain)?;
@@ -714,6 +736,9 @@ struct TaskPreflightContext {
     effective_accumulator_by_name: BTreeMap<String, AccumulatorConfig>,
     effective_evaluator_by_name: BTreeMap<String, EvaluatorConfig>,
     current_accumulator: Option<AccumulatorConfig>,
+    current_sampling: Option<SamplingConfig>,
+    latest_havana_sampling: Option<SamplingConfig>,
+    sampling_by_name: BTreeMap<String, SamplingConfig>,
     current_evaluator: Option<EvaluatorConfig>,
     next_sequence: i32,
     run_domain: Domain,
@@ -746,6 +771,9 @@ impl TaskPreflightContext {
             effective_accumulator_by_name: BTreeMap::new(),
             effective_evaluator_by_name: BTreeMap::new(),
             current_accumulator: None,
+            current_sampling: None,
+            latest_havana_sampling: None,
+            sampling_by_name: BTreeMap::new(),
             current_evaluator: evaluator.clone(),
             next_sequence,
             run_domain,
@@ -815,6 +843,7 @@ impl TaskPreflightContext {
                 self.validate_accumulator_against_evaluator(effective_evaluator, config)?;
             }
         }
+        self.validate_sampling(task, &task_name, effective_accumulator.as_ref())?;
         self.prior_sourceable_names.insert(task_name.clone());
         if let Some(effective_evaluator) = effective_evaluator {
             self.effective_evaluator_by_name
@@ -842,10 +871,98 @@ impl TaskPreflightContext {
             self.current_evaluator = Some(effective_evaluator);
         }
         let effective_accumulator = self.resolve_effective_accumulator(&input)?;
+        self.validate_sampling(&input, &task.name, effective_accumulator.as_ref())?;
         if let Some(config) = effective_accumulator {
             self.effective_accumulator_by_name
                 .insert(task.name.clone(), config.clone());
             self.current_accumulator = Some(config);
+        }
+        Ok(())
+    }
+
+    fn validate_sampling(
+        &mut self,
+        task: &RunTaskInput,
+        name: &str,
+        accumulator: Option<&AccumulatorConfig>,
+    ) -> Result<(), ApiError> {
+        use crate::core::tasks::StageSourceSpec;
+        let crate::core::RunTaskSpec::Sample {
+            sampler,
+            estimator,
+            accumulator: accumulator_source,
+            ..
+        } = &task.task
+        else {
+            return Ok(());
+        };
+        let mut sampling = match sampler {
+            Some(StageSourceSpec::Config { config }) => Some(config.clone()),
+            Some(StageSourceSpec::FromStage { config, from_stage }) => {
+                let source = self.sampling_by_name.get(from_stage).ok_or_else(|| {
+                    ApiError::BadRequest("sampler handoff has no source configuration".into())
+                })?;
+                if config.stratification.is_some() && config.stratification != source.stratification
+                {
+                    return Err(ApiError::BadRequest(
+                        "changing the Voronoi partition requires retraining".into(),
+                    ));
+                }
+                let mut resolved = config.clone();
+                resolved.stratification = source.stratification.clone();
+                Some(resolved)
+            }
+            Some(StageSourceSpec::FromName { from_name: source }) => {
+                self.sampling_by_name.get(source).cloned()
+            }
+            _ => self.current_sampling.clone(),
+        };
+        if let Some(config) = &mut sampling {
+            if matches!(sampler, Some(StageSourceSpec::Config { .. }))
+                && matches!(
+                    config.sampler,
+                    crate::core::SamplerConfig::HavanaInference { .. }
+                )
+                && config.stratification.is_none()
+            {
+                config.stratification = self
+                    .latest_havana_sampling
+                    .as_ref()
+                    .and_then(|c| c.stratification.clone());
+            }
+            if let Some(partition) = &config.stratification {
+                let accumulator = accumulator.ok_or_else(|| {
+                    ApiError::BadRequest("stratification requires an accumulator".into())
+                })?;
+                partition.validate_accumulator(accumulator)?;
+                config.sampling_domain(&self.run_domain)?;
+            }
+        }
+        if *estimator == crate::core::Estimator::Stratified {
+            if sampling.as_ref().is_none_or(|s| s.stratification.is_none()) {
+                return Err(ApiError::BadRequest(
+                    "stratified estimation requires a sampling partition".into(),
+                ));
+            }
+            if !matches!(accumulator_source, Some(StageSourceSpec::Config { .. })) {
+                return Err(ApiError::BadRequest(
+                    "stratified inference requires an explicit fresh accumulator".into(),
+                ));
+            }
+            if accumulator.is_some_and(|config| config.discrete_projections().is_some()) {
+                return Err(ApiError::BadRequest("stratified inference uses per-stratum diagnostics instead of discrete_projections".into()));
+            }
+        }
+        if let Some(sampling) = sampling {
+            if matches!(
+                sampling.sampler,
+                crate::core::SamplerConfig::HavanaTraining { .. }
+                    | crate::core::SamplerConfig::HavanaInference { .. }
+            ) {
+                self.latest_havana_sampling = Some(sampling.clone());
+            }
+            self.sampling_by_name.insert(name.into(), sampling.clone());
+            self.current_sampling = Some(sampling);
         }
         Ok(())
     }
@@ -1615,6 +1732,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
         RunTaskInput {
             name: None,
             task: RunTaskSpec::Sample {
+                estimator: crate::core::Estimator::Pooled,
                 publish_result: true,
                 stop_condition: SampleStopCondition {
                     max_samples: Some(10),
@@ -1624,6 +1742,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
                 evaluator: None,
                 sampler: Some(SamplerSourceSpec::Config {
                     config: SamplingConfig {
+                        stratification: None,
                         sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                             params: NaiveMonteCarloSamplerParams::default(),
                         },
@@ -1751,6 +1870,7 @@ discrete_dims = 0
             .validate_batch(&[RunTaskInput {
                 name: Some("sample".to_string()),
                 task: RunTaskSpec::Sample {
+                    estimator: crate::core::Estimator::Pooled,
                     publish_result: true,
                     stop_condition: SampleStopCondition {
                         max_samples: Some(10),
@@ -1760,6 +1880,7 @@ discrete_dims = 0
                     evaluator: None,
                     sampler: Some(SamplerSourceSpec::Config {
                         config: SamplingConfig {
+                            stratification: None,
                             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                                 params: NaiveMonteCarloSamplerParams::default(),
                             },

@@ -42,12 +42,47 @@ fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> 
 }
 
 impl SamplingConfig {
+    pub fn sampling_domain(&self, physical: &Domain) -> Result<Domain, EngineError> {
+        match &self.stratification {
+            Some(partition) => {
+                partition.validate()?;
+                if matches!(
+                    self.sampler,
+                    crate::core::SamplerConfig::RasterPlane { .. }
+                        | crate::core::SamplerConfig::RasterLine { .. }
+                        | crate::core::SamplerConfig::PdfAdaptationRasterPlane { .. }
+                        | crate::core::SamplerConfig::PdfAdaptationRasterLine { .. }
+                ) {
+                    return Err(EngineError::invalid_input(
+                        "raster samplers do not support stratification",
+                    ));
+                }
+                Ok(partition.sampling_domain(physical))
+            }
+            None => Ok(physical.clone()),
+        }
+    }
+    pub fn inherit_stratification(&self, source: &SavedSampler) -> Result<Self, EngineError> {
+        if self.stratification.is_some() && self.stratification != source.config.stratification {
+            return Err(EngineError::invalid_input(
+                "changing the stratification partition requires retraining",
+            ));
+        }
+        let mut config = self.clone();
+        config.stratification = source.config.stratification.clone();
+        Ok(config)
+    }
+}
+
+impl SamplingConfig {
     pub(crate) fn restore_state(
         &self,
         raw: JsonValue,
         domain: &Domain,
         evaluator_metadata: JsonValue,
     ) -> Result<Box<dyn Sampler>, EngineError> {
+        let sampling_domain = self.sampling_domain(domain)?;
+        let domain = &sampling_domain;
         match self {
             Self {
                 sampler: crate::core::SamplerConfig::NaiveMonteCarlo { params, .. },
@@ -238,6 +273,7 @@ impl SamplingConfig {
         sample_budget: Option<usize>,
         evaluator_metadata: JsonValue,
     ) -> Result<Box<dyn Sampler>, EngineError> {
+        let domain = self.sampling_domain(&domain)?;
         match self {
             Self {
                 sampler: crate::core::SamplerConfig::NaiveMonteCarlo { params, .. },
@@ -303,10 +339,22 @@ impl SamplingConfig {
         domain: &Domain,
         source: StageHandoff<'_>,
     ) -> Result<Box<dyn Sampler>, EngineError> {
+        self.from_stage_with_metadata(domain, source, serde_json::json!({}))
+    }
+
+    pub fn from_stage_with_metadata(
+        &self,
+        domain: &Domain,
+        source: StageHandoff<'_>,
+        evaluator_metadata: JsonValue,
+    ) -> Result<Box<dyn Sampler>, EngineError> {
         let snapshot = source
             .sampler_snapshot
             .ok_or_else(|| EngineError::build("stage handoff requires a saved sampler"))?;
-        match self {
+        let config = self.inherit_stratification(snapshot)?;
+        let sampling_domain = config.sampling_domain(domain)?;
+        let domain = &sampling_domain;
+        match &config {
             Self {
                 sampler: crate::core::SamplerConfig::PdfAdaptationRasterPlane { params, .. },
                 ..
@@ -349,6 +397,15 @@ impl SamplingConfig {
                 snapshot.clone(),
                 domain,
             )?)),
+            Self {
+                sampler: crate::core::SamplerConfig::ProcessSampler { params },
+                ..
+            } => Ok(Box::new(ProcessSampler::from_stage(
+                params.clone(),
+                snapshot,
+                domain,
+                evaluator_metadata,
+            )?)),
             _ => Err(EngineError::build(format!(
                 "{} does not support stage handoff; create fresh state or restore saved state",
                 self.kind_str(),
@@ -361,6 +418,8 @@ impl SamplingConfig {
         domain: &Domain,
         handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn Materializer>, EngineError> {
+        let sampling_domain = self.sampling_domain(domain)?;
+        let domain = &sampling_domain;
         if let Some(materializer) = self.materializer_config() {
             return match materializer {
                 MaterializerConfig::ProcessMaterializer { params } => Ok(Box::new(

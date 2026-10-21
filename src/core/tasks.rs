@@ -857,6 +857,8 @@ pub enum RunTaskSpec {
         accumulator: AccumulatorConfig,
     },
     Sample {
+        #[serde(default)]
+        estimator: crate::core::Estimator,
         #[serde(default = "default_publish_result")]
         publish_result: bool,
         stop_condition: SampleStopCondition,
@@ -960,6 +962,10 @@ impl RunTaskSpec {
                 }
                 if let Some(source) = sampler {
                     source.validate_ref("sampler")?;
+                }
+                if let Some(source)=sampler {
+                    let config=match source {SamplerSourceSpec::Config{config}|SamplerSourceSpec::FromStage{config,..}=>Some(config),_=>None};
+                    if let Some(partition)=config.and_then(|c|c.stratification.as_ref()) {partition.validate().map_err(|e|e.to_string())?;}
                 }
                 if let Some(source) = accumulator {
                     source.validate_ref("accumulator")?;
@@ -1136,6 +1142,7 @@ impl RunTaskSpec {
     pub fn sampler_config(&self) -> Option<SamplingConfig> {
         match self {
             Self::Image { geometry, .. } => Some(SamplingConfig {
+                stratification: None,
                 sampler: crate::core::SamplerConfig::RasterPlane {
                     params: RasterPlaneSamplerParams {
                         geometry: geometry.clone(),
@@ -1145,6 +1152,7 @@ impl RunTaskSpec {
                 transforms: None,
             }),
             Self::PdfAdaptationImage { geometry, .. } => Some(SamplingConfig {
+                stratification: None,
                 sampler: crate::core::SamplerConfig::PdfAdaptationRasterPlane {
                     params: RasterPlaneSamplerParams {
                         geometry: geometry.clone(),
@@ -1154,6 +1162,7 @@ impl RunTaskSpec {
                 transforms: None,
             }),
             Self::PdfAdaptationPlotLine { geometry, .. } => Some(SamplingConfig {
+                stratification: None,
                 sampler: crate::core::SamplerConfig::PdfAdaptationRasterLine {
                     params: RasterLineSamplerParams {
                         geometry: geometry.clone(),
@@ -1163,6 +1172,7 @@ impl RunTaskSpec {
                 transforms: None,
             }),
             Self::PlotLine { geometry, .. } => Some(SamplingConfig {
+                stratification: None,
                 sampler: crate::core::SamplerConfig::RasterLine {
                     params: RasterLineSamplerParams {
                         geometry: geometry.clone(),
@@ -1848,6 +1858,7 @@ mod tests {
     #[test]
     fn sample_task_without_accumulator_reuses_previous_state() {
         let task = RunTaskSpec::Sample {
+            estimator: crate::core::Estimator::Pooled,
             publish_result: true,
             stop_condition: SampleStopCondition {
                 max_samples: Some(10),
@@ -1857,6 +1868,7 @@ mod tests {
             evaluator: None,
             sampler: Some(SamplerSourceSpec::Config {
                 config: SamplingConfig {
+                    stratification: None,
                     sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                         params: NaiveMonteCarloSamplerParams::default(),
                     },
@@ -2157,6 +2169,7 @@ max = 1.0
         let input = RunTaskInput {
             name: Some("sample-1".to_string()),
             task: RunTaskSpec::Sample {
+                estimator: crate::core::Estimator::Pooled,
                 publish_result: true,
                 stop_condition: SampleStopCondition {
                     max_samples: Some(10),
@@ -2181,6 +2194,7 @@ max = 1.0
     #[test]
     fn sample_task_rejects_dual_source() {
         let missing = RunTaskSpec::Sample {
+            estimator: crate::core::Estimator::Pooled,
             publish_result: true,
             stop_condition: SampleStopCondition {
                 max_samples: Some(0),
@@ -2196,6 +2210,7 @@ max = 1.0
         assert!(missing.validate().is_ok());
 
         let both = RunTaskSpec::Sample {
+            estimator: crate::core::Estimator::Pooled,
             publish_result: true,
             stop_condition: SampleStopCondition {
                 max_samples: Some(0),
@@ -2214,12 +2229,14 @@ max = 1.0
     #[test]
     fn sample_task_with_havana_training_requires_budget_in_config_mode() {
         let task = RunTaskSpec::Sample {
+            estimator: crate::core::Estimator::Pooled,
             publish_result: true,
             stop_condition: SampleStopCondition::default(),
             measurement: None,
             evaluator: None,
             sampler: Some(SamplerSourceSpec::Config {
                 config: SamplingConfig {
+                    stratification: None,
                     sampler: crate::core::SamplerConfig::HavanaTraining {
                         params: HavanaSamplerParams::default(),
                     },
@@ -2384,6 +2401,7 @@ max = 1.0
             };
             *sampler = Some(SamplerSourceSpec::Config {
                 config: SamplingConfig {
+                    stratification: None,
                     sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                         params: NaiveMonteCarloSamplerParams::default(),
                     },

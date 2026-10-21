@@ -13,6 +13,7 @@ pub fn extract_accumulator_metric(
         return Ok(None);
     }
     match state {
+        AccumulatorState::Stratified(state) => Ok(state.metric(selector)),
         AccumulatorState::Vector(vector) => Ok(metric_for_vector(vector, selector)),
         AccumulatorState::Gammaloop(gammaloop) => Ok(metric_for_gammaloop(gammaloop, selector)),
         AccumulatorState::Empty(_) | AccumulatorState::FullVector(_) => Ok(None),

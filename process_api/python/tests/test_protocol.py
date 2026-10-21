@@ -273,3 +273,36 @@ def test_invalid_evaluator_component_rejects_the_whole_response(value):
     from gammaboard_process.runners import _normalize_evaluator_values
     with pytest.raises(ValueError, match="sample 1, component 'imag'.*non-finite"):
         _normalize_evaluator_values([[1., 2.], [3., value]], 2, ["real", "imag"])
+
+
+def test_sampler_stage_handoff_is_distinct_from_exact_recovery(monkeypatch):
+    from gammaboard_process import runners
+    from gammaboard_process.protocol import PROTOCOL
+    monkeypatch.setattr(runners, "ProtocolIo", lambda: None)
+    class Sampler:
+        def __init__(self, **kwargs):
+            self.produced = 0
+            self.model = kwargs.get("model", 1)
+        @classmethod
+        def from_snapshot(cls, *, snapshot, **kwargs):
+            result = cls(**kwargs)
+            result.produced = snapshot["produced"]
+            result.model = snapshot["model"]
+            return result
+        @classmethod
+        def from_stage(cls, *, source_state, source_args, **kwargs):
+            result = cls(**kwargs)
+            result.model = source_state["model"]
+            return result
+    worker = runners._SamplerWorker(Sampler)
+    params = {"protocol": PROTOCOL, "role": "sampler", "domain": {"rectangular": {"discrete_cardinalities": [2], "continuous_dims": 1}}, "args": {}}
+    worker.handle("initialize", {**params, "initialization": {"kind": "restore", "state": {"model": 7, "produced": 50}}})
+    assert (worker.sampler.model, worker.sampler.produced) == (7, 50)
+    worker.handle("initialize", {**params, "initialization": {"kind": "from_stage", "source_state": {"model": 7, "produced": 50}, "source_args": {}}})
+    assert (worker.sampler.model, worker.sampler.produced) == (7, 0)
+    worker.handle("initialize", {**params, "initialization": {"kind": "fresh"}})
+    assert worker.sampler.produced == 0
+    with pytest.raises(ValueError, match="tagged"):
+        worker.handle("initialize", params)
+    with pytest.raises(ValueError, match="non-null"):
+        worker.handle("initialize", {**params, "initialization": {"kind": "restore", "state": None}})

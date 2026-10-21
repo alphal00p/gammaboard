@@ -73,7 +73,7 @@ impl SamplerInitialization {
             Self::Fresh(config) => config.create(domain, sample_budget, metadata),
             Self::Restore(saved) => saved.restore(&domain, metadata),
             Self::FromStage { config, source } => {
-                config.from_stage(&domain, source.as_ref().as_ref())
+                config.from_stage_with_metadata(&domain, source.as_ref().as_ref(), metadata)
             }
         }
     }
@@ -219,7 +219,7 @@ where
     // A checkpoint owns the exact configuration as well as sampler state.
     // A new explicit configuration always creates new state or performs a
     // supported handoff; equality of sampler kinds never selects restoration.
-    let sampler = if let Some(checkpoint) = restored_snapshot {
+    let mut sampler = if let Some(checkpoint) = restored_snapshot {
         SamplerInitialization::Restore(checkpoint.sampler_snapshot)
     } else if !has_explicit_sampler_config
         && let Some(saved) = sampler_source_snapshot
@@ -292,6 +292,13 @@ where
         }
     };
 
+    if let SamplerInitialization::FromStage { config, source } = &mut sampler
+        && let Some(saved) = &source.sampler_snapshot
+    {
+        *config = config
+            .inherit_stratification(saved)
+            .map_err(|e| StoreError::store(e.to_string()))?;
+    }
     Ok(ResolvedStageContext {
         evaluator_config,
         evaluator_provenance,

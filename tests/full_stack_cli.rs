@@ -59,3 +59,6 @@ mod contracts;
 #[cfg(unix)]
 #[path = "e2e/recovery.rs"]
 mod recovery;
+
+#[path = "e2e/stratification.rs"]
+mod stratification;

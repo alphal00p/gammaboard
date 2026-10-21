@@ -11,6 +11,19 @@ use crate::utils::domain::Domain;
 
 use crate::ProcessConfig;
 
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Initialization {
+    Fresh,
+    Restore {
+        state: Value,
+    },
+    FromStage {
+        source_state: Value,
+        source_args: Value,
+    },
+}
+
 pub struct ProcessSampler {
     domain: Domain,
     worker: ProcessSamplerWorker,
@@ -23,8 +36,42 @@ impl ProcessSampler {
         evaluator_metadata: Value,
     ) -> Result<Self, EngineError> {
         params.validate()?;
-        let worker =
-            ProcessSamplerWorker::spawn(&params, domain.clone(), None, evaluator_metadata)?;
+        let worker = ProcessSamplerWorker::spawn(
+            &params,
+            domain.clone(),
+            Initialization::Fresh,
+            evaluator_metadata,
+        )?;
+        Ok(Self {
+            domain: domain.clone(),
+            worker,
+        })
+    }
+
+    pub(crate) fn from_stage(
+        params: ProcessConfig,
+        source: &crate::sampling::SavedSampler,
+        domain: &Domain,
+        evaluator_metadata: Value,
+    ) -> Result<Self, EngineError> {
+        params.validate()?;
+        let crate::core::SamplerConfig::ProcessSampler {
+            params: source_params,
+        } = &source.config.sampler
+        else {
+            return Err(EngineError::build(
+                "process stage handoff requires a process sampler source",
+            ));
+        };
+        let worker = ProcessSamplerWorker::spawn(
+            &params,
+            domain.clone(),
+            Initialization::FromStage {
+                source_state: source.state.clone(),
+                source_args: source_params.args.clone(),
+            },
+            evaluator_metadata,
+        )?;
         Ok(Self {
             domain: domain.clone(),
             worker,
@@ -38,8 +85,12 @@ impl ProcessSampler {
         evaluator_metadata: Value,
     ) -> Result<Self, EngineError> {
         params.validate()?;
-        let worker =
-            ProcessSamplerWorker::spawn(&params, domain.clone(), Some(state), evaluator_metadata)?;
+        let worker = ProcessSamplerWorker::spawn(
+            &params,
+            domain.clone(),
+            Initialization::Restore { state },
+            evaluator_metadata,
+        )?;
         Ok(Self {
             domain: domain.clone(),
             worker,
@@ -115,7 +166,7 @@ impl ProcessSamplerWorker {
     fn spawn(
         params: &ProcessConfig,
         domain: Domain,
-        snapshot: Option<Value>,
+        initialization: Initialization,
         evaluator_metadata: Value,
     ) -> Result<Self, EngineError> {
         let mut command =
@@ -126,14 +177,14 @@ impl ProcessSamplerWorker {
             params.shutdown_grace_seconds,
         )?;
         let mut worker = Self { process, domain };
-        worker.send_init(params.args.clone(), snapshot, evaluator_metadata)?;
+        worker.send_init(params.args.clone(), initialization, evaluator_metadata)?;
         Ok(worker)
     }
 
     fn send_init(
         &mut self,
         args: Value,
-        snapshot: Option<Value>,
+        initialization: Initialization,
         evaluator_metadata: Value,
     ) -> Result<(), EngineError> {
         let response = self
@@ -145,7 +196,7 @@ impl ProcessSamplerWorker {
                     "role": "sampler",
                     "domain": self.domain,
                     "args": args,
-                    "snapshot": snapshot,
+                    "initialization": initialization,
                     "evaluator_metadata": evaluator_metadata,
                 }),
             )

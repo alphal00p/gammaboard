@@ -861,6 +861,7 @@ impl WorkQueueStore for PgStore {
                 claim_token: claim_token.to_owned(),
                 task_id,
                 requires_training_values,
+                stratification: latent_batch.stratification,
                 accumulator: latent_batch.accumulator,
                 latent_batch: latent_batch.samples,
             },

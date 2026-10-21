@@ -377,7 +377,10 @@ fn accumulator_matches_requested_config(
 ) -> bool {
     match requested {
         AccumulatorConfig::Empty => matches!(accumulator, AccumulatorState::Empty(_)),
-        AccumulatorConfig::Vector { .. } => matches!(accumulator, AccumulatorState::Vector(_)),
+        AccumulatorConfig::Vector { .. } => matches!(
+            accumulator,
+            AccumulatorState::Vector(_) | AccumulatorState::Stratified(_)
+        ),
         AccumulatorConfig::Gammaloop => matches!(accumulator, AccumulatorState::Gammaloop(_)),
         AccumulatorConfig::FullVector { .. } => {
             matches!(accumulator, AccumulatorState::FullVector(_))
@@ -397,6 +400,15 @@ fn decode_aggregate_persisted_accumulator(
     config: &AccumulatorConfig,
     persisted: &JsonValue,
 ) -> Result<AccumulatorState, EngineError> {
+    if persisted.get("kind").and_then(JsonValue::as_str) == Some("stratified") {
+        let state = AccumulatorState::from_json(persisted)?;
+        if &state.config() != config {
+            return Err(EngineError::build(
+                "stratified history configuration mismatch",
+            ));
+        }
+        return Ok(state);
+    }
     match config {
         AccumulatorConfig::Empty => Err(EngineError::build(
             "sample task expected aggregate accumulator, got empty".to_string(),
@@ -436,6 +448,17 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
         return None;
     }
     let points = match accumulator {
+        AccumulatorState::Stratified(state) => {
+            let metric = state.metric(&crate::core::AccumulatorMetricSelector {
+                name: crate::core::AccumulatorMetricName::Mean,
+                component: None,
+            })?;
+            vec![PlotPoint::timeseries(
+                metric.sample_count as f64,
+                metric.value,
+                Some(metric.uncertainty?),
+            )]
+        }
         AccumulatorState::Vector(state) => {
             let projection = &state.projection().state;
             vec![PlotPoint::timeseries(
@@ -485,7 +508,7 @@ fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     let rsd = match &accumulator {
         AccumulatorState::Vector(state) => state.rsd(),
         AccumulatorState::Gammaloop(state) => state.rsd()?,
-        _ => 0.0,
+        _ => return None,
     };
     Some(
         scalar_timeseries_panel_with_smoothing(
@@ -726,6 +749,69 @@ fn base_estimate_summary_entries(
     run_target: Option<VectorTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     match accumulator {
+        AccumulatorState::Stratified(state) => {
+            let mut entries = vec![
+                key_value("count", "Attempted samples", state.sample_count()),
+                key_value("estimator", "Estimator", "stratified"),
+                key_value("plan", "Partition ID", state.plan.id()),
+            ];
+            let means = state.mean();
+            let covariance = state.covariance();
+            let width = state.strata[0].mean.len();
+            for (j, name) in state.plan.components.iter().enumerate() {
+                if let (Some(mean), Some(cov)) = (&means, &covariance) {
+                    entries.push(estimate_entry(
+                        &format!("component_{name}_mean"),
+                        &format!("{name} Mean"),
+                        mean[j],
+                        cov[j * width + j].max(0.).sqrt(),
+                    ));
+                } else {
+                    entries.push(key_value(
+                        &format!("component_{name}_mean"),
+                        &format!("{name} Mean"),
+                        "insufficient stratum coverage",
+                    ));
+                }
+            }
+            for (k, stratum) in state.strata.iter().enumerate() {
+                entries.push(key_value(
+                    &format!("stratum_{k}_attempts"),
+                    &format!("Stratum {k} attempts"),
+                    stratum.attempts,
+                ));
+                entries.push(key_value(
+                    &format!("stratum_{k}_matches"),
+                    &format!("Stratum {k} matches"),
+                    stratum.matches,
+                ));
+                entries.push(key_value(
+                    &format!("stratum_{k}_probability"),
+                    &format!("Stratum {k} probability"),
+                    state.plan.probabilities.as_ref().unwrap()[k],
+                ));
+                for (j, name) in state.plan.components.iter().enumerate() {
+                    if stratum.attempts >= 2 {
+                        entries.push(estimate_entry(
+                            &format!("stratum_{k}_{name}"),
+                            &format!("Stratum {k} {name}"),
+                            stratum.mean[j],
+                            (stratum.m2[j * width + j].max(0.)
+                                / (stratum.attempts as f64 * (stratum.attempts - 1) as f64))
+                                .sqrt(),
+                        ));
+                    }
+                }
+                if stratum.matches == 0 {
+                    entries.push(key_value(
+                        &format!("stratum_{k}_warning"),
+                        &format!("Stratum {k} warning"),
+                        "No matches observed; this does not establish a zero integral",
+                    ));
+                }
+            }
+            entries
+        }
         AccumulatorState::Empty(_) => vec![key_value("count", "Samples in this accumulator", 0)],
         AccumulatorState::Vector(state) => {
             let mut entries = vec![
@@ -2183,5 +2269,41 @@ mod tests {
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0]["label"], "3");
         assert_eq!(projected[0]["value"], 3.0);
+    }
+}
+
+#[cfg(test)]
+mod stratification_panels {
+    use super::*;
+    use crate::core::{StratificationConfig, StratificationPlan};
+    use crate::evaluation::accumulator::StratifiedAccumulatorState;
+    #[test]
+    fn stratified_history_retains_estimator_identity_and_shows_zero_accounting() {
+        let config = AccumulatorConfig::scalar();
+        let plan = StratificationPlan {
+            proposal_id: "history".into(),
+            partition: StratificationConfig::Voronoi {
+                centers: vec![vec![-1.], vec![1.]],
+                scales: None,
+            },
+            probabilities: Some(vec![0.5, 0.5]),
+            components: vec!["value".into()],
+        };
+        let mut state = StratifiedAccumulatorState::new(plan, config.clone()).unwrap();
+        for _ in 0..16 {
+            state.push(0, &[0.], 2., false).unwrap();
+            state.push(1, &[1.], 2., true).unwrap();
+        }
+        let state = AccumulatorState::Stratified(Box::new(state));
+        let persisted = state.to_persistent_json().unwrap();
+        let restored = decode_aggregate_persisted_accumulator(&config, &persisted).unwrap();
+        assert_eq!(restored.kind_str(), "stratified");
+        let entries = serde_json::to_value(base_estimate_summary_entries(&restored, None))
+            .unwrap()
+            .to_string();
+        assert!(entries.contains("Stratum 0 attempts"));
+        assert!(entries.contains("No matches observed"));
+        assert!(rsd_history_panel(restored.clone()).is_none());
+        assert!(ess_history_panel(restored).is_none());
     }
 }

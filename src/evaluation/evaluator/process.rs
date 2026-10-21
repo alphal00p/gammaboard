@@ -85,6 +85,22 @@ impl Evaluator for ProcessEvaluator {
         }
     }
 
+    fn eval_values(
+        &mut self,
+        batch: &Batch,
+        components: &[String],
+    ) -> Result<Vec<f64>, EngineError> {
+        if !matches!(&self.worker.output, ProcessOutput::Values { .. })
+            || self.worker.output.components() != components
+        {
+            return Err(EngineError::invalid_input(
+                "stratification requires matching per-sample evaluator values",
+            ));
+        }
+        self.worker
+            .eval_batch(&pack_eval_inputs(batch, &self.worker.domain), batch.len())
+    }
+
     fn eval_batch(
         &mut self,
         batch: &Batch,

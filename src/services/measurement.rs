@@ -276,6 +276,15 @@ fn extract_central_value_metrics(
     source_task: &RunTask,
 ) -> Result<Vec<MeasurementResult>, ApiError> {
     let selectors = match accumulator {
+        AccumulatorState::Stratified(state) => state
+            .plan
+            .components
+            .iter()
+            .map(|name| AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Mean,
+                component: Some(name.clone()),
+            })
+            .collect(),
         AccumulatorState::Vector(vector) => vector
             .components
             .iter()
@@ -335,6 +344,7 @@ mod tests {
             name: name.to_string(),
             sequence_nr,
             task: RunTaskSpec::Sample {
+                estimator: crate::core::Estimator::Pooled,
                 publish_result: true,
                 stop_condition: SampleStopCondition {
                     max_samples: Some(100),

@@ -132,6 +132,7 @@ mod tests {
     #[test]
     fn saved_sampler_roundtrip_preserves_next_draw_and_rejects_invalid_envelopes() {
         let config = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                 params: Default::default(),
             },
@@ -163,6 +164,7 @@ mod tests {
     #[test]
     fn fresh_configuration_and_pending_feedback_restore_are_distinct() {
         let config = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                 params: crate::sampling::NaiveMonteCarloSamplerParams {
                     seed: 19,
@@ -184,6 +186,7 @@ mod tests {
         restored.feedback(&[1.; 7]).unwrap();
         assert_eq!(original.generate(5).unwrap(), restored.generate(5).unwrap());
         let changed = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
                 params: crate::sampling::NaiveMonteCarloSamplerParams {
                     seed: 27,
@@ -217,6 +220,7 @@ mod tests {
         use crate::sampling::{HavanaInferenceSamplerParams, HavanaSamplerParams, StageHandoff};
         let domain = Domain::continuous(2);
         let training = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaTraining {
                 params: HavanaSamplerParams {
                     seed: 3,
@@ -232,6 +236,7 @@ mod tests {
         let source = training.snapshot(&mut *sampler).unwrap();
         assert!(source.state.get("samples_for_update").is_none());
         let inference = |seed| SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaInference {
                 params: HavanaInferenceSamplerParams { seed: Some(seed) },
             },

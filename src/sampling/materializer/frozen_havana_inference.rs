@@ -79,6 +79,7 @@ mod tests {
             final_training_rate: 0.01,
         };
         let training_config = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaTraining { params },
             materializer: None,
             transforms: None,
@@ -104,6 +105,7 @@ mod tests {
         assert!(HavanaInferenceMaterializer::new(Some(invalid_handoff)).is_err());
         assert!(
             SamplingConfig {
+                stratification: None,
                 sampler: crate::core::SamplerConfig::HavanaInference {
                     params: Default::default()
                 },
@@ -114,6 +116,7 @@ mod tests {
             .is_err()
         );
         let mut inference = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaInference {
                 params: HavanaInferenceSamplerParams::default(),
             },
@@ -133,6 +136,7 @@ mod tests {
             .and_then(|generated| generated.into_batch())
             .expect("produce inference batch");
         let snapshot = SamplingConfig {
+            stratification: None,
             sampler: crate::core::SamplerConfig::HavanaInference {
                 params: Default::default(),
             },

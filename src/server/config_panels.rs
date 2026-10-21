@@ -109,7 +109,11 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplingConfig {
             vec![
                 key_value("implementation", "Implementation", self.kind_str()),
                 key_value("effective_source", "Effective Source", ctx.provenance),
-                key_value("domain", "Domain", summarize_domain(ctx.domain)),
+                key_value(
+                    "domain",
+                    "Sampling Domain",
+                    summarize_domain(&self.sampling_domain(ctx.domain)?),
+                ),
                 key_value(
                     "snapshot_interval_ms",
                     "Snapshot Interval (ms)",
