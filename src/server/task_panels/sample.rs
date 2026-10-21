@@ -744,74 +744,94 @@ fn diagnostic_ratio(value: f64) -> JsonValue {
     }
 }
 
+fn stratified_summary_entries(
+    state: &crate::evaluation::accumulator::StratifiedAccumulatorState,
+) -> Vec<crate::server::panels::KeyValueEntry> {
+    let mut entries = vec![
+        key_value("count", "Attempted samples", state.sample_count()),
+        key_value("estimator", "Estimator", "stratified"),
+        key_value("plan", "Partition ID", state.plan.id()),
+    ];
+    let means = state.mean();
+    let covariance = state.covariance();
+    let width = state.strata[0].mean.len();
+    for (j, name) in state.plan.components.iter().enumerate() {
+        entries.push(stratified_estimate_entry(
+            &format!("component_{name}_mean"),
+            &format!("{name} Mean"),
+            means.as_ref().map(|m| m[j]),
+            covariance
+                .as_ref()
+                .map(|c| c[j * width + j].max(0.0).sqrt()),
+        ));
+    }
+    if !state.uncertainty_ready() {
+        entries.push(key_value(
+            "uncertainty_status",
+            "Uncertainty",
+            "Unavailable: insufficient stratum coverage",
+        ));
+    }
+    for (k, stratum) in state.strata.iter().enumerate() {
+        entries.extend([
+            key_value(
+                &format!("stratum_{k}_attempts"),
+                &format!("Stratum {k} attempts"),
+                stratum.attempts,
+            ),
+            key_value(
+                &format!("stratum_{k}_matches"),
+                &format!("Stratum {k} matches"),
+                stratum.matches,
+            ),
+            key_value(
+                &format!("stratum_{k}_probability"),
+                &format!("Stratum {k} probability"),
+                state.plan.probabilities.as_ref().unwrap()[k],
+            ),
+        ]);
+        for (j, name) in state.plan.components.iter().enumerate() {
+            entries.push(stratified_estimate_entry(
+                &format!("stratum_{k}_{name}"),
+                &format!("Stratum {k} {name}"),
+                (stratum.attempts > 0).then_some(stratum.mean[j]),
+                stratum.standard_error(j),
+            ));
+        }
+        if !stratum.uncertainty_ready() {
+            entries.push(key_value(
+                &format!("stratum_{k}_warning"),
+                &format!("Stratum {k} uncertainty"),
+                if stratum.matches == 0 {
+                    "Unavailable: no matches observed; this does not establish a zero integral"
+                } else {
+                    "Unavailable: insufficient stratum coverage"
+                },
+            ));
+        }
+    }
+    entries
+}
+
+fn stratified_estimate_entry(
+    key: &str,
+    label: &str,
+    mean: Option<f64>,
+    error: Option<f64>,
+) -> crate::server::panels::KeyValueEntry {
+    match (mean, error) {
+        (Some(mean), Some(error)) => estimate_entry(key, label, mean, error),
+        (Some(mean), None) => key_value(key, label, mean),
+        (None, _) => key_value(key, label, "unavailable: unsampled stratum"),
+    }
+}
+
 fn base_estimate_summary_entries(
     accumulator: &AccumulatorState,
     run_target: Option<VectorTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     match accumulator {
-        AccumulatorState::Stratified(state) => {
-            let mut entries = vec![
-                key_value("count", "Attempted samples", state.sample_count()),
-                key_value("estimator", "Estimator", "stratified"),
-                key_value("plan", "Partition ID", state.plan.id()),
-            ];
-            let means = state.mean();
-            let covariance = state.covariance();
-            let width = state.strata[0].mean.len();
-            for (j, name) in state.plan.components.iter().enumerate() {
-                if let (Some(mean), Some(cov)) = (&means, &covariance) {
-                    entries.push(estimate_entry(
-                        &format!("component_{name}_mean"),
-                        &format!("{name} Mean"),
-                        mean[j],
-                        cov[j * width + j].max(0.).sqrt(),
-                    ));
-                } else {
-                    entries.push(key_value(
-                        &format!("component_{name}_mean"),
-                        &format!("{name} Mean"),
-                        "insufficient stratum coverage",
-                    ));
-                }
-            }
-            for (k, stratum) in state.strata.iter().enumerate() {
-                entries.push(key_value(
-                    &format!("stratum_{k}_attempts"),
-                    &format!("Stratum {k} attempts"),
-                    stratum.attempts,
-                ));
-                entries.push(key_value(
-                    &format!("stratum_{k}_matches"),
-                    &format!("Stratum {k} matches"),
-                    stratum.matches,
-                ));
-                entries.push(key_value(
-                    &format!("stratum_{k}_probability"),
-                    &format!("Stratum {k} probability"),
-                    state.plan.probabilities.as_ref().unwrap()[k],
-                ));
-                for (j, name) in state.plan.components.iter().enumerate() {
-                    if stratum.attempts >= 2 {
-                        entries.push(estimate_entry(
-                            &format!("stratum_{k}_{name}"),
-                            &format!("Stratum {k} {name}"),
-                            stratum.mean[j],
-                            (stratum.m2[j * width + j].max(0.)
-                                / (stratum.attempts as f64 * (stratum.attempts - 1) as f64))
-                                .sqrt(),
-                        ));
-                    }
-                }
-                if stratum.matches == 0 {
-                    entries.push(key_value(
-                        &format!("stratum_{k}_warning"),
-                        &format!("Stratum {k} warning"),
-                        "No matches observed; this does not establish a zero integral",
-                    ));
-                }
-            }
-            entries
-        }
+        AccumulatorState::Stratified(state) => stratified_summary_entries(state),
         AccumulatorState::Empty(_) => vec![key_value("count", "Samples in this accumulator", 0)],
         AccumulatorState::Vector(state) => {
             let mut entries = vec![
@@ -2290,7 +2310,7 @@ mod stratification_panels {
             components: vec!["value".into()],
         };
         let mut state = StratifiedAccumulatorState::new(plan, config.clone()).unwrap();
-        for _ in 0..16 {
+        for _ in 0..64 {
             state.push(0, &[0.], 2., false).unwrap();
             state.push(1, &[1.], 2., true).unwrap();
         }
@@ -2298,11 +2318,24 @@ mod stratification_panels {
         let persisted = state.to_persistent_json().unwrap();
         let restored = decode_aggregate_persisted_accumulator(&config, &persisted).unwrap();
         assert_eq!(restored.kind_str(), "stratified");
-        let entries = serde_json::to_value(base_estimate_summary_entries(&restored, None))
-            .unwrap()
-            .to_string();
-        assert!(entries.contains("Stratum 0 attempts"));
-        assert!(entries.contains("No matches observed"));
+        let entries = base_estimate_summary_entries(&restored, None);
+        let value = |key: &str| &entries.iter().find(|entry| entry.key == key).unwrap().value;
+        assert_eq!(value("component_value_mean"), &json!(1.0));
+        assert_eq!(value("stratum_0_value"), &json!(0.0));
+        assert_eq!(value("stratum_1_value")["error"], json!(0.0));
+        assert!(
+            value("stratum_0_warning")
+                .as_str()
+                .unwrap()
+                .contains("no matches observed")
+        );
+        assert!(
+            value("uncertainty_status")
+                .as_str()
+                .unwrap()
+                .contains("Unavailable")
+        );
+        assert!(real_estimate_history_panel(restored.clone()).is_none());
         assert!(rsd_history_panel(restored.clone()).is_none());
         assert!(ess_history_panel(restored).is_none());
     }

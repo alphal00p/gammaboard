@@ -11,7 +11,7 @@ The source branch is `stratification`. Database model 3, checkpoint/saved sample
 model 2, queue GBQ2 and process protocol v7 deliberately require matching current
 components. Existing databases/demos were preserved; validation used fresh databases.
 
-## Checks
+## Initial implementation checks
 
 - 362 library tests passed, followed by the additional all-miss convergence guard
   regression. One pre-existing library test remains intentionally ignored.
@@ -63,3 +63,41 @@ unequal-probability tests or the independent repeated-sampling calibration test.
 
 Raw results, reproducible commands, plots, bootstrap intervals and all caveats are
 in the [A/B report](../../benchmarks/stratification/README.md).
+
+## Follow-up hardening
+
+A review found that the first coverage guard applied only to the sampling runner's
+own stopping decision. The measurement API could still publish zero uncertainty
+from an all-miss stratum, which a campaign could consume. Coverage now gates the
+accumulator's covariance itself, and per-stratum UI errors use that same rule.
+Regression checks cover mean/error publication, persisted history, campaign
+combination/allocation and error-based convergence.
+
+The new process-pipeline test uses an original discrete branch plus a stratum axis,
+a materializer mapping `u -> 2u` with Jacobian 2, a transform mapping `z -> 3z+1`
+with Jacobian 3, and evaluator `(d+1)*x`. It checks that only the physical branch
+reaches transforms/evaluation, that factors are applied exactly once, and that
+both stratum moments agree with an independent reference stream. Its exact integral
+is 72, split into 25.5 and 46.5 by the chosen Voronoi cells.
+
+That test exposed a real uniform-sampler defect: discrete coordinates were sampled
+but emitted weights were always 1. Uniform generation now includes all discrete
+selection factors, with a nested-domain regression. The earlier Havana A/B
+experiment is unaffected; old uniform runs over nontrivial discrete domains need
+to be rerun rather than mixed with corrected weights.
+
+The original pause test could satisfy its checkpoint condition after completion.
+It now requires partial progress on an active task and asserts a partial saved
+checkpoint. A separate SIGKILL test interrupts both sampler and evaluator with
+queued/claimed work, resumes from the frozen plan, and compares final attempt/match
+counts, means and central moments against an independent replay of the saved grid.
+
+Cleanup centralized readiness and shape validation, removed temporary accumulator
+allocations from validation, extracted stratified UI rendering, consolidated test
+polling/snapshot helpers, and replaced the completed implementation plan with a
+short rationale linking to the authoritative specification.
+
+Follow-up validation passed all 365 library tests (one existing ignored test) and
+37 backend workflow tests, including all four stratification cases. Strict
+all-target/all-feature Clippy, Rust formatting, fixture syntax, documentation links
+and changed-file whitespace checks also passed.

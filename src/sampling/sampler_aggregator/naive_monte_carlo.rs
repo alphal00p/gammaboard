@@ -153,8 +153,9 @@ impl Sampler for NaiveMonteCarloSamplerAggregator {
         for _ in 0..nr_samples {
             discrete.clear();
             continuous.clear();
-            sample_domain_point(&self.domain, &mut self.rng, &mut discrete, &mut continuous)?;
-            builder.push(&discrete, &continuous, 1.0);
+            let weight =
+                sample_domain_point(&self.domain, &mut self.rng, &mut discrete, &mut continuous)?;
+            builder.push(&discrete, &continuous, weight);
         }
         self.produced_samples += nr_samples as u64;
         if self.params.training_window_samples > 0 {
@@ -306,8 +307,8 @@ fn sample_domain_point(
     rng: &mut impl Rng,
     discrete: &mut Vec<i64>,
     continuous: &mut Vec<f64>,
-) -> Result<(), EngineError> {
-    match domain {
+) -> Result<f64, EngineError> {
+    let weight = match domain {
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,
@@ -323,6 +324,9 @@ fn sample_domain_point(
                     .map(|cardinality| rng.random_range(0..*cardinality) as i64),
             );
             continuous.extend((0..*continuous_dims).map(|_| rng.random::<f64>()));
+            discrete_cardinalities
+                .iter()
+                .fold(1.0, |weight, n| weight * (*n as f64))
         }
         Domain::Discrete { branches, .. } => {
             if branches.is_empty() {
@@ -332,10 +336,13 @@ fn sample_domain_point(
             }
             let branch = &branches[rng.random_range(0..branches.len())];
             discrete.push(branch.index as i64);
-            sample_domain_point(&branch.domain, rng, discrete, continuous)?;
+            branches.len() as f64 * sample_domain_point(&branch.domain, rng, discrete, continuous)?
         }
+    };
+    if !weight.is_finite() {
+        return Err(EngineError::engine("uniform sampling weight overflow"));
     }
-    Ok(())
+    Ok(weight)
 }
 
 #[cfg(test)]
@@ -345,7 +352,7 @@ mod tests {
 
     #[test]
     fn flat_generation_preserves_seeded_points_and_rng_across_domain_shapes() {
-        // The original recursive, allocating algorithm is the compatibility reference.
+        // Check the seeded coordinate stream independently of the weight calculation.
         fn reference(domain: &Domain, rng: &mut impl Rng) -> (Vec<i64>, Vec<f64>) {
             match domain {
                 Domain::Rectangular {
@@ -394,7 +401,14 @@ mod tests {
             for count in [3, 51, 74] {
                 let expected = Batch::from_iter((0..count).map(|_| {
                     let (discrete, continuous) = reference(&domain, &mut rng);
-                    Point::new(continuous, discrete, 1.0)
+                    let fixed_dims = discrete
+                        .iter()
+                        .enumerate()
+                        .map(|(axis, value)| (axis, *value))
+                        .collect();
+                    let probability =
+                        discrete_subspace_probability(&domain, &fixed_dims, 0).unwrap();
+                    Point::new(continuous, discrete, 1.0 / probability)
                 }));
                 let actual = sampler
                     .generate(count)
@@ -405,6 +419,35 @@ mod tests {
                 assert_eq!(sampler.rng, rng);
             }
         }
+    }
+
+    #[test]
+    fn uniform_discrete_weights_match_counting_measure_on_each_branch() {
+        let domain = Domain::discrete(
+            None,
+            [
+                DomainBranch::new(0, Domain::rectangular_with_cardinalities(1, [2])),
+                DomainBranch::new(1, Domain::rectangular_with_cardinalities(1, [3])),
+            ],
+        );
+        let mut sampler =
+            NaiveMonteCarloSamplerAggregator::from_params_and_domain(Default::default(), &domain)
+                .unwrap();
+        let batch = sampler
+            .generate(128)
+            .unwrap()
+            .into_batch()
+            .unwrap()
+            .payload
+            .into_batch()
+            .unwrap();
+        let mut seen = [false, false];
+        for point in batch.points() {
+            let branch = point.discrete[0] as usize;
+            seen[branch] = true;
+            assert_eq!(point.total_weight(), if branch == 0 { 4.0 } else { 6.0 });
+        }
+        assert_eq!(seen, [true, true]);
     }
 
     fn sampler(window: usize) -> NaiveMonteCarloSamplerAggregator {

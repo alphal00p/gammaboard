@@ -10,6 +10,9 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
   [Tetrahedron A/B results](benchmarks/stratification/README.md) include uncertainty
   calibration and the observed finite-sample tail limitation.
 - Named real-vector Symbolica expressions and matching train/inference run cards.
+- Stratified uncertainty stays unavailable across measurements, campaigns and UI
+  until coverage is adequate; crash/replay and transformed-domain tests verify the
+  end-to-end contract. Uniform sampling now includes discrete selection weights.
 
 - Strict task/queue configuration, one tagged Symbolica source, common sampling
   pipeline configuration, and shared stopping estimates in the runner/dashboard.

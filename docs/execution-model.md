@@ -183,8 +183,11 @@ campaign coefficients are separate from those sampling weights.
 For a normalized proposal density `p` relative to the desired integration measure,
 the sampling weight is `1/p`; include volume and discrete-choice factors where
 needed. The weight returned by generation must contain the complete sampling
-correction. `global_pdf_norm()` describes PDF diagnostics and does not automatically
-rescale ordinary evaluation results.
+correction. Native uniform sampling multiplies the cardinalities of every chosen
+discrete branch/axis, including the stratum axis, into its inverse-density weight;
+it integrates the discrete sum rather than the average over labels.
+`global_pdf_norm()` describes PDF diagnostics and does not automatically rescale
+ordinary evaluation results.
 
 Materializers and transforms have no snapshot/restore callback. Their output must
 be reproducible from the supplied batch, immutable configuration, and immutable
@@ -400,10 +403,12 @@ plan without querying a newer proposal. A new inference stage gets a new identit
 and fresh statistics. The runtime relies on independent frozen sampling as a
 documented assumption, not a capability handshake.
 
-An unsampled stratum makes the combined estimate unavailable; fewer than two
-attempts makes uncertainty unavailable. Error-based stopping additionally waits
-for at least 32 attempts and two matches per stratum, while fixed budgets remain
-hard limits.
+An unsampled stratum makes the combined estimate unavailable. Covariance and
+standard errors remain unavailable until every stratum has at least 32 attempts
+and two matches. This single publication rule applies to measurements, campaign
+allocation/convergence, task stopping, live panels and restored history. Means can
+be displayed before their uncertainty is available; unavailable uncertainty is
+never encoded or displayed as zero. Fixed budgets remain hard limits.
 Zero matches are reported explicitly: even many zero observations do not establish
 that a stratum's integral is zero. Error bars assume finite second moments and may
 be unreliable before rare large contributions have been sampled. Quotas, adaptive

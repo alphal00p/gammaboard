@@ -197,7 +197,7 @@ mod tests {
         assert!(state.covariance().is_none());
     }
     #[test]
-    fn queue_plan_roundtrip_and_physical_transforms_preserve_outer_labels() {
+    fn queue_plan_roundtrip_separates_stratum_from_physical_coordinates() {
         let config = AccumulatorConfig::scalar();
         let plan = StratificationPlan {
             proposal_id: "queue".into(),

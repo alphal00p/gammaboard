@@ -14,6 +14,22 @@ pub struct StratumMoments {
     pub m2: Vec<f64>,
 }
 impl StratumMoments {
+    /// One publication rule shared by measurements, controllers and task panels.
+    pub fn uncertainty_ready(&self) -> bool {
+        self.attempts >= 32 && self.matches >= 2
+    }
+
+    pub fn standard_error(&self, component: usize) -> Option<f64> {
+        if !self.uncertainty_ready() || component >= self.mean.len() {
+            return None;
+        }
+        Some(
+            (self.m2[component * self.mean.len() + component].max(0.0)
+                / (self.attempts as f64 * (self.attempts - 1) as f64))
+                .sqrt(),
+        )
+    }
+
     fn new(width: usize) -> Self {
         Self {
             attempts: 0,
@@ -118,9 +134,13 @@ impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
 }
 
 impl StratifiedAccumulatorState {
-    pub fn new(plan: StratificationPlan, config: AccumulatorConfig) -> Result<Self, EngineError> {
+    fn validated_width(
+        plan: &StratificationPlan,
+        config: &AccumulatorConfig,
+    ) -> Result<usize, EngineError> {
         plan.validate()?;
-        plan.partition.validate_accumulator(&config)?;
+        config.validate().map_err(EngineError::invalid_input)?;
+        plan.partition.validate_accumulator(config)?;
         if plan.probabilities.is_none() {
             return Err(EngineError::invalid_input(
                 "stratified accumulator needs frozen probabilities",
@@ -131,14 +151,18 @@ impl StratifiedAccumulatorState {
                 "stratification component mismatch",
             ));
         }
-        let width = plan.components.len()
+        Ok(plan.components.len()
             + usize::from(matches!(
-                &config,
+                config,
                 AccumulatorConfig::Vector {
                     training_projection: TrainingProjection::Norm,
                     ..
                 }
-            ));
+            )))
+    }
+
+    pub fn new(plan: StratificationPlan, config: AccumulatorConfig) -> Result<Self, EngineError> {
+        let width = Self::validated_width(&plan, &config)?;
         let strata = vec![StratumMoments::new(width); plan.partition.centers().len()];
         Ok(Self {
             plan,
@@ -186,11 +210,10 @@ impl StratifiedAccumulatorState {
         self.strata.iter().map(|s| s.attempts as i64).sum()
     }
     pub fn validate(&self) -> Result<(), EngineError> {
-        let expected = Self::new(self.plan.clone(), self.config.clone())?;
-        if self.strata.len() != expected.strata.len() {
+        let width = Self::validated_width(&self.plan, &self.config)?;
+        if self.strata.len() != self.plan.partition.centers().len() {
             return Err(EngineError::eval("incomplete stratum state"));
         }
-        let width = expected.strata[0].mean.len();
         let mut count = 0u64;
         for s in &self.strata {
             if s.mean.len() != width
@@ -234,7 +257,7 @@ impl StratifiedAccumulatorState {
         Some(mean)
     }
     pub fn covariance(&self) -> Option<Vec<f64>> {
-        if self.strata.iter().any(|s| s.attempts < 2) {
+        if !self.uncertainty_ready() {
             return None;
         }
         let mut covariance = vec![0.; self.strata[0].m2.len()];
@@ -289,10 +312,8 @@ impl StratifiedAccumulatorState {
             sample_count: self.sample_count(),
         })
     }
-    pub fn error_coverage_ready(&self) -> bool {
-        self.strata
-            .iter()
-            .all(|s| s.attempts >= 32 && s.matches >= 2)
+    pub fn uncertainty_ready(&self) -> bool {
+        self.strata.iter().all(StratumMoments::uncertainty_ready)
     }
 }
 
@@ -317,19 +338,46 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn empty_hit_history_cannot_trigger_error_convergence() {
+    fn insufficient_coverage_never_publishes_zero_uncertainty() {
         let mut state = empty();
         for _ in 0..64 {
             state.push(0, &[0., 0.], 4., false).unwrap();
             state.push(1, &[0., 0.], 4. / 3., false).unwrap();
         }
-        assert!(state.covariance().is_some());
-        assert!(!state.error_coverage_ready());
+        assert!(state.covariance().is_none());
+        assert!(!state.uncertainty_ready());
+        let selector = AccumulatorMetricSelector {
+            name: AccumulatorMetricName::Mean,
+            component: Some("x".into()),
+        };
+        let mean = state.metric(&selector).unwrap();
+        assert_eq!(mean.value, 0.0);
+        assert_eq!(mean.uncertainty, None);
+        assert!(
+            state
+                .metric(&AccumulatorMetricSelector {
+                    name: AccumulatorMetricName::Error,
+                    ..selector.clone()
+                })
+                .is_none()
+        );
+        assert!(
+            state
+                .metric(&AccumulatorMetricSelector {
+                    name: AccumulatorMetricName::RelativeError,
+                    ..selector
+                })
+                .is_none()
+        );
+        assert_eq!(state.strata[0].standard_error(0), None);
+        let restored: StratifiedAccumulatorState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        assert!(restored.covariance().is_none());
         for _ in 0..2 {
             state.push(0, &[1., 2.], 4., true).unwrap();
             state.push(1, &[-1., -2.], 4. / 3., true).unwrap();
         }
-        assert!(state.error_coverage_ready());
+        assert!(state.uncertainty_ready());
     }
     #[test]
     fn unequal_probabilities_misses_and_parallel_covariance_are_normalized_once() {
@@ -342,26 +390,44 @@ mod tests {
             (0, [0., 0.], 4., false),
             (1, [-1., -2.], 4. / 3., true),
             (1, [0., 0.], 4. / 3., false),
-        ] {
+        ]
+        .into_iter()
+        .cycle()
+        .take(64)
+        {
             whole.push(label, &value, weight, matched).unwrap();
             let mut one = empty();
             one.push(label, &value, weight, matched).unwrap();
             merged.merge(one).unwrap();
         }
-        assert_eq!(whole.sample_count(), 4);
-        assert_eq!(whole.strata[0].matches, 1);
+        assert_eq!(whole.sample_count(), 64);
+        assert_eq!(whole.strata[0].matches, 16);
         assert_eq!(whole.mean(), merged.mean());
-        assert_eq!(whole.covariance(), merged.covariance());
+        for (left, right) in whole
+            .covariance()
+            .unwrap()
+            .iter()
+            .zip(merged.covariance().unwrap())
+        {
+            assert!((left - right).abs() < 1e-14);
+        }
         let mean = whole.mean().unwrap();
         assert_eq!(&mean[..2], &[0., 0.]);
         let covariance = whole.covariance().unwrap();
-        assert!((covariance[0] - 0.5).abs() < 1e-14);
-        assert!((covariance[1] - 1.).abs() < 1e-14);
-        assert!((covariance[4] - 2.).abs() < 1e-14);
+        assert!((covariance[0] - 0.5 / 31.).abs() < 1e-14);
+        assert!((covariance[1] - 1. / 31.).abs() < 1e-14);
+        assert!((covariance[4] - 2. / 31.).abs() < 1e-14);
         let roundtrip: StratifiedAccumulatorState =
             serde_json::from_str(&serde_json::to_string(&whole).unwrap()).unwrap();
         roundtrip.validate().unwrap();
-        assert_eq!(roundtrip.covariance(), whole.covariance());
+        for (left, right) in whole
+            .covariance()
+            .unwrap()
+            .iter()
+            .zip(roundtrip.covariance().unwrap())
+        {
+            assert!((left - right).abs() < 1e-14);
+        }
         let mut incompatible = empty();
         incompatible.plan.probabilities = Some(vec![0.5, 0.5]);
         let before = serde_json::to_value(&whole).unwrap();

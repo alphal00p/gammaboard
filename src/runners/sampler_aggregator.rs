@@ -664,7 +664,7 @@ where
             Some(self.completed_samples_per_second),
         )
         .map_err(RunnerError::Engine)?;
-        let coverage_ready = !matches!(&self.observable_state, AccumulatorState::Stratified(s) if !s.error_coverage_ready());
+        let coverage_ready = !matches!(&self.observable_state, AccumulatorState::Stratified(s) if !s.uncertainty_ready());
         let min_samples_reached = coverage_ready
             && stop_condition
                 .min_samples

@@ -753,6 +753,63 @@ mod tests {
     }
 
     #[test]
+    fn insufficient_stratum_coverage_cannot_converge_a_campaign() {
+        use crate::core::{
+            AccumulatorConfig, AccumulatorMetricSelector, StratificationConfig, StratificationPlan,
+        };
+        use crate::evaluation::accumulator::StratifiedAccumulatorState;
+        let plan = StratificationPlan {
+            proposal_id: "campaign".into(),
+            partition: StratificationConfig::Voronoi {
+                centers: vec![vec![0.], vec![1.]],
+                scales: None,
+            },
+            probabilities: Some(vec![0.5, 0.5]),
+            components: vec!["value".into()],
+        };
+        let mut state = StratifiedAccumulatorState::new(plan, AccumulatorConfig::scalar()).unwrap();
+        for _ in 0..64 {
+            state.push(0, &[0.], 2., false).unwrap();
+            state.push(1, &[1.], 2., true).unwrap();
+        }
+        let selector = AccumulatorMetricSelector {
+            name: AccumulatorMetricName::Mean,
+            component: Some("value".into()),
+        };
+        let measurement = state.metric(&selector).unwrap();
+        assert_eq!(measurement.value, 1.0);
+        assert_eq!(measurement.uncertainty, None);
+        let stop = IntegrationCampaignStopCondition {
+            min_total_samples: 0,
+            max_total_samples: None,
+            absolute_error: Some(1.0),
+            relative_error: None,
+        };
+        assert!(!campaign_should_stop(
+            std::slice::from_ref(&measurement),
+            128,
+            true,
+            &stop
+        ));
+        let mut child = child(1, 1.0, 1.0, 0.0, 128);
+        child.measurement = Some(TaskMeasurementOutput::Completed {
+            results: vec![measurement],
+        });
+        assert!(
+            child
+                .score(IntegrationCampaignAllocationAlgorithm::LargestVariance)
+                .is_none()
+        );
+        assert!(combine_measurements(&[child]).is_none());
+        for _ in 0..2 {
+            state.push(0, &[0.], 2., true).unwrap();
+        }
+        let measurement = state.metric(&selector).unwrap();
+        assert_eq!(measurement.uncertainty, Some(0.0));
+        assert!(campaign_should_stop(&[measurement], 130, true, &stop));
+    }
+
+    #[test]
     fn error_target_waits_for_every_child_pilot() {
         let results = [MeasurementResult {
             name: AccumulatorMetricName::Mean,
