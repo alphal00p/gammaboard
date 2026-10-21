@@ -1,9 +1,6 @@
-use crate::core::{AccumulatorConfig, BuildError, EngineError};
+use crate::core::EngineError;
 use crate::sampling::latent_batch::IndexedBatchBuilder;
-use crate::sampling::{
-    DiscreteSubspace, Generation, LatentBatchSpec, PdfPoint, SamplerAggregator,
-    SamplerAggregatorSnapshot,
-};
+use crate::sampling::{DiscreteSubspace, Generation, LatentBatch, PdfPoint, Sampler};
 use crate::utils::domain::Domain;
 use crate::utils::synthetic_timing::{TimingModel, TimingStats};
 use rand::Rng;
@@ -13,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NaiveMonteCarloSamplerAggregator {
     domain: Domain,
+    #[serde(skip)]
     params: NaiveMonteCarloSamplerParams,
     rng: crate::utils::rng::SerializableMonteCarloRng,
     produced_samples: u64,
@@ -46,7 +44,7 @@ impl NaiveMonteCarloSamplerAggregator {
     pub(crate) fn from_params_and_domain(
         params: NaiveMonteCarloSamplerParams,
         domain: &Domain,
-    ) -> Result<Self, BuildError> {
+    ) -> Result<Self, EngineError> {
         params.generation_timing.validate()?;
         params.ingest_timing.validate()?;
         params.update_timing.validate()?;
@@ -68,7 +66,12 @@ impl NaiveMonteCarloSamplerAggregator {
         })
     }
 
-    pub(crate) fn from_snapshot(mut snapshot: Self, domain: &Domain) -> Result<Self, BuildError> {
+    pub(crate) fn from_snapshot(
+        params: NaiveMonteCarloSamplerParams,
+        mut snapshot: Self,
+        domain: &Domain,
+    ) -> Result<Self, EngineError> {
+        snapshot.params = params;
         snapshot.validate_domain(domain)?;
         snapshot.params.generation_timing.validate()?;
         snapshot.params.ingest_timing.validate()?;
@@ -78,7 +81,7 @@ impl NaiveMonteCarloSamplerAggregator {
             && (snapshot.window_returned >= window
                 || snapshot.pending_training_samples > window - snapshot.window_returned)
         {
-            return Err(BuildError::build(
+            return Err(EngineError::build(
                 "invalid synthetic training window snapshot",
             ));
         }
@@ -100,10 +103,10 @@ impl NaiveMonteCarloSamplerAggregator {
     }
 }
 
-impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+impl Sampler for NaiveMonteCarloSamplerAggregator {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
         if domain != &self.domain {
-            return Err(BuildError::build(format!(
+            return Err(EngineError::build(format!(
                 "naive_monte_carlo sampler domain mismatch: expected {:?}, got {:?}",
                 self.domain, domain
             )));
@@ -111,14 +114,12 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         Ok(())
     }
 
-    fn snapshot(&mut self) -> Result<SamplerAggregatorSnapshot, EngineError> {
+    fn snapshot(&mut self) -> Result<serde_json::Value, EngineError> {
         if self.barrier_since.is_some() {
             self.flush_barrier_time();
             self.barrier_since = Some(std::time::Instant::now());
         }
-        Ok(SamplerAggregatorSnapshot::NaiveMonteCarlo {
-            raw: serde_json::to_value(&*self)?,
-        })
+        Ok(serde_json::to_value(&*self)?)
     }
 
     fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
@@ -163,9 +164,8 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
             }
         }
         Ok(Generation::batch(
-            LatentBatchSpec {
+            LatentBatch {
                 nr_samples,
-                accumulator: AccumulatorConfig::scalar(),
                 payload: builder.finish(),
             },
             training_remaining,
@@ -201,7 +201,7 @@ impl SamplerAggregator for NaiveMonteCarloSamplerAggregator {
         Ok(())
     }
 
-    fn get_diagnostics(&mut self) -> serde_json::Value {
+    fn diagnostics(&mut self) -> serde_json::Value {
         serde_json::json!({"synthetic":true,"produced_samples":self.produced_samples,"returned_samples":self.returned_samples,
             "training_updates":self.updates,"training_barrier_seconds":self.training_barrier_seconds + self.barrier_since.map_or(0.0, |start| start.elapsed().as_secs_f64()),"training_window_samples":self.params.training_window_samples,
             "pending_training_samples":self.pending_training_samples,"window_returned":self.window_returned,
@@ -246,13 +246,6 @@ fn discrete_subspace_probability(
     depth: usize,
 ) -> Result<f64, EngineError> {
     match domain {
-        Domain::Continuous { .. } => {
-            if fixed_dims.keys().any(|dim| *dim >= depth) {
-                Ok(0.0)
-            } else {
-                Ok(1.0)
-            }
-        }
         Domain::Rectangular {
             discrete_cardinalities,
             ..
@@ -315,9 +308,6 @@ fn sample_domain_point(
     continuous: &mut Vec<f64>,
 ) -> Result<(), EngineError> {
     match domain {
-        Domain::Continuous { dims } => {
-            continuous.extend((0..*dims).map(|_| rng.random::<f64>()));
-        }
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,
@@ -358,7 +348,6 @@ mod tests {
         // The original recursive, allocating algorithm is the compatibility reference.
         fn reference(domain: &Domain, rng: &mut impl Rng) -> (Vec<i64>, Vec<f64>) {
             match domain {
-                Domain::Continuous { dims } => (vec![], (0..*dims).map(|_| rng.random()).collect()),
                 Domain::Rectangular {
                     discrete_cardinalities,
                     continuous_dims,
@@ -403,17 +392,16 @@ mod tests {
             .unwrap();
             let mut rng = sampler.rng.clone();
             for count in [3, 51, 74] {
-                let expected = Batch::from_points((0..count).map(|_| {
+                let expected = Batch::from_iter((0..count).map(|_| {
                     let (discrete, continuous) = reference(&domain, &mut rng);
                     Point::new(continuous, discrete, 1.0)
-                }))
-                .unwrap();
+                }));
                 let actual = sampler
                     .generate(count)
                     .and_then(|generated| generated.into_batch())
                     .unwrap();
                 assert_eq!(actual.payload.as_batch().unwrap(), expected);
-                assert_eq!(actual, LatentBatchSpec::from_batch(&expected));
+                assert_eq!(actual, LatentBatch::from_batch(&expected));
                 assert_eq!(sampler.rng, rng);
             }
         }
@@ -447,10 +435,9 @@ mod tests {
         );
         s.feedback(&[1.0; 4]).unwrap();
         assert_eq!(s.updates, 0);
-        let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = s.snapshot().unwrap() else {
-            unreachable!()
-        };
+        let raw = s.snapshot().unwrap();
         let mut restored = NaiveMonteCarloSamplerAggregator::from_snapshot(
+            s.params.clone(),
             serde_json::from_value(raw).unwrap(),
             &s.domain,
         )
@@ -481,13 +468,12 @@ mod tests {
             .and_then(|generated| generated.into_batch())
             .unwrap();
         s.training_barrier_seconds = 3.0;
-        let SamplerAggregatorSnapshot::NaiveMonteCarlo { raw } = s.snapshot().unwrap() else {
-            unreachable!()
-        };
+        let raw = s.snapshot().unwrap();
         assert!(raw.get("barrier_since").is_none());
         let saved = raw["training_barrier_seconds"].as_f64().unwrap();
         assert!(saved >= 3.0);
         let mut restored = NaiveMonteCarloSamplerAggregator::from_snapshot(
+            s.params.clone(),
             serde_json::from_value(raw).unwrap(),
             &s.domain,
         )

@@ -1,84 +1,88 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::{AccumulatorConfig, BuildError, EvalError};
+use crate::core::{AccumulatorConfig, EngineError};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
 };
 use crate::process_runtime::{build_process_worker_command, default_process_args};
-use crate::process_worker::{
-    PROCESS_PROTOCOL, ProcessWorker, default_process_shutdown_grace_seconds,
-};
+use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker};
 use crate::utils::domain::Domain;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ProcessAccumulatorKind {
-    #[default]
-    Vector,
-    FullVector,
+/// The callback's output contract, independent of the task's storage policy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProcessOutput {
+    Values {
+        #[serde(default = "default_components")]
+        components: Vec<String>,
+    },
     Gammaloop,
+}
+impl Default for ProcessOutput {
+    fn default() -> Self {
+        Self::Values {
+            components: default_components(),
+        }
+    }
+}
+impl ProcessOutput {
+    fn components(&self) -> &[String] {
+        match self {
+            Self::Values { components } => components,
+            Self::Gammaloop => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessEvaluatorParams {
-    pub command: Vec<String>,
-    pub cwd: Option<String>,
+    #[serde(flatten)]
+    pub process: crate::ProcessConfig,
     pub domain: Domain,
-    #[serde(default = "default_components")]
-    pub components: Vec<String>,
     #[serde(default)]
-    pub accumulator: ProcessAccumulatorKind,
-    #[serde(default = "default_process_args")]
-    pub args: Value,
-    #[serde(default = "default_process_shutdown_grace_seconds")]
-    pub shutdown_grace_seconds: u64,
+    pub output: ProcessOutput,
 }
 
 pub struct ProcessEvaluator {
-    domain: Domain,
-    components: Vec<String>,
-    metadata: Value,
     worker: ProcessRuntimeWorker,
 }
 
 impl ProcessEvaluator {
-    pub fn from_params(params: ProcessEvaluatorParams) -> Result<Self, BuildError> {
-        if params.command.is_empty() {
-            return Err(BuildError::build(
-                "process_evaluator command must not be empty",
-            ));
+    pub fn from_params(params: ProcessEvaluatorParams) -> Result<Self, EngineError> {
+        params.process.validate()?;
+        if let ProcessOutput::Values { components } = &params.output {
+            AccumulatorConfig::vector(components.clone(), crate::TrainingProjection::Norm)
+                .validate()
+                .map_err(EngineError::build)?;
         }
-        if !params.args.is_object() {
-            return Err(BuildError::build(
-                "process_evaluator args must be a TOML table / JSON object",
-            ));
-        }
-        if !matches!(params.accumulator, ProcessAccumulatorKind::Gammaloop)
-            && params.components.is_empty()
-        {
-            return Err(BuildError::build(
-                "process_evaluator components must not be empty",
-            ));
-        }
-        let domain = params.domain.clone();
-        let worker = ProcessRuntimeWorker::spawn(&params, domain.clone())?;
         Ok(Self {
-            domain,
-            components: params.components,
-            metadata: worker.metadata.clone(),
-            worker,
+            worker: ProcessRuntimeWorker::spawn(&params)?,
         })
     }
 }
 
 impl Evaluator for ProcessEvaluator {
-    fn get_domain(&self) -> Domain {
-        self.domain.clone()
+    fn domain(&self) -> Domain {
+        self.worker.domain.clone()
     }
 
     fn metadata(&self) -> Value {
-        self.metadata.clone()
+        self.worker.metadata.clone()
+    }
+
+    fn diagnostics(&mut self) -> Value {
+        match self
+            .worker
+            .process
+            .request("diagnostics", serde_json::json!({}))
+        {
+            Ok(response) => response.get("diagnostics").cloned().unwrap_or_else(
+                || serde_json::json!({"error": "process evaluator response missing 'diagnostics'"}),
+            ),
+            Err(error) => serde_json::json!({"error": error}),
+        }
     }
 
     fn eval_batch(
@@ -86,29 +90,37 @@ impl Evaluator for ProcessEvaluator {
         batch: &Batch,
         accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
-    ) -> Result<BatchResult, EvalError> {
+    ) -> Result<BatchResult, EngineError> {
         let mut observable_state = AccumulatorState::from_config(accumulator);
-        let inputs = pack_eval_inputs(batch, &self.domain);
+        let mut inputs = pack_eval_inputs(batch, &self.worker.domain);
 
         if let AccumulatorState::Gammaloop(gl_state) = &mut observable_state {
-            let (new_state, training_values) =
-                self.worker.eval_batch_gammaloop(&inputs, batch.size())?;
+            for point in batch.points() {
+                inputs
+                    .binary
+                    .extend_from_slice(&point.total_weight().to_le_bytes());
+            }
+            let (new_state, training_values) = self.worker.eval_batch_gammaloop(
+                &inputs,
+                batch.len(),
+                options.require_training_values,
+            )?;
             *gl_state = new_state;
             return Ok(BatchResult::new(training_values, observable_state));
         }
 
-        let values = self.worker.eval_batch(&inputs, batch.size())?;
+        let values = self.worker.eval_batch(&inputs, batch.len())?;
         let mut training_values = options
             .require_training_values
-            .then(|| Vec::with_capacity(batch.size()));
+            .then(|| Vec::with_capacity(batch.len()));
         match &mut observable_state {
             AccumulatorState::Vector(vector_state) => {
                 for (sample_idx, point) in batch.points().iter().enumerate() {
-                    let start = sample_idx * self.components.len();
-                    let end = start + self.components.len();
+                    let start = sample_idx * self.worker.output.components().len();
+                    let end = start + self.worker.output.components().len();
                     let projected = vector_state
                         .ingest_vector(&values[start..end], point)
-                        .map_err(EvalError::eval)?;
+                        .map_err(|err| EngineError::eval(format!("sample {sample_idx}: {err}")))?;
                     if let Some(training_values) = training_values.as_mut() {
                         training_values.push(projected * point.total_weight());
                     }
@@ -116,19 +128,21 @@ impl Evaluator for ProcessEvaluator {
             }
             AccumulatorState::FullVector(full_state) => {
                 for (sample_idx, point) in batch.points().iter().enumerate() {
-                    let start = sample_idx * self.components.len();
-                    let end = start + self.components.len();
+                    let start = sample_idx * self.worker.output.components().len();
+                    let end = start + self.worker.output.components().len();
                     let weight = point.total_weight().abs();
                     let weighted = values[start..end]
                         .iter()
                         .map(|value| value * weight)
                         .collect::<Vec<_>>();
-                    full_state.push_vector(&weighted);
+                    full_state
+                        .push_vector(&weighted)
+                        .map_err(|err| EngineError::eval(format!("sample {sample_idx}: {err}")))?;
                 }
                 training_values = None;
             }
             other => {
-                return Err(EvalError::eval(format!(
+                return Err(EngineError::eval(format!(
                     "process_evaluator requires vector or full_vector accumulator config, got {}",
                     other.kind_str()
                 )));
@@ -156,11 +170,11 @@ fn pack_eval_inputs(batch: &Batch, domain: &Domain) -> PackedEvalInputs {
     let mut discrete_offsets = domain
         .fixed_discrete_depth()
         .is_none()
-        .then(|| Vec::with_capacity(batch.size() + 1));
+        .then(|| Vec::with_capacity(batch.len() + 1));
     let mut continuous_offsets = domain
         .fixed_continuous_dims()
         .is_none()
-        .then(|| Vec::with_capacity(batch.size() + 1));
+        .then(|| Vec::with_capacity(batch.len() + 1));
     if let Some(offsets) = &mut discrete_offsets {
         offsets.push(0);
     }
@@ -192,9 +206,9 @@ fn pack_eval_inputs(batch: &Batch, domain: &Domain) -> PackedEvalInputs {
 }
 
 /// Decode a little-endian `f64` binary block into a `Vec<f64>`.
-fn unpack_f64_le(bytes: &[u8], what: &str) -> Result<Vec<f64>, EvalError> {
+fn unpack_f64_le(bytes: &[u8], what: &str) -> Result<Vec<f64>, EngineError> {
     if !bytes.len().is_multiple_of(8) {
-        return Err(EvalError::eval(format!(
+        return Err(EngineError::eval(format!(
             "process worker {what} binary block length {} is not a multiple of 8",
             bytes.len()
         )));
@@ -219,56 +233,42 @@ fn add_required_offsets(params: &mut Value, inputs: &PackedEvalInputs) {
 struct ProcessRuntimeWorker {
     process: ProcessWorker,
     domain: Domain,
-    components: Vec<String>,
-    accumulator_kind: ProcessAccumulatorKind,
+    output: ProcessOutput,
     metadata: Value,
 }
 
 impl ProcessRuntimeWorker {
-    fn spawn(params: &ProcessEvaluatorParams, domain: Domain) -> Result<Self, BuildError> {
-        let mut command =
-            build_process_worker_command(&params.command, params.cwd.as_deref(), "evaluator")?;
+    fn spawn(params: &ProcessEvaluatorParams) -> Result<Self, EngineError> {
+        let mut command = build_process_worker_command(
+            &params.process.command,
+            params.process.cwd.as_deref(),
+            "evaluator",
+        )?;
         let process = ProcessWorker::spawn(
             &mut command,
             "process evaluator",
-            params.shutdown_grace_seconds,
+            params.process.shutdown_grace_seconds,
         )?;
         let mut worker = Self {
             process,
-            domain,
-            components: params.components.clone(),
-            accumulator_kind: params.accumulator.clone(),
+            domain: params.domain.clone(),
+            output: params.output.clone(),
             metadata: default_process_args(),
         };
-        worker.send_init(params.args.clone())?;
+        worker.send_init(params.process.args.clone())?;
         Ok(worker)
     }
 
-    fn send_init(&mut self, args: Value) -> Result<(), BuildError> {
-        let init_params = match self.accumulator_kind {
-            ProcessAccumulatorKind::Gammaloop => serde_json::json!({
-                "protocol": PROCESS_PROTOCOL,
-                "role": "evaluator",
-                "accumulator": "gammaloop",
-                "domain": self.domain,
-                "args": args,
-            }),
-            _ => serde_json::json!({
-                "protocol": PROCESS_PROTOCOL,
-                "role": "evaluator",
-                "components": self.components,
-                "observable": {
-                    "components": self.components,
-                },
-                "domain": self.domain,
-                "args": args,
-            }),
-        };
+    fn send_init(&mut self, args: Value) -> Result<(), EngineError> {
+        let init_params = serde_json::json!({
+            "protocol": PROCESS_PROTOCOL, "role": "evaluator", "output": self.output,
+            "domain": self.domain, "args": args,
+        });
         let response = self
             .process
             .request("initialize", init_params)
-            .map_err(BuildError::build)?;
-        self.metadata = Self::expect_ack(response).map_err(BuildError::build)?;
+            .map_err(EngineError::build)?;
+        self.metadata = Self::expect_ack(response).map_err(EngineError::build)?;
         Ok(())
     }
 
@@ -276,20 +276,20 @@ impl ProcessRuntimeWorker {
         &mut self,
         inputs: &PackedEvalInputs,
         nr_samples: usize,
-    ) -> Result<Vec<f64>, EvalError> {
+    ) -> Result<Vec<f64>, EngineError> {
         let mut params = serde_json::json!({
             "nr_samples": nr_samples,
-            "components": self.components,
+            "components": self.output.components(),
         });
         add_required_offsets(&mut params, inputs);
         let (_result, response_binary) = self
             .process
             .request_with_binary("eval_batch", params, &inputs.binary)
-            .map_err(EvalError::eval)?;
+            .map_err(EngineError::eval)?;
         let values = unpack_f64_le(&response_binary, "values")?;
-        let expected_len = nr_samples.saturating_mul(self.components.len());
+        let expected_len = nr_samples.saturating_mul(self.output.components().len());
         if values.len() != expected_len {
-            return Err(EvalError::eval(format!(
+            return Err(EngineError::eval(format!(
                 "process evaluator output size mismatch: expected {}, got {}",
                 expected_len,
                 values.len()
@@ -302,45 +302,48 @@ impl ProcessRuntimeWorker {
         &mut self,
         inputs: &PackedEvalInputs,
         nr_samples: usize,
-    ) -> Result<(GammaLoopAccumulatorState, Option<Vec<f64>>), EvalError> {
+        require_training_values: bool,
+    ) -> Result<(GammaLoopAccumulatorState, Option<Vec<f64>>), EngineError> {
         let mut params = serde_json::json!({
             "nr_samples": nr_samples,
-            "accumulator": "gammaloop",
+            "require_training_values": require_training_values,
         });
         add_required_offsets(&mut params, inputs);
-        let (response, _response_binary) = self
+        let (response, response_binary) = self
             .process
             .request_with_binary("eval_batch", params, &inputs.binary)
-            .map_err(EvalError::eval)?;
+            .map_err(EngineError::eval)?;
         let state: GammaLoopAccumulatorState = serde_json::from_value(
             response
                 .get("gammaloop_state")
                 .ok_or_else(|| {
-                    EvalError::eval("process worker response missing 'gammaloop_state'")
+                    EngineError::eval("process worker response missing 'gammaloop_state'")
                 })?
                 .clone(),
         )
-        .map_err(|err| EvalError::eval(format!("failed to parse gammaloop_state: {err}")))?;
-        let training_values = response
-            .get("training_values")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .enumerate()
-                    .map(|(index, v)| {
-                        v.as_f64().ok_or_else(|| {
-                            EvalError::eval(format!("non-f64 in training_values at index {index}"))
-                        })
-                    })
-                    .collect::<Result<Vec<f64>, EvalError>>()
-            })
-            .transpose()?;
-        if let Some(ref tv) = training_values
-            && tv.len() != nr_samples
+        .map_err(|err| EngineError::eval(format!("failed to parse gammaloop_state: {err}")))?;
+        let training_values = if require_training_values {
+            let values = unpack_f64_le(&response_binary, "training values")?;
+            if values.len() != nr_samples {
+                return Err(EngineError::eval(
+                    "GammaLoop training value count does not match batch",
+                ));
+            }
+            Some(values)
+        } else {
+            if !response_binary.is_empty() {
+                return Err(EngineError::eval(
+                    "unexpected GammaLoop training values for inference",
+                ));
+            }
+            None
+        };
+        state.validate_values()?;
+        if let Some(values) = &training_values
+            && let Some(sample) = values.iter().position(|value| !value.is_finite())
         {
-            return Err(EvalError::eval(format!(
-                "training_values length {} does not match nr_samples {nr_samples}",
-                tv.len()
+            return Err(EngineError::eval(format!(
+                "sample {sample}: non-finite training feedback"
             )));
         }
         Ok((state, training_values))
@@ -373,8 +376,7 @@ mod tests {
         let batch = Batch::new(vec![
             Point::new(vec![0.5, 1.5], vec![0, 1], 1.0),
             Point::new(vec![2.5, 3.5], vec![2, 3], 1.0),
-        ])
-        .unwrap();
+        ]);
         let inputs = super::pack_eval_inputs(&batch, &Domain::rectangular(2, 2));
         assert!(inputs.xs_discrete_offsets.is_none());
         assert!(inputs.xs_continuous_offsets.is_none());
@@ -396,8 +398,7 @@ mod tests {
         let batch = Batch::new(vec![
             Point::new(vec![0.5], vec![0], 1.0),
             Point::new(vec![1.5, 2.5], vec![1, 1], 1.0),
-        ])
-        .unwrap();
+        ]);
         let ragged_domain = Domain::discrete(
             None,
             [
@@ -435,15 +436,15 @@ args = { scale = 1.0 }
         )
         .expect("process scalar config should parse");
 
-        assert_eq!(params.command, ["python", "-u", "worker.py"]);
-        assert_eq!(params.cwd.as_deref(), Some("$resources"));
+        assert_eq!(params.process.command, ["python", "-u", "worker.py"]);
+        assert_eq!(params.process.cwd.as_deref(), Some("$resources"));
         assert_eq!(params.domain.fixed_rectangular_dims(), Some((2, 2)));
         assert_eq!(
             params.domain.fixed_discrete_cardinalities(),
             Some(vec![2, 3])
         );
-        assert_eq!(params.components, ["value"]);
-        assert!(params.args.is_object());
+        assert_eq!(params.output.components(), ["value"]);
+        assert!(params.process.args.is_object());
     }
 
     #[test]
@@ -452,9 +453,9 @@ args = { scale = 1.0 }
             r#"
 command = ["worker"]
 domain = { discrete = { axis_label = "d0", branches = [
-  { index = 0, domain = { continuous = { dims = 3 } } },
+  { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 3 } } },
   { index = 1, domain = { discrete = { axis_label = "d1", branches = [
-    { index = 0, domain = { continuous = { dims = 1 } } },
+    { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 1 } } },
     { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
   ] } } },
 ] } }

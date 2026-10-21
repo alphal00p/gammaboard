@@ -4,6 +4,18 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use url::Url;
 
+/// Program path for immediately spawning the same executable image. On Linux
+/// this survives an atomic rebuild/unlink of the original executable path and
+/// avoids starting a different worker version than the running server.
+/// Do not persist this process-relative path as an external launch command.
+pub fn self_executable() -> std::io::Result<PathBuf> {
+    #[cfg(target_os = "linux")]
+    if Path::new("/proc/self/exe").is_file() {
+        return Ok(PathBuf::from("/proc/self/exe"));
+    }
+    std::env::current_exe()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeOverrides {
     pub database_url: Option<String>,

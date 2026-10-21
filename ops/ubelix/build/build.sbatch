@@ -37,4 +37,14 @@ esac
 mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build" "$(dirname "${output_path}")"
 
 cd "${WORKSPACE_ROOT}"
-apptainer build --force "${output_path}" "${def_path}"
+if [[ -e "$output_path" || -L "$output_path" ]]; then
+  echo "refusing to overwrite a runtime image; choose a new versioned output path" >&2
+  exit 1
+fi
+temporary="$(mktemp "$(dirname "$output_path")/.runtime-build-XXXXXX.sif")"
+rm "$temporary"
+trap 'rm -f "$temporary"' EXIT
+apptainer build "$temporary" "$def_path"
+apptainer inspect "$temporary" >/dev/null
+ln "$temporary" "$output_path"
+chmod 444 "$output_path"

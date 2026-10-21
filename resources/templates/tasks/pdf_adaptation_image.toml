@@ -9,7 +9,7 @@ replacements = { train_samples = 100_000, havana_bins = 64, samples_for_update =
 name = "train"
 kind = "sample"
 stop_condition = { max_samples = "$(train_samples:100_000)" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(samples_for_update:16384)", initial_training_rate = 0.1, final_training_rate = 0.001 } }
+sampler = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(samples_for_update:16384)", initial_training_rate = 0.1, final_training_rate = 0.001 } }
 
 [[task_queue]]
 name = "pdf"

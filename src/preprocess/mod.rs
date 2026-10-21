@@ -1,94 +1,135 @@
-mod preflight;
-
-use crate::core::{BuildError, EvaluatorConfig, IntegrationParams, RunStageSnapshot, RunTaskInput};
-use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
+use crate::core::{EngineError, IntegrationParams, RunStageSnapshot, RunTaskInput, RunTaskSpec};
 use crate::utils::domain::Domain;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RunAddIntegrationParams {
-    pub evaluator: Option<EvaluatorConfig>,
-    #[serde(default)]
-    pub evaluator_requirements: crate::core::CapabilityRequirements,
-    #[serde(default)]
-    pub sampler_requirements: crate::core::CapabilityRequirements,
-    pub evaluator_runner_params: EvaluatorRunnerParams,
-    pub sampler_aggregator_runner_params: SamplerAggregatorRunnerParams,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RunAddConfig {
-    #[serde(skip)]
-    pub kind: String,
-    #[serde(skip)]
-    pub effective_document: Option<toml::Value>,
+/// Submitted definition after template expansion; it contains no execution state.
+#[derive(Debug, Clone)]
+pub struct RunDefinition {
     pub name: String,
-    pub task_queue: Option<Vec<RunTaskInput>>,
-    #[serde(flatten)]
-    pub integration_params: RunAddIntegrationParams,
     pub target: Option<JsonValue>,
-    #[serde(skip)]
-    pub original_toml: Option<String>,
-    #[serde(skip)]
-    pub domain: Option<Domain>,
-    #[serde(skip)]
-    pub resolved_integration_params: Option<IntegrationParams>,
-    #[serde(skip)]
-    pub initial_stage_snapshot: Option<RunStageSnapshot>,
-    #[serde(skip)]
-    pub resolved_task_queue: Option<Vec<RunTaskInput>>,
+    pub original_toml: String,
+    pub effective_document: toml::Value,
+    pub body: RunDefinitionBody,
 }
 
-pub fn preprocess_run_add(mut config: RunAddConfig) -> Result<RunAddConfig, BuildError> {
-    crate::services::validation::validate_resources(&config)?;
-    let resolved_task_queue = config.task_queue.clone();
-    if let Some(tasks) = resolved_task_queue.as_ref() {
-        for task in tasks {
-            task.validate().map_err(BuildError::invalid_input)?;
-            for child in crate::api::run_definition::preflight_children(&task.task)
-                .map_err(|error| BuildError::invalid_input(error.to_string()))?
-            {
-                crate::api::runs::validate_run(child, false)
-                    .map_err(|error| BuildError::invalid_input(error.to_string()))?;
-            }
+#[derive(Debug, Clone)]
+pub enum RunDefinitionBody {
+    Integration(Box<IntegrationDefinition>),
+    // Reuse the controller's typed specification without creating a task yet.
+    Controller(Box<RunTaskSpec>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IntegrationDefinition {
+    #[serde(flatten)]
+    pub params: IntegrationParams,
+    #[serde(default)]
+    pub task_queue: Vec<RunTaskInput>,
+}
+
+impl RunDefinition {
+    pub fn kind(&self) -> &'static str {
+        match &self.body {
+            RunDefinitionBody::Integration(_) => "integration",
+            RunDefinitionBody::Controller(task) => task.kind_str(),
         }
     }
-    let resolved_integration_params = IntegrationParams {
-        evaluator: config.integration_params.evaluator.clone(),
-        evaluator_requirements: config.integration_params.evaluator_requirements.clone(),
-        sampler_requirements: config.integration_params.sampler_requirements.clone(),
-        evaluator_runner_params: config.integration_params.evaluator_runner_params.clone(),
-        sampler_aggregator_runner_params: config
-            .integration_params
-            .sampler_aggregator_runner_params
-            .clone(),
-    };
 
-    // The top-level evaluator is initial-stage shorthand. If it is absent, the
-    // first task-local evaluator establishes the immutable run domain.
-    let initial_evaluator = config.integration_params.evaluator.clone().or_else(|| {
-        resolved_task_queue
-            .as_ref()
-            .and_then(|tasks| tasks.iter().find_map(|task| task.task.evaluator_config()))
-    });
-    let domain = match initial_evaluator.as_ref() {
-        Some(evaluator) => {
-            let evaluator_kind = evaluator.kind_str();
-            evaluator.resolve_domain().map_err(|err| {
-                BuildError::build(format!(
-                    "failed to resolve evaluator domain for {evaluator_kind}: {err}"
-                ))
-            })?
+    pub fn integration(&self) -> Option<&IntegrationDefinition> {
+        match &self.body {
+            RunDefinitionBody::Integration(definition) => Some(definition),
+            RunDefinitionBody::Controller(_) => None,
         }
+    }
+
+    pub fn controller(&self) -> Option<&RunTaskSpec> {
+        match &self.body {
+            RunDefinitionBody::Controller(task) => Some(task),
+            RunDefinitionBody::Integration(_) => None,
+        }
+    }
+}
+
+/// Fully resolved creation input. Preparation consumes the submitted definition.
+#[derive(Debug)]
+pub struct PreparedRun {
+    pub name: String,
+    pub kind: &'static str,
+    pub target: Option<JsonValue>,
+    pub original_toml: String,
+    pub effective_document: toml::Value,
+    pub integration_params: IntegrationParams,
+    pub task_queue: Vec<RunTaskInput>,
+    pub domain: Domain,
+    pub initial_stage: RunStageSnapshot,
+}
+
+pub fn prepare_run(config: RunDefinition) -> Result<PreparedRun, EngineError> {
+    crate::services::validation::validate_resources(&config)?;
+    let kind = config.kind();
+    let (integration_params, task_queue) = match config.body {
+        RunDefinitionBody::Integration(definition) => (definition.params, definition.task_queue),
+        RunDefinitionBody::Controller(task) => {
+            let mut params: IntegrationParams =
+                toml::from_str(include_str!("../config_defaults/run.toml")).map_err(|e| {
+                    EngineError::build(format!("invalid embedded run defaults: {e}"))
+                })?;
+            params.evaluator = None;
+            (
+                params,
+                vec![RunTaskInput {
+                    name: Some(kind.into()),
+                    task: *task,
+                }],
+            )
+        }
+    };
+    for task in &task_queue {
+        task.validate().map_err(EngineError::invalid_input)?;
+        for child in crate::api::run_definition::preflight_children(&task.task)
+            .map_err(|e| EngineError::invalid_input(e.to_string()))?
+        {
+            crate::api::runs::validate_run(child, false)
+                .map_err(|e| EngineError::invalid_input(e.to_string()))?;
+        }
+    }
+    // The first task-local evaluator can establish the domain when the root omits it.
+    let evaluator = integration_params.evaluator.clone().or_else(|| {
+        task_queue
+            .iter()
+            .find_map(|task| task.task.evaluator_config())
+    });
+    let domain = match evaluator {
+        Some(evaluator) => evaluator.resolve_domain().map_err(|e| {
+            EngineError::build(format!(
+                "failed to resolve {} domain: {e}",
+                evaluator.kind_str()
+            ))
+        })?,
         None => Domain::continuous(0),
     };
-    config.domain = Some(domain.clone());
-
-    let initial_stage_snapshot = preflight::build_initial_stage()?;
-    config.resolved_integration_params = Some(resolved_integration_params);
-    config.initial_stage_snapshot = Some(initial_stage_snapshot);
-    config.resolved_task_queue = resolved_task_queue;
-
-    Ok(config)
+    let initial_stage = RunStageSnapshot {
+        id: None,
+        run_id: 0,
+        task_id: None,
+        name: "root".into(),
+        sequence_nr: None,
+        queue_empty: true,
+        sampler_snapshot: None,
+        observable_state: None,
+        evaluator: integration_params.evaluator.clone(),
+        batch_transforms: Vec::new(),
+    };
+    Ok(PreparedRun {
+        name: config.name,
+        kind,
+        target: config.target,
+        original_toml: config.original_toml,
+        effective_document: config.effective_document,
+        integration_params,
+        task_queue,
+        domain,
+        initial_stage,
+    })
 }

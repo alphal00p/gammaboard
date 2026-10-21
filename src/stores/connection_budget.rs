@@ -47,7 +47,8 @@ pub(super) async fn check_worker_connection_budget(
                    n.lease_expires_at <= now() AND EXISTS (
                        SELECT 1 FROM node_launch_requests r
                         WHERE r.id=n.launch_request_id AND r.state IN ('pending','starting')
-                          AND (n.last_seen IS NULL OR n.last_seen < r.created_at)) AS reserved,
+                          AND (n.last_seen IS NULL OR n.last_seen < r.created_at)
+                          AND NOT EXISTS(SELECT 1 FROM external_worker_launches w WHERE w.request_id=r.id AND w.node_name=n.name AND w.state IN ('failed','canceled'))) AS reserved,
                    'sampler_aggregator' IN (n.pool_role,n.desired_role,n.active_role) AS sampler
             FROM nodes n
          ) SELECT count(*) FILTER (WHERE live), count(*) FILTER (WHERE reserved),

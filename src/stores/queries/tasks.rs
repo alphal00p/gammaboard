@@ -378,6 +378,12 @@ pub(crate) async fn activate_next_run_task(
     pool: &PgPool,
     run_id: i32,
 ) -> Result<Option<RunTask>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    // Use the same run-before-task lock order as definition edits.
+    sqlx::query("SELECT id FROM runs WHERE id=$1 FOR UPDATE")
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await?;
     // Wait for definition edits: skipping locked tasks could reorder the queue
     // or make the controller mistake a locked queue for an exhausted one.
     let row = sqlx::query_as::<_, RunTaskRow>(&format!(
@@ -400,10 +406,25 @@ pub(crate) async fn activate_next_run_task(
         "#
     ))
     .bind(run_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    row.map(decode_task_row).transpose()
+    let task = row.map(decode_task_row).transpose()?;
+    if task
+        .as_ref()
+        .is_some_and(|task| task.task.runs_on_sampler_worker())
+    {
+        // A live accumulator belongs to the stage that published it. During
+        // initialization of the next stage, expose no live result rather than
+        // relabelling the previous stage's result (including to controllers).
+        // Initialization/restoration uses durable stage/checkpoint snapshots.
+        sqlx::query("UPDATE runs SET current_observable=NULL WHERE id=$1")
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(task)
 }
 
 pub(crate) async fn update_run_task_progress(

@@ -9,6 +9,12 @@ const stripHtml = (value) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const gatewayError = (status) => {
+  if (status === 504) return "gateway timeout (504): the request took too long and may still be running";
+  if (status === 502 || status === 503) return `gateway error (${status}): backend unavailable or restarting`;
+  return null;
+};
+
 const extractErrorDetails = async (response) => {
   const contentType = response.headers.get("content-type") || "";
 
@@ -25,13 +31,7 @@ const extractErrorDetails = async (response) => {
     if (text.trim()) {
       if (contentType.includes("text/html")) {
         const summary = stripHtml(text);
-        if (response.status === 504) {
-          return "gateway timeout (504): the request took too long and may still be running";
-        }
-        if (response.status === 502 || response.status === 503) {
-          return `gateway error (${response.status}): backend unavailable or restarting`;
-        }
-        return summary || `HTTP ${response.status}`;
+        return gatewayError(response.status) || summary || `HTTP ${response.status}`;
       }
       return text.trim();
     }
@@ -39,14 +39,7 @@ const extractErrorDetails = async (response) => {
     // Fall through to status fallback.
   }
 
-  if (response.status === 504) {
-    return "gateway timeout (504): the request took too long and may still be running";
-  }
-  if (response.status === 502 || response.status === 503) {
-    return `gateway error (${response.status}): backend unavailable or restarting`;
-  }
-
-  return response.statusText || `HTTP ${response.status}`;
+  return gatewayError(response.status) || response.statusText || `HTTP ${response.status}`;
 };
 
 const parseJsonOrThrow = async (response, message) => {

@@ -1,6 +1,21 @@
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
+pub fn build_identity() -> String {
+    format!(
+        "{}:{}:{}",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("GAMMABOARD_GIT_REVISION").unwrap_or("unknown"),
+        enabled_features().join(",")
+    )
+}
+
+pub fn build_info() -> JsonValue {
+    serde_json::json!({"build_id":build_identity(),"version":env!("CARGO_PKG_VERSION"),
+        "git_revision":option_env!("GAMMABOARD_GIT_REVISION"),"features":enabled_features(),
+        "model_version":crate::compatibility::DATABASE_MODEL_VERSION})
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunProvenance {
     pub gammaboard_version: String,

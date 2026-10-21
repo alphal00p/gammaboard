@@ -29,7 +29,7 @@ pub struct PerformanceSnapshot {
 pub async fn snapshot(store: &PgStore, run_id: i32) -> Result<PerformanceSnapshot> {
     let raw: Option<Value> = sqlx::query_scalar(r#"
         SELECT jsonb_build_object(
-            'schema_version', 1, 'observed_at', statement_timestamp(),
+            'schema_version', 2, 'observed_at', statement_timestamp(),
             'run_id', r.id, 'run_name', r.name,
             'task_id', (SELECT id::text FROM run_tasks WHERE run_id=r.id AND state='active' LIMIT 1),
             'completed_samples', r.nr_completed_samples,
@@ -139,11 +139,12 @@ impl PerformanceSnapshot {
             match rows.iter().find(|e| e["worker_id"] == n["name"]) {
                 None => issues.push(format!("missing telemetry: {name}")),
                 Some(e) => {
-                    if !is_evaluator
-                        && (e["runtime_metrics"]["runner_epoch"].as_str().is_none()
-                            || e["runtime_metrics"]["task_id"].as_str() != self.task_id.as_deref())
+                    if e["metrics"]["epoch"].as_str().is_none()
+                        || e["metrics"]["node_uuid"] != n["uuid"]
+                        || e["metrics"]["task_id"].as_str() != self.task_id.as_deref()
                     {
-                        issues.push(format!("unknown or mismatched sampler epoch: {name}"));
+                        let role = if is_evaluator { "evaluator" } else { "sampler" };
+                        issues.push(format!("unknown or mismatched {role} epoch: {name}"));
                     }
                     let timestamp = e["created_at"]
                         .as_str()
@@ -153,13 +154,6 @@ impl PerformanceSnapshot {
                             > max_age.as_secs_f64() * 1000.0
                     }) {
                         issues.push(format!("stale telemetry: {name}"));
-                    }
-                    if is_evaluator
-                        && (e["metrics"]["epoch"].as_str().is_none()
-                            || e["metrics"]["node_uuid"] != n["uuid"]
-                            || e["metrics"]["task_id"].as_str() != self.task_id.as_deref())
-                    {
-                        issues.push(format!("unknown or mismatched evaluator epoch: {name}"));
                     }
                 }
             }
@@ -223,7 +217,7 @@ pub fn summarize(
         let sampler_epochs = |s: &PerformanceSnapshot| {
             s.samplers
                 .iter()
-                .map(|r| json!([r["worker_id"], r["runtime_metrics"]["runner_epoch"]]))
+                .map(|r| json!([r["worker_id"], r["metrics"]["epoch"]]))
                 .collect::<Vec<_>>()
         };
         if sampler_epochs(&pair[0]) != sampler_epochs(&pair[1]) {
@@ -300,7 +294,7 @@ pub fn summarize(
     issues.sort();
     issues.dedup();
     PerformanceInterval {
-        schema_version: 1,
+        schema_version: crate::compatibility::PERFORMANCE_SCHEMA_VERSION,
         elapsed_seconds,
         completed_samples,
         samples_per_second: issues
@@ -372,7 +366,7 @@ pub async fn history(
     let truncated = rows.len() > limit as usize;
     rows.truncate(limit as usize);
     Ok(
-        json!({"schema_version":1,"run_id":run_id,"since":since,"until":until,"truncated":truncated,"rows":rows}),
+        json!({"schema_version":2,"run_id":run_id,"since":since,"until":until,"truncated":truncated,"rows":rows}),
     )
 }
 
@@ -386,7 +380,7 @@ mod tests {
             "active_run_id":1,"desired_run_id":1,"active_role":role,"desired_role":role})
         };
         PerformanceSnapshot {
-            schema_version: 1,
+            schema_version: crate::compatibility::PERFORMANCE_SCHEMA_VERSION,
             observed_at: now,
             run_id: 1,
             run_name: "test".into(),
@@ -402,7 +396,7 @@ mod tests {
                 "cumulative":{"evaluate_seconds":0.1}}}),
             ],
             samplers: vec![
-                json!({"worker_id":"s","created_at":now,"runtime_metrics":{"runner_epoch":"sampler-one","task_id":"7"}}),
+                json!({"worker_id":"s","created_at":now,"metrics":{"epoch":"sampler-one","node_uuid":"s","task_id":"7"}}),
             ],
         }
     }
@@ -429,7 +423,23 @@ mod tests {
         reset.completed_samples = 0;
         assert!(!summarize(vec![a.clone(), reset], 2., Duration::from_secs(10)).valid);
         let mut sampler_restart = a.clone();
-        sampler_restart.samplers[0]["runtime_metrics"]["runner_epoch"] = json!("two");
+        sampler_restart.samplers[0]["metrics"]["epoch"] = json!("two");
         assert!(!summarize(vec![a, sampler_restart], 2., Duration::from_secs(10)).valid);
+    }
+
+    #[test]
+    fn worker_replacement_requires_a_report_from_the_new_identity() {
+        for index in 0..2 {
+            let mut snapshot = sample();
+            snapshot.nodes[index]["uuid"] = json!("replacement");
+            assert!(!snapshot.ready(1, Duration::from_secs(10)));
+            let reports = if index == 0 {
+                &mut snapshot.evaluators
+            } else {
+                &mut snapshot.samplers
+            };
+            reports[0]["metrics"]["node_uuid"] = json!("replacement");
+            assert!(snapshot.ready(1, Duration::from_secs(10)));
+        }
     }
 }

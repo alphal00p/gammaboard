@@ -123,31 +123,25 @@ pub(in crate::server) async fn load(
             .ok_or_else(|| ApiError::BadRequest("invalid end_ms".into()))?
     };
     let mut graphs = Graphs::new([start as f64, end as f64]);
-    for (evaluator, table, field) in [
-        (true, "evaluator_performance_history", "metrics"),
-        (
-            false,
-            "sampler_aggregator_performance_history",
-            "runtime_metrics",
-        ),
+    for (evaluator, table) in [
+        (true, "evaluator_performance_history"),
+        (false, "sampler_aggregator_performance_history"),
     ] {
         // Bound memory with keyset pages; exclude histogram/engine diagnostics.
         let diagnostic_fields = if !diagnostics {
             String::new()
         } else if evaluator {
-            format!(", 'cumulative', {field}->'cumulative'")
+            ", 'cumulative', metrics->'cumulative'".to_owned()
         } else {
-            format!(
-                ", 'sampler', {field}->'sampler', 'queue', jsonb_build_object('rolling', {field}->'queue'->'rolling')"
-            )
+            ", 'sampler', metrics->'sampler', 'queue', jsonb_build_object('rolling', metrics->'queue'->'rolling')".to_owned()
         };
         let payload = format!(
             r#"jsonb_build_object('worker_id', worker_id, 'created_at', created_at,
-            '{field}', jsonb_build_object('epoch', {field}->'epoch',
-            'runner_epoch', {field}->'runner_epoch', 'node_uuid', {field}->'node_uuid',
-            'task_id', {field}->'task_id', 'busy', {field}->'busy',
-            'samples_evaluated', {field}->'samples_evaluated',
-            'completed_samples_total', {field}->'completed_samples_total'{diagnostic_fields}))"#
+            'metrics', jsonb_build_object('epoch', metrics->'epoch',
+            'node_uuid', metrics->'node_uuid',
+            'task_id', metrics->'task_id', 'busy', metrics->'busy',
+            'samples_evaluated', metrics->'samples_evaluated',
+            'completed_samples_total', metrics->'completed_samples_total'{diagnostic_fields}))"#
         );
         // Boundary neighbors preserve intervals when zooming below the reporting cadence.
         let query = format!(

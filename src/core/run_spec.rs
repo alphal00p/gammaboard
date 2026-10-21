@@ -7,14 +7,11 @@ use crate::core::tasks::DiscreteProjectionConfig;
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::sampling::HavanaInferenceSamplerParams;
 use crate::sampling::{
-    HavanaSamplerParams, NaiveMonteCarloSamplerParams, ProcessBatchTransformParams,
-    ProcessMaterializerParams, ProcessSamplerParams, RasterLineSamplerParams,
+    HavanaSamplerParams, NaiveMonteCarloSamplerParams, RasterLineSamplerParams,
     RasterPlaneSamplerParams, SphericalBatchTransformParams, UnitBallBatchTransformParams,
 };
-use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
-use std::fmt;
 
 pub type CapabilityRequirements = BTreeMap<String, u64>;
 
@@ -39,128 +36,45 @@ pub struct RunSpec {
     pub integration_params: IntegrationParams,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
 pub enum AccumulatorMomentConfig {
     #[default]
-    Default,
     MaxOrder2,
     MaxOrder4,
 }
 
 impl AccumulatorMomentConfig {
     pub fn max_order(self) -> u8 {
-        match self {
-            Self::Default | Self::MaxOrder2 => 2,
-            Self::MaxOrder4 => 4,
-        }
-    }
-
-    pub fn validate(self) -> Result<(), String> {
-        match self {
-            Self::Default | Self::MaxOrder2 | Self::MaxOrder4 => Ok(()),
-        }
+        self.into()
     }
 }
 
-impl Serialize for AccumulatorMomentConfig {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if !serializer.is_human_readable() {
-            let encoded = match self {
-                Self::Default => 0,
-                Self::MaxOrder2 => 2,
-                Self::MaxOrder4 => 4,
-            };
-            return serializer.serialize_u8(encoded);
-        }
-        if *self == Self::Default {
-            serializer.serialize_str("default")
-        } else {
-            #[derive(Serialize)]
-            struct MomentTable {
-                max_order: u8,
-            }
-            MomentTable {
-                max_order: self.max_order(),
-            }
-            .serialize(serializer)
+impl From<AccumulatorMomentConfig> for u8 {
+    fn from(value: AccumulatorMomentConfig) -> Self {
+        match value {
+            AccumulatorMomentConfig::MaxOrder2 => 2,
+            AccumulatorMomentConfig::MaxOrder4 => 4,
         }
     }
 }
 
-impl<'de> Deserialize<'de> for AccumulatorMomentConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if !deserializer.is_human_readable() {
-            let max_order = u8::deserialize(deserializer)?;
-            return match max_order {
-                0 => Ok(Self::Default),
-                2 => Ok(Self::MaxOrder2),
-                4 => Ok(Self::MaxOrder4),
-                other => Err(serde::de::Error::custom(format!(
-                    "accumulator moment max_order must be 2 or 4, got {other}"
-                ))),
-            };
+impl TryFrom<u8> for AccumulatorMomentConfig {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            2 => Ok(Self::MaxOrder2),
+            4 => Ok(Self::MaxOrder4),
+            _ => Err(format!("accumulator moments must be 2 or 4, got {value}")),
         }
-        struct MomentVisitor;
-
-        impl<'de> Visitor<'de> for MomentVisitor {
-            type Value = AccumulatorMomentConfig;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(r#""default" or a table like { max_order = 4 }"#)
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "default" => Ok(AccumulatorMomentConfig::Default),
-                    other => Err(E::unknown_variant(other, &["default"])),
-                }
-            }
-
-            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct MomentTable {
-                    max_order: u8,
-                }
-                match MomentTable::deserialize(serde::de::value::MapAccessDeserializer::new(map))?
-                    .max_order
-                {
-                    2 => Ok(AccumulatorMomentConfig::MaxOrder2),
-                    4 => Ok(AccumulatorMomentConfig::MaxOrder4),
-                    other => Err(serde::de::Error::custom(format!(
-                        "accumulator moments.max_order must be 2 or 4, got {other}"
-                    ))),
-                }
-            }
-        }
-
-        deserializer.deserialize_any(MomentVisitor)
     }
 }
 
-fn is_default_moment_config(value: &AccumulatorMomentConfig) -> bool {
-    *value == AccumulatorMomentConfig::default()
-}
-
+/// Canonical accumulator model. Scalar input syntax is normalized to one component.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccumulatorConfig {
     Empty,
-    Scalar {
-        discrete_projections: Option<DiscreteProjectionConfig>,
-        moments: AccumulatorMomentConfig,
-    },
     Vector {
         components: Vec<String>,
         training_projection: TrainingProjection,
@@ -174,7 +88,7 @@ pub enum AccumulatorConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TrainingProjection {
     Component { name: String },
     Norm,
@@ -186,198 +100,112 @@ impl TrainingProjection {
     }
 }
 
-impl From<TrainingProjection> for BinaryTrainingProjection {
-    fn from(value: TrainingProjection) -> Self {
-        match value {
-            TrainingProjection::Component { name } => Self {
-                kind: BinaryTrainingProjectionKind::Component,
-                name: Some(name),
-            },
-            TrainingProjection::Norm => Self {
-                kind: BinaryTrainingProjectionKind::Norm,
-                name: None,
-            },
-        }
-    }
-}
-
-impl From<BinaryTrainingProjection> for TrainingProjection {
-    fn from(value: BinaryTrainingProjection) -> Self {
-        match value.kind {
-            BinaryTrainingProjectionKind::Component => {
-                TrainingProjection::component(value.name.unwrap_or_else(|| "value".to_string()))
-            }
-            BinaryTrainingProjectionKind::Norm => TrainingProjection::Norm,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum AccumulatorConfigKind {
-    Empty,
-    Scalar,
-    Vector,
-    Gammaloop,
-    FullVector,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BinaryAccumulatorConfig {
-    kind: AccumulatorConfigKind,
-    discrete_projections: Option<DiscreteProjectionConfig>,
-    #[serde(default)]
-    moments: AccumulatorMomentConfig,
-    components: Option<Vec<String>>,
-    training_projection: Option<BinaryTrainingProjection>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum BinaryTrainingProjectionKind {
-    Component,
+// Bincode needs externally tagged enums; unlike a kind plus optional fields,
+// these representations cannot omit the data required by their variant.
+#[derive(Serialize, Deserialize)]
+enum BinaryProjection {
+    Component(String),
     Norm,
 }
+#[derive(Serialize, Deserialize)]
+enum BinaryAccumulatorConfig {
+    Empty,
+    Vector {
+        components: Vec<String>,
+        training_projection: BinaryProjection,
+        discrete_projections: Option<DiscreteProjectionConfig>,
+        moments: AccumulatorMomentConfig,
+    },
+    Gammaloop,
+    FullVector {
+        components: Vec<String>,
+    },
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BinaryTrainingProjection {
-    kind: BinaryTrainingProjectionKind,
-    name: Option<String>,
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum AccumulatorInput {
+    Empty,
+    Scalar {
+        discrete_projections: Option<DiscreteProjectionConfig>,
+        #[serde(default)]
+        moments: AccumulatorMomentConfig,
+    },
+    Vector {
+        #[serde(default = "scalar_components")]
+        components: Vec<String>,
+        training_projection: Option<TrainingProjection>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        discrete_projections: Option<DiscreteProjectionConfig>,
+        #[serde(default)]
+        moments: AccumulatorMomentConfig,
+    },
+    Gammaloop,
+    FullVector {
+        #[serde(default = "scalar_components")]
+        components: Vec<String>,
+    },
+}
+
+fn scalar_components() -> Vec<String> {
+    vec!["value".to_string()]
 }
 
 impl AccumulatorConfig {
     pub fn scalar() -> Self {
-        Self::Scalar {
-            discrete_projections: None,
-            moments: AccumulatorMomentConfig::default(),
-        }
+        Self::vector(scalar_components(), TrainingProjection::component("value"))
     }
-
     pub fn vector(components: Vec<String>, training_projection: TrainingProjection) -> Self {
         Self::Vector {
             components,
             training_projection,
             discrete_projections: None,
-            moments: AccumulatorMomentConfig::default(),
+            moments: Default::default(),
         }
     }
-
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Empty => "empty",
-            Self::Scalar { .. } => "scalar",
             Self::Vector { .. } => "vector",
             Self::Gammaloop => "gammaloop",
             Self::FullVector { .. } => "full_vector",
         }
     }
-
-    fn kind(&self) -> AccumulatorConfigKind {
+    pub fn components(&self) -> Option<&[String]> {
         match self {
-            Self::Empty => AccumulatorConfigKind::Empty,
-            Self::Scalar { .. } => AccumulatorConfigKind::Scalar,
-            Self::Vector { .. } => AccumulatorConfigKind::Vector,
-            Self::Gammaloop => AccumulatorConfigKind::Gammaloop,
-            Self::FullVector { .. } => AccumulatorConfigKind::FullVector,
+            Self::Vector { components, .. } | Self::FullVector { components } => Some(components),
+            _ => None,
         }
     }
-
-    fn to_binary(&self) -> BinaryAccumulatorConfig {
-        BinaryAccumulatorConfig {
-            kind: self.kind(),
-            discrete_projections: self.discrete_projections().cloned(),
-            moments: self.moments(),
-            components: match self {
-                Self::Vector { components, .. } | Self::FullVector { components } => {
-                    Some(components.clone())
-                }
-                _ => None,
-            },
-            training_projection: match self {
-                Self::Vector {
-                    training_projection,
-                    ..
-                } => Some(BinaryTrainingProjection::from(training_projection.clone())),
-                _ => None,
-            },
-        }
+    pub fn is_scalar(&self) -> bool {
+        self.components().is_some_and(|c| c == ["value"])
     }
-
-    fn from_parts(
-        kind: AccumulatorConfigKind,
-        discrete_projections: Option<DiscreteProjectionConfig>,
-        moments: AccumulatorMomentConfig,
-        components: Option<Vec<String>>,
-        training_projection: Option<TrainingProjection>,
-    ) -> Self {
-        match kind {
-            AccumulatorConfigKind::Empty => Self::Empty,
-            AccumulatorConfigKind::Scalar => Self::Scalar {
-                discrete_projections,
-                moments,
-            },
-            AccumulatorConfigKind::Vector => {
-                let components = components.unwrap_or_else(|| vec!["value".to_string()]);
-                let training_projection = training_projection
-                    .unwrap_or_else(|| TrainingProjection::component(components[0].clone()));
-                Self::Vector {
-                    components,
-                    training_projection,
-                    discrete_projections,
-                    moments,
-                }
-            }
-            AccumulatorConfigKind::Gammaloop => Self::Gammaloop,
-            AccumulatorConfigKind::FullVector => Self::FullVector {
-                components: components.unwrap_or_else(|| vec!["value".to_string()]),
-            },
-        }
-    }
-
-    fn kind_accepts_discrete_projections(kind: AccumulatorConfigKind) -> bool {
-        matches!(
-            kind,
-            AccumulatorConfigKind::Scalar | AccumulatorConfigKind::Vector
-        )
-    }
-
     pub fn discrete_projections(&self) -> Option<&DiscreteProjectionConfig> {
         match self {
-            Self::Scalar {
-                discrete_projections,
-                ..
-            }
-            | Self::Vector {
+            Self::Vector {
                 discrete_projections,
                 ..
             } => discrete_projections.as_ref(),
-            Self::Empty | Self::Gammaloop | Self::FullVector { .. } => None,
+            _ => None,
         }
     }
-
     pub fn moments(&self) -> AccumulatorMomentConfig {
         match self {
-            Self::Scalar { moments, .. } | Self::Vector { moments, .. } => *moments,
-            Self::Empty | Self::Gammaloop | Self::FullVector { .. } => {
-                AccumulatorMomentConfig::default()
-            }
+            Self::Vector { moments, .. } => *moments,
+            _ => Default::default(),
         }
     }
-
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(config) = self.discrete_projections() {
-            config.validate()?;
-        }
-        self.moments().validate()?;
-        if let Self::Scalar {
-            discrete_projections: Some(config),
-            ..
-        } = self
-            && !config.streams.is_empty()
-        {
-            return Err(
-                "discrete_projections.streams is only valid for vector accumulators".to_string(),
-            );
+        if let Some(components) = self.components() {
+            if components.is_empty() {
+                return Err("accumulator components must not be empty".into());
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for name in components {
+                if name.trim().is_empty() || name == "training_projection" || !seen.insert(name) {
+                    return Err("accumulator component names must be non-empty, unique, and not 'training_projection'".into());
+                }
+            }
         }
         if let Self::Vector {
             components,
@@ -386,279 +214,163 @@ impl AccumulatorConfig {
             ..
         } = self
         {
-            validate_vector_accumulator(components, training_projection)?;
-            if let Some(config) = discrete_projections {
-                validate_discrete_projection_streams(components, config)?;
+            if let TrainingProjection::Component { name } = training_projection
+                && !components.contains(name)
+            {
+                return Err(format!(
+                    "training projection references unknown component {name:?}"
+                ));
             }
-        }
-        if let Self::FullVector { components } = self
-            && components.is_empty()
-        {
-            return Err("full_vector accumulator components must not be empty".to_string());
+            if let Some(config) = discrete_projections {
+                config.validate()?;
+                for stream in &config.streams {
+                    if stream != "training_projection" && !components.contains(stream) {
+                        return Err(format!(
+                            "discrete_projections.streams references unknown vector stream '{stream}'"
+                        ));
+                    }
+                }
+            }
         }
         Ok(())
     }
-
-    pub fn semantic_kind(&self) -> crate::evaluation::SemanticAccumulatorKind {
-        match self {
-            Self::Empty | Self::Scalar { .. } => crate::evaluation::SemanticAccumulatorKind::Scalar,
-            Self::Vector { .. } => crate::evaluation::SemanticAccumulatorKind::Vector,
-            Self::FullVector { components } if components == &["value".to_string()] => {
-                crate::evaluation::SemanticAccumulatorKind::Scalar
-            }
-            Self::FullVector { .. } => crate::evaluation::SemanticAccumulatorKind::Vector,
-            Self::Gammaloop => crate::evaluation::SemanticAccumulatorKind::Scalar,
-        }
-    }
-}
-
-fn validate_discrete_projection_streams(
-    components: &[String],
-    config: &DiscreteProjectionConfig,
-) -> Result<(), String> {
-    for stream in &config.streams {
-        if stream == "training_projection" || components.iter().any(|component| component == stream)
-        {
-            continue;
-        }
-        return Err(format!(
-            "discrete_projections.streams references unknown vector stream '{stream}'"
-        ));
-    }
-    Ok(())
 }
 
 impl Serialize for AccumulatorConfig {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if !serializer.is_human_readable() {
-            return self.to_binary().serialize(serializer);
-        }
-
-        #[derive(Serialize)]
-        struct Rich<'a> {
-            kind: &'static str,
-            #[serde(
-                rename = "discrete_projections",
-                skip_serializing_if = "Option::is_none"
-            )]
-            discrete_projections: Option<&'a DiscreteProjectionConfig>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            components: Option<&'a [String]>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            training_projection: Option<&'a TrainingProjection>,
-            #[serde(skip_serializing_if = "is_default_moment_config")]
-            moments: AccumulatorMomentConfig,
-        }
-
-        match self {
-            Self::Vector {
-                components,
-                training_projection,
-                discrete_projections,
-                moments,
-            } => Rich {
-                kind: self.kind_str(),
-                discrete_projections: discrete_projections.as_ref(),
-                components: Some(components.as_slice()),
-                training_projection: Some(training_projection),
-                moments: *moments,
-            }
-            .serialize(serializer),
-            Self::FullVector { components } => Rich {
-                kind: self.kind_str(),
-                discrete_projections: None,
-                components: Some(components.as_slice()),
-                training_projection: None,
-                moments: AccumulatorMomentConfig::default(),
-            }
-            .serialize(serializer),
-            Self::Scalar {
-                discrete_projections: Some(discrete_projections),
-                moments,
-            } => Rich {
-                kind: self.kind_str(),
-                discrete_projections: Some(discrete_projections),
-                components: None,
-                training_projection: None,
-                moments: *moments,
-            }
-            .serialize(serializer),
-            Self::Scalar { moments, .. } if *moments != AccumulatorMomentConfig::default() => {
-                Rich {
-                    kind: self.kind_str(),
-                    discrete_projections: None,
-                    components: None,
-                    training_projection: None,
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            match self {
+                Self::Empty => AccumulatorInput::Empty,
+                Self::Gammaloop => AccumulatorInput::Gammaloop,
+                Self::FullVector { components } => AccumulatorInput::FullVector {
+                    components: components.clone(),
+                },
+                Self::Vector {
+                    components,
+                    training_projection,
+                    discrete_projections,
+                    moments,
+                } => AccumulatorInput::Vector {
+                    components: components.clone(),
+                    training_projection: Some(training_projection.clone()),
+                    discrete_projections: discrete_projections.clone(),
                     moments: *moments,
-                }
-                .serialize(serializer)
+                },
             }
-            _ => serializer.serialize_str(self.kind_str()),
+            .serialize(serializer)
+        } else {
+            match self {
+                Self::Empty => BinaryAccumulatorConfig::Empty,
+                Self::Gammaloop => BinaryAccumulatorConfig::Gammaloop,
+                Self::FullVector { components } => BinaryAccumulatorConfig::FullVector {
+                    components: components.clone(),
+                },
+                Self::Vector {
+                    components,
+                    training_projection,
+                    discrete_projections,
+                    moments,
+                } => BinaryAccumulatorConfig::Vector {
+                    components: components.clone(),
+                    training_projection: match training_projection {
+                        TrainingProjection::Component { name } => {
+                            BinaryProjection::Component(name.clone())
+                        }
+                        TrainingProjection::Norm => BinaryProjection::Norm,
+                    },
+                    discrete_projections: discrete_projections.clone(),
+                    moments: *moments,
+                },
+            }
+            .serialize(serializer)
         }
     }
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum HumanAccumulatorConfig {
-    Named(String),
-    Rich(RichAccumulatorConfig),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RichAccumulatorConfig {
-    kind: String,
-    discrete_projections: Option<DiscreteProjectionConfig>,
-    #[serde(default)]
-    moments: AccumulatorMomentConfig,
-    components: Option<Vec<String>>,
-    training_projection: Option<TrainingProjection>,
 }
 
 impl<'de> Deserialize<'de> for AccumulatorConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if !deserializer.is_human_readable() {
-            let binary = BinaryAccumulatorConfig::deserialize(deserializer)?;
-            if binary.discrete_projections.is_some()
-                && !Self::kind_accepts_discrete_projections(binary.kind)
-            {
-                return Err(serde::de::Error::custom(
-                    "discrete_projections is only valid for scalar and vector accumulators",
-                ));
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let config = if deserializer.is_human_readable() {
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum Input {
+                Named(String),
+                Rich(AccumulatorInput),
             }
-            return Ok(Self::from_parts(
-                binary.kind,
-                binary.discrete_projections,
-                binary.moments,
-                binary.components,
-                binary.training_projection.map(TrainingProjection::from),
-            ));
-        }
-
-        match HumanAccumulatorConfig::deserialize(deserializer)? {
-            HumanAccumulatorConfig::Named(kind) => accumulator_from_kind_str(
-                &kind,
-                None,
-                AccumulatorMomentConfig::default(),
-                None,
-                None,
-            ),
-            HumanAccumulatorConfig::Rich(config) => accumulator_from_kind_str(
-                &config.kind,
-                config.discrete_projections,
-                config.moments,
-                config.components,
-                config.training_projection,
-            ),
-        }
+            let input = match Input::deserialize(deserializer)? {
+                Input::Rich(input) => input,
+                Input::Named(name) => serde_json::from_value(serde_json::json!({"kind": name}))
+                    .map_err(serde::de::Error::custom)?,
+            };
+            match input {
+                AccumulatorInput::Empty => Self::Empty,
+                AccumulatorInput::Gammaloop => Self::Gammaloop,
+                AccumulatorInput::FullVector { components } => Self::FullVector { components },
+                AccumulatorInput::Scalar {
+                    discrete_projections,
+                    moments,
+                } => Self::Vector {
+                    components: scalar_components(),
+                    training_projection: TrainingProjection::component("value"),
+                    discrete_projections,
+                    moments,
+                },
+                AccumulatorInput::Vector {
+                    components,
+                    training_projection,
+                    discrete_projections,
+                    moments,
+                } => {
+                    let training_projection = match training_projection {
+                        Some(projection) => projection,
+                        None => TrainingProjection::component(
+                            components
+                                .first()
+                                .ok_or_else(|| {
+                                    serde::de::Error::custom(
+                                        "accumulator components must not be empty",
+                                    )
+                                })?
+                                .clone(),
+                        ),
+                    };
+                    Self::Vector {
+                        components,
+                        training_projection,
+                        discrete_projections,
+                        moments,
+                    }
+                }
+            }
+        } else {
+            match BinaryAccumulatorConfig::deserialize(deserializer)? {
+                BinaryAccumulatorConfig::Empty => Self::Empty,
+                BinaryAccumulatorConfig::Gammaloop => Self::Gammaloop,
+                BinaryAccumulatorConfig::FullVector { components } => {
+                    Self::FullVector { components }
+                }
+                BinaryAccumulatorConfig::Vector {
+                    components,
+                    training_projection,
+                    discrete_projections,
+                    moments,
+                } => Self::Vector {
+                    components,
+                    training_projection: match training_projection {
+                        BinaryProjection::Component(name) => TrainingProjection::component(name),
+                        BinaryProjection::Norm => TrainingProjection::Norm,
+                    },
+                    discrete_projections,
+                    moments,
+                },
+            }
+        };
+        config.validate().map_err(serde::de::Error::custom)?;
+        Ok(config)
     }
 }
 
-fn accumulator_from_kind_str<E>(
-    kind: &str,
-    discrete_projections: Option<DiscreteProjectionConfig>,
-    moments: AccumulatorMomentConfig,
-    components: Option<Vec<String>>,
-    training_projection: Option<TrainingProjection>,
-) -> Result<AccumulatorConfig, E>
-where
-    E: serde::de::Error,
-{
-    match kind {
-        "empty" => reject_discrete_projections(AccumulatorConfigKind::Empty, discrete_projections)
-            .map(|_| AccumulatorConfig::Empty),
-        "scalar" => Ok(AccumulatorConfig::Scalar {
-            discrete_projections,
-            moments,
-        }),
-        "vector" => {
-            let components = components.unwrap_or_else(|| vec!["value".to_string()]);
-            if components.is_empty() {
-                return Err(E::custom("vector accumulator components must not be empty"));
-            }
-            let training_projection = training_projection
-                .unwrap_or_else(|| TrainingProjection::component(components[0].clone()));
-            validate_vector_accumulator(&components, &training_projection).map_err(E::custom)?;
-            Ok(AccumulatorConfig::Vector {
-                components,
-                training_projection,
-                discrete_projections,
-                moments,
-            })
-        }
-        "gammaloop" => {
-            reject_discrete_projections(AccumulatorConfigKind::Gammaloop, discrete_projections)
-                .map(|_| AccumulatorConfig::Gammaloop)
-        }
-        "full_vector" => {
-            reject_discrete_projections(AccumulatorConfigKind::FullVector, discrete_projections)?;
-            let components = components.unwrap_or_else(|| vec!["value".to_string()]);
-            if components.is_empty() {
-                return Err(E::custom(
-                    "full_vector accumulator components must not be empty",
-                ));
-            }
-            Ok(AccumulatorConfig::FullVector { components })
-        }
-        other => Err(serde::de::Error::unknown_variant(
-            other,
-            &["empty", "scalar", "vector", "gammaloop", "full_vector"],
-        )),
-    }
-}
-
-fn validate_vector_accumulator(
-    components: &[String],
-    training_projection: &TrainingProjection,
-) -> Result<(), String> {
-    if components.is_empty() {
-        return Err("vector accumulator components must not be empty".to_string());
-    }
-    if components
-        .iter()
-        .any(|component| component.trim().is_empty())
-    {
-        return Err("vector accumulator components must not contain empty names".to_string());
-    }
-    match training_projection {
-        TrainingProjection::Component { name } => {
-            if !components.iter().any(|component| component == name) {
-                return Err(format!(
-                    "vector accumulator training projection references unknown component {name:?}"
-                ));
-            }
-        }
-        TrainingProjection::Norm => {}
-    }
-    Ok(())
-}
-
-fn reject_discrete_projections<E>(
-    kind: AccumulatorConfigKind,
-    discrete_projections: Option<DiscreteProjectionConfig>,
-) -> Result<(), E>
-where
-    E: serde::de::Error,
-{
-    if discrete_projections.is_some() && !AccumulatorConfig::kind_accepts_discrete_projections(kind)
-    {
-        Err(E::custom(
-            "discrete_projections is only valid for scalar and vector accumulators",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EvaluatorConfig {
     Gammaloop {
         #[serde(flatten)]
@@ -678,73 +390,135 @@ pub enum EvaluatorConfig {
     },
 }
 
-impl EvaluatorConfig {}
-
+/// Complete sampling pipeline. Algorithm state belongs to the sampler; the
+/// runtime owns materialization and coordinate transforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SamplerAggregatorConfig {
+pub struct SamplingConfig {
+    #[serde(flatten)]
+    pub sampler: SamplerConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materializer: Option<MaterializerConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transforms: Option<Vec<BatchTransformConfig>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SamplerConfig {
     NaiveMonteCarlo {
         #[serde(flatten)]
         params: NaiveMonteCarloSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
     },
     RasterPlane {
         #[serde(flatten)]
         params: RasterPlaneSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
     },
     RasterLine {
         #[serde(flatten)]
         params: RasterLineSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
     },
     PdfAdaptationRasterPlane {
         #[serde(flatten)]
         params: RasterPlaneSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
     },
     PdfAdaptationRasterLine {
         #[serde(flatten)]
         params: RasterLineSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
     },
     HavanaTraining {
         #[serde(flatten)]
         params: HavanaSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
     },
     HavanaInference {
         #[serde(flatten)]
         params: HavanaInferenceSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
     },
     ProcessSampler {
         #[serde(flatten)]
-        params: ProcessSamplerParams,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        materializer: Option<MaterializerConfig>,
+        params: crate::ProcessConfig,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MaterializerConfig {
     ProcessMaterializer {
         #[serde(flatten)]
-        params: ProcessMaterializerParams,
+        params: crate::ProcessConfig,
     },
 }
 
 #[cfg(test)]
 mod tests {
     use super::{AccumulatorConfig, AccumulatorMomentConfig};
+
+    #[test]
+    fn scalar_syntax_is_canonical_and_binary_config_is_validated() {
+        for value in [
+            serde_json::json!("scalar"),
+            serde_json::json!({"kind":"scalar"}),
+            serde_json::json!({"kind":"vector", "components":["value"]}),
+        ] {
+            let config: AccumulatorConfig = serde_json::from_value(value).unwrap();
+            assert_eq!(config, AccumulatorConfig::scalar());
+            let bytes =
+                bincode::serde::encode_to_vec(&config, bincode::config::standard()).unwrap();
+            let (restored, _): (AccumulatorConfig, usize) =
+                bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+            assert_eq!(restored, config);
+        }
+        for components in [
+            vec![],
+            vec!["value".into(), "value".into()],
+            vec!["other".into()],
+        ] {
+            let invalid = super::BinaryAccumulatorConfig::Vector {
+                components,
+                training_projection: super::BinaryProjection::Component("value".into()),
+                discrete_projections: None,
+                moments: AccumulatorMomentConfig::default(),
+            };
+            let bytes =
+                bincode::serde::encode_to_vec(invalid, bincode::config::standard()).unwrap();
+            assert!(
+                bincode::serde::decode_from_slice::<AccumulatorConfig, _>(
+                    &bytes,
+                    bincode::config::standard()
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn moment_defaults_and_explicit_order_are_identical() {
+        let default: AccumulatorConfig = toml::from_str("kind = 'scalar'").unwrap();
+        let explicit: AccumulatorConfig = toml::from_str("kind = 'scalar'\nmoments = 2").unwrap();
+        assert_eq!(default, explicit);
+        assert_eq!(
+            serde_json::to_value(default).unwrap(),
+            serde_json::to_value(explicit).unwrap()
+        );
+        for order in [2_u8, 4] {
+            let config = AccumulatorMomentConfig::try_from(order).unwrap();
+            assert_eq!(
+                serde_json::to_value(config).unwrap(),
+                serde_json::json!(order)
+            );
+            let bytes = bincode::serde::encode_to_vec(config, bincode::config::standard()).unwrap();
+            let (restored, _): (AccumulatorMomentConfig, usize) =
+                bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+            assert_eq!(restored, config);
+        }
+        for invalid in ["0", "3", "'default'", "{ max_order = 2 }"] {
+            assert!(
+                toml::from_str::<AccumulatorConfig>(&format!(
+                    "kind = 'scalar'\nmoments = {invalid}"
+                ))
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn accumulator_config_parses_discrete_projections() {
@@ -763,7 +537,7 @@ fixed_dims = { "0" = 0 }
         )
         .expect("accumulator config");
 
-        let AccumulatorConfig::Scalar {
+        let AccumulatorConfig::Vector {
             discrete_projections: Some(projections),
             ..
         } = config
@@ -799,7 +573,7 @@ dims = [0]
         let config: AccumulatorConfig = toml::from_str(
             r#"
 kind = "scalar"
-moments = { max_order = 4 }
+moments = 4
 "#,
         )
         .expect("accumulator config");
@@ -814,7 +588,7 @@ moments = { max_order = 4 }
 kind = "vector"
 components = ["real", "imag"]
 training_projection = { kind = "component", name = "real" }
-moments = { max_order = 4 }
+moments = 4
 "#,
         )
         .expect("vector accumulator config");
@@ -824,7 +598,7 @@ moments = { max_order = 4 }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BatchTransformConfig {
     UnitBall {
         #[serde(flatten)]
@@ -836,6 +610,56 @@ pub enum BatchTransformConfig {
     },
     ProcessBatchTransform {
         #[serde(flatten)]
-        params: ProcessBatchTransformParams,
+        params: crate::ProcessConfig,
     },
+}
+
+impl<'de> Deserialize<'de> for EvaluatorConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Decode the tagged variant directly, so its parameter struct can reject
+        // unknown fields without nested serde flatten losing field ownership.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum Input {
+            Gammaloop(GammaLoopParams),
+            Unit(UnitEvaluatorParams),
+            Symbolica(SymbolicaParams),
+            ProcessEvaluator(ProcessEvaluatorParams),
+        }
+        Ok(match Input::deserialize(deserializer)? {
+            Input::Gammaloop(params) => Self::Gammaloop { params },
+            Input::Unit(params) => Self::Unit { params },
+            Input::Symbolica(params) => Self::Symbolica { params },
+            Input::ProcessEvaluator(params) => Self::ProcessEvaluator { params },
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for SamplerConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Decode the tagged variant directly, so its parameter struct can reject
+        // unknown fields without nested serde flatten losing field ownership.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum Input {
+            NaiveMonteCarlo(NaiveMonteCarloSamplerParams),
+            RasterPlane(RasterPlaneSamplerParams),
+            RasterLine(RasterLineSamplerParams),
+            PdfAdaptationRasterPlane(RasterPlaneSamplerParams),
+            PdfAdaptationRasterLine(RasterLineSamplerParams),
+            HavanaTraining(HavanaSamplerParams),
+            HavanaInference(HavanaInferenceSamplerParams),
+            ProcessSampler(crate::ProcessConfig),
+        }
+        Ok(match Input::deserialize(deserializer)? {
+            Input::NaiveMonteCarlo(params) => Self::NaiveMonteCarlo { params },
+            Input::RasterPlane(params) => Self::RasterPlane { params },
+            Input::RasterLine(params) => Self::RasterLine { params },
+            Input::PdfAdaptationRasterPlane(params) => Self::PdfAdaptationRasterPlane { params },
+            Input::PdfAdaptationRasterLine(params) => Self::PdfAdaptationRasterLine { params },
+            Input::HavanaTraining(params) => Self::HavanaTraining { params },
+            Input::HavanaInference(params) => Self::HavanaInference { params },
+            Input::ProcessSampler(params) => Self::ProcessSampler { params },
+        })
+    }
 }

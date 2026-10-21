@@ -61,6 +61,10 @@ pub(super) fn build_app(state: AppState) -> Router {
             "/node-launch-requests/:id/progress",
             post(update_node_launch_request_progress),
         )
+        .route(
+            "/node-launch-requests/:id/lease",
+            post(renew_external_launch_lease),
+        )
         .route("/templates/:kind", get(list_templates).post(save_template))
         .route(
             "/templates/:kind/:name",

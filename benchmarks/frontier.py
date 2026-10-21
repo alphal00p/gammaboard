@@ -275,13 +275,13 @@ name = "initialize-grid"
 kind = "sample"
 stop_condition = { max_samples = 16 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "havana_training", seed = 1234, bins = 2, samples_for_update = 16, initial_training_rate = 0.0, final_training_rate = 0.0 } }
+sampler = { config = { kind = "havana_training", seed = 1234, bins = 2, samples_for_update = 16, initial_training_rate = 0.0, final_training_rate = 0.0 } }
 [[task_queue]]
 name = "measure"
 kind = "sample"
 stop_condition = { max_samples = 1000000000000000 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "havana_inference", seed = 1234 } }
+sampler = { config = { kind = "havana_inference", seed = 1234 } }
 """
     return text
 
@@ -304,13 +304,13 @@ def active_evaluators(snapshot):
 def runtime(snapshot):
     if len(snapshot["samplers"]) != 1:
         raise ValueError("one sampler is required")
-    return snapshot["samplers"][0]["runtime_metrics"]
+    return snapshot["samplers"][0]["metrics"]
 
 
 def applied(snapshot, settings):
     if len(snapshot["samplers"]) != 1:
         return False
-    config = snapshot["samplers"][0]["engine_diagnostics"].get("runner", {}).get("queue_config", {})
+    config = runtime(snapshot).get("queue_config", {})
     return all(config.get(k) == v for k, v in settings.items())
 
 
@@ -318,7 +318,7 @@ def warmed(snapshot, baseline, point, completed_offset=0):
     # Wait past all work generated before the tuning acknowledgement, including
     # an undispatched draw, then accept two new batches per worker. No pause knob.
     previous = runtime(baseline)
-    buffered = baseline["samplers"][0]["engine_diagnostics"]["runner"]["buffered_generated_samples"]
+    buffered = previous["buffered_generated_samples"]
     cutoff = max(
         previous["completed_samples_total"],
         previous["produced_samples_total"] + buffered + completed_offset,
@@ -335,7 +335,7 @@ def sampler_progress(measurement):
     first, last = [runtime(s) for s in (measurement["snapshots"][0], measurement["snapshots"][-1])]
     if any(
         first.get(k) is None or first[k] != last.get(k)
-        for k in ["runner_epoch", "node_uuid", "task_id"]
+        for k in ["epoch", "node_uuid", "task_id"]
     ):
         raise RuntimeError("sampler identity changed during measurement")
     accepted = last["completed_samples_total"] - first["completed_samples_total"]

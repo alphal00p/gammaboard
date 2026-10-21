@@ -11,6 +11,7 @@ command = ["$resources/../process_api/examples/python_scalar_sin/.venv/bin/pytho
 cwd = "$resources/../process_api/examples/python_scalar_sin/src"
 domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
+output = {kind = "values", components = ["value"]}
 
 [[task_queue]]
 name = "accumulator"
@@ -41,9 +42,9 @@ fixed_dims = { "0" = 1 }
 name = "train"
 kind = "sample"
 stop_condition = { max_samples = 100000 }
-sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", requires_training_values = true, args = { seed = 0, bins = 16, samples_for_update = 4096, stop_training_after_n_samples = 100000, initial_training_rate = 0.1, final_training_rate = 0.01, save_path = "havana_demo.grid" } } }
 
 # Reset the accumulator so the inference estimate is not polluted by training samples.
+sampler = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", args = { seed = 0, bins = 16, samples_for_update = 4096, stop_training_after_n_samples = 100000, initial_training_rate = 0.1, final_training_rate = 0.01, save_path = "havana_demo.grid" } } }
 [[task_queue]]
 name = "reset-for-inference"
 kind = "set_accumulator"
@@ -58,4 +59,4 @@ training_projection = { kind = "component", name = "value" }
 name = "infer"
 kind = "sample"
 stop_condition = { max_samples = 1000000 }
-sampler_aggregator = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", requires_training_values = false, args = { seed = 0, samples_for_update = 100000, inference = true, grid_path = "havana_demo.grid" } } }
+sampler = { config = { kind = "process_sampler", command = ["nix", "shell", "path:$resources/../process_api/examples/python_sampler_symbolica_havana#runtime", "-c", "env", "PYTHONPATH=$resources/../process_api/python/src:$resources/../process_api/examples/python_sampler_symbolica_havana/src", "python", "-u", "-m", "run_sampler"], cwd = "$resources", args = { seed = 0, samples_for_update = 100000, inference = true, grid_path = "havana_demo.grid" } } }

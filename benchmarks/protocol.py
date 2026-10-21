@@ -169,7 +169,7 @@ def report(directory):
     notes = [
         "Real Rust adapters and Python SDK; no database. Three warmup calls are discarded; 32–128 measured calls per case in the current harness (saved raw timings retain the actual counts). Startup is excluded and retained separately.",
         "Overhead includes packing, validation, pipes, native generation decoding/evaluator accumulation, result cleanup and scheduling. It is not pure wire latency. Sampler training cycles sum generation and feedback costs at the same batch size.",
-        "Sampler generation remains flat. Generation::into_batch() in older measurements only unwrapped a LatentBatchSpec; it did not expand evaluator Points. Both roles time result cleanup, with callback time subtracted per call.",
+        "Sampler generation remains flat. Generation::into_batch() in older measurements only unwrapped a flat generation batch; it did not expand evaluator Points. Both roles time result cleanup, with callback time subtracted per call.",
         "The generic evaluator returns per-sample values over IPC in both modes for accumulation; enabling feedback additionally retains weighted values. Similar evaluator curves are expected.",
     ]
     return publish(directory, "Process API overhead", rows, ["overhead.png"], notes)

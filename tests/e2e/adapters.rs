@@ -6,13 +6,15 @@ async fn full_stack_cli_symbolica_havana_pdf_two_bumps_e2e() -> anyhow::Result<(
     let mut harness = FullStackHarness::new().await?;
 
     let config = temp_config(
-        r#"
-name = "symbolica-havana-pdf-1d2d-e2e"
+        r#"name = "symbolica-havana-pdf-1d2d-e2e"
 
 [evaluator]
 kind = "symbolica"
-expr = "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z"
 args = ["x", "y", "z"]
+
+[evaluator.source]
+kind = "expression"
+expr = "1/((x-1/4)^2+(y-1/4)^2+1/40) + 1/((x-3/4)^2+(y-3/4)^2+1/40) + z"
 
 [evaluator_runner_params]
 performance_snapshot_interval_ms = 2000
@@ -24,11 +26,8 @@ frontend_sync_interval_ms = 2000
 db_pool_size = 2
 
 [sampler_aggregator_runner_params.queue]
-
 target_batch_eval_ms = 500.0
-
 max_batch_size = 100000
-
 max_batches_per_tick = 100
 max_insert_bundle_size = 5
 max_concurrent_insert_tasks = 8
@@ -43,9 +42,11 @@ accumulator = "scalar"
 [[task_queue]]
 name = "havana-train"
 kind = "sample"
+
 [task_queue.stop_condition]
 max_samples = 200000
-[task_queue.sampler_aggregator.config]
+
+[task_queue.sampler.config]
 kind = "havana_training"
 seed = 0
 bins = 64
@@ -125,7 +126,7 @@ count = 128
             if !seen_batch_ids.insert(batch_id) {
                 continue;
             }
-            let latent = LatentBatch::from_bytes(&payload)?;
+            let latent = gammaboard::core::EvaluationBatch::from_bytes(&payload)?.samples;
             let batch = latent.payload.as_batch()?;
             for point in batch.points() {
                 assert_eq!(
@@ -356,7 +357,7 @@ fixed_dims = {{ "0" = 0 }}
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
-sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "env", "PYTHONPATH={sampler_pythonpath}", "python", "-u", "-m", "run_sampler"], requires_training_values = true, args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
+sampler = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "env", "PYTHONPATH={sampler_pythonpath}", "python", "-u", "-m", "run_sampler"], args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
 "#,
         process_api_python.display(),
         evaluator_python.display(),
@@ -448,10 +449,16 @@ async fn madnis_metadata_and_batch_boundaries() -> anyhow::Result<()> {
 
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
+    let sampler_artifacts = tempfile::tempdir()?;
     let mut task_toml = String::new();
     for (case_idx, (queue_max_batch_size, madnis_max_batch_size, samples_for_update)) in
         cases.iter().copied().enumerate()
     {
+        let save_path = sampler_artifacts
+            .path()
+            .join(format!("madnis-{case_idx}.pkl"))
+            .display()
+            .to_string();
         task_toml.push_str(&format!(
             r#"
 
@@ -460,7 +467,7 @@ name = "madnis-case-{case_idx}"
 kind = "sample"
 stop_condition = {{ max_samples = {samples_for_update} }}
 accumulator = "latest"
-sampler_aggregator = {{ config = {{ kind = "process_sampler", command = ["env", "PYTHONPATH={madnis_pythonpath}", "{madnis_python}", "-u", "-m", "run_sampler"], requires_training_values = true, args = {{ seed = {case_idx}, training_steps = 1, training_batch_size = {samples_for_update}, max_batch_size = {madnis_max_batch_size}, use_gpu = false, learning_rate = 0.001, use_scheduler = false, discrete_model = "made", discrete_dims_position = "first", flow_config = {{ layers = 1, units = 8, bins = 4 }}, made_config = {{ layers = 1, nodes_per_feature = 8 }} }} }} }}
+sampler = {{ config = {{ kind = "process_sampler", command = ["env", "PYTHONPATH={madnis_pythonpath}", "{madnis_python}", "-u", "-m", "run_sampler"], args = {{ save_path = "{save_path}", seed = {case_idx}, training_steps = 1, training_batch_size = {samples_for_update}, max_batch_size = {madnis_max_batch_size}, use_gpu = false, learning_rate = 0.001, use_scheduler = false, discrete_model = "made", discrete_dims_position = "first", flow_config = {{ layers = 1, units = 8, bins = 4 }}, made_config = {{ layers = 1, nodes_per_feature = 8 }} }} }} }}
 
 [task_queue.queue_tuning]
 max_batch_size = {queue_max_batch_size}
@@ -563,7 +570,7 @@ training_projection = {{ kind = "component", name = "real" }}
                 async move {
                     let diagnostics: Option<JsonValue> = sqlx::query_scalar(
                         r#"
-                        SELECT engine_diagnostics
+                        SELECT metrics->'engine_diagnostics'
                         FROM sampler_aggregator_performance_latest
                         WHERE run_id = $1 AND worker_id = 'w-1'
                         "#,
@@ -658,8 +665,8 @@ name = "{run_name}"
 kind = "process_evaluator"
 command = ["env", "PYTHONPATH={pythonpath}", "{python}", "-u", "-m", "run_evaluator"]
 cwd = "{}"
-domain = {{ continuous = {{ dims = 1 }} }}
-accumulator = "gammaloop"
+domain = {{ rectangular = {{ discrete_cardinalities = [], continuous_dims = 1 }} }}
+output = {{ kind = "gammaloop" }}
 
 [[task_queue]]
 name = "accumulator"
@@ -673,7 +680,7 @@ name = "sample"
 kind = "sample"
 stop_condition = {{ max_samples = 8 }}
 accumulator = "latest"
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo", seed = 0 }} }}
+sampler = {{ config = {{ kind = "naive_monte_carlo", seed = 0 }} }}
 
 [task_queue.queue_tuning]
 max_batch_size = 8
@@ -789,9 +796,9 @@ name = "rust-apptainer-process-evaluator-e2e"
 kind = "process_evaluator"
 command = ["apptainer", "exec", "{}", "breit-wigner-worker"]
 domain = {{ discrete = {{ axis_label = "d0", branches = [
-  {{ index = 0, domain = {{ continuous = {{ dims = 3 }} }} }},
+  {{ index = 0, domain = {{ rectangular = {{ discrete_cardinalities = [], continuous_dims = 3 }} }} }},
   {{ index = 1, domain = {{ discrete = {{ axis_label = "d1", branches = [
-    {{ index = 0, domain = {{ continuous = {{ dims = 1 }} }} }},
+    {{ index = 0, domain = {{ rectangular = {{ discrete_cardinalities = [], continuous_dims = 1 }} }} }},
     {{ index = 1, domain = {{ rectangular = {{ discrete_cardinalities = [5], continuous_dims = 5 }} }} }},
   ] }} }} }},
 ] }} }}
@@ -810,7 +817,7 @@ training_projection = {{ kind = "component", name = "value" }}
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
+sampler = {{ config = {{ kind = "naive_monte_carlo" }} }}
 "#,
         "../process_api/examples/rust_breit_wigner_evaluator/runtime.sif"
     ));
@@ -992,13 +999,13 @@ kind = "sample"
 publish_result = false
 stop_condition = {{ max_samples = 512 }}
 accumulator = {{ config = "gammaloop" }}
-sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 21, bins = 16, samples_for_update = 128 }} }}
+sampler = {{ config = {{ kind = "havana_training", seed = 21, bins = 16, samples_for_update = 128 }} }}
 [[task_queue]]
 name = "infer"
 kind = "sample"
 stop_condition = {{ max_samples = 2048 }}
 accumulator = {{ config = "gammaloop" }}
-sampler_aggregator = {{ config = {{ kind = "havana_inference", source = "latest_training_sampler_aggregator" }} }}
+sampler = {{ config = {{ kind = "havana_inference" }} }}
 [sampler_aggregator_runner_params.queue]
 max_batch_size = 64
 fixed_batch_size = 64

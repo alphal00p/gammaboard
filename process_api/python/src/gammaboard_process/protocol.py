@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import inspect
 import json
 import os
 import sys
 import traceback
 from typing import Any
 
-PROTOCOL = "gammaboard-jsonrpc-v4"
+PROTOCOL = "gammaboard-jsonrpc-v6"
 JSON_RPC_VERSION = "2.0"
 
 
@@ -21,7 +20,7 @@ class ProtocolIo:
         install_print_redirect("info")
 
     def send_frame(self, payload: dict[str, Any], binary: bytes = b"") -> None:
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
         header = f"Content-Length: {len(body)}\r\n"
         if binary:
             header += f"Binary-Length: {len(binary)}\r\n"
@@ -89,8 +88,6 @@ def _read_exact(length: int) -> bytes:
 def fixed_domain_shape(domain: dict[str, Any]) -> tuple[list[int], int]:
     if not isinstance(domain, dict):
         raise ValueError("domain must be an object")
-    if "continuous" in domain:
-        return [], int(domain["continuous"]["dims"])
     if "rectangular" in domain:
         rectangular = domain["rectangular"]
         return (
@@ -151,10 +148,8 @@ def instantiate_user_object(
         raise TypeError(
             "process args must not define reserved keys 'discrete_cardinalities', 'continuous_dims', or 'evaluator_metadata'"
         )
-    evaluator_metadata = {} if evaluator_metadata is None else evaluator_metadata
+    metadata_kwargs = {} if evaluator_metadata is None else {"evaluator_metadata": evaluator_metadata}
     if snapshot is not None:
-        if isinstance(snapshot, dict) and "save_path" not in snapshot and "save_path" in init_args:
-            snapshot = {**snapshot, "save_path": init_args["save_path"]}
         from_snapshot = getattr(target, "from_snapshot", None)
         if from_snapshot is None:
             raise TypeError("class must define from_snapshot(...) when restoring from snapshot")
@@ -164,32 +159,16 @@ def instantiate_user_object(
                 discrete_cardinalities=discrete_cardinalities,
                 continuous_dims=continuous_dims,
                 init_args=init_args,
-                **_optional_evaluator_metadata_kwargs(from_snapshot, evaluator_metadata),
+                **metadata_kwargs,
             )
         except NotImplementedError as exc:
             raise TypeError("class must override from_snapshot(...) when restoring from snapshot") from exc
     return target(
         discrete_cardinalities=discrete_cardinalities,
         continuous_dims=continuous_dims,
-        **_optional_evaluator_metadata_kwargs(target, evaluator_metadata),
+        **metadata_kwargs,
         **init_args,
     )
-
-
-def _optional_evaluator_metadata_kwargs(callable_obj: Any, evaluator_metadata: Any) -> dict[str, Any]:
-    try:
-        signature = inspect.signature(callable_obj)
-    except (TypeError, ValueError):
-        return {}
-    for parameter in signature.parameters.values():
-        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
-            return {"evaluator_metadata": evaluator_metadata}
-        if parameter.name == "evaluator_metadata" and parameter.kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        ):
-            return {"evaluator_metadata": evaluator_metadata}
-    return {}
 
 
 def normalize_discrete_subspaces(params: dict[str, Any]) -> list[dict[int, int]]:
@@ -201,10 +180,7 @@ def normalize_discrete_subspaces(params: dict[str, Any]) -> list[dict[int, int]]
         if not isinstance(subspace, dict):
             raise TypeError("each subspace must be an object")
         raw = subspace.get("fixed_dims", [])
-        if isinstance(raw, dict):
-            normalized.append({int(dim): int(value) for dim, value in raw.items()})
-        elif isinstance(raw, list):
-            normalized.append({int(entry["dim"]): int(entry["value"]) for entry in raw})
-        else:
-            raise TypeError("subspace.fixed_dims must be an array or object")
+        if not isinstance(raw, list):
+            raise TypeError("subspace.fixed_dims must be an array")
+        normalized.append({int(entry["dim"]): int(entry["value"]) for entry in raw})
     return normalized

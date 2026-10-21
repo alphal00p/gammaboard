@@ -35,6 +35,16 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("definition editors", () => {
+  test("a new-run draft survives a background change of selected run", async () => {
+    const view = renderRun(3);
+    fireEvent.click(await screen.findByRole("button", { name: "New run" }));
+    const draft = 'name="independent-draft"\n# still editing';
+    fireEvent.change(await screen.findByLabelText("Run TOML"), { target: { value: draft } });
+    view.rerender(<RunsWorkspace runs={runs} selectedRun={1} />);
+    await act(async () => {});
+    expect(screen.getByLabelText("Run TOML")).toHaveValue(draft);
+  });
+
   test.each([1, 3])("run %s opens its original definition and duplicates the edited draft", async (id) => {
     fixtures.templates = ["old.toml"];
     window.localStorage.setItem("dialogs.create_run.selected_template", "old.toml");
@@ -139,7 +149,8 @@ describe("definition editors", () => {
   test("copy and download export the exact current draft, including incomplete TOML", async () => {
     api.fetchRunDefinition.mockResolvedValueOnce({ toml: 'name = "ordinary"' });
     const createObjectURL = vi.fn(() => "blob:draft");
-    vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = vi.fn(); });
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = revokeObjectURL; });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     renderRun(3); await openRun();
     const draft = 'name = "changed"\n# work in progress\n[evaluator';
@@ -149,6 +160,7 @@ describe("definition editors", () => {
     await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(draft));
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     const blob = createObjectURL.mock.calls[0][0];
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:draft"));
     const text = await new Promise((resolve) => {
       const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsText(blob);
     });

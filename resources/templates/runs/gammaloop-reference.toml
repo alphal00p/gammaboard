@@ -17,22 +17,23 @@ kind = "sample"
 publish_result = false
 stop_condition = { max_samples = 10000 }
 accumulator = { config = "gammaloop" }
-[task_queue.sampler_aggregator.config]
-kind = "havana_training"
-seed = 0
-bins = 32
-samples_for_update = 1000
 [task_queue.queue_tuning]
 target_batch_eval_ms = 100.0
 max_batch_size = 1000
 
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = 0
+bins = 32
+samples_for_update = 1000
 [[task_queue]]
 name = "reference"
 kind = "sample"
 stop_condition = { max_samples = "$(samples:100000)" }
-measurement = { quantity = "central_value" }
-sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
+measurement = { selection = { kind = "all_component_means" } }
 accumulator = { config = "gammaloop" }
+sampler = { config = { kind = "havana_inference" } }
+
 [task_queue.queue_tuning]
 target_batch_eval_ms = 100.0
 max_batch_size = 1000

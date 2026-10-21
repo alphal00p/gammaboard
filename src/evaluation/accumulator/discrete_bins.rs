@@ -11,7 +11,7 @@ pub struct DiscreteProjectionBinState {
 }
 
 impl DiscreteProjectionBinState {
-    pub fn merge_in_place(&mut self, other: Self) {
+    pub(super) fn merge_in_place(&mut self, other: Self) {
         self.state.merge_plain(other.state);
     }
 
@@ -56,11 +56,12 @@ pub fn upsert_scalar_discrete_bin(
     discrete: &[i64],
     value: f64,
     point: &Point,
-) {
+    evaluation: Option<&crate::evaluation::batch::SampleEvaluation>,
+) -> Result<(), crate::core::EngineError> {
     let key = discrete_bin_key(discrete);
     if !bins.contains_key(&key) && bins.len() >= DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS {
         *overflow_count += 1;
-        return;
+        return Ok(());
     }
     let entry = bins
         .entry(key)
@@ -68,7 +69,5 @@ pub fn upsert_scalar_discrete_bin(
             discrete: discrete.to_vec(),
             state: ScalarAccumulatorState::plain(),
         });
-    entry
-        .state
-        .add_sample_without_discrete_projection(value, point);
+    entry.state.add_plain_sample(value, point, evaluation)
 }

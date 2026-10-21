@@ -26,5 +26,5 @@ settings use embedded defaults. Changing the connection limit requires a
 database restart. Use `--runtime-config PATH` for a separate configuration.
 Do not start a second deployment on occupied ports.
 
-See [examples](../../docs/examples.md), [operations](../../docs/operations.md),
+See [examples](../../docs/quickstart.md#examples), [operations](../../docs/operations.md),
 and [benchmarking](../../docs/benchmarking.md).

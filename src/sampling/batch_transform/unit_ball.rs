@@ -1,5 +1,4 @@
-use crate::core::EngineResultExt;
-use crate::core::{BuildError, EngineError};
+use crate::core::EngineError;
 use crate::evaluation::{Batch, BatchTransform};
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
@@ -18,19 +17,19 @@ impl UnitBallBatchTransform {
 }
 
 impl BatchTransform for UnitBallBatchTransform {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
         let continuous_dims = domain.fixed_continuous_dims().ok_or_else(|| {
-            BuildError::build("unit_ball batch transform requires a fixed continuous dimension")
+            EngineError::build("unit_ball batch transform requires a fixed continuous dimension")
         })?;
         if continuous_dims == 0 {
-            return Err(BuildError::build(
+            return Err(EngineError::build(
                 "unit_ball batch transform requires continuous_dims >= 1",
             ));
         }
         Ok(())
     }
 
-    fn apply(&self, batch: Batch) -> Result<Batch, EngineError> {
+    fn apply(&mut self, batch: Batch) -> Result<Batch, EngineError> {
         let dims = batch
             .points()
             .first()
@@ -42,8 +41,8 @@ impl BatchTransform for UnitBallBatchTransform {
             ));
         }
 
-        let mut transformed_points = Vec::with_capacity(batch.size());
-        for (row_idx, point) in batch.points().iter().enumerate() {
+        let mut transformed_points = batch.into_points();
+        for (row_idx, point) in transformed_points.iter_mut().enumerate() {
             if point.continuous.len() != dims {
                 return Err(EngineError::engine(format!(
                     "unit_ball batch transform requires homogeneous continuous dimensions, got {} and {}",
@@ -62,14 +61,11 @@ impl BatchTransform for UnitBallBatchTransform {
             }
 
             let (mapped, jacobian) = unit_hypercube_to_unit_ball(&unit);
-            transformed_points.push(point.clone_with_continuous_and_added_factor(
-                mapped,
-                "unit_ball_jacobian",
-                jacobian.abs(),
-            ));
+            point.continuous = mapped;
+            point.add_weight_factor("unit_ball_jacobian", jacobian.abs());
         }
 
-        Batch::new(transformed_points).engine_err()
+        Ok(Batch::new(transformed_points))
     }
 }
 

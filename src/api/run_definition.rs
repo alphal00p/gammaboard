@@ -1,9 +1,9 @@
 //! Public run documents. Integration defaults never leak into controller schemas.
 //! Child sources are frozen at submission; bindings are applied before expansion.
 use super::{ApiError, toml_template};
+use crate::core::RunTaskSpec;
 use crate::core::tasks::ChildRunSource;
-use crate::core::{RunTaskInput, RunTaskSpec};
-use crate::preprocess::RunAddConfig;
+use crate::preprocess::{RunDefinition, RunDefinitionBody};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -11,21 +11,19 @@ pub fn parse(
     raw: &str,
     bindings: BTreeMap<String, toml::Value>,
     base: Option<&Path>,
-) -> Result<RunAddConfig, ApiError> {
+) -> Result<RunDefinition, ApiError> {
     let value: toml::Value =
         toml::from_str(raw).map_err(|e| bad(format!("invalid run TOML: {e}")))?;
     let original: toml::Value = value.clone();
     let retain_original = bindings.is_empty();
     let mut config = instantiate(value, bindings, base)?;
     if retain_original
-        && config
-            .original_toml
-            .as_ref()
-            .and_then(|raw| toml::from_str::<toml::Value>(raw).ok())
+        && toml::from_str::<toml::Value>(&config.original_toml)
+            .ok()
             .as_ref()
             == Some(&original)
     {
-        config.original_toml = Some(raw.to_owned());
+        config.original_toml = raw.to_owned();
     }
     Ok(config)
 }
@@ -34,7 +32,7 @@ pub fn instantiate(
     mut value: toml::Value,
     bindings: BTreeMap<String, toml::Value>,
     base: Option<&Path>,
-) -> Result<RunAddConfig, ApiError> {
+) -> Result<RunDefinition, ApiError> {
     let base = base
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().map_err(|e| bad(e.to_string()))?);
@@ -53,15 +51,20 @@ pub fn instantiate(
         .get("name")
         .and_then(toml::Value::as_str)
         .ok_or_else(|| bad("run.name must be a string"))?
+        .trim()
         .to_owned();
-    if name.trim().is_empty() {
+    if name.is_empty() {
         return Err(bad("run.name must not be empty"));
     }
     let effective = value.clone();
-    if kind != "integration" {
+    let target = table
+        .remove("target")
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| bad(format!("invalid target: {e}")))?;
+    let body = if kind != "integration" {
         table.remove("name");
         table.remove("gammaboard");
-        let target = table.remove("target");
         table.insert("kind".into(), toml::Value::String(kind.clone()));
         let controller: RunTaskSpec = toml::Value::Table(table)
             .try_into()
@@ -71,14 +74,14 @@ pub fn instantiate(
             for child in children {
                 let config =
                     instantiate_child(child.run.clone(), child.replacements.clone(), None)?;
-                if config.kind != "integration" {
+                if config.kind() != "integration" {
                     return Err(bad(format!(
                         "campaign child '{}' must be an integration run",
                         child.name
                     )));
                 }
-                if !config.task_queue.as_ref().is_some_and(|tasks| {
-                    tasks.iter().any(|task| {
+                if !config.integration().is_some_and(|definition| {
+                    definition.task_queue.iter().any(|task| {
                         matches!(
                             task.task,
                             RunTaskSpec::Sample {
@@ -95,30 +98,19 @@ pub fn instantiate(
                 }
             }
         }
-        // Share durable execution/checkpoint infrastructure with integration tasks.
-        // This single controller record is not part of the public task-queue schema.
-        let mut config =
-            super::runs::parse_integration_value(toml::Value::Table(toml::map::Map::from_iter([
-                ("name".into(), toml::Value::String(name)),
-            ])))?;
-        config.task_queue = Some(vec![RunTaskInput {
-            name: Some(kind.clone()),
-            task: controller,
-        }]);
-        config.kind = kind;
-        config.target = target
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|e| bad(format!("invalid target: {e}")))?;
-        config.original_toml = Some(frozen);
-        config.effective_document = Some(effective);
-        Ok(config)
+        RunDefinitionBody::Controller(Box::new(controller))
     } else {
-        let mut config = super::runs::parse_integration_value(toml::Value::Table(table))?;
-        config.original_toml = Some(frozen);
-        config.effective_document = Some(effective);
-        Ok(config)
-    }
+        RunDefinitionBody::Integration(Box::new(super::runs::parse_integration_value(
+            toml::Value::Table(table),
+        )?))
+    };
+    Ok(RunDefinition {
+        name,
+        target,
+        original_toml: frozen,
+        effective_document: effective,
+        body,
+    })
 }
 
 fn kind(value: &toml::Value) -> Result<&str, ApiError> {
@@ -169,9 +161,9 @@ pub(crate) fn validate_document(value: &toml::Value) -> Result<(), ApiError> {
         }
     }
     let selection = match kind {
-        "integration_campaign" => Some(("measurement", &["quantity"][..])),
-        "parameter_scan" => Some(("measurement", &["source_task", "quantity"][..])),
-        "hyperparameter_tuning" => Some(("objective", &["source_task", "quantity", "mode"][..])),
+        "integration_campaign" => Some(("measurement", &["selection"][..])),
+        "parameter_scan" => Some(("measurement", &["source_task", "selection"][..])),
+        "hyperparameter_tuning" => Some(("objective", &["source_task", "selection", "mode"][..])),
         _ => None,
     };
     if let Some((field, allowed)) = selection
@@ -217,7 +209,7 @@ pub(crate) fn instantiate_child(
     source: ChildRunSource,
     bindings: BTreeMap<String, toml::Value>,
     base: Option<&Path>,
-) -> Result<RunAddConfig, ApiError> {
+) -> Result<RunDefinition, ApiError> {
     let base = match base {
         Some(base) => base.to_path_buf(),
         None => std::env::current_dir().map_err(|e| bad(e.to_string()))?,
@@ -325,7 +317,7 @@ fn bad(message: impl Into<String>) -> ApiError {
 
 /// Validate one representative scan/trial binding; every generated instance is
 /// validated again at creation. Campaign children are all known at submission.
-pub(crate) fn preflight_children(task: &RunTaskSpec) -> Result<Vec<RunAddConfig>, ApiError> {
+pub(crate) fn preflight_children(task: &RunTaskSpec) -> Result<Vec<RunDefinition>, ApiError> {
     use crate::core::HyperparameterTuningParameterDomain as Parameter;
     let sources = match task {
         RunTaskSpec::IntegrationCampaign { children, .. } => children
@@ -373,20 +365,55 @@ pub(crate) fn preflight_children(task: &RunTaskSpec) -> Result<Vec<RunAddConfig>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejects_misspelled_and_retired_task_configuration() {
+        for field in [
+            "publsh_result = false",
+            "nr_samples = 1",
+            "queue_tuning = { max_generaton_size = 10 }",
+            "sampler_aggregator = { config = { kind = 'naive_monte_carlo' } }",
+        ] {
+            let raw = format!(
+                "name='strict'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nkind='sample'\nstop_condition={{max_samples=10}}\n{field}\n"
+            );
+            assert!(
+                super::parse(&raw, Default::default(), None).is_err(),
+                "accepted {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_pipeline_transforms_and_rejects_ambiguous_symbolica_sources() {
+        let raw = "name='pipeline'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nkind='sample'\nstop_condition={max_samples=10}\nsampler={config={kind='naive_monte_carlo',transforms=[]}}\n";
+        let parsed = super::parse(raw, Default::default(), None).unwrap();
+        let task = &parsed.integration().unwrap().task_queue[0].task;
+        assert_eq!(task.batch_transforms_config(), Some(vec![]));
+        for extra in ["expr='x'", "compiled_args=['x']", "typo=true"] {
+            let raw = format!(
+                "name='symbolica'\n[evaluator]\nkind='symbolica'\nargs=['x']\nsource={{kind='expression',expr='x'}}\n{extra}\n"
+            );
+            assert!(
+                super::parse(&raw, Default::default(), None).is_err(),
+                "accepted {extra}"
+            );
+        }
+    }
+
     use super::*;
     use crate::core::EvaluatorConfig;
 
     #[test]
     fn integration_is_default_and_all_kinds_reject_foreign_fields() {
         let default = parse("name = 'plain'", BTreeMap::new(), None).unwrap();
-        assert_eq!(default.kind, "integration");
+        assert_eq!(default.kind(), "integration");
         let explicit = parse(
             "name = 'plain'\nkind = 'integration'",
             BTreeMap::new(),
             None,
         )
         .unwrap();
-        assert_eq!(default.kind, explicit.kind);
+        assert_eq!(default.kind(), explicit.kind());
         for kind in [
             "integration_campaign",
             "parameter_scan",
@@ -457,7 +484,7 @@ discrete_dims = 0
             None,
         )
         .unwrap();
-        let instances = preflight_children(&config.task_queue.unwrap()[0].task).unwrap();
+        let instances = preflight_children(config.controller().unwrap()).unwrap();
         assert_eq!(instances[0].name, "child-3");
     }
 
@@ -496,12 +523,10 @@ run = 'name = "child"'
     fn file_defaults_are_overridden_before_expansion_and_frozen() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("integration.toml");
-        std::fs::write(&file, "name = 'child-$(dims:1)'\nreplacements = { dims = 2 }\n[evaluator]\nkind = 'unit'\ncontinuous_dims = '$(dims:1)'\ndiscrete_dims = 0\n[[task_queue]]\nkind = 'sample'\nstop_condition = {max_samples = 10}\naccumulator = {config = 'scalar'}\nsampler_aggregator = {config = {kind = 'naive_monte_carlo'}}").unwrap();
+        std::fs::write(&file, "name = 'child-$(dims:1)'\nreplacements = { dims = 2 }\n[evaluator]\nkind = 'unit'\ncontinuous_dims = '$(dims:1)'\ndiscrete_dims = 0\n[[task_queue]]\nkind = 'sample'\nstop_condition = {max_samples = 10}\naccumulator = {config = 'scalar'}\nsampler = {config = {kind = 'naive_monte_carlo'}}").unwrap();
         let raw = "kind = 'integration_campaign'\nname = 'parent'\nreplacements = { dims = 99, selected = 3 }\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'a'\nreplacements = { dims = '$(selected:4)' }\nrun = { file = 'integration.toml' }\n[[children]]\nname = 'b'\nrun = { file = 'integration.toml' }";
         let config = parse(raw, BTreeMap::new(), Some(dir.path())).unwrap();
-        let RunTaskSpec::IntegrationCampaign { children, .. } =
-            &config.task_queue.as_ref().unwrap()[0].task
-        else {
+        let RunTaskSpec::IntegrationCampaign { children, .. } = config.controller().unwrap() else {
             panic!()
         };
         // The enclosing scope must not consume placeholders in child definitions.
@@ -514,7 +539,13 @@ run = 'name = "child"'
             let config =
                 instantiate_child(child.run.clone(), child.replacements.clone(), None).unwrap();
             assert_eq!(config.name, format!("child-{dims}"));
-            let EvaluatorConfig::Unit { params } = config.integration_params.evaluator.unwrap()
+            let EvaluatorConfig::Unit { params } = config
+                .integration()
+                .unwrap()
+                .params
+                .evaluator
+                .clone()
+                .unwrap()
             else {
                 panic!()
             };
@@ -522,12 +553,7 @@ run = 'name = "child"'
         }
         std::fs::remove_file(file).unwrap();
         // Persisted document remains self-contained even after its input disappears.
-        parse(
-            config.original_toml.as_ref().unwrap(),
-            BTreeMap::new(),
-            None,
-        )
-        .unwrap();
+        parse(&config.original_toml, BTreeMap::new(), None).unwrap();
     }
 
     #[test]
@@ -536,7 +562,7 @@ run = 'name = "child"'
         std::fs::create_dir(dir.path().join("nested")).unwrap();
         std::fs::write(
             dir.path().join("nested/leaf.toml"),
-            "name = 'leaf'\n[[task_queue]]\nkind = 'sample'\nstop_condition = { max_samples = 1 }\naccumulator = { config = 'scalar' }\nsampler_aggregator = { config = { kind = 'naive_monte_carlo' } }",
+            "name = 'leaf'\n[[task_queue]]\nkind = 'sample'\nstop_condition = { max_samples = 1 }\naccumulator = { config = 'scalar' }\nsampler = { config = { kind = 'naive_monte_carlo' } }",
         )
         .unwrap();
         std::fs::write(dir.path().join("nested/parent.toml"), "kind = 'integration_campaign'\nname = 'inner'\nstop_condition = { max_total_samples = 10 }\n[[children]]\nname = 'leaf'\nrun = { file = 'leaf.toml' }").unwrap();
@@ -555,7 +581,7 @@ run = 'name = "child"'
 
     #[test]
     fn typed_arrays_and_quoted_strings_survive_child_bindings() {
-        let document: toml::Value = toml::from_str("name = '$(name:fallback)'\nreplacements = { dims = 2 }\n[evaluator]\nkind = 'unit'\ncontinuous_dims = '$(dims:1)'\ndiscrete_cardinalities = '$(channels:[2])'").unwrap();
+        let document: toml::Value = toml::from_str("name = '$(name:fallback)'\nreplacements = { dims = 2 }\n[evaluator]\nkind = 'unit'\ncontinuous_dims = '$(dims:1)'\nfail_on_batch_nrs = '$(failure_batches:[2])'").unwrap();
         let bindings = BTreeMap::from([
             (
                 "name".into(),
@@ -563,15 +589,15 @@ run = 'name = "child"'
             ),
             ("dims".into(), toml::Value::Integer(3)),
             (
-                "channels".into(),
+                "failure_batches".into(),
                 toml::Value::Array(vec![toml::Value::Integer(2), toml::Value::Integer(4)]),
             ),
         ]);
         let config = instantiate(document, bindings, None).unwrap();
         assert_eq!(config.name, "a \"quoted\" \\ name");
-        let effective = config.effective_document.unwrap();
+        let effective = config.effective_document;
         assert_eq!(
-            effective["evaluator"]["discrete_cardinalities"]
+            effective["evaluator"]["fail_on_batch_nrs"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -588,15 +614,15 @@ replacements = {
 [evaluator]
 kind = "unit"
 continuous_dims = "$(dims:1)"
-discrete_cardinalities = "$(channels:[2, 4])"
+fail_on_batch_nrs = "$(failure_batches:[2, 4])"
 [[task_queue]]
 name = "sample"
 kind = "sample"
 publish_result = "$(publish:true)"
 stop_condition = { max_samples = "$(samples:4)" }
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = 'all_component_means' } }
 accumulator = { config = "scalar" }
-sampler_aggregator = {
+sampler = {
     config = {
         kind = "naive_monte_carlo",
     },
@@ -619,7 +645,7 @@ sampler_aggregator = {
                 "parameters = [{ name = 'dims', values = [3, 4] }]\n[child]\nreplacements = { dims = '$(selected:4)', samples = 12 }"
             }
             "hyperparameter_tuning" => {
-                "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', quantity = 'central_value' }\nparameters = { dims = { kind = 'integer', min = 3, max = 4, step = 1 } }\n[child]\nreplacements = { dims = '$(selected:4)', samples = 12 }"
+                "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', selection = { kind = 'all_component_means' } }\nparameters = { dims = { kind = 'integer', min = 3, max = 4, step = 1 } }\n[child]\nreplacements = { dims = '$(selected:4)', samples = 12 }"
             }
             _ => unreachable!(),
         };
@@ -652,10 +678,10 @@ sampler_aggregator = {
             let inline = parse(&inline, BTreeMap::new(), Some(dir.path())).unwrap();
             let file = parse(&file, BTreeMap::new(), Some(dir.path())).unwrap();
             assert_eq!(inline.effective_document, file.effective_document, "{kind}");
-            let inline_child = preflight_children(&inline.task_queue.as_ref().unwrap()[0].task)
+            let inline_child = preflight_children(inline.controller().unwrap())
                 .unwrap()
                 .remove(0);
-            let file_child = preflight_children(&file.task_queue.as_ref().unwrap()[0].task)
+            let file_child = preflight_children(file.controller().unwrap())
                 .unwrap()
                 .remove(0);
             assert_eq!(
@@ -664,13 +690,13 @@ sampler_aggregator = {
             );
             let dims = if kind == "integration_campaign" { 2 } else { 3 };
             assert_eq!(file_child.name, format!("child-{dims}-local"));
-            let document = file_child.effective_document.unwrap();
+            let document = file_child.effective_document;
             assert_eq!(
                 document["evaluator"]["continuous_dims"].as_integer(),
                 Some(dims)
             );
             assert_eq!(
-                document["evaluator"]["discrete_cardinalities"]
+                document["evaluator"]["fail_on_batch_nrs"]
                     .as_array()
                     .unwrap()
                     .len(),
@@ -686,16 +712,11 @@ sampler_aggregator = {
             );
             std::fs::remove_file(path).unwrap();
             for config in [inline, file] {
-                let restored = parse(
-                    config.original_toml.as_ref().unwrap(),
-                    BTreeMap::new(),
-                    None,
-                )
-                .unwrap();
-                let child = preflight_children(&restored.task_queue.unwrap()[0].task)
+                let restored = parse(&config.original_toml, BTreeMap::new(), None).unwrap();
+                let child = preflight_children(restored.controller().unwrap())
                     .unwrap()
                     .remove(0);
-                assert_eq!(child.effective_document.unwrap(), document, "{kind}");
+                assert_eq!(child.effective_document, document, "{kind}");
             }
         }
     }
@@ -751,16 +772,15 @@ sampler_aggregator = {
             let outer = controller_document("parameter_scan", file_source("nested/middle.toml"));
             let frozen = parse(&outer, BTreeMap::new(), Some(dir.path()))
                 .unwrap()
-                .original_toml
-                .unwrap();
+                .original_toml;
             std::fs::remove_dir_all(nested).unwrap();
             let mut config = parse(&frozen, BTreeMap::new(), None).unwrap();
             for _ in 0..3 {
-                config = preflight_children(&config.task_queue.as_ref().unwrap()[0].task)
+                config = preflight_children(config.controller().unwrap())
                     .unwrap()
                     .remove(0);
             }
-            assert_eq!(config.kind, "integration");
+            assert_eq!(config.kind(), "integration");
             assert_eq!(
                 config.name,
                 if kind == "integration_campaign" {
@@ -799,7 +819,7 @@ sampler_aggregator = {
                 toml::Value::String("quoted \\\"label\\\" and \\ path".into()),
             ),
             (
-                "channels".into(),
+                "failure_batches".into(),
                 toml::Value::Array(vec![toml::Value::Integer(3)]),
             ),
         ]);

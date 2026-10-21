@@ -29,6 +29,7 @@ class Fixture:
                  stats_path=None, evaluator_metadata=None, feedback=True, benchmark=False):
         self.dims = continuous_dims
         self.cards = discrete_cardinalities
+        self.evaluator_metadata = evaluator_metadata
         self.work = work
         self.feedback_enabled = feedback
         self.benchmark = benchmark
@@ -69,10 +70,29 @@ class Fixture:
         self.count += len(values)
         self.total += float(self.transform(values).sum())
 
-    def snapshot(self):
-        return self.get_diagnostics()
+    def metadata(self):
+        return {"space": "coordinates", "dims": self.dims}
 
-    def get_diagnostics(self):
+    def snapshot(self):
+        return dict(count=self.count, total=self.total, rng=self.rng.bit_generator.state,
+                    evaluator_metadata=self.evaluator_metadata)
+
+    @classmethod
+    def from_snapshot(cls, *, snapshot, discrete_cardinalities, continuous_dims, init_args, evaluator_metadata=None):
+        instance = cls(discrete_cardinalities=discrete_cardinalities, continuous_dims=continuous_dims,
+                       evaluator_metadata=evaluator_metadata, **init_args)
+        instance.count = snapshot["count"]
+        instance.total = snapshot["total"]
+        instance.rng.bit_generator.state = snapshot["rng"]
+        return instance
+
+    def diagnostics(self):
+        return dict(count=self.count, total=self.total)
+
+    def global_pdf_norm(self):
+        return 2.5
+
+    def persisted_output(self):
         return dict(count=self.count, total=self.total)
 
 

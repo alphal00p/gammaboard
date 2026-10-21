@@ -557,7 +557,8 @@ fn prepare_runtime_dirs(paths: &DeployRuntimePaths) -> Result<()> {
 }
 
 fn start_backend(server_config: &ServerConfig, runtime: &RuntimeContext) -> Result<Child> {
-    let binary = std::env::current_exe().context("failed to resolve current executable path")?;
+    let binary = gammaboard::runtime_context::self_executable()
+        .context("failed to resolve running executable image")?;
     let mut command = Command::new(&binary);
     command.args(runtime.runtime_cli_args());
     command

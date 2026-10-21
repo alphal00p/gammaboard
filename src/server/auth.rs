@@ -33,6 +33,7 @@ pub struct AuthConfig {
 
 #[derive(Debug, Serialize)]
 pub struct SessionStatus {
+    pub auth_enabled: bool,
     pub authenticated: bool,
     pub allow_local_node_spawn: bool,
 }
@@ -93,6 +94,7 @@ pub async fn login(
     validate_origin(&headers, &state.allowed_origins)?;
     let Some(auth) = &state.auth else {
         return Ok(Json(SessionStatus {
+            auth_enabled: false,
             authenticated: true,
             allow_local_node_spawn: state.allow_local_node_spawn,
         })
@@ -106,6 +108,7 @@ pub async fn login(
     Ok(response_with_cookie(
         session_cookie(&token, SESSION_TTL_SECS, state.secure_cookie),
         SessionStatus {
+            auth_enabled: true,
             authenticated: true,
             allow_local_node_spawn: state.allow_local_node_spawn,
         },
@@ -121,6 +124,7 @@ pub async fn logout(
     Ok(response_with_cookie(
         session_cookie("", 0, state.secure_cookie),
         SessionStatus {
+            auth_enabled: state.auth.is_some(),
             authenticated,
             allow_local_node_spawn: state.allow_local_node_spawn,
         },
@@ -135,6 +139,7 @@ pub fn auth_status_from_headers(state: &AppState, headers: &HeaderMap) -> Sessio
         None => true,
     };
     SessionStatus {
+        auth_enabled: state.auth.is_some(),
         authenticated,
         allow_local_node_spawn: state.allow_local_node_spawn,
     }

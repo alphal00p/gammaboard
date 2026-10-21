@@ -13,8 +13,8 @@ sampler_requirements = { gpu = 1 }
 
 [evaluator]
 kind = "symbolica"
-expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) - 1/2"
 args = ["x", "y"]
+source = {kind = "expression", expr = "1/((x-1/4)^2+(y-1/4)^2+1/20) + 1/((x-3/4)^2+(y-3/4)^2+1/20) - 1/2"}
 
 [[task_queue]]
 name = "madnis-train"
@@ -24,13 +24,13 @@ accumulator = { config = "scalar" }
 [task_queue.stop_condition]
 max_samples = "$(train_samples:200000)"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "process_sampler"
 command = ["apptainer", "exec", "--no-mount", "/etc/localtime", "--nv", "--bind", "$resources:$resources", "$resources/$(madnis_dir:\"runtimes/madnis\")/madnis.sif", "madnis-gammaboard-sampler"]
 cwd = "$resources"
-requires_training_values = true
 
-[task_queue.sampler_aggregator.config.args]
+
+[task_queue.sampler.config.args]
 seed = 0
 training_steps = "$(training_steps:200)"
 training_batch_size = "$(training_batch_size:1000)"
@@ -39,7 +39,7 @@ save_path = '$(save_path:"runtimes/madnis/checkpoints/ghost_bump_madnis")'
 [[task_queue]]
 name = "pdf-2d"
 kind = "pdf_adaptation_image"
-sampler_aggregator = { from_name = "madnis-train" }
+sampler = { from_name = "madnis-train" }
 
 [task_queue.geometry]
 offset = [0.0, 0.0]

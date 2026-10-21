@@ -1,5 +1,5 @@
 use crate::evaluation::AccumulatorState;
-use crate::sampling::SamplerAggregatorSnapshot;
+use crate::sampling::SavedSampler;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -36,11 +36,13 @@ pub struct SamplerQueueCheckpoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerAggregatorCheckpoint {
+    #[serde(deserialize_with = "crate::compatibility::deserialize_model_version")]
+    pub format_version: u32,
     pub completed_samples: i64,
     pub task_id: i64,
     pub(crate) output_snapshot_id: Option<i64>,
     pub(crate) batches_completed: i32,
-    pub sampler_snapshot: SamplerAggregatorSnapshot,
+    pub sampler_snapshot: SavedSampler,
     pub observable_state: AccumulatorState,
     pub(crate) runtime_state: SamplerProgress,
     pub(crate) queue: SamplerQueueCheckpoint,

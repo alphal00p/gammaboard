@@ -324,7 +324,7 @@ class MadnisSampler(Sampler):
             raise RuntimeError("MadnisSampler not properly initialized with an Integrator instance.")
 
         if self.cfg.save_path is None:
-            return dict(Warning="No save path provided. No snapshot was created.")
+            raise ValueError("save_path is required to create a restorable MadNIS snapshot")
 
         tmp_integrand = self.madnis.integrand
         tmp_loss = self.madnis.loss
@@ -429,7 +429,7 @@ class MadnisSampler(Sampler):
         if self.trained_samples >= self.cfg.training_batch_size and received == self.trained_samples:
             self._train_step()
 
-    def get_diagnostics(self) -> Dict[str, Any]:
+    def diagnostics(self) -> Dict[str, Any]:
         """Optional runtime diagnostics. Empty dict means no diagnostics available."""
         diagnostics: Dict[str, Any] = dict(
             produced_batches=self.produced_batches,

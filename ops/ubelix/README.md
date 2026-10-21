@@ -1,170 +1,195 @@
-# UBELIX Deployment
+# UBELIX deployment
 
-Operator guide for the current UBELIX setup. Local sync commands run from your workstation; `ubelix.py` commands run on a UBELIX login node.
+Run sync on your workstation and `python3 ubelix.py` on a UBELIX login node.
+The helper requires Python 3.11+, Slurm (`sbatch`, `squeue`, `sacct`, `scancel`),
+and Apptainer. A workspace is the canonical directory containing the installed
+helper. A deployment is one control allocation, its workers, and an immutable
+image/configuration snapshot. Use one workspace and port offset consistently.
 
-Shared docs live in repo-root `docs/`: `docs/deployment.md`, `docs/config.md`, and `docs/operations.md`.
-
-## UBELIX Model
-
-- Workspace: the directory containing the installed `ubelix.py`
-- Deploy: one control/UI Slurm job with Postgres, API, nginx, and frontend
-- Workers: separate Slurm jobs connecting to the control job database
-- Access: one SSH tunnel to the frontend port
-- Resources: templates, states, and process runtimes live under
-  `${WORKSPACE_ROOT}/resources`
-
-## Sync From Local
+## Managed files and private configuration
 
 ```bash
 just sync-ubelix
-```
-
-The sync uploads `ops/`, shared `resources/templates/`, `docs/`, `ubelix.py`, and
-this README. Only worker-allocation templates are specific to UBELIX. State,
-checkpoints, databases, and runtime environments are not uploaded.
-Pass a host and folder to sync into another relative path under `/storage/research/itp_localunitaritydata`:
-
-```bash
+# Or another relative folder below /storage/research/itp_localunitaritydata:
 just sync-ubelix ubelix "$USER/gammaboard"
 ```
 
-## Build Images
+Sync mirrors only `ops/`, `gbops/`, `docs/`, and `resources/templates/`, and replaces
+`ubelix.py` and this README. Deleted repository files disappear from those trees.
+Templates combine the shared run/task cards with UBELIX node cards. **Do not keep
+private edits in managed trees.** Move them out before syncing this revision.
 
-Run on a UBELIX login node:
+Private configuration belongs in `config/server.toml` and `config/runtime.toml`.
+These merge over the managed server defaults and embedded runtime defaults;
+`up --server-config PATH --runtime-config PATH` selects other private overrides.
+The helper owns base ports, database URL, and local/external launch mode. Use
+`--port-offset`, rather than overriding ports. Configuration must use TOML 1.0
+syntax supported by Python's `tomllib`; run/task cards support TOML 1.1.
 
-```bash
-python ubelix.py build gammaloop --revision <COMMIT_OR_TAG>
-python ubelix.py build gammaboard --revision <COMMIT_OR_TAG>
-python ubelix.py build apptainer resources/runtimes/madnis/madnis.sif resources/runtimes/madnis/apptainer.def
-```
+Sync preserves `config/`, `deployments/`, `images/`, `artifacts/`, logs, databases,
+physics states, and process environments. Shell environment overrides belong in
+`~/.config/gammaboard/slurm.env`, sourced by the batch scripts. Secrets in server
+configuration are copied into private deployment snapshots; protect/backup those
+snapshots accordingly. Environment overrides are still read at job start.
 
-GammaBoard and GammaLoop are service images under `images/`; each build resolves
-the requested commit, tag, branch, or ref (default `HEAD`), records both the
-request and resolved commit in
-`images/<family>/<family>.meta`, and replaces the current image. Build logs go
-to `logs/slurm/build`. Generic process-runtime builds take explicit output and
-definition paths; stage the definition and its sources under
-`resources/runtimes/` first.
-
-For reproducible release images, pass a full 40-character commit SHA. The build
-checks out that SHA detached and embeds it in the GammaBoard binary provenance.
-
-## Start
-
-Normal multi-job deployment:
+## Build and select images
 
 ```bash
-python ubelix.py up
+python3 ubelix.py build gammaboard --revision <FULL_COMMIT_SHA>
+python3 ubelix.py build gammaloop --revision <FULL_COMMIT_SHA>
+python3 ubelix.py build apptainer resources/runtimes/madnis/madnis.sif resources/runtimes/madnis/apptainer.def
 ```
 
-Single-node deployment with local workers in the same Slurm allocation:
+Service builds resolve the revision from the remote repository. Local uncommitted
+or unpushed changes are not included. Each build has private sources, Cargo target,
+staging, and temporary image paths under `artifacts/builds/`. Only dependency
+caches are shared. Rust, Node, and Debian base images are pinned by digest in
+`ops/build/images.lock.json`; Rust builds use `--locked` and a generic x86-64 CPU
+target. The builder and runtime share the Bookworm ABI. Package versions and
+compiler information are retained in the image; apt repositories can still change,
+so this is not a promise of byte-for-byte reproducible builds.
+
+Image definition tests run during building. GammaBoard publication additionally
+requires starting its bundled PostgreSQL, API, frontend and two workers, then
+completing a 32-sample run inside the image. GammaLoop requires a successful CLI
+startup. Logs and smoke evidence remain in the unique build directory. Failed
+builds leave the previously published image selected.
+
+Successful images are published at
+`images/<family>/<source-sha>/<image-sha256>/<family>.sif`, alongside `image.json`.
+`images/<family>/current.json` selects the default for **new** deployments. Active
+workers/control retain their selected digest even after another build completes.
+Use `up --image PATH/TO/image.json` to select a particular published image.
+Generic runtime builds refuse to overwrite an existing output; choose a new path.
+
+## Start and reuse
 
 ```bash
-python ubelix.py up --single-node
+python3 ubelix.py up --watch
+python3 ubelix.py up --single-node --port-offset 10 --local-port 9000
 ```
 
-Useful options:
+Normal mode uses one control job for PostgreSQL/API/nginx and separate worker
+allocations. Single-node mode launches workers inside the control allocation.
+Ports are frontend/API/PostgreSQL `8080/4000/5400` plus the offset. Managed database
+paths are also isolated by offset. A custom `--local-port` is included in allowed
+browser origins. `up` waits for a matching deployment/build health response before
+printing the SSH tunnel command; run the tunnel locally and open its local port.
+
+Useful options are `--time 00:45:00`, `--startup-timeout 180`, `--copy` (terminal
+clipboard escape), and `--resume-workers`. Resume requests previously configured
+workers; without it, startup suspends them. `--watch` keeps reconciling dashboard
+requests while the helper runs. Otherwise run `watch-requests` separately.
+`--time` and `--resume-workers` apply when creating a control job; they do not
+reconfigure an already running control allocation.
+
+The active pointer is scoped by canonical workspace and port offset. Manifests
+under `deployments/<id>/` record the control job, image digest, origins, private
+configuration snapshots and launch recipes. Queued jobs also retain a copy of
+the launcher, so a managed sync cannot remove their scripts. Job names and Slurm
+comments contain the deployment ID and submission identity.
+
+Repeating `up` reuses a matching active deployment. Different mode, configuration,
+image or tunnel origin requires stopping it first. An unavailable scheduler or
+missing accounting record is **unknown**, not proof that a job ended; the helper
+refuses to create a duplicate control job. A startup timeout leaves the deployment
+recorded and can be followed by `status`, `up` or `down`.
+
+## Worker requests and recovery
 
 ```bash
-python ubelix.py up --time 00:45:00
-python ubelix.py up --port-offset 10
-python ubelix.py up --watch
-python ubelix.py up --copy
+python3 ubelix.py submit-workers --count 2 --prefix w
+python3 ubelix.py watch-requests
+python3 ubelix.py watch-requests --once
 ```
 
-`up` waits for Slurm node assignment and frontend readiness, then prints the SSH tunnel command. Run that command locally and open `http://localhost:8080`.
-
-Port offsets shift frontend/API/Postgres from `8080/4000/5400`; pass the same `--port-offset` to helper commands for that deployment.
-
-## Workers
-
-Submit manual workers:
-
-```bash
-python ubelix.py submit-workers --count 2 --prefix w
-```
-
-Resolve dashboard node-start requests:
-
-```bash
-python ubelix.py watch-requests
-python ubelix.py watch-requests --once
-```
-
-Dashboard node-launch TOML uses grouped `config` tables. On UBELIX, the watcher maps supported config keys to `sbatch` options. A GPU group such as:
+Pass the selected `--port-offset` to each command. Dashboard launch cards use only
+the current grouped schema:
 
 ```toml
 [[groups]]
 count = 1
 name_prefix = "gpu"
 max_start_failures = 6
-config = { gpu = "rtx4090:1" }
+config = { gpus = "h100:1", cpus_per_task = 4 }
 ```
 
-submits worker jobs with `--gres=gpu:rtx4090:1 --partition=gpu` and registers
-`gpu=1` as a worker capability. Select another free-tier GPU type with
-`config = { gpu = "h100:1" }` when available. Synced templates live under
-`resources/templates/nodes`; cluster-specific node cards come from
-`ops/ubelix/resources/templates/nodes` in the checkout. Run and task cards come
-from the shared `resources/templates` tree. Supported `config` keys are `account`, `partition`, `qos`,
-`wckey`, `reservation`, `gpu`, `gres`, `gpus`, `cpus_per_task`, `mem`,
-`mem_per_cpu`, `time`, `constraint`, `nodelist`, and `exclude`.
-Use `cores`, `nr_cores`, or `cpus` as dashboard-friendly aliases for `cpus_per_task`; they submit `--cpus-per-task=<value>` and register `cpus=<value>` as the worker capability.
-Omitted group `config` defaults to `{}` and omitted `max_start_failures` defaults to `3`.
-Workers with `gpu > 0` start the GammaBoard image with Apptainer `--nv`.
-Nested process runtimes also include `--nv` in their explicit Apptainer command,
-as shown in the shared MADNIS example.
+The server normalizes resources once, reserves names, and supplies canonical
+configuration/capabilities to the launcher. `gpu = "h100:1"` becomes
+`gres = "gpu:h100:1"`; typed `gpus` and GPU `gres` also register `gpu=1` and enable
+Apptainer `--nv`. Use exactly one GPU allocation spelling. Numeric/bool `gpu`
+shorthand chooses `rtx4090`; use typed forms for another model. CPU aliases `cores`,
+`nr_cores`, `cpus`, and `cpus-per-task` become `cpus_per_task` and capability `cpus`.
+Conflicting CPU aliases, GPU declarations, and `mem` with `mem_per_cpu` are rejected.
+Supported Slurm options are `account`, `partition`, `qos`, `wckey`, `reservation`,
+`gres`, `gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`,
+and `exclude`. Additional numeric keys are custom worker capabilities.
 
-`up --watch` also resolves dashboard requests while it watches the control job.
+Each request has a renewable 120-second database lease and a per-worker submission
+record. The launcher saves intent before `sbatch`, then immediately saves its job
+ID. Restarting a watcher adopts matching scheduler/accounting jobs. A worker's
+registration is authoritative even if the job-ID response was lost. Confirmed
+terminal jobs that never registered fail their individual reservation. Temporary
+scheduler failures do not kill healthy workers or cause automatic resubmission.
 
-## Stop And Inspect
+There is no atomic transaction spanning PostgreSQL and Slurm. If intent was saved
+but no unambiguous job can be found, the helper reports uncertainty and leaves it
+for explicit resolution. Stop the watcher and allow its lease to expire, inspect
+Slurm/accounting, then either adopt the identified job or confirm no job was sent:
 
 ```bash
-python ubelix.py status
-python ubelix.py down
+python3 ubelix.py resolve-submission 123 worker-1 --job-id 456789
+python3 ubelix.py resolve-submission 123 worker-1 --not-submitted
+# The corresponding repair for an interrupted control submission:
+python3 ubelix.py resolve-control --job-id 456790
+python3 ubelix.py resolve-control --not-submitted
 ```
 
-`down` requests node shutdown through the API, waits briefly for workers, cancels remaining worker jobs, then cancels the control or single-node job.
+The repair commands check job ownership and refuse an absence claim if matching
+jobs are visible. `--not-submitted` is an operator assertion: accounting gaps are
+not sufficient evidence. It enables a subsequent retry; it does not submit a job.
+The database/API state machine is specified in [cluster launches](docs/cluster-launches.md).
 
-Use GammaBoard's `db backup` and `db restore` commands for database maintenance;
-see [operations](docs/operations.md). The cluster helper manages Slurm jobs and
-images; it does not delete database directories.
+## Stop and inspect
 
-## Examples
+```bash
+python3 ubelix.py status --port-offset 10
+python3 ubelix.py down --port-offset 10
+```
 
-Start with `resources/templates/runs/installation-smoke.toml`. After generating
-the required state, use `resources/templates/runs/gammaloop.toml` for ttH
-training/inference or `integration-campaign-qft-like.toml` for a campaign.
-`resources/templates/runs/ghost_bump_madnis_apptainer.toml` uses the shared
-MADNIS runtime image under `resources/runtimes/madnis/`. The same cards work on
-local deployments with the corresponding dependencies. See [examples](docs/examples.md).
+`down` cancels a pending control allocation directly. For a running control it
+suspends workers through the API, waits up to `--worker-timeout` seconds, cancels
+remaining owned workers, then cancels the control. A finished control still gets
+its stranded workers cleaned up. Watchers cannot submit while shutdown runs.
+Only jobs belonging to this deployment are canceled. Failed queries or unknown
+control status remain errors; retry after inspecting scheduler availability.
 
-When the selected server config enables authentication, protected commands
-require `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD`. The checked-in
-UBELIX configs are passwordless and should only be exposed to a trusted network.
-PostgreSQL follows the same model: the control job enables
-`--postgres-trusted-network`, whose `samenet trust` rule admits directly
-connected UBELIX networks. Every user and device able to reach that port is
-therefore part of the deployment trust boundary.
+The helper never deletes database directories. Use GammaBoard's `db backup` and
+`db restore` for maintenance; see [operations](docs/operations.md). This revision
+requires a fresh model-2 database, not an in-place upgrade from the prior schema.
+The database rejects worker registrations and lease renewals with a different
+deployment/build identity and refuses cohort replacement while workers are live.
 
-## UBELIX Layout
+## Access and layout
+
+Protected commands take `--admin-password` or `GAMMABOARD_ADMIN_PASSWORD` when
+authentication is enabled. Defaults are passwordless. Distributed mode enables
+`--postgres-trusted-network`; every user/device reaching the database is trusted.
+A matching build check is not an authorization boundary for database administrators.
 
 ```text
-<WORKSPACE_ROOT>/
-  ops/{build,config,slurm}/
-  ubelix.py
-  README.md
-  artifacts/{bin,npm-cache,sqlx-root,src}/
-  images/{gammaboard,gammaloop}/      # service images
+<workspace>/
+  ubelix.py, gbops/, README.md
+  ops/{build,config,slurm}/       # managed
+  docs/, resources/templates/  # managed
+  config/                      # private overrides
+  deployments/<id>/            # manifest, configs, launcher and worker recipes
+  images/<family>/             # immutable images and current.json
+  artifacts/{builds,download-cache}/
   logs/slurm/
-  resources/db/{postgres,socket,logfile}
-  resources/runtimes/                 # process evaluator/sampler runtimes
-  resources/states/
+  resources/{db,states,runtimes}/
 ```
 
-Local overrides live in `${HOME}/.config/gammaboard/slurm.env`; all sbatch
-scripts source it when present. The workspace is self-locating from the
-installed `ubelix.py` and sbatch paths, so `GAMMABOARD_WORKSPACE_ROOT` is only
-needed as an explicit override. GammaBoard and GammaLoop use their own bundled
-Symbolica 3 application keys, so runtime Slurm jobs do not require
-`SYMBOLICA_LICENSE`.
+Start with `resources/templates/runs/installation-smoke.toml`. Scientific runs
+need their matching physics states and process runtimes; see
+[examples](docs/quickstart.md#examples) and [deployment](docs/deployment.md).

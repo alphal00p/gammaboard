@@ -26,17 +26,3 @@ git_resolve_sha() {
   fi
   printf '%s\n' "${sha}"
 }
-
-write_meta() {
-  local meta_path="$1"
-  shift
-  : >"${meta_path}"
-  for line in "$@"; do
-    printf '%s\n' "${line}" >>"${meta_path}"
-  done
-  printf 'built_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${meta_path}"
-}
-
-seconds_since() {
-  printf '%s\n' "$(($2 - $1))"
-}

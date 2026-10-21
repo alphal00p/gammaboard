@@ -2,7 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::core::{
-    BatchClaim, BatchFailOutcome, BatchTransformConfig, EngineError, EvalError, EvaluatorConfig,
+    BatchClaim, BatchFailOutcome, BatchTransformConfig, EngineError, EvaluatorConfig,
     EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, EvaluatorWorkerStore, StoreError,
 };
 use crate::evaluation::{BatchResult, EvalBatchOptions, Evaluator, Materializer};
@@ -31,8 +31,6 @@ pub struct EvaluatorRunnerParams {
 pub enum EvaluatorRunnerError {
     #[error(transparent)]
     Engine(#[from] EngineError),
-    #[error(transparent)]
-    Eval(EvalError),
     #[error(transparent)]
     Store(#[from] StoreError),
 }
@@ -475,14 +473,9 @@ where
         configs
             .iter()
             .map(|config| {
-                let transform = config.build().map_err(|err| {
+                let transform = config.build(domain).map_err(|err| {
                     EvaluatorRunnerError::Store(StoreError::store(format!(
                         "failed to build batch transform: {err}"
-                    )))
-                })?;
-                transform.validate_domain(domain).map_err(|err| {
-                    EvaluatorRunnerError::Store(StoreError::store(format!(
-                        "failed to validate batch transform domain: {err}"
                     )))
                 })?;
                 Ok(transform)
@@ -554,11 +547,8 @@ where
             ))));
         }
         let materializer = resolved
-            .sampler_config
-            .build_materializer(
-                &self.domain,
-                resolved.handoff.as_ref().map(|handoff| handoff.as_ref()),
-            )
+            .sampler
+            .build_materializer(&self.domain)
             .map_err(|err| {
                 EvaluatorRunnerError::Store(StoreError::store(format!(
                     "failed to build materializer for task {}: {err}",
@@ -787,7 +777,7 @@ where
                     .materialize_batch(&claimed.latent_batch)
                     .map_err(EvaluatorRunnerError::Engine)
             })?;
-            for transform in &self.current_batch_transforms {
+            for transform in &mut self.current_batch_transforms {
                 batch = Self::call_with_panic_guard("batch_transform.apply", || {
                     transform.apply(batch).map_err(EvaluatorRunnerError::Engine)
                 })?;
@@ -804,33 +794,18 @@ where
                 self.evaluator
                     .eval_batch(
                         &batch,
-                        &claimed.latent_batch.accumulator,
+                        &claimed.accumulator,
                         EvalBatchOptions {
                             require_training_values: claimed.requires_training_values,
                         },
                     )
-                    .map_err(EvaluatorRunnerError::Eval)
+                    .map_err(EvaluatorRunnerError::Engine)
             })?;
             let eval_time_ms = started.elapsed().as_secs_f64() * 1000.0;
-            if claimed.requires_training_values && result.values.is_none() {
-                return Err(EngineError::engine(format!(
-                    "result is missing training values for training batch {}",
-                    claimed.batch_id
-                ))
-                .into());
-            }
-            if !result.matches_batch(&batch) {
-                return Err(EngineError::engine(format!(
-                    "result length mismatch for batch {}: expected {}, got {}",
-                    claimed.batch_id,
-                    batch.size(),
-                    result.len()
-                ))
-                .into());
-            }
+            result.validate_for_batch(batch.len(), claimed.requires_training_values)?;
             Ok(EvaluatedBatch {
                 result,
-                processed_samples: batch.size(),
+                processed_samples: batch.len(),
                 eval_time_ms,
                 materialization_time_ms,
                 total_time_ms: materialization_time_ms + eval_time_ms,
@@ -954,11 +929,13 @@ where
             run_id: self.run_id,
             node_name: self.node_name.clone(),
             metrics: EvaluatorPerformanceMetrics {
-                epoch: Some(self.epoch.clone()),
-                node_uuid: Some(self.prefetch_buffer.node_uuid.clone()),
-                task_id: task_id.map(|id| id.to_string()),
-                cumulative: Some(self.cumulative.clone()),
-                busy: Some(self.busy.snapshot()),
+                worker: crate::core::WorkerReportContext {
+                    epoch: self.epoch.clone(),
+                    node_uuid: self.prefetch_buffer.node_uuid.clone(),
+                    task_id: task_id.map(|id| id.to_string()),
+                    busy: self.busy.snapshot(),
+                },
+                cumulative: self.cumulative.clone(),
                 engine_diagnostics: self.evaluator.diagnostics(),
                 batches_completed: self.batches_completed_total,
                 samples_evaluated: self.samples_evaluated_total,

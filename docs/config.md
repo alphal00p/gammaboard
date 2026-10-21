@@ -1,666 +1,191 @@
-# Config Reference
+# Run and task configuration
 
-This document covers the operator-facing config shapes. Checked-in templates live under `resources/templates` and profile-specific ops configs live under `ops/*/config`.
+Run cards use TOML 1.1. Start from [run/task templates](../resources/templates),
+then validate with `gammaboard run validate CARD`. Runner defaults are listed in
+[run.toml](../src/config_defaults/run.toml); hosting settings are in
+[deployment](deployment.md).
 
-## TOML Syntax
+## Integration runs
 
-GammaBoard accepts [TOML 1.1](https://toml.io/en/v1.1.0#inline-table) in run,
-task, node, and runtime/server configuration files. Inline tables can span
-multiple lines, include comments, and end with a trailing comma:
-
-```toml
-[[task_queue]]
-kind = "sample"
-stop_condition = {
-    max_samples = 20_000, # Commas still separate entries inside braces.
-}
-sampler_aggregator = {
-    config = {
-        kind = "naive_monte_carlo",
-        seed = 42,
-    },
-}
-```
-
-The CLI and dashboard use the same parser, including for replacements and child
-run sources. Existing TOML 1.0 runcards remain valid. Rebuild/redeploy GammaBoard
-before submitting runcards that use the new syntax; an older binary cannot parse
-multiline inline tables. External TOML validators must also support version 1.1
-(for Python, use Tomli 2.4 or later rather than Python 3.13's `tomllib`).
-
-## Layout
-
-- `src/config_defaults/*.toml`: built-in fallback defaults embedded into the Rust binary.
-- Local development uses the embedded runtime/server defaults.
-- `ops/itphlies/config`: ITPhlies profiles.
-- `ops/ubelix/config/*`: UBELIX profiles rendered/submitted by the UBELIX launcher.
-- `resources/templates/{runs,tasks,nodes}/`: shared templates served by the backend.
-
-All commands use the embedded runtime default unless `--runtime-config` points
-at a custom file:
-
-```bash
-gammaboard --runtime-config path/to/runtime.toml <COMMAND>
-```
-
-For common deployment differences, prefer CLI overrides over a nearly-default
-runtime file:
-
-```bash
-gammaboard \
-  --database-url postgresql://... \
-  --resource-root /shared/gammaboard/resources \
-  <COMMAND>
-```
-
-Use `--postgres-trusted-network` only when workers on other machines or Slurm
-nodes must connect to the managed Postgres instance. It listens on all network
-interfaces but PostgreSQL accepts passwordless connections only from directly
-connected networks through its `samenet trust` rule. Network access is the
-security boundary: every device and user able to reach the database port must
-be trusted.
-
-Relative evaluator resources, such as GammaLoop `state_folder`, resolve through `resources.roots` in order. Absolute paths are used as-is.
-
-## Server Config
-
-Server config owns both the backend API settings and the foreground deploy
-settings used by `gammaboard deploy`:
-
-```toml
-api_host = "127.0.0.1"
-api_port = 4000
-allowed_origins = ["http://localhost:8080"]
-secure_cookie = false
-allow_local_node_spawn = true
-
-[frontend]
-build_dir = "../../../dashboard/build"
-host = "127.0.0.1"
-port = 8080
-
-[database]
-ensure_started = true
-
-# Optional. Omit this section for passwordless local control.
-[auth]
-admin_password_hash = "..."
-session_secret = "..."
-```
-
-`gammaboard deploy` validates the frontend build, optionally starts local Postgres, starts the backend, waits for its health endpoint, starts nginx, and verifies the proxied health endpoint before reporting success. It runs nginx in the foreground and on `Ctrl-C`/`SIGTERM` requests graceful node shutdown before stopping nginx, backend, and local Postgres.
-
-## Runtime Config
-
-Runtime config owns the database URL, resource roots, tracing, and local Postgres settings. The checked-in default Postgres port is `5400`; global `--port-offset <N>` shifts frontend/API/Postgres ports and local Postgres state paths for all child processes.
-
-## Auth And Templates
-
-- When `[auth]` is configured, every dashboard API endpoint except health and
-  session/login/logout requires the single admin session. There are no user
-  accounts or roles.
-- Omit `[auth]` only for passwordless trusted-network control. Anyone who can
-  access the deployment can create runs and launch their configured process
-  commands.
-- Put `auth.admin_password_hash` and `auth.session_secret` in your server config to enable dashboard auth.
-- Set `allowed_origins` in your server config if the frontend is served from origins other than `http://localhost:3000`.
-- Deploy this behind HTTPS for real use and set `secure_cookie = true` in your server config.
-- An open or HTTP dashboard is appropriate only on a trusted network; otherwise
-  the server prints a startup warning. Keep authentication secrets in an
-  untracked private config.
-
-Authentication sessions include expiry, issued-at, issuer, audience, and a
-`session_version`. Increase `session_version` to invalidate existing sessions.
-
-Generate the password hash with:
-
-```bash
-gammaboard auth hash-password
-```
-
-`auth.admin_password_hash` should contain the full Argon2 encoded hash output from that command.
-
-When `allow_local_node_spawn = true`, the server resolves node launch requests by spawning local child processes. Otherwise launch requests remain queued for an external launcher. External launchers should use the node-launch-request API; `starting` means workers were submitted, and `fulfilled` records that all workers connected. Current worker health is separate from this historical launch outcome; the dashboard collapses fulfilled/canceled requests into launch history.
-
-The create-run, add-task, and node-request dialogs can load `.toml` templates from `run_templates_dir`, `task_templates_dir`, and `node_templates_dir`; admin users can also save edited TOML back as templates and delete templates from the dashboard.
-
-## Template Replacements
-
-Run configs, task-append configs, and node-launch configs support an optional top-level `replacements` table. This is intentionally not supported for server or runtime config.
-
-Placeholders use `$(name:default)`. When the complete TOML string value is exactly one placeholder, the replacement value, or the default when no replacement is provided, is parsed as standalone TOML before the final config is deserialized:
-
-```toml
-replacements = { run_name = "scan-a", samples = 100_000, mode = "auto" }
-
-name = '$(run_name:"fallback")'
-stop_condition = { max_samples = "$(samples:10_000)" }
-args = { subtraction_mode = '$(mode:"none")' }
-```
-
-If a placeholder appears inside a larger TOML string, it is interpolated as text instead:
-
-```toml
-expr = "1 / ((x - $(mu:0.5))^2 + $(width:0.1))"
-label = "mode=$(mode:auto)"
-```
-
-Defaults are parsed as TOML when possible, otherwise they are treated as raw strings. Numeric, boolean, array, table, and string replacements keep their TOML types for exact full-value placeholders; embedded placeholders always stringify the selected value. Prefer the inline `replacements = { ... }` form when the config also has top-level keys after it; a TOML `[replacements]` header keeps following keys in that table until the next table header.
-
-## Run Configs
-
-Run configs are TOML. Omitted `kind` means `integration`, preserving existing
-integration configurations. Only integrations merge the runner defaults from
-`src/config_defaults/run.toml` and accept `evaluator`, capability
-requirements, runner parameters, and `task_queue`.
-Both integrations and integration campaigns accept an optional `target`.
-
-`integration_campaign`, `parameter_scan`, and `hyperparameter_tuning` are root
-run kinds with separate field sets. Integration-only fields and unknown fields
-are rejected. Controller definitions cannot be placed in an integration task
-queue, and integration tasks cannot be appended to controller runs.
-
-Minimal shape:
+Omitted `kind` means `integration`. Only integrations have a task queue.
 
 ```toml
 name = "example"
-target = { kind = "scalar", value = 1.23 } # optional
-# or: target = { kind = "vector", components = { real = 1.23, imag = 0.0 } }
+target = { kind = "scalar", value = 1.0 }
 
 [evaluator]
 kind = "unit"
 continuous_dims = 1
-discrete_dims = 0
-```
 
-Optional capability requirements are matched against worker `capabilities` with `>=`:
-
-```toml
-evaluator_requirements = { gpu = 1, cuda = 12 }
-sampler_requirements = { gpu = 1, madnis = 1 }
-```
-
-If `task_queue` is omitted, the run is created idle. Every run stores an initial root stage snapshot (`sequence_nr = 0`) immediately at creation.
-
-### GammaLoop Evaluator
-
-GammaLoop support is behind the default `gammaloop` Cargo feature. Build without the heavy GammaLoop dependency with:
-
-```bash
-cargo build --no-default-features
-```
-
-In that build, `evaluator.kind = "gammaloop"` and HwU histogram export return explicit unsupported-feature errors.
-
-For `evaluator.kind = "gammaloop"`, `continuous_dims` and `discrete_dims` are inferred from the selected integrand and should be omitted.
-
-`graph_groups = [0, 3]` optionally restricts a discretely sampled GammaLoop
-integrand to those graph-group indices. The exposed domain renumbers the chosen
-groups locally while evaluation maps them back to GammaLoop's original indices.
-This lets separate child runs load and sample individual graph groups without
-changing the generated state.
-
-GammaBoard evaluates GammaLoop runs in x-space so GammaLoop's parameterized observable and histogram path is used.
-
-The pinned GammaLoop revision is `80e6e91e0` (Symbolica 3, state format 10).
-Regenerate older saved states with that revision; they cannot be migrated by
-editing the manifest. Rebuild any compiled Symbolica evaluators as well. Start a
-new run when changing channel definitions or ordering; existing trained grids
-refer to the old domain. `graph_groups` indexes the loaded integration view,
-after any upstream `sampling.graph_names` selection.
-
-Evaluator metadata includes the effective `sampling` settings and the canonical
-`sampling_channels` catalogue (graph names, selectors and ordered entries).
-Graph groups, orientations and channels retain their separate discrete axes;
-native maps and channel partitions are evaluated inside the evaluator worker.
-
-`reference_gaussian = { width = 300.0 }` replaces physics with two known targets
-while retaining those real sampling maps: real is Gaussian normalization and
-imaginary is the normalized raw momentum second moment, both with expectation
-one. An optional `center` supplies one coordinate per spatial loop-momentum
-component. This requires x-space, a common nonzero loop count, no active physical
-selectors and no observables. Use a separate run with a vector or GammaLoop
-accumulator and check both targets. See the reference run template and
-[benchmarking](benchmarking.md#sampling-correctness).
-
-`[evaluator.preprocessing]` is optional and runs GammaLoop commands after loading
-the state and before integrand selection. `read_only = true` is the default and
-enables GammaLoop's protection against preprocessing commands writing into the
-active state folder. In-memory changes and exports outside that folder remain
-allowed by GammaLoop. Set `read_only = false` explicitly when preprocessing
-must modify files in the loaded state. Commands are executed in order.
-`use_f128 = true` skips double-precision stability levels while retaining the
-configured higher-precision rescue levels (or a default quad level if none remain).
-
-### Process Evaluator
-
-For `evaluator.kind = "process_evaluator"`, configure:
-
-- `command`: exact process argv after `$resources` expansion, for example `["python", "-m", "my_runtime.evaluator_worker"]` or `["apptainer", "exec", "--nv", "--bind", "$resources:$resources", "$resources/runtimes/my_runtime/runtime.sif", "python", "-m", "my_runtime.evaluator_worker"]`.
-- `cwd`: optional working directory; defaults to `$resources`.
-- `domain`: explicit `Domain` tree. This is the authoritative coordinate layout for homogeneous and inhomogeneous runs.
-- `components`: observable component names; defaults to `["value"]` and must match the vector accumulator components.
-- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
-
-Domain config uses snake_case variants. Use `rectangular` for fixed-cardinality grids instead of expanding large branch trees:
-
-```toml
-domain = { rectangular = { discrete_cardinalities = [5, 5, 5], continuous_dims = 10 } }
-```
-
-It can be nested inside a discrete branch:
-
-```toml
-domain = { discrete = { axis_label = "channel", branches = [
-  { index = 0, domain = { continuous = { dims = 3 } } },
-  { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
-] } }
-```
-
-Process evaluator construction semantics:
-
-- GammaBoard only speaks the process protocol.
-- The bundled Python package exposes `run_evaluator(MyEvaluator)`, where the worker module imports the user class explicitly.
-- The bundled homogeneous Python wrapper derives `discrete_cardinalities` and `continuous_dims` from `domain` and calls `ClassName(discrete_cardinalities=..., continuous_dims=..., **args)`.
-- Process evaluators require a `kind = "vector"` accumulator; the training projection is stored as its own scalar aggregate and is used for sampler feedback.
-
-See [process-runtime.md](process-runtime.md) for the protocol contract.
-
-### Process Sampler
-
-For `sampler_aggregator.kind = "process_sampler"`, configure:
-
-- `command`: exact process argv after `$resources` expansion, for example `["python", "-m", "my_runtime.sampler_worker"]` or `["apptainer", "exec", "--nv", "--bind", "$resources:$resources", "$resources/runtimes/my_runtime/runtime.sif", "python", "-m", "my_runtime.sampler_worker"]`.
-- `cwd`: optional working directory; defaults to `$resources`.
-- `requires_training_values`: set to `true` when the sampler needs evaluator feedback through `feedback`.
-- `args = { ... }`: optional opaque JSON object passed to the process during `initialize`.
-
-Process evaluator and sampler methods use ragged row-major arrays plus offsets. Homogeneous wrappers may validate that offsets match the fixed-width shape derived from `domain` and reject inhomogeneous batches.
-
-Process samplers receive the authoritative run `domain`; sampler configs do not define coordinate shape separately.
-
-Process sampler construction semantics:
-
-- GammaBoard only speaks the process protocol.
-- The bundled Python package exposes `run_sampler(MySampler)`, where the worker module imports the user class explicitly.
-- Restore path: `from_snapshot(*, snapshot=..., discrete_cardinalities=..., continuous_dims=..., init_args=...)` when present.
-- Fresh path: `ClassName(discrete_cardinalities=..., continuous_dims=..., **args)`.
-- Python worker protocol entrypoints are included in each example runtime, but `command` must explicitly start the desired process.
-- GammaBoard does not infer paths, append worker scripts, or inject Apptainer binds. Use `$resources` explicitly where the host resources path is needed.
-
-## Reusing definitions
-
-Open the definition icon beside a run or task to edit its TOML draft. Deletion has
-a separate button. The editor offers **Copy TOML**, **Download**, templates, and
-creation or duplication; every action uses the current text, including unsaved edits.
-Duplicate names receive a `-copy` suffix (then `-copy-2`, etc.) only when needed.
-
-**Create duplicate run** creates a fresh run from the full definition, including
-pending and failed task definitions. It does not copy results, checkpoints or
-worker assignments. Campaigns, scans and tuning runs create new children;
-**Create standalone run** reuses a child's resolved definition independently of
-its controller. Existing runs cannot be overwritten from this editor.
-
-Integration queues support **Add tasks**. A task's editor offers **Save changes**
-for pending tasks and **Duplicate task** to append the draft. Active and historical
-tasks allow draft edits for duplication or export, with in-place saving disabled.
-Omitted sources resolve at the new queue position; named sources still refer to
-earlier tasks in that run. Only pending tasks can be removed, and changes must
-preserve downstream references. Campaign-owned queues are managed by the controller,
-so create a standalone run before changing its task definitions.
-
-Run definitions include all current task definitions and omit execution metadata.
-Templates can be loaded, saved and deleted from the shared editors, including
-**New run** and **Add tasks**.
-
-External paths and explicit source references are retained. Files are not copied
-or verified: use distinct writable output paths for independent runs, especially
-MadNIS `save_path`. Saved artifacts can still be required for ordinary resume.
-Historical run cloning/branching is no longer supported; use **Duplicate** for a
-fresh execution or **Assign / Resume** to continue the existing run.
-
-## Task Queue
-
-Sample tasks use direct source specs:
-
-- Omit `evaluator` or use `evaluator = "latest"` to use the latest effective evaluator.
-- Use `evaluator = { from_name = "..." }` to load the evaluator from a prior task snapshot.
-- Use `evaluator = { config = ... }` to set an explicit task-local evaluator.
-- Omit `sampler_aggregator` or `accumulator` to use `latest`.
-- Use `kind = "set_accumulator"` when you want to establish or reset accumulator state explicitly before later sample tasks.
-- Use `{ from_name = "..." }` to load from a prior task name.
-- Use `{ config = ... }` to set explicit inline config.
-- `accumulator = { config = "gammaloop" }` is available for GammaLoop runs and persists GammaLoop's native histogram snapshot bundle.
-
-Task names are unique per run and can be referenced by `from_name`.
-
-For gammaloop sample tasks, Result reports the signed real and imaginary means,
-their target comparisons, the means of the absolute real and imaginary
-contributions, and the mean complex norm. `Norm Mean` is the average of each
-sample's `sqrt(re² + im²)`, including Monte Carlo weights; it is not the norm of
-the final complex mean. The absolute-component estimates include uncertainties
-computed from their own absolute moments.
-
-Sample and campaign Result widgets display estimates with two significant digits
-in the uncertainty, in parentheses referring to the last digits of the mean.
-For example, `(-1.318 ± 0.0039) × 10^-4` is displayed as
-`-1.3180(39) × 10^-4`. The full-precision values remain available in the details.
-
-RSD and normalized ESS use the evaluator's training projection, including sampling
-weights, independently of `Norm Mean`. RSD is the standard deviation divided by
-the mean absolute contribution; ESS is `(Σ|w|)² / (N Σw²)`, displayed as a
-dimensionless value from 0 to 1. Existing native gammaloop snapshots have enough
-moments to recover real, imaginary, and norm projection statistics. Historical
-`abs_sq` statistics are unavailable because the required weighted squared-norm
-moments were not stored; Result shows `n/a` instead of a partial estimate. New
-accumulators record these moments when `training_projection = "abs_sq"`.
-
-In Max Weight Points, `Returned integrand` is the component returned by GammaLoop.
-New GammaLoop contributions include native map Jacobians and channel partitions;
-`Top-level Jacobian` is the remaining factor, normally one. Older records may
-store an unapplied Jacobian separately. `w` is the point's sampling weight.
-Estimates, histograms and training feedback apply the outer weight exactly once.
-The weighted extremum includes all applicable weight factors. Numeric columns use
-scientific notation; continuous coordinates show three significant digits,
-with their stored values available under `Full Precision (f64)`.
-
-The top-level `[evaluator]` is shorthand for the initial evaluator stage. If it is omitted, the first explicit compute-task evaluator establishes the immutable run domain. Every later evaluator stage must resolve to that domain. Controller runs never resolve or inherit an evaluator; their child-run TOML owns each child evaluator. This keeps batches, materializers, and accumulator state compatible while allowing implementation and parameters to vary between compute stages.
-
-`batch_transforms` is stage state for tasks. Omitted inherits; `batch_transforms = []` explicitly clears inherited transforms.
-
-When raster `image`/`plot_line`/`pdf_adaptation_image`/`pdf_adaptation_plot_line` tasks should evaluate directly in declared geometry coordinates after transformed sampling stages, set `batch_transforms = []` on those raster tasks.
-
-Raster geometry `discrete` selects the domain branch to scan. The selected branch, or remaining subtree if the path is a prefix, must determine a unique continuous dimensionality matching `offset` and direction vectors.
-
-`set_accumulator` is the explicit no-work task for changing accumulator state. Sample tasks may omit `accumulator`, but only if a prior task in the run already established an effective accumulator state.
-
-Task files used with `gammaboard run task append` may contain either a single `task = { ... }`, a `[[task_queue]]` array, or both. When both are present, `task` is appended first.
-
-Sample task config example:
-
-```toml
-[[task_queue]]
-name = "accumulator"
-kind = "set_accumulator"
-
-[task_queue.accumulator]
-kind = "scalar"
-
-[task_queue.accumulator.discrete_projections]
-normalization = "contribution" # default; use "conditional_mean" for per-bin means
-
-[[task_queue.accumulator.discrete_projections.items]]
-name = "summed"
-dims = [0]
-fixed_dims = {}
-
-[[task_queue]]
-name = "warmup-sample"
-kind = "sample"
-stop_condition = { max_samples = 10000, absolute_error = 1e-3, relative_error = 1e-2, projection = "real" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-```
-
-Discrete projection dimensions address the discrete coordinate path. For inhomogeneous domains, samples where a configured fixed or projected dimension does not exist are ignored, so `fixed_dims` can select a subtree before projecting a deeper branch. The backend renders these projected scalar accumulators as histograms.
-
-Deterministic scan tasks:
-
-```toml
-[[task_queue]]
-kind = "image"
-accumulator = "scalar"
-[task_queue.geometry]
-offset = [0.0, 0.0]
-u_vector = [1.0, 0.0]
-v_vector = [0.0, 1.0]
-u_linspace = { start = -2.0, stop = 2.0, count = 128 }
-v_linspace = { start = -2.0, stop = 2.0, count = 128 }
-
-[[task_queue]]
-kind = "plot_line"
-accumulator = "scalar"
-[task_queue.geometry]
-offset = [0.0, 0.0]
-direction = [1.0, 0.0]
-linspace = { start = -2.0, stop = 2.0, count = 512 }
-
-[[task_queue]]
-kind = "pdf_adaptation_plot_line"
-[task_queue.geometry]
-offset = [0.0, 0.0]
-direction = [1.0, 0.0]
-linspace = { start = -2.0, stop = 2.0, count = 512 }
-```
-
-## Integration Campaigns
-
-`integration_campaign` is a run kind that allocates workers among independent
-integration children. Each child has a `name`, optional `coefficient` (default
-one), its own `replacements`, and a `run` containing TOML text or a file reference:
-
-```toml
-kind = "integration_campaign"
-name = "ttH"
-stop_condition = { relative_error = 0.01 }
-target = { kind = "vector", components = { real = 1.23, imag = 0.0 } } # optional
-
-[[children]]
-name = "GL0"
-replacements = { graph_group = 0 }
-run = { file = "tt_h.toml" }
-
-[[children]]
-name = "GL2"
-replacements = { graph_group = 1 }
-run = { file = "tt_h.toml" }
-```
-
-The campaign target describes the combined, coefficient-weighted result. It uses
-the same scalar or vector syntax as an integration target and appears in the
-Result widget with relative and standard-error deviations. It is a reference for
-comparison, independent of `stop_condition`, and is not inherited by children.
-
-All three controller kinds accept exactly two child source forms:
-
-- Inline TOML text: `run = '''...'''`.
-- A file reference: `run = { file = "child.toml" }`.
-
-Nested run-definition tables such as `[children.run]` or `[child.run]` are
-rejected. For example, an inline campaign child is:
-
-```toml
-[[children]]
-name = "constant"
-replacements = { samples = 1000 }
-run = '''
-name = "constant-integral"
-[evaluator]
-kind = "unit"
-continuous_dims = 1
-discrete_dims = 0
 [[task_queue]]
 name = "sample"
 kind = "sample"
-stop_condition = { max_samples = "$(samples:100)" }
+stop_condition = { max_samples = 10000 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-'''
+sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }
 ```
 
-Both forms use one pipeline: resolve to TOML text, parse, merge replacements,
-expand typed placeholders, and validate. File references resolve relative to the
-containing file, recursively; an inline child's references inherit its containing
-document's directory. Cycles and file references with extra fields are rejected.
-All referenced contents, including nested references inside inline text, are
-frozen into inline TOML text when the run is submitted. The dashboard template
-editor shows the authored file and resolves its relative references against the
-run-template directory only on submission. Resuming does not reread source files.
+The first evaluator establishes the run's domain; later evaluators must preserve
+it. `evaluator_requirements` and `sampler_requirements` match worker capabilities
+with `>=`, for example `sampler_requirements = { gpu = 1 }` at the run root.
 
-For each child, replacement precedence is **placeholder fallback < child-file
-replacements < caller replacements**. Merge bindings first, then expand the
-child. Parent replacements do not implicitly enter child scope: explicitly pass
-one through `children.replacements`, for example
-`state_folder = "$(state_folder:states/tt_h)"`. This applies equally to file and
-inline definitions: the child TOML is parsed before expansion, preserving the
-types of numeric, boolean, array, and quoted-string replacements.
+### Evaluators and samplers
 
-The campaign follows each child's newest usable publishing sample stage. Sample
-tasks publish by default; `publish_result = false` excludes a training stage.
-During initialization or non-publishing stages, the previous usable result stays
-available. A new stage replaces the old result; stages are never added together.
-Independent children combine as `I = sum(c_i I_i)` and
-`variance = sum(c_i^2 variance_i)`. Compatible histogram bins are also combined;
-incompatible layouts are reported as omitted. Child-native results remain
-available separately.
+| Kind | Main settings |
+| --- | --- |
+| `unit` evaluator | `continuous_dims`, `discrete_dims`; installation/benchmark fixture |
+| `symbolica` evaluator | `args`, tagged `source` with expression/constants or compiled-library settings |
+| `gammaloop` evaluator | `state_folder`, integrand selection; dimensions inferred from state |
+| `process_evaluator` | `command`, `domain`, `args`, `output`; [process guide](../process_api/README.md) |
+| `naive_monte_carlo` sampler | Optional `seed` |
+| `havana_training` sampler | `seed`, `bins`, `samples_for_update`, `initial_training_rate`, `final_training_rate` |
+| `havana_inference` sampler | Trained source and optional `seed` |
+| `process_sampler` | `command`, `args`; sampler defines its training windows |
 
-The campaign panel places progress and the combined result side by side, followed
-by sub-runs, combined observables, task details, and run identity/lifecycle.
-Sub-run headers sort descending on the first click and ascending on the second;
-the `#` column shows the current row position. Means and errors use scientific
-notation. Relative errors are `100 * error / abs(mean)` (zero for an exact zero,
-infinite for a zero mean with nonzero error). **Absolute components** displays
-the means of `|real|` and `|imag|` with their own standard errors and relative
-errors. The `var ctrb (%)` column still refers to the signed campaign result.
-Older results recover absolute diagnostics from matching child snapshots when
-available; unavailable diagnostics display `n/a`.
+For GammaLoop, regenerate states with the revision pinned by GammaBoard. Changing
+channel definitions/order requires a new run and trained grid. `graph_groups`
+selects graph groups from the loaded integration view. Optional `preprocessing`
+runs ordered commands; `read_only = true` protects the loaded state by default.
+`use_f128 = true` skips double-precision stability levels. See the
+[GammaLoop card](../resources/templates/runs/gammaloop.toml) for field names.
 
-Error-based stopping waits until every child has a usable result from its final
-publishing stage and has met its pilot minimum. Sample budgets and allocation
-windows count work across all stages, including excluded training, independently
-of accumulator resets. A hard budget can stop preparation; if some children have
-never published, the campaign fails with a missing-result explanation. Child
-failure detection covers the entire queue, including preparation tasks.
+## Task sources and training
 
-Controller ticks keep unchanged worker assignments intact. When allocation
-changes, the worker pool moves atomically, so evaluators do not see a temporary
-unassigned state and rebuild between ticks. A sampler's training batch boundary
-can still pause sampling for an optimizer step; it does not itself reassign
-workers. Campaigns reconsider children at allocation-window and publishing-stage
-changes.
+Tasks have unique names within a run. For sampling, `evaluator`, `accumulator`,
+and `sampler` accept:
 
-## Parameter Scans and Tuning
+| Source | Meaning |
+| --- | --- |
+| Omitted or `"latest"` | Continue from the preceding effective stage |
+| `{ from_name = "earlier-task" }` | Restore that task's saved state/configuration |
+| `{ config = ... }` | Start with explicit configuration; accumulator state is fresh |
 
-`kind = "parameter_scan"` accepts `parameters`, `measurement`,
-`max_concurrent_runs`, and `child`. `kind = "hyperparameter_tuning"` accepts
-`parameters`, `objective`, `optimizer`, `max_concurrent_trials`, and `child`.
-Campaign/scan measurements accept `quantity`; scans also accept `source_task`.
-Only tuning objectives accept `mode` (minimize/maximize).
-Their shared `[child]` template accepts the same TOML string or file reference:
+Havana inference can import a selected trained grid:
 
 ```toml
-kind = "parameter_scan"
-name = "scale-scan"
-measurement = { source_task = "sample" }
-parameters = [{ name = "scale", values = [0.5, 1.0, 2.0] }]
-
-[child]
-replacements = { scan_samples = 4096 }
-run = { file = "integrations/polynomial.toml" }
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = { max_samples = 1000000 }
+accumulator = { config = "scalar" }
+sampler = { config = { kind = "havana_inference" }, from_stage = "training" }
 ```
 
-The `run` above can equivalently be a multiline TOML string containing the
-file's contents. The parent does not expand placeholders inside that string.
-Generated scan/trial parameter values override `child.replacements`, which
-in turn override the template's own defaults. Scans and tuning still select a
-named task measurement; campaigns follow published stages. Separate scan/tuning
-experiments are separate run documents, rather than successive controller tasks.
+Without `from_stage`, Havana inference uses the latest compatible prior stage.
+A new seed starts a new random stream; omitting it continues the source stream.
+Use `publish_result = false` on training and a fresh inference accumulator to
+exclude training samples from published estimates. Unsupported handoffs fail.
 
-### Variance-based campaign allocation
+| Other tasks | Purpose |
+| --- | --- |
+| `set_accumulator` | Establish/reset accumulator state without generating work |
+| `pause` | Stop at a deliberate queue boundary |
+| `image`, `plot_line` | Evaluate plane/line raster geometry |
+| `pdf_adaptation_image`, `pdf_adaptation_plot_line` | Inspect a saved sampler's PDF |
 
-For a campaign estimate
+`batch_transforms` inherits when omitted; `[]` clears it. Clear inherited transforms
+on raster tasks that use direct geometry coordinates. Raster `discrete` selects
+the branch; its dimensionality must match the geometry. Task append files accept
+`[task]`, `[[task_queue]]`, or both (single task first).
 
-`I = sum_i c_i I_i`,
+## Accumulators and measurements
 
-the controller assumes statistically independent child estimates and computes
-the current weighted variance of child `i` as
+- `"scalar"` is shorthand for statistical vector component `value`.
+- `vector` names components and a `training_projection`: `{ kind = "component",
+  name = "real" }` or `{ kind = "norm" }`. Components must be nonempty, unique,
+  and different from reserved `training_projection`.
+- `moments = 2` is the default; `4` enables uncertainty estimates requiring fourth
+  moments. Component projections reuse component statistics.
+- `full_vector` retains every weighted value; size grows with sample count.
+- `gammaloop` retains native observable/histogram state and complex estimates.
 
-`V_i = c_i^2 sum_k sigma_(i,k)^2`,
+Optional `discrete_projections` specifies `items` with `name`, `dims`, and
+`fixed_dims`. `normalization` is `contribution` (default) or `conditional_mean`;
+optional `streams` selects components. See the [projection example](../process_api/examples/python_scalar_sin/run.toml).
 
-where `c_i` is the child's coefficient and `sigma_(i,k)` is the uncertainty of
-measurement component `k`. Summing components gives the allocator one scalar
-priority for vector or complex measurements. The combined result retains each
-component separately and combines its child uncertainties in quadrature.
+Sample stopping supports `max_samples`, `min_samples`, `absolute_error`, and
+`relative_error`, with an optional metric selector.
+Invalid values/overflow fail the entire batch and follow the retry policy;
+they are never silently dropped or replaced with zeros.
 
-The default `allocation.algorithm = "variance_reduction_rate"` assigns the next
-sample window by descending
+Measurements default to every component's mean. To select one metric:
 
-`score_i = V_i r_i / N_i`,
+```toml
+measurement = { selection = { kind = "metric", name = "variance", component = "real" } }
+```
 
-where `N_i` is the child's sample count and `r_i` is its measured completed-sample
-throughput. Monte Carlo variance approximately follows `V_i(N) = C_i / N`, so
-its expected decrease per additional sample is proportional to `V_i / N_i`.
-Multiplying by throughput estimates the decrease in total campaign variance per
-wall-clock second. This directs work to the child expected to improve the final
-precision fastest; it deliberately does not try to equalize child sample counts.
+An omitted component selects the training projection. Scans/tuning also choose
+`source_task`; tuning objectives use `mode = "minimize"` or `"maximize"`.
 
-`allocation.algorithm = "largest_variance"` instead uses `score_i = V_i`. It is
-useful when child evaluation costs are comparable or throughput should not affect
-allocation. Unlike the default proxy, it does not explicitly divide by the
-current sample count when estimating the marginal benefit of more samples.
+## Controllers
 
-Before scoring, children below `min_samples_per_child` receive pilot coverage,
-least-sampled first. This supplies an initial uncertainty and throughput estimate
-for every child. The selected set is retained until
-`allocation_window_samples` additional child samples have completed, then scores
-are recomputed; this avoids rapid reassignment from noisy live estimates.
-`max_active_runs` selects how many of the highest-ranked children run concurrently.
+Controllers are root run kinds, each creating ordinary inspectable child runs.
+They do not accept an integration task queue or a parent evaluator.
 
-The dashboard's **variance contribution (%)** is
-`100 V_i / sum_j V_j`. It explains the current uncertainty budget, but is not the
-default allocation score: throughput, sample count, the pilot phase, and the
-current allocation window can make the selected child differ from the largest
-displayed contributor. Percentages are withheld until every child has reported
-the uncertainties needed for the total.
+| Kind | Settings and example |
+| --- | --- |
+| `integration_campaign` | `children`, `allocation`, `stop_condition`, optional `target`; [card](../resources/templates/runs/integration-campaign-qft-like.toml) |
+| `parameter_scan` | `parameters`, `child`, `measurement`, `max_concurrent_runs`; [card](../resources/templates/runs/parameter-scan-symbolica.toml) |
+| `hyperparameter_tuning` | `parameters`, `child`, `objective`, `optimizer`, `max_concurrent_trials`; [card](../resources/templates/runs/hyperparameter-tuning-symbolica.toml) |
 
-These calculations require independent child estimates. Correlated child
-estimators need covariance terms and should not be represented as an independent
-campaign. Early estimates can also be noisy; increase `min_samples_per_child` or
-`allocation_window_samples` when allocations are unstable.
+Child `run` is an inline TOML string or `{ file = "path.toml" }`. Relative references
+are resolved and contents frozen at submission. Generated parameter values override
+child `replacements`, which override the child card's defaults. A scan/categorical
+source chooses exactly one of `values`, `linspace`, or `range`. Tuning supports
+`grid_search` (no parameters), `random_search`, and `egobox` with typed `params`.
 
-The campaign stops on its combined absolute or relative error after
-`min_total_samples`, or at `max_total_samples`.
+Campaigns sum independent child estimates with signed coefficients and combine
+uncertainties in quadrature. Correlated estimates require covariance handling
+outside this model. Campaigns follow each child's latest publishing sample stage;
+error convergence waits for final publishing stages. Compatible histograms are
+combined; incompatible layouts are reported as omitted.
 
-All controller child records include a result source reference containing the
-child run, source task, immutable stage snapshot when available, and live sample
-revision. Parameter scans use these records for their 1D series, 2D heatmaps,
-and point table. Hyperparameter tuning exposes objective and best-so-far
-history, plus `best_result_source` for the complete winning child result.
+`max_total_samples` is a hard cap on logical samples across every child stage,
+including training and plotting. Error targets can finish earlier. A cap too small
+for every final publishing stage fails explicitly. The [execution specification](execution-model.md#sample-budgets)
+defines reservations, queued/buffered work, pilot grants, and retry accounting.
 
-See `resources/templates/runs/integration-campaign-qft-like.toml` for a complete
-two-graph-group ttH example with native GammaLoop histograms.
+The default allocation favors expected variance reduction per second
+(`weighted variance × throughput / samples`) after pilot coverage.
+`largest_variance` ignores cost. Increase `min_samples_per_child` or
+`allocation_window_samples` for steadier decisions; `max_active_runs` limits
+concurrent children. Displayed variance contribution is not the allocation score.
 
-## Queue Tuning
-
-Evaluators use a fixed single-slot latent prefetch and single-slot async submit
-pipeline. Materialization and evaluation remain strictly one batch at a time.
-Evaluators claim available batches independently; an idle peer does not block
-prefetch, and equal work distribution is not guaranteed.
-
-`sampler_aggregator_runner_params` controls queue and persistence behavior:
-
-- `io_threads` (default 1, must be positive) sets the background I/O pool owned by each sampler runner. It is independent of `TOKIO_WORKER_THREADS` and takes effect when the runner starts, not through live queue tuning.
-- `frontend_sync_interval_ms` sets how often the sampler runner refreshes frontend-facing and persisted accumulator snapshots during sampling.
-- Sampler queue settings live under `[sampler_aggregator_runner_params.queue]`.
-- `target_batch_eval_ms` (default 2000), `max_batch_size`, and optional `fixed_batch_size` control evaluator work units. They can be overridden live in task `queue_tuning` and the dashboard. Fixed sizing is an advanced option.
-- `max_generation_size` (default 262,144, must be positive) caps each new sampler draw independently of evaluator batch sizes. It supports live task `queue_tuning` and the dashboard. Changes apply to the next draw; buffered draws finish unchanged. Draws are also clipped to training boundaries and the remaining task budget. Native samplers no longer have a separate `generation_batch_size` setting.
-- One pending batch per active evaluator is the fixed soft refill threshold, including local and in-flight inserts. An existing draw can exceed it; only starting another draw waits for the queue to fall below it.
-- The adaptive controller uses a fixed 15% deadband and a three-completion cooldown.
-- `max_batches_per_tick`, `max_insert_bundle_size`, `max_concurrent_insert_tasks`, `completed_batch_fetch_limit`, and `max_batch_retries` remain deployment settings under the runner queue config, not task tuning.
-- Sampler I/O defaults to four concurrent inserts and six database connections;
-  evaluators retain two connections. The role-specific caps and admission rules
-  are described in [concurrency](concurrency.md#io-limits-and-scheduling).
-- The sampler defaults to `min_tick_time_ms = 10`. Evaluators process available work immediately and wait for a refill notification when empty, with a bounded safety retry. Evaluator `min_tick_time_ms` and `db_pool_size` are retired; old run cards remain readable, and evaluator pools use two connections.
-- Pause/unassign flushes local I/O before checkpointing the undispatched draw and partially assembled feedback along with sampler state.
-
-For a sampler with several allocated CPU cores, the run TOML can use:
+## Batch and resource tuning
 
 ```toml
 [sampler_aggregator_runner_params]
-io_threads = 3
+io_threads = 1
+
+[sampler_aggregator_runner_params.queue]
+target_batch_eval_ms = 2000
+max_batch_size = 32768
+max_generation_size = 262144
 ```
 
-This is a runtime resource setting shared by all sampler implementations; it does
-not belong to the sampler algorithm config. See [deployment CPU threads](deployment.md#cpu-threads)
-for core allocation and [the measurements](performance-development.md) for scaling limits.
+| Setting | Effect |
+| --- | --- |
+| `target_batch_eval_ms` | Adaptive evaluator batch duration; larger values amortize overhead |
+| `max_batch_size` | Transport batch cap; larger batches can increase memory/database cost |
+| `max_generation_size` | Sampler draw cap, independent of evaluator splitting; not a total memory cap |
+| `fixed_batch_size` | Advanced override that bypasses timing adaptation |
+| `io_threads` | Sampler I/O threads per runner; requires allocated cores and a runner restart |
 
-See [the sampler contract](sampling.md) for generation, feedback, memory, and migration details.
+The four queue size/time settings can be changed live through task `queue_tuning`
+or the dashboard. Generation changes apply to the next draw. Training windows
+remain sampler-owned and can span multiple draws; generation is split across
+evaluators automatically. Leave other queue settings at their defaults unless
+[benchmarks](benchmarking.md) justify a change. Threads do not allocate CPU cores.
+
+## Replacements
+
+Run, task-append, and node-launch cards support `replacements`; server/runtime
+configs do not. `$(name:default)` as an entire string becomes the selected TOML
+value; inside a larger string it is interpolated as text.
+
+```toml
+replacements = { samples = 10000, center = 0.5 }
+# Inside the relevant task/evaluator tables:
+# stop_condition = { max_samples = "$(samples:1000)" }
+# source = { kind = "expression", expr = "(x - $(center:0.0))^2" }
+```

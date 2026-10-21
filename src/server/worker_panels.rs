@@ -27,7 +27,7 @@ fn worker_panel_specs(worker: &RegisteredWorkerEntry) -> Vec<crate::server::pane
 
     match worker.current_role {
         Some(WorkerRole::SamplerAggregator) => {
-            if json_has_object_fields(worker.sampler_engine_diagnostics.as_ref()) {
+            if worker.sampler_metrics.is_some() {
                 panels.push(sized_panel_spec(
                     "sampler_diagnostics",
                     "Sampler Queue",
@@ -112,8 +112,7 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
     match worker.current_role {
         Some(WorkerRole::Evaluator) => {}
         Some(WorkerRole::SamplerAggregator) => {
-            if let Some(diagnostics) = diagnostics_panel(worker.sampler_engine_diagnostics.as_ref())
-            {
+            if let Some(diagnostics) = diagnostics_panel(worker.sampler_metrics.as_ref()) {
                 panels.push(diagnostics);
             } else {
                 panels.push(text_panel(
@@ -170,41 +169,68 @@ fn worker_panel_states(worker: &RegisteredWorkerEntry) -> Vec<PanelState> {
     panels
 }
 
-fn diagnostics_panel(value: Option<&JsonValue>) -> Option<PanelState> {
-    let runner = value?.as_object()?.get("runner")?.as_object()?;
-    let entries = [
-        ("active_evaluator_count", "Active Evaluators"),
-        (
-            "target_pending_batches",
-            "Refill Threshold (Pending Batches)",
-        ),
-        ("db_pending_batches", "DB Pending Batches"),
-        ("pending_shortfall", "Pending Shortfall"),
-        ("local_pending_batches", "Local Pending Batches"),
-        (
-            "local_inflight_insert_tasks",
-            "Local In-Flight Insert Tasks",
-        ),
-        (
-            "local_inflight_insert_batches",
-            "Local In-Flight Insert Batches",
-        ),
-        ("local_ready_processed_batches", "Completed Prefetch Buffer"),
-        ("accumulator_checkpoint_state", "Checkpoint State"),
-        ("buffered_generated_samples", "Undispatched Samples"),
-    ]
-    .into_iter()
-    .filter_map(|(key, label)| {
-        runner
-            .get(key)
-            .cloned()
-            .map(|value| key_value(key, label, value))
-    })
-    .collect::<Vec<_>>();
-    if entries.is_empty() {
-        return None;
-    }
-    Some(key_value_panel("sampler_diagnostics", entries))
+fn diagnostics_panel(
+    metrics: Option<&crate::core::SamplerPerformanceMetrics>,
+) -> Option<PanelState> {
+    let m = metrics?;
+    let q = &m.queue;
+    Some(key_value_panel(
+        "sampler_diagnostics",
+        vec![
+            key_value(
+                "active_evaluator_count",
+                "Active Evaluators",
+                m.active_evaluator_count,
+            ),
+            key_value(
+                "target_pending_batches",
+                "Refill Threshold (Pending Batches)",
+                m.target_pending_batches,
+            ),
+            key_value(
+                "db_pending_batches",
+                "DB Pending Batches",
+                q.db_pending_batches,
+            ),
+            key_value(
+                "pending_shortfall",
+                "Pending Shortfall",
+                m.target_pending_batches
+                    .zip(q.db_pending_batches)
+                    .map(|(target, pending)| target.saturating_sub(pending.max(0) as usize)),
+            ),
+            key_value(
+                "local_pending_batches",
+                "Local Pending Batches",
+                q.local_pending_batches,
+            ),
+            key_value(
+                "local_inflight_insert_tasks",
+                "Local In-Flight Insert Tasks",
+                q.local_inflight_insert_tasks,
+            ),
+            key_value(
+                "local_inflight_insert_batches",
+                "Local In-Flight Insert Batches",
+                q.local_inflight_insert_batches,
+            ),
+            key_value(
+                "local_ready_processed_batches",
+                "Completed Prefetch Buffer",
+                q.local_ready_processed_batches,
+            ),
+            key_value(
+                "accumulator_checkpoint_state",
+                "Checkpoint State",
+                m.checkpoint_state,
+            ),
+            key_value(
+                "buffered_generated_samples",
+                "Undispatched Samples",
+                m.buffered_generated_samples,
+            ),
+        ],
+    ))
 }
 
 fn text_panel(panel_id: &str, text: impl Into<String>) -> PanelState {
@@ -212,12 +238,6 @@ fn text_panel(panel_id: &str, text: impl Into<String>) -> PanelState {
         panel_id: panel_id.to_string(),
         text: text.into(),
     }
-}
-
-fn json_has_object_fields(value: Option<&JsonValue>) -> bool {
-    value
-        .and_then(JsonValue::as_object)
-        .is_some_and(|object| !object.is_empty())
 }
 
 pub fn append_activity_panel(response: &mut PanelResponse, activity: &JsonValue) {
@@ -254,7 +274,10 @@ pub fn append_activity_panel(response: &mut PanelResponse, activity: &JsonValue)
 fn synthetic_diagnostics(worker: &RegisteredWorkerEntry) -> Option<&JsonValue> {
     let diagnostics = match worker.current_role {
         Some(WorkerRole::Evaluator) => &worker.evaluator_metrics.as_ref()?.engine_diagnostics,
-        Some(WorkerRole::SamplerAggregator) => worker.sampler_engine_diagnostics.as_ref()?,
+        Some(WorkerRole::SamplerAggregator) => worker
+            .sampler_metrics
+            .as_ref()
+            .map(|m| &m.engine_diagnostics)?,
         _ => return None,
     };
     (diagnostics.get("synthetic").and_then(JsonValue::as_bool) == Some(true)).then_some(diagnostics)

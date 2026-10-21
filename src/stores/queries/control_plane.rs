@@ -16,7 +16,7 @@ const CLEAR_CURRENT_ASSIGNMENT_SET: &str = r#"
     updated_at = now()
 "#;
 
-pub(crate) struct DesiredAssignmentRaw {
+pub(crate) struct AssignmentTargetRaw {
     pub node_name: String,
     pub role: String,
     pub run_id: i32,
@@ -29,13 +29,10 @@ pub(crate) struct NodeRaw {
     pub capabilities: JsonValue,
     pub pool_role: Option<String>,
     pub pool_run_id: Option<i32>,
-    pub pool_run_name: Option<String>,
     pub desired_role: Option<String>,
     pub desired_run_id: Option<i32>,
-    pub desired_run_name: Option<String>,
     pub current_role: Option<String>,
     pub current_run_id: Option<i32>,
-    pub current_run_name: Option<String>,
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -93,10 +90,8 @@ async fn clear_expired_assignments<'e>(
     Ok(())
 }
 
-fn desired_assignment_raw(
-    (node_name, role, run_id): (String, String, i32),
-) -> DesiredAssignmentRaw {
-    DesiredAssignmentRaw {
+fn desired_assignment_raw((node_name, role, run_id): (String, String, i32)) -> AssignmentTargetRaw {
+    AssignmentTargetRaw {
         node_name,
         role,
         run_id,
@@ -240,6 +235,8 @@ pub(crate) async fn announce_node(
             name,
             uuid,
             capabilities,
+            deployment_id,
+            build_id,
             lease_expires_at,
             last_seen,
             updated_at
@@ -247,6 +244,8 @@ pub(crate) async fn announce_node(
             $1,
             $2,
             $3,
+            $4,
+            $5,
             now() + interval '10 seconds',
             now(),
             now()
@@ -254,6 +253,8 @@ pub(crate) async fn announce_node(
         ON CONFLICT (name) DO UPDATE
         SET
             uuid = EXCLUDED.uuid,
+            deployment_id = EXCLUDED.deployment_id,
+            build_id = EXCLUDED.build_id,
             capabilities = EXCLUDED.capabilities,
             lease_expires_at = EXCLUDED.lease_expires_at,
             last_seen = EXCLUDED.last_seen,
@@ -302,6 +303,8 @@ pub(crate) async fn announce_node(
         serde_json::to_value(capabilities)
             .unwrap_or_else(|_| JsonValue::Object(Default::default())),
     )
+    .bind(std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok())
+    .bind(crate::provenance::build_identity())
     .fetch_optional(pool)
     .await?;
 
@@ -398,7 +401,7 @@ pub(crate) async fn clear_all_desired_assignments(pool: &PgPool) -> Result<u64, 
 pub(crate) async fn get_desired_assignment(
     pool: &PgPool,
     node_name: &str,
-) -> Result<Option<DesiredAssignmentRaw>, sqlx::Error> {
+) -> Result<Option<AssignmentTargetRaw>, sqlx::Error> {
     let row = sqlx::query_as::<_, (String, String, i32)>(
         r#"
         SELECT name, desired_role AS role, desired_run_id AS run_id
@@ -418,7 +421,7 @@ pub(crate) async fn get_desired_assignment(
 pub(crate) async fn list_desired_assignments(
     pool: &PgPool,
     node_name: Option<&str>,
-) -> Result<Vec<DesiredAssignmentRaw>, sqlx::Error> {
+) -> Result<Vec<AssignmentTargetRaw>, sqlx::Error> {
     let rows = sqlx::query_as::<_, (String, String, i32)>(
         r#"
         SELECT name, desired_role AS role, desired_run_id AS run_id
@@ -445,18 +448,13 @@ pub(crate) async fn list_nodes(
             n.name,
             n.uuid,
             n.capabilities,
-            n.pool_role, n.pool_run_id, pr.name AS pool_run_name,
+            n.pool_role, n.pool_run_id,
             n.desired_role,
             n.desired_run_id,
-            dr.name AS desired_run_name,
             n.active_role AS current_role,
             n.active_run_id AS current_run_id,
-            cr.name AS current_run_name,
             n.last_seen
         FROM nodes n
-        LEFT JOIN runs pr ON pr.id = n.pool_run_id
-        LEFT JOIN runs dr ON dr.id = n.desired_run_id
-        LEFT JOIN runs cr ON cr.id = n.active_run_id
         WHERE n.lease_expires_at > now()
           AND ($1::text IS NULL OR n.name = $1)
         ORDER BY n.name ASC
@@ -543,62 +541,49 @@ pub(crate) async fn list_node_launch_requests(
     .await
 }
 
-pub(crate) async fn claim_external_node_launch_request(
-    pool: &PgPool,
-) -> Result<Option<NodeLaunchRequestRaw>, sqlx::Error> {
-    sqlx::query_as::<_, NodeLaunchRequestRaw>(
-        r#"
-        WITH next_request AS (
-            SELECT id
-            FROM node_launch_requests
-            WHERE state = 'pending'
-              AND backend = 'external'
-            ORDER BY created_at, id
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
-        )
-        UPDATE node_launch_requests request
-        SET
-            state = 'starting',
-            started_count = 0,
-            result = '{}'::jsonb,
-            error = NULL,
-            updated_at = now()
-        FROM next_request
-        WHERE request.id = next_request.id
-        RETURNING
-            request.id,
-            request.created_at,
-            request.updated_at,
-            request.state,
-            request.backend,
-            request.requested_count,
-            request.started_count,
-            request.name_prefix,
-            request.args,
-            request.result,
-            request.error
-        "#,
-    )
-    .fetch_optional(pool)
-    .await
-}
-
 pub(crate) async fn reconcile_fulfilled_node_launch_requests(
     pool: &PgPool,
 ) -> Result<PgQueryResult, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL synchronous_commit=on")
+        .execute(&mut *tx)
+        .await?;
+    // Match the launcher's parent-before-worker lock order. This also makes
+    // registration, progress counts and terminal request state one publication.
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM node_launch_requests WHERE state='starting' ORDER BY id FOR UPDATE",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE external_worker_launches w SET state='connected',error=NULL,updated_at=now()
+        WHERE w.request_id=ANY($1) AND w.state IN ('pending','submitting','submitted') AND EXISTS (
+            SELECT 1 FROM nodes n JOIN node_launch_requests r ON r.id=w.request_id
+            WHERE n.name=w.node_name AND n.launch_request_id=w.request_id AND n.last_seen>=r.created_at)")
+        .bind(&ids).execute(&mut *tx).await?;
+    sqlx::query("UPDATE node_launch_requests r SET
+        started_count=(SELECT count(*) FROM external_worker_launches WHERE request_id=r.id AND (job_id IS NOT NULL OR state='connected')),
+        result=jsonb_build_object('workers',(SELECT jsonb_agg(to_jsonb(w) ORDER BY node_name) FROM external_worker_launches w WHERE request_id=r.id))
+      WHERE r.id=ANY($1) AND EXISTS(SELECT 1 FROM external_worker_launches WHERE request_id=r.id)")
+        .bind(&ids).execute(&mut *tx).await?;
+    sqlx::query("UPDATE node_launch_requests r SET
+        state=CASE WHEN EXISTS(SELECT 1 FROM external_worker_launches WHERE request_id=r.id AND state IN ('failed','canceled')) THEN 'failed' ELSE 'fulfilled' END,
+        error=(SELECT string_agg(error,'; ') FROM external_worker_launches WHERE request_id=r.id AND error IS NOT NULL),updated_at=now()
+      WHERE r.id=ANY($1) AND r.backend='external'
+        AND (SELECT count(*) FROM external_worker_launches WHERE request_id=r.id)=r.requested_count
+        AND NOT EXISTS(SELECT 1 FROM external_worker_launches WHERE request_id=r.id AND state IN ('pending','submitting','submitted'))")
+        .bind(&ids).execute(&mut *tx).await?;
     // Fulfillment records that every requested worker connected at least once.
     // Requiring all leases to remain live simultaneously leaves a completed
     // launch stuck in 'starting' after an early worker exits. last_seen is
     // durable across expiration; its timestamp and launch_request_id keep a
     // previous incarnation from fulfilling a resumed worker's new request.
-    sqlx::query(
+    let result = sqlx::query(
         r#"
         UPDATE node_launch_requests request
         SET
             state = 'fulfilled',
             updated_at = now()
-        WHERE request.state = 'starting'
+        WHERE request.id=ANY($1) AND request.state = 'starting' AND request.backend='local'
           AND request.started_count >= request.requested_count
           AND (
               SELECT COUNT(*)
@@ -608,8 +593,11 @@ pub(crate) async fn reconcile_fulfilled_node_launch_requests(
           ) >= request.requested_count
         "#,
     )
-    .execute(pool)
-    .await
+    .bind(&ids)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(result)
 }
 
 pub(crate) async fn update_node_launch_request_state(

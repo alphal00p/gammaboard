@@ -1,4 +1,5 @@
-import { Button, Stack } from "@mui/material";
+import { useState } from "react";
+import { Alert, Button, Stack } from "@mui/material";
 
 export const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf-8") => {
   const blob = new Blob([contents], { type: mimeType });
@@ -49,61 +50,41 @@ const downloadSvgFromElement = (baseName, element) => {
   return true;
 };
 
-const downloadSvgFromEcharts = (baseName, echartsRef) => {
-  const instance = echartsRef?.current?.getEchartsInstance?.();
-  if (!instance) return false;
-  try {
-    const dataUrl = instance.getDataURL({
-      type: "svg",
-      pixelRatio: 2,
-      backgroundColor: "#ffffff",
-    });
-    if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/svg+xml")) return false;
-    const encoded = dataUrl.slice(dataUrl.indexOf(",") + 1);
-    const markup = decodeURIComponent(encoded);
-    downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, markup, "image/svg+xml;charset=utf-8");
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const downloadCanvasAsSvg = (baseName, canvas) => {
-  if (!canvas?.toDataURL) return false;
-  const width = Number(canvas.width) || 1;
-  const height = Number(canvas.height) || 1;
-  const pngDataUri = canvas.toDataURL("image/png");
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-    `<image href="${pngDataUri}" x="0" y="0" width="${width}" height="${height}" />`,
-    "</svg>",
-  ].join("");
-  downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, svg, "image/svg+xml;charset=utf-8");
+// Render a separate SVG instance so canvas plots export actual vector paths.
+const exportCharts = async (baseName, echartsRef, element) => {
+  const { echarts } = await import("../../lib/echarts");
+  const direct = echartsRef?.current?.getEchartsInstance?.();
+  const instances = direct ? [direct] : Array.from(element?.querySelectorAll?.("[_echarts_instance_]") || [])
+    .map((node) => echarts.getInstanceByDom(node)).filter(Boolean);
+  if (!instances.length) return false;
+  let height = 0;
+  let width = 1;
+  const figures = instances.map((instance) => {
+    const w = instance.getWidth();
+    const h = instance.getHeight();
+    const renderer = echarts.init(null, null, { renderer: "svg", ssr: true, width: w, height: h });
+    try {
+      renderer.setOption({ ...instance.getOption(), animation: false });
+      const svg = renderer.renderToSVGString().replace("<svg ", `<svg y="${height}" `);
+      height += h;
+      width = Math.max(width, w);
+      return svg;
+    } finally { renderer.dispose(); }
+  });
+  downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${figures.join("")}</svg>`, "image/svg+xml;charset=utf-8");
   return true;
 };
 
-const downloadCanvasCollectionAsSvg = (baseName, canvases) => {
-  const list = Array.from(canvases || []).filter((canvas) => canvas?.toDataURL);
-  if (list.length === 0) return false;
-  const width = Math.max(...list.map((canvas) => Number(canvas.width) || 1), 1);
-  const heights = list.map((canvas) => Number(canvas.height) || 1);
-  const totalHeight = heights.reduce((sum, height) => sum + height, 0);
-  let yOffset = 0;
-  const images = list
-    .map((canvas, index) => {
-      const height = heights[index];
-      const pngDataUri = canvas.toDataURL("image/png");
-      const imageTag = `<image href="${pngDataUri}" x="0" y="${yOffset}" width="${width}" height="${height}" />`;
-      yOffset += height;
-      return imageTag;
-    })
-    .join("");
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${totalHeight}" viewBox="0 0 ${width} ${totalHeight}">`,
-    images,
-    "</svg>",
-  ].join("");
-  downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, svg, "image/svg+xml;charset=utf-8");
+const downloadPng = (baseName, element) => {
+  const canvas = element?.querySelector?.("canvas");
+  if (!canvas) return false;
+  const anchor = document.createElement("a");
+  anchor.href = canvas.toDataURL("image/png");
+  anchor.download = `${sanitizeFigureFilename(baseName)}.png`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
   return true;
 };
 
@@ -113,19 +94,28 @@ const FigureExportActions = ({
   elementRef = null,
   echartsRef = null,
   svgBuilder = null,
+  imageFormat = "svg",
   onResetView = null,
 }) => {
-  const handleDownloadSvg = () => {
-    if (downloadSvgFromEcharts(baseName, echartsRef)) return;
-    if (downloadSvgFromElement(baseName, elementRef?.current)) return;
-    if (downloadCanvasCollectionAsSvg(baseName, elementRef?.current?.querySelectorAll?.("canvas"))) return;
-    if (downloadCanvasAsSvg(baseName, elementRef?.current?.querySelector?.("canvas"))) return;
-    if (typeof svgBuilder === "function") {
-      const markup = svgBuilder();
-      if (typeof markup === "string" && markup.trim()) {
-        downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, markup, "image/svg+xml;charset=utf-8");
+  const [error, setError] = useState(null);
+  const handleDownloadImage = async () => {
+    setError(null);
+    try {
+      if (imageFormat === "png") {
+        if (downloadPng(baseName, elementRef?.current)) return;
+      } else {
+        if (typeof svgBuilder === "function") {
+          const markup = svgBuilder();
+          if (typeof markup === "string" && markup.trim()) {
+            downloadTextFile(`${sanitizeFigureFilename(baseName)}.svg`, markup, "image/svg+xml;charset=utf-8");
+            return;
+          }
+        }
+        if (await exportCharts(baseName, echartsRef, elementRef?.current)) return;
+        if (downloadSvgFromElement(baseName, elementRef?.current)) return;
       }
-    }
+      setError("The figure is not ready to export yet.");
+    } catch (err) { setError(`Export failed: ${err.message}`); }
   };
 
   return (
@@ -138,9 +128,10 @@ const FigureExportActions = ({
       <Button size="small" variant="outlined" onClick={() => downloadJsonFile(baseName, payload)}>
         JSON
       </Button>
-      <Button size="small" variant="outlined" onClick={handleDownloadSvg}>
-        SVG
+      <Button size="small" variant="outlined" onClick={handleDownloadImage}>
+        {imageFormat.toUpperCase()}
       </Button>
+      {error && <Alert severity="error">{error}</Alert>}
     </Stack>
   );
 };

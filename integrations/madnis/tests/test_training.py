@@ -15,6 +15,13 @@ class TrainingTests(unittest.TestCase):
     def setUpClass(cls):
         torch.set_num_threads(1)
 
+    def test_snapshot_without_artifact_path_is_rejected(self):
+        sampler = MadnisSampler.__new__(MadnisSampler)
+        sampler.madnis = object()
+        sampler.cfg = SimpleNamespace(save_path=None)
+        with self.assertRaisesRegex(ValueError, 'save_path'):
+            sampler.snapshot()
+
     def test_multiple_draws_wait_for_completed_training_window(self):
         sampler = MadnisSampler(continuous_dims=2, discrete_cardinalities=[], training_steps=2,
                                training_batch_size=16, use_gpu=False,
@@ -28,7 +35,7 @@ class TrainingTests(unittest.TestCase):
             self.assertEqual(sampler.step, step)
             self.assertEqual(sampler._training_samples_remaining(), 0)
             sampler.feedback(weights[5:])
-            self.assertEqual(sampler.get_diagnostics()['training_updates'], step + 1)
+            self.assertEqual(sampler.diagnostics()['training_updates'], step + 1)
         self.assertIsNone(sampler._training_samples_remaining())
         batch = sampler.generate(8)
         self.assertIsNone(batch.training_remaining)

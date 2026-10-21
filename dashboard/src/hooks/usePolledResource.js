@@ -30,6 +30,7 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
 
       try {
         const nextData = await fetchResource(signal);
+        if (signal.aborted) return;
         setData(nextData);
         setError(null);
         setIsConnected(true);

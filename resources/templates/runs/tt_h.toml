@@ -18,11 +18,11 @@ kind = "sample"
 publish_result = false
 stop_condition = { max_samples = "$(training_samples:10_000)" }
 accumulator = { config = "gammaloop" }
-sampler_aggregator = { config = { kind = "havana_training", seed = "$(seed:11)", bins = 64, samples_for_update = 2_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
+sampler = { config = { kind = "havana_training", seed = "$(seed:11)", bins = 64, samples_for_update = 2_000, initial_training_rate = 0.05, final_training_rate = 0.005 } }
 
 [[task_queue]]
 name = "inference"
 kind = "sample"
 stop_condition = { max_samples = "$(max_samples:10_000_000)" }
 accumulator = { config = "gammaloop" }
-sampler_aggregator = { config = { kind = "havana_inference", seed = "$(seed:11)" } }
+sampler = { config = { kind = "havana_inference", seed = "$(seed:11)" } }

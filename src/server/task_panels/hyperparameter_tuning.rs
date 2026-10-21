@@ -186,7 +186,9 @@ fn tuning_total_trials(ctx: &TaskPanelContext<'_>) -> Option<u64> {
 
 fn tuning_mode(ctx: &TaskPanelContext<'_>) -> crate::core::MeasurementMode {
     match &ctx.task.task {
-        crate::core::RunTaskSpec::HyperparameterTuning { objective, .. } => objective.mode,
+        crate::core::RunTaskSpec::HyperparameterTuning { objective, .. } => {
+            objective.measurement.mode
+        }
         _ => crate::core::MeasurementMode::Minimize,
     }
 }
@@ -307,10 +309,9 @@ fn objective_sample_count(trial: &HyperparameterTrialOutput) -> JsonValue {
 mod tests {
     use super::*;
     use crate::core::{
-        HyperparameterTuningAlgorithm, HyperparameterTuningCategoricalDomain,
-        HyperparameterTuningFloatDomain, HyperparameterTuningOptimizerSpec,
-        HyperparameterTuningParameterDomain, MeasurementMode, MeasurementSpec, RunTask,
-        RunTaskInput, RunTaskSpec, RunTaskState, canonical_task_toml,
+        HyperparameterTuningCategoricalDomain, HyperparameterTuningFloatDomain,
+        HyperparameterTuningOptimizerSpec, HyperparameterTuningParameterDomain, MeasurementMode,
+        MeasurementSpec, RunTask, RunTaskInput, RunTaskSpec, RunTaskState, canonical_task_toml,
     };
     use crate::server::panels::PanelState;
     use chrono::Utc;
@@ -319,12 +320,14 @@ mod tests {
 
     fn tuning_task(controller_output: Option<JsonValue>) -> RunTask {
         let task = RunTaskSpec::HyperparameterTuning {
-            optimizer: HyperparameterTuningOptimizerSpec {
-                algorithm: HyperparameterTuningAlgorithm::RandomSearch,
-                params: json!({ "max_trials": 3, "seed": 1 }),
-            },
+            optimizer: HyperparameterTuningOptimizerSpec::RandomSearch(
+                serde_json::from_value(json!({ "max_trials": 3, "seed": 1 })).unwrap(),
+            ),
             objective: MeasurementSpec {
-                mode: MeasurementMode::Minimize,
+                measurement: crate::TaskMeasurementSpec {
+                    mode: MeasurementMode::Minimize,
+                    ..Default::default()
+                },
                 ..MeasurementSpec::default()
             },
             parameters: BTreeMap::from([
@@ -339,10 +342,9 @@ mod tests {
                     "scale".to_string(),
                     HyperparameterTuningParameterDomain::Categorical(
                         HyperparameterTuningCategoricalDomain {
-                            source: crate::core::ParameterValueSourceSpec {
-                                values: vec![toml::Value::Float(1.0)],
-                                ..Default::default()
-                            },
+                            source: crate::core::ParameterValueSourceSpec::Values(vec![
+                                toml::Value::Float(1.0),
+                            ]),
                         },
                     ),
                 ),

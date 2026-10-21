@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from gammaboard_process import Evaluator, GammaLoopBatchResult
+from gammaboard_process import GammaLoopEvaluator, GammaLoopBatchResult
 
 N_BINS = 20
 X_MIN, X_MAX = 0.0, 1.0
@@ -76,8 +76,8 @@ def _scalar_state(count: int, total: float, sq: float) -> dict:
     return {"count": count, "sum_weighted_value": total, "sum_abs": abs(total), "sum_sq": sq}
 
 
-class PolynomialEvaluator(Evaluator):
-    """Evaluator for f(x) = 6x(1-x) with a GammaLoop-style histogram observable.
+class PolynomialEvaluator(GammaLoopEvaluator):
+    """GammaLoopEvaluator for f(x) = 6x(1-x) with a GammaLoop-style histogram observable.
 
     In gammaloop accumulator mode, ``eval_gammaloop`` is called and returns a
     ``GammaLoopBatchResult`` containing:
@@ -90,18 +90,16 @@ class PolynomialEvaluator(Evaluator):
     def __init__(self, *, discrete_cardinalities: list[int], continuous_dims: int) -> None:
         pass
 
-    def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> np.ndarray:
-        return _f(xs_continuous[:, 0])
-
     def eval_gammaloop(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
+        weights: np.ndarray, *, require_training_values: bool,
     ) -> GammaLoopBatchResult:
         x = xs_continuous[:, 0]
-        values = _f(x)
+        values = _f(x) * weights
         n = len(x)
         s = float(values.sum())
         s2 = float((values**2).sum())
-        zero = _scalar_state(0, 0.0, 0.0)
+        zero = _scalar_state(n, 0.0, 0.0)
         state = {
             "bundle": {"histograms": {"x": _histogram_snapshot(x, values)}},
             "estimate": {
@@ -110,13 +108,15 @@ class PolynomialEvaluator(Evaluator):
                     {"name": "imag", "state": zero},
                 ],
                 "projection": {
-                    "name": "training_projection",
-                    "state": _scalar_state(n, s, s2),
+                    "kind": "norm",
+                    "state": {
+                        "name": "training_projection",
+                        "state": _scalar_state(n, s, s2),
+                    },
                 },
-                "projection_spec": {"kind": "norm"},
             },
         }
         return GammaLoopBatchResult(
             state=state,
-            training_values=np.abs(values).tolist(),
+            training_values=np.abs(values).tolist() if require_training_values else None,
         )

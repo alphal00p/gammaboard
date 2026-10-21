@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::SamplerAggregatorConfig;
+use crate::core::SamplingConfig;
 use crate::evaluation::Materializer;
 use crate::sampling::{IdentityMaterializer, NaiveMonteCarloSamplerParams};
 
@@ -72,14 +72,17 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
         ..Default::default()
     })
     .unwrap();
-    let mut sampler = SamplerAggregatorConfig::NaiveMonteCarlo {
-        params: NaiveMonteCarloSamplerParams {
-            seed: 1234,
-            ..Default::default()
+    let mut sampler = SamplingConfig {
+        sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+            params: NaiveMonteCarloSamplerParams {
+                seed: 1234,
+                ..Default::default()
+            },
         },
         materializer: None,
+        transforms: None,
     }
-    .build(evaluator.get_domain(), None, None, evaluator.metadata())
+    .create(evaluator.domain(), None, evaluator.metadata())
     .unwrap();
     let options = EvalBatchOptions {
         require_training_values: true,
@@ -97,9 +100,7 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
         let latent = sampler
             .generate(size)
             .and_then(|generated| generated.into_batch())
-            .unwrap()
-            .with_accumulator_config(AccumulatorConfig::Gammaloop)
-            .build();
+            .unwrap();
         let batch = IdentityMaterializer::new()
             .materialize_batch(&latent)
             .unwrap();
@@ -181,15 +182,18 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
         // Parameterization is squared; the Monte Carlo weight is applied once.
         (TrainingProjection::AbsSq, [300.0, 84.5]),
     ] {
-        let whole = GammaLoopEvaluator::gammaloop_estimate(&results, &points, projection);
+        let whole = GammaLoopEvaluator::gammaloop_estimate(&results, &points, projection).unwrap();
         let mut merged = GammaLoopAccumulatorState::default();
         for i in 0..2 {
             merged
-                .merge_in_place(GammaLoopEvaluator::gammaloop_estimate(
-                    &results[i..i + 1],
-                    &points[i..i + 1],
-                    projection,
-                ))
+                .merge_in_place(
+                    GammaLoopEvaluator::gammaloop_estimate(
+                        &results[i..i + 1],
+                        &points[i..i + 1],
+                        projection,
+                    )
+                    .unwrap(),
+                )
                 .unwrap();
         }
         assert_eq!(
@@ -200,7 +204,9 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
             serde_json::from_value(merged.to_persistent_json().unwrap()).unwrap();
         let mut reference = ScalarAccumulatorState::plain();
         for value in expected {
-            reference.add_sample(value, &crate::Point::new(vec![], vec![], 1.0));
+            reference
+                .add_sample(value, &crate::Point::new(vec![], vec![], 1.0))
+                .unwrap();
         }
         assert_eq!(
             restored.training_statistics().unwrap().mean(),
@@ -216,14 +222,26 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
             .component("real")
             .unwrap()
             .state
-            .max_weighted_positive_point
+            .max_weighted_positive_sample
             .as_ref()
             .unwrap();
-        assert_eq!(positive_real_point.integrand_value_re, Some(3.0));
-        assert_eq!(positive_real_point.integrand_value_im, Some(4.0));
-        assert_eq!(positive_real_point.parameterization_jacobian, Some(2.0));
         assert_eq!(
-            positive_real_point.factor_value("sampler_weight"),
+            positive_real_point.evaluation.unwrap().integrand_value_re,
+            3.0
+        );
+        assert_eq!(
+            positive_real_point.evaluation.unwrap().integrand_value_im,
+            4.0
+        );
+        assert_eq!(
+            positive_real_point
+                .evaluation
+                .unwrap()
+                .parameterization_jacobian,
+            Some(2.0)
+        );
+        assert_eq!(
+            positive_real_point.point.factor_value("sampler_weight"),
             Some(3.0)
         );
         for (name, expected_metric) in [("rsd", reference.rsd()), ("ess", reference.ess())] {
@@ -237,25 +255,10 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
             assert_eq!(metric.value, expected_metric);
         }
 
-        // Upgrading an old accumulator must use its existing phase moments,
-        // and must not silently label partial AbsSq statistics as complete.
-        let mut old = GammaLoopEvaluator::gammaloop_estimate(
-            &results[..1],
-            &points[..1],
-            TrainingProjection::Abs,
-        );
-        old.training_projection = None;
-        old.merge_in_place(GammaLoopEvaluator::gammaloop_estimate(
-            &results[1..],
-            &points[1..],
-            projection,
-        ))
-        .unwrap();
-        if projection == TrainingProjection::AbsSq {
-            assert!(old.training_statistics().is_none());
-        } else {
-            assert_eq!(old.rsd(), restored.rsd());
-            assert_eq!(old.ess(), restored.ess());
-        }
+        let mut incompatible = whole.clone();
+        incompatible.training_projection = None;
+        let before = incompatible.to_persistent_json().unwrap();
+        assert!(incompatible.merge_in_place(restored).is_err());
+        assert_eq!(incompatible.to_persistent_json().unwrap(), before);
     }
 }

@@ -63,6 +63,8 @@ pub fn format_error_json(code: &str, message: impl std::fmt::Display) -> String 
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Print the compiled build identity as JSON without connecting to a database
+    BuildInfo,
     /// Helpers for the Python benchmark suite
     Benchmark(benchmark::BenchmarkArgs),
     /// Run lifecycle commands
@@ -94,6 +96,10 @@ pub fn dispatch(cli: Cli) -> Result<()> {
 }
 
 async fn dispatch_async(cli: Cli) -> Result<()> {
+    if matches!(cli.command, Command::BuildInfo) {
+        println!("{}", gammaboard::provenance::build_info());
+        return Ok(());
+    }
     let quiet = cli.quiet;
     shared::set_json_output(cli.json);
     if cli.postgres_trusted_network && !cli.json {
@@ -112,6 +118,7 @@ async fn dispatch_async(cli: Cli) -> Result<()> {
     )?;
     let config = runtime.runtime_config();
     match cli.command {
+        Command::BuildInfo => unreachable!(),
         Command::Benchmark(args) => benchmark::run(args, config).await,
         Command::Run(args) => run_run_commands(args.command, config, quiet).await,
         Command::Node(args) => run_node_commands(args.command, &runtime, quiet).await,

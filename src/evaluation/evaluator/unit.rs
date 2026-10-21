@@ -1,4 +1,4 @@
-use crate::core::{AccumulatorConfig, BuildError, EvalError};
+use crate::core::{AccumulatorConfig, EngineError};
 use crate::evaluation::{
     AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
     ingest_scalar_values,
@@ -31,18 +31,18 @@ impl UnitEvaluator {
         }
     }
 
-    pub fn from_params(params: UnitEvaluatorParams) -> Result<Self, BuildError> {
+    pub fn from_params(params: UnitEvaluatorParams) -> Result<Self, EngineError> {
         params.timing.validate()?;
         if params
             .value_coordinate
             .is_some_and(|i| i >= params.continuous_dims)
         {
-            return Err(BuildError::invalid_input(
+            return Err(EngineError::invalid_input(
                 "unit value_coordinate must be smaller than continuous_dims",
             ));
         }
         if params.fail_on_build {
-            return Err(BuildError::build("unit evaluator injected build failure"));
+            return Err(EngineError::build("unit evaluator injected build failure"));
         }
         let mut evaluator = Self::new(
             Domain::rectangular(params.continuous_dims, params.discrete_dims),
@@ -54,12 +54,12 @@ impl UnitEvaluator {
         Ok(evaluator)
     }
 
-    fn scalar_ingestor(state: &mut AccumulatorState) -> Result<&mut dyn IngestScalar, EvalError> {
+    fn scalar_ingestor(state: &mut AccumulatorState) -> Result<&mut dyn IngestScalar, EngineError> {
         match state {
             AccumulatorState::Empty(accumulator) => Ok(accumulator),
             AccumulatorState::Vector(accumulator) => Ok(accumulator),
             AccumulatorState::FullVector(accumulator) => Ok(accumulator),
-            other => Err(EvalError::eval(format!(
+            other => Err(EngineError::eval(format!(
                 "unit evaluator scalar mode does not support accumulator kind {}",
                 other.kind_str()
             ))),
@@ -110,11 +110,11 @@ impl Evaluator for UnitEvaluator {
         serde_json::json!({"synthetic":true,"kind":"unit","timing":self.timing,"cpu_iterations_per_sample":self.cpu_iterations_per_sample,"value_coordinate":self.value_coordinate})
     }
 
-    fn diagnostics(&self) -> serde_json::Value {
+    fn diagnostics(&mut self) -> serde_json::Value {
         serde_json::json!({"synthetic":true,"timing":self.timing_stats})
     }
 
-    fn get_domain(&self) -> Domain {
+    fn domain(&self) -> Domain {
         self.domain.clone()
     }
 
@@ -123,17 +123,17 @@ impl Evaluator for UnitEvaluator {
         batch: &Batch,
         accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
-    ) -> Result<BatchResult, EvalError> {
+    ) -> Result<BatchResult, EngineError> {
         self.eval_batches_total = self.eval_batches_total.saturating_add(1);
         if self.should_fail_on_batch(self.eval_batches_total) {
-            return Err(EvalError::eval(format!(
+            return Err(EngineError::eval(format!(
                 "unit evaluator injected failure on batch {}",
                 self.eval_batches_total
             )));
         }
         let mut observable_state = AccumulatorState::from_config(accumulator);
         // Hash batch endpoints and size: stable across worker assignment/retries.
-        let mut key = batch.size() as u64;
+        let mut key = batch.len() as u64;
         for point in batch
             .points()
             .first()
@@ -149,17 +149,16 @@ impl Evaluator for UnitEvaluator {
                 key = (key ^ bits).wrapping_mul(0x100000001b3);
             }
         }
-        self.timing
-            .wait(batch.size(), key, &mut self.timing_stats)?;
-        cpu_work(self.cpu_iterations_per_sample, batch.size());
+        self.timing.wait(batch.len(), key, &mut self.timing_stats)?;
+        cpu_work(self.cpu_iterations_per_sample, batch.len());
         let values = match self.value_coordinate {
-            None => vec![1.0; batch.size()],
+            None => vec![1.0; batch.len()],
             Some(index) => batch
                 .points()
                 .iter()
                 .map(|point| {
                     point.continuous.get(index).copied().ok_or_else(|| {
-                        EvalError::eval("unit value_coordinate is missing from the sample")
+                        EngineError::eval("unit value_coordinate is missing from the sample")
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -195,11 +194,10 @@ mod tests {
 
     #[test]
     fn coordinate_values_are_weighted_once_with_optional_feedback() {
-        let batch = Batch::from_points([
+        let batch = Batch::from_iter([
             Point::new(vec![0.5, 0.125], Vec::new(), 2.0),
             Point::new(vec![0.5, 0.75], Vec::new(), 3.0),
-        ])
-        .unwrap();
+        ]);
         let mut evaluator = UnitEvaluator::from_params(UnitEvaluatorParams {
             continuous_dims: 2,
             value_coordinate: Some(1),
@@ -217,7 +215,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                result.values,
+                result.training_values,
                 require_training_values.then(|| vec![0.25, 2.25])
             );
             let AccumulatorState::Vector(accumulator) = result.accumulator else {
@@ -242,7 +240,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let batch = Batch::from_points([Point::new(Vec::new(), Vec::new(), 1.0)]).unwrap();
+        let batch = Batch::from_iter([Point::new(Vec::new(), Vec::new(), 1.0)]);
         assert!(
             evaluator
                 .eval_batch(
@@ -258,11 +256,10 @@ mod tests {
 
     #[test]
     fn eval_batch_returns_weighted_ones_for_scalar_observable() {
-        let batch = Batch::from_points([
+        let batch = Batch::from_iter([
             Point::new(vec![0.0], Vec::new(), 2.0),
             Point::new(vec![1.0], Vec::new(), 3.0),
-        ])
-        .expect("batch");
+        ]);
         let mut evaluator =
             UnitEvaluator::new(Domain::continuous(1), Vec::new(), TimingModel::default());
 
@@ -276,7 +273,7 @@ mod tests {
             )
             .expect("result");
 
-        assert_eq!(result.values, Some(vec![2.0, 3.0]));
+        assert_eq!(result.training_values, Some(vec![2.0, 3.0]));
         let AccumulatorState::Vector(accumulator) = result.accumulator else {
             panic!("expected vector accumulator");
         };

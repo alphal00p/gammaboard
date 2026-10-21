@@ -4,10 +4,11 @@ use crate::core::{
     ControllerTaskOutput, DerivedResultSnapshot, IntegrationCampaignAllocationAlgorithm,
     IntegrationCampaignChildOutput, IntegrationCampaignOutput, IntegrationCampaignStopCondition,
     MeasurementResult, RunReadStore, RunSpecStore, RunTask, RunTaskSpec, RunTaskState,
-    RunTaskStore, SamplerRuntimeMetrics, StoreError, StoreResultExt, TaskMeasurementOutput,
+    RunTaskStore, StoreError, StoreResultExt, TaskMeasurementOutput,
 };
 use crate::runners::controller_child::{
-    ControllerAssignmentPlan, apply_controller_assignment_plan, load_published_child_result,
+    ControllerAssignmentPlan, apply_controller_assignment_plan, finish_controller,
+    load_controller_children, load_published_child_result,
 };
 use crate::services::measurement::project_measurement_results;
 use crate::services::results::combine_independent_observables;
@@ -54,17 +55,10 @@ where
             ));
         };
 
-        let existing = self
-            .store
-            .get_child_runs_for_task(self.run_id, self.task.id, SPAWN_KIND)
-            .await?;
-        let mut by_label = existing
-            .iter()
-            .filter_map(|run| {
-                run.spawn_label
-                    .as_deref()
-                    .map(|label| (label.to_string(), run.run_id))
-            })
+        let mut by_label = load_controller_children(&self.store, self.run_id, &self.task)
+            .await?
+            .into_iter()
+            .map(|(label, run)| (label, run.run_id))
             .collect::<BTreeMap<_, _>>();
         for child in children {
             if by_label.contains_key(&child.name) {
@@ -104,9 +98,8 @@ where
             let run_id = *by_label
                 .get(&child.name)
                 .ok_or_else(|| StoreError::store("created campaign child is missing"))?;
-            let (persisted, final_stage_ready, work_samples) =
+            let (mut persisted, final_stage_ready, work_samples) =
                 load_published_child_result(&self.store, run_id).await?;
-            let task_failure_reason = persisted.task_failure_reason();
             let completed_samples_per_second = self.latest_throughput(run_id).await?;
             let projected = persisted.accumulator.as_ref().and_then(|accumulator| {
                 project_measurement_results(
@@ -118,38 +111,29 @@ where
                 .ok()
                 .map(|results| TaskMeasurementOutput::Completed { results })
             });
-            let output = match persisted.output {
+            persisted.output = match persisted.output {
                 failed @ Some(TaskMeasurementOutput::Failed { .. }) => failed,
                 _ => projected,
             };
-            let child_failure_reason = task_failure_reason
-                .map(|reason| format!("campaign child '{}' task failed: {reason}", child.name))
-                .or_else(|| match &output {
-                    Some(TaskMeasurementOutput::Failed { reason }) => Some(format!(
-                        "campaign child '{}' measurement failed: {reason}",
-                        child.name
-                    )),
-                    _ => None,
-                });
+            let observed = persisted.controller_output();
+            let child_failure_reason = observed
+                .failure_reason
+                .map(|reason| format!("campaign child '{}' failed: {reason}", child.name));
             if let Some(reason) = &child_failure_reason {
                 failure.get_or_insert_with(|| reason.clone());
             }
-            let status = match (&output, persisted.task_state) {
-                (Some(TaskMeasurementOutput::Failed { .. }), _) => ControllerChildState::Failed,
-                (_, state) => state.into(),
-            };
             states.push(ChildState {
                 final_stage_ready,
                 work_samples,
                 name: child.name.clone(),
                 coefficient: child.coefficient,
                 run_id,
-                status,
+                status: observed.status,
                 task_state: persisted.task_state,
                 result_source: persisted.source,
                 accumulator: persisted.accumulator,
                 completed_samples_per_second,
-                measurement: output,
+                measurement: observed.measurement,
                 failure_reason: child_failure_reason,
             });
         }
@@ -165,8 +149,9 @@ where
         let pilots_complete = states.iter().all(|child| {
             child.final_stage_ready && child.sample_count() >= allocation.min_samples_per_child
         });
+        let final_results_ready = states.iter().all(|child| child.final_stage_ready);
 
-        if combined_results.is_none()
+        if (combined_results.is_none() || !final_results_ready)
             && stop_condition
                 .max_total_samples
                 .is_some_and(|limit| total_samples >= limit)
@@ -187,13 +172,7 @@ where
                 allocation.algorithm,
             );
             self.persist_output(&output).await?;
-            apply_controller_assignment_plan(
-                &self.store,
-                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
-            )
-            .await?;
-            self.store.fail_run_task(self.task.id, &reason).await?;
-            return Ok(true);
+            return finish_controller(&self.store, self.run_id, self.task.id, Err(&reason)).await;
         }
 
         if combined_results.as_deref().is_some_and(|results| {
@@ -214,18 +193,26 @@ where
                     .persist_task_measurement_output(self.task.id, measurement)
                     .await?;
             }
-            apply_controller_assignment_plan(
-                &self.store,
-                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
-            )
-            .await?;
-            self.store.complete_run_task(self.task.id).await?;
-            return Ok(true);
+            return finish_controller(&self.store, self.run_id, self.task.id, Ok(())).await;
         }
 
+        let grants = if stop_condition.max_total_samples.is_some() {
+            self.store
+                .allocate_campaign_samples(self.task.id, &[])
+                .await?
+        } else {
+            BTreeMap::new()
+        };
+        let unallocated = stop_condition
+            .max_total_samples
+            .map(|cap| cap.saturating_sub(grants.values().sum::<i64>()));
         let eligible = states
             .iter()
             .filter(|child| child.task_state != RunTaskState::Completed)
+            .filter(|child| {
+                unallocated != Some(0)
+                    || grants.get(&child.run_id).copied().unwrap_or(0) > child.work_samples
+            })
             .map(|child| child.run_id)
             .collect::<BTreeSet<_>>();
         if eligible.is_empty() {
@@ -241,34 +228,101 @@ where
                 allocation.algorithm,
             );
             self.persist_output(&output).await?;
-            self.store.fail_run_task(self.task.id, reason).await?;
-            return Ok(true);
+            return finish_controller(&self.store, self.run_id, self.task.id, Err(reason)).await;
         }
 
         // First result publication and another child's stage changes do not
         // consume the allocation window. Eligibility below still removes a
         // finished/failed child; otherwise retain its pool until the budget ends.
         let keep_window = total_samples.saturating_sub(previous_allocation_start)
-            < allocation.allocation_window_samples;
+            < allocation.allocation_window_samples
+            && (pilots_complete
+                || previous_selected.iter().all(|id| {
+                    states
+                        .iter()
+                        .find(|child| child.run_id == *id)
+                        .is_some_and(|child| {
+                            !child.final_stage_ready
+                                || child.sample_count() < allocation.min_samples_per_child
+                        })
+                }));
+        // Selecting more children than available samplers would keep the lone
+        // sampler on the same child forever, starving the other pilots.
+        let sampler_capacity = self
+            .store
+            .list_nodes(None)
+            .await?
+            .iter()
+            .filter_map(|node| node.desired_assignment)
+            .filter(|target| {
+                target.role == crate::core::WorkerRole::SamplerAggregator
+                    && (target.run_id == self.run_id
+                        || by_label.values().any(|id| *id == target.run_id))
+            })
+            .count()
+            .max(1)
+            .min(allocation.max_active_runs);
         let retained = previous_selected
             .iter()
             .copied()
             .filter(|run_id| eligible.contains(run_id))
+            .take(sampler_capacity)
             .collect::<Vec<_>>();
         let (selected, allocation_started_total_samples) = if keep_window && !retained.is_empty() {
             (retained, previous_allocation_start)
         } else {
             (
                 select_children(
-                    &states,
+                    &states
+                        .iter()
+                        .filter(|child| eligible.contains(&child.run_id))
+                        .cloned()
+                        .collect::<Vec<_>>(),
                     allocation.algorithm,
                     allocation.min_samples_per_child,
-                    allocation.max_active_runs,
+                    sampler_capacity,
                 ),
                 total_samples,
             )
         };
 
+        if let Some(remaining) = unallocated {
+            // Reserve small windows before assigning workers. Every child gets
+            // pilot opportunities even when its own task/batch budget is huge.
+            let quantum = (allocation.allocation_window_samples / selected.len().max(1) as i64)
+                .max(1)
+                .min((remaining / selected.len().max(1) as i64).max(1));
+            let requests = states
+                .iter()
+                .filter(|child| selected.contains(&child.run_id))
+                .filter(|child| {
+                    pilots_complete
+                        || !child.final_stage_ready
+                        || child.sample_count() < allocation.min_samples_per_child
+                })
+                .filter(|child| {
+                    grants.get(&child.run_id).copied().unwrap_or(0) <= child.work_samples
+                })
+                .map(|child| {
+                    let pilot_remaining = allocation.min_samples_per_child.max(2).saturating_sub(
+                        if child.final_stage_ready {
+                            child.sample_count()
+                        } else {
+                            0
+                        },
+                    );
+                    let grant = if pilots_complete {
+                        quantum
+                    } else {
+                        quantum.min(pilot_remaining)
+                    };
+                    (child.run_id, child.work_samples.saturating_add(grant))
+                })
+                .collect::<Vec<_>>();
+            self.store
+                .allocate_campaign_samples(self.task.id, &requests)
+                .await?;
+        }
         apply_controller_assignment_plan(
             &self.store,
             ControllerAssignmentPlan::new(self.run_id, selected.clone()),
@@ -295,10 +349,7 @@ where
             .into_iter()
             .next();
         Ok(latest
-            .and_then(|entry| {
-                serde_json::from_value::<SamplerRuntimeMetrics>(entry.runtime_metrics).ok()
-            })
-            .map(|runtime| runtime.completed_samples_per_second)
+            .map(|entry| entry.metrics.completed_samples_per_second)
             .filter(|rate| rate.is_finite() && *rate > 0.0))
     }
 
@@ -425,9 +476,18 @@ fn select_children(
         .iter()
         .filter(|child| child.task_state != RunTaskState::Completed)
         .map(|child| {
-            let pilot = child.sample_count() < min_samples_per_child;
+            let pilot = !child.final_stage_ready || child.sample_count() < min_samples_per_child;
             let score = child.score(algorithm).unwrap_or(0.0);
-            (child.run_id, pilot, child.sample_count(), score)
+            (
+                child.run_id,
+                pilot,
+                if pilot {
+                    child.work_samples
+                } else {
+                    child.sample_count()
+                },
+                score,
+            )
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| {

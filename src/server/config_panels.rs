@@ -1,4 +1,4 @@
-use crate::core::{EngineError, EvaluatorConfig, SamplerAggregatorConfig};
+use crate::core::{EngineError, EvaluatorConfig, SamplingConfig};
 use crate::runners::{EvaluatorRunnerParams, SamplerAggregatorRunnerParams};
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelSpec, PanelState, PanelWidth, key_value, key_value_panel,
@@ -76,7 +76,7 @@ impl PanelProvider<EvaluatorPanelContext<'_>> for EvaluatorConfig {
     }
 }
 
-impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfig {
+impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplingConfig {
     fn panel_specs(&self, _ctx: &SamplerAggregatorPanelContext<'_>) -> Vec<PanelSpec> {
         vec![
             sized_panel_spec(
@@ -134,7 +134,7 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
             ],
         )];
         let config_payload = json!({
-            "sampler_aggregator": self,
+            "sampler": self,
             "runner": {
                 "performance_snapshot_interval_ms": ctx.runner_params.performance_snapshot_interval_ms,
                 "min_tick_time_ms": ctx.runner_params.min_tick_time_ms,
@@ -153,7 +153,6 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplerAggregatorConfi
 
 fn summarize_domain(domain: &Domain) -> String {
     match domain {
-        Domain::Continuous { dims } => format!("continuous({dims})"),
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,

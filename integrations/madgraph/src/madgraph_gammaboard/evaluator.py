@@ -37,7 +37,6 @@ class MadGraphEvaluator(Evaluator):
         if unknown:
             raise ValueError(f"unsupported MadGraph output component(s): {unknown!r}")
 
-    @property
     def metadata(self) -> dict:
         return self.state.metadata
 

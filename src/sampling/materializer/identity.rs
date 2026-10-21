@@ -3,6 +3,7 @@ use crate::core::EngineResultExt;
 use crate::evaluation::{Batch, Materializer};
 use crate::sampling::LatentBatch;
 
+#[derive(Default)]
 pub struct IdentityMaterializer {
     fail_on_materialize_batch_nr: Option<usize>,
     materialized_batches_total: usize,
@@ -10,10 +11,7 @@ pub struct IdentityMaterializer {
 
 impl IdentityMaterializer {
     pub fn new() -> Self {
-        Self {
-            fail_on_materialize_batch_nr: None,
-            materialized_batches_total: 0,
-        }
+        Self::default()
     }
 
     pub fn new_with_failure(fail_on_materialize_batch_nr: Option<usize>) -> Self {
@@ -21,12 +19,6 @@ impl IdentityMaterializer {
             fail_on_materialize_batch_nr,
             materialized_batches_total: 0,
         }
-    }
-}
-
-impl Default for IdentityMaterializer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

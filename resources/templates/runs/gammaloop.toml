@@ -37,7 +37,11 @@ publish_result = false
 stop_condition = { max_samples = "$(train_samples:100000)" }
 accumulator = { config = "gammaloop" }
 
-[task_queue.sampler_aggregator.config]
+[task_queue.queue_tuning]
+target_batch_eval_ms = 1000.0
+max_batch_size = "$(max_batch_size:10000)"
+
+[task_queue.sampler.config]
 kind = "havana_training"
 seed = 0
 bins = "$(havana_bins:128)"
@@ -45,18 +49,14 @@ samples_for_update = "$(samples_for_update:10000)"
 initial_training_rate = 0.05
 final_training_rate = 0.005
 
-[task_queue.queue_tuning]
-target_batch_eval_ms = 1000.0
-max_batch_size = "$(max_batch_size:10000)"
-
 [[task_queue]]
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = "$(sample_samples:1000000)" }
-measurement = { quantity = "central_value" }
-sampler_aggregator = { config = { kind = "havana_inference", source = "latest_training_sampler_aggregator" } }
+measurement = { selection = { kind = "all_component_means" } }
 # Report inference independently of the adaptive training samples.
 accumulator = { config = "gammaloop" }
+sampler = { config = { kind = "havana_inference" } }
 
 [task_queue.queue_tuning]
 target_batch_eval_ms = 1000.0

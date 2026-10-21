@@ -1,6 +1,6 @@
 [package]
 name = "gammaboard"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Distributed numerical integration control plane and dashboard"
 license = "MIT"
@@ -11,6 +11,7 @@ keywords = ["integration", "monte-carlo", "distributed", "scientific"]
 categories = ["science", "command-line-utilities"]
 include = [
     "/src/**",
+    "/tests/fixtures/json_worker.py",
     "/migrations/**",
     "/resources/templates/**",
     "/ops/ubelix/resources/templates/**",

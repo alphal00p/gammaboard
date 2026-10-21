@@ -3,15 +3,15 @@
 
 use super::errors::StoreError;
 use super::models::{
-    BatchClaim, BatchFailOutcome, BatchQueueCounts, CompletedBatch, DesiredAssignment,
+    AssignmentTarget, BatchClaim, BatchFailOutcome, BatchQueueCounts, CompletedBatch,
     EvaluatorPerformanceSnapshot, InsertBatchesOutcome, NodeCapabilities, NodeLaunchRequest,
     RegisteredNode, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
     SamplerAggregatorPerformanceSnapshot,
 };
+use crate::core::EvaluationBatch;
 use crate::core::SamplerAggregatorCheckpoint;
 use crate::core::{RunSpec, RunTask, RunTaskInput, SamplerQueueTuning};
 use crate::evaluation::BatchResult;
-use crate::sampling::LatentBatch;
 use crate::stores::read_models::{
     EvaluatorPerformanceHistoryEntry, RegisteredWorkerEntry, RunProgress, RuntimeLogPage,
     SamplerPerformanceHistoryEntry, TaskOutputSnapshot, TaskStageSnapshot,
@@ -118,11 +118,11 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn get_desired_assignment(
         &self,
         node_name: &str,
-    ) -> Result<Option<DesiredAssignment>, StoreError>;
+    ) -> Result<Option<AssignmentTarget>, StoreError>;
     async fn list_desired_assignments(
         &self,
         node_name: Option<&str>,
-    ) -> Result<Vec<DesiredAssignment>, StoreError>;
+    ) -> Result<std::collections::BTreeMap<String, AssignmentTarget>, StoreError>;
     async fn list_nodes(&self, node_name: Option<&str>) -> Result<Vec<RegisteredNode>, StoreError>;
     async fn create_node_launch_request(
         &self,
@@ -131,9 +131,6 @@ pub trait ControlPlaneStore: Send + Sync {
         name_prefix: Option<&str>,
         args: &JsonValue,
     ) -> Result<NodeLaunchRequest, StoreError>;
-    async fn claim_external_node_launch_request(
-        &self,
-    ) -> Result<Option<NodeLaunchRequest>, StoreError>;
     async fn list_node_launch_requests(&self) -> Result<Vec<NodeLaunchRequest>, StoreError>;
     async fn update_node_launch_request_state(
         &self,
@@ -192,7 +189,7 @@ pub trait WorkQueueStore: Send + Sync {
         task_id: i64,
         requires_training_values: bool,
         batch_ids: &[i64],
-        batches: &[LatentBatch],
+        batches: &[EvaluationBatch],
     ) -> Result<InsertBatchesOutcome, StoreError>;
     async fn get_batch_queue_counts(
         &self,
@@ -344,6 +341,21 @@ pub enum TaskQueueChange {
 
 #[async_trait]
 pub trait RunTaskStore: Send + Sync {
+    /// Durable per-child reservations. Requested totals include all child stages.
+    async fn allocate_campaign_samples(
+        &self,
+        task_id: i64,
+        requests: &[(i32, i64)],
+    ) -> Result<std::collections::BTreeMap<i32, i64>, StoreError>;
+
+    /// This task's share of its child's reservation, excluding other stages.
+    /// None means that the run is not subject to a campaign cap.
+    async fn campaign_sample_allowance(
+        &self,
+        run_id: i32,
+        task_id: i64,
+    ) -> Result<Option<i64>, StoreError>;
+
     /// Apply only if the queue definitions still match those used for validation.
     async fn apply_task_queue_change(
         &self,
@@ -371,6 +383,8 @@ pub trait RunTaskStore: Send + Sync {
         queue_tuning: Option<SamplerQueueTuning>,
     ) -> Result<RunTask, StoreError>;
     async fn load_active_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
+    /// Activate the next task atomically. A new sampling/plotting stage clears
+    /// the previous live accumulator; durable stage history remains available.
     async fn activate_next_run_task(&self, run_id: i32) -> Result<Option<RunTask>, StoreError>;
     async fn update_run_task_progress(
         &self,

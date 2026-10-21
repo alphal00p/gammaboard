@@ -1,5 +1,4 @@
-use crate::core::EngineResultExt;
-use crate::core::{BuildError, EngineError};
+use crate::core::EngineError;
 use crate::evaluation::{Batch, BatchTransform};
 use crate::utils::domain::Domain;
 use serde::{Deserialize, Serialize};
@@ -18,16 +17,16 @@ impl SphericalBatchTransform {
 }
 
 impl BatchTransform for SphericalBatchTransform {
-    fn validate_domain(&self, domain: &Domain) -> Result<(), BuildError> {
+    fn validate_domain(&self, domain: &Domain) -> Result<(), EngineError> {
         if domain.fixed_continuous_dims() != Some(3) {
-            return Err(BuildError::build(
+            return Err(EngineError::build(
                 "spherical batch transform requires continuous_dims == 3",
             ));
         }
         Ok(())
     }
 
-    fn apply(&self, batch: Batch) -> Result<Batch, EngineError> {
+    fn apply(&mut self, batch: Batch) -> Result<Batch, EngineError> {
         let dims = batch
             .points()
             .first()
@@ -39,8 +38,8 @@ impl BatchTransform for SphericalBatchTransform {
             ));
         }
 
-        let mut transformed_points = Vec::with_capacity(batch.size());
-        for (row_idx, point) in batch.points().iter().enumerate() {
+        let mut transformed_points = batch.into_points();
+        for (row_idx, point) in transformed_points.iter_mut().enumerate() {
             if point.continuous.len() != 3 {
                 return Err(EngineError::engine(format!(
                     "spherical batch transform requires homogeneous 3D points, got {} at row {}",
@@ -79,13 +78,10 @@ impl BatchTransform for SphericalBatchTransform {
             ];
 
             let jacobian = 4.0 * PI * r * r * dr_du_r;
-            transformed_points.push(point.clone_with_continuous_and_added_factor(
-                transformed_continuous,
-                "spherical_jacobian",
-                jacobian.abs(),
-            ));
+            point.continuous = transformed_continuous;
+            point.add_weight_factor("spherical_jacobian", jacobian.abs());
         }
 
-        Batch::new(transformed_points).engine_err()
+        Ok(Batch::new(transformed_points))
     }
 }

@@ -12,7 +12,7 @@ const emptyState = Object.freeze({
 });
 
 const asObject = (value) => (isPlainObject(value) ? value : {});
-const PANEL_VALUES_STORAGE_PREFIX = "gammaboard.panel-values.";
+const PANEL_VALUES_STORAGE_PREFIX = "gammaboard.panel-values.v1.";
 const canUseStorage = () => typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 const storageKeyForSource = (sourceId) => `${PANEL_VALUES_STORAGE_PREFIX}${sourceId}`;
 const readStoredPanelValues = (sourceId) => {
@@ -191,8 +191,10 @@ const panelValueEquals = (left, right) => {
   return leftEntries.every(([key, value]) => Object.is(value, right[key]));
 };
 
-export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, useCursor = true } = {}) => {
+export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null } = {}) => {
   const [state, setState] = useState(emptyState);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const previousRefreshKey = useRef(refreshKey);
   const cursorRef = useRef(null);
   const panelValuesRef = useRef({});
   const pendingActionsRef = useRef([]);
@@ -222,6 +224,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
           },
           signal,
         );
+        if (signal.aborted) return;
         pendingActionsRef.current = [];
         const nextPollAfterMs =
           response && Object.prototype.hasOwnProperty.call(response, "poll_after_ms")
@@ -268,6 +271,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
             error: null,
           };
         });
+        setLastUpdate(new Date().toLocaleTimeString());
         if (refreshSeededPanelValuesRef.current) {
           refreshSeededPanelValuesRef.current = false;
           return 1;
@@ -291,9 +295,16 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
     panelValuesRef.current = {};
     pendingActionsRef.current = [];
     setState(emptyState);
+    setLastUpdate(null);
   }, []);
 
   const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset });
+  useEffect(() => {
+    if (previousRefreshKey.current !== refreshKey) {
+      previousRefreshKey.current = refreshKey;
+      triggerPoll();
+    }
+  }, [refreshKey, triggerPoll]);
 
   const setPanelValue = useCallback(
     (panelId, value, shouldTriggerPoll = true) => {
@@ -333,18 +344,19 @@ export const usePanelSource = ({ enabled = true, pollMs = 5000, fetchPanels, use
   return useMemo(
     () => ({
       ...state,
+      lastUpdate,
       setPanelValue,
       invokePanelAction,
     }),
-    [invokePanelAction, setPanelValue, state],
+    [invokePanelAction, setPanelValue, state, lastUpdate],
   );
 };
 
-export const usePanelResource = ({ id, pollMs, fetchById }) => {
+export const usePanelResource = ({ id, pollMs, fetchById, refreshKey }) => {
   const enabled = id != null;
   const fetchPanels = useCallback(
     (_request, signal) => fetchById(id, signal),
     [fetchById, id],
   );
-  return usePanelSource({ enabled, pollMs, fetchPanels, useCursor: false });
+  return usePanelSource({ enabled, pollMs, fetchPanels, useCursor: false, refreshKey });
 };

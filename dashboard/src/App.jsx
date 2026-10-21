@@ -32,7 +32,7 @@ const LoadingPanel = ({ label = "Loading..." }) => (
 );
 
 const DashboardHeader = () => {
-  const { authenticated, busy, ready, requestLogin, logout } = useAuth();
+  const { authenticated, authEnabled = true, busy, ready, requestLogin, logout } = useAuth();
 
   return (
     <Box sx={{ mb: 3, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 2 }}>
@@ -50,16 +50,16 @@ const DashboardHeader = () => {
       <Stack direction="row" spacing={1} alignItems="center">
         <Chip
           color={authenticated ? "success" : "default"}
-          label={authenticated ? "Operator mode" : ready ? "Read-only" : "Checking session"}
+          label={authenticated ? (authEnabled ? "Operator mode" : "Operator mode · no password") : ready ? (authEnabled ? "Read-only" : "Read-only in this browser") : "Checking session"}
           variant={authenticated ? "filled" : "outlined"}
         />
         {authenticated ? (
           <Button onClick={logout} disabled={busy}>
-            Log Out
+            {authEnabled ? "Log Out" : "Switch to read-only"}
           </Button>
         ) : (
           <Button onClick={() => requestLogin()} disabled={!ready || busy}>
-            Log In
+            {authEnabled ? "Log In" : "Enable controls"}
           </Button>
         )}
       </Stack>
@@ -92,13 +92,20 @@ function AppContent() {
     if (pendingRunSelection == null) return;
     if (!runList.some((run) => run.run_id === pendingRunSelection)) return;
     setSelectedRun(pendingRunSelection);
-    setMode("runs");
     setPendingRunSelection(null);
   }, [pendingRunSelection, runList]);
 
   const selectRunIncludingChildren = useCallback((runId) => {
+    // Navigate when requested, not when a later poll finally contains the run.
+    // The user may open another workspace (and an unsaved draft) in between.
+    setMode("runs");
     setShowChildRuns(true);
     setPendingRunSelection(runId);
+  }, []);
+
+  const selectRun = useCallback((runId) => {
+    setPendingRunSelection(null);
+    setSelectedRun(runId);
   }, []);
 
   return (
@@ -119,7 +126,7 @@ function AppContent() {
           <RunsWorkspace
             runs={runList}
             selectedRun={selectedRun}
-            setSelectedRun={setSelectedRun}
+            setSelectedRun={selectRun}
             showChildRuns={showChildRuns}
             setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}
@@ -144,7 +151,7 @@ function AppContent() {
             runs={runList}
             workers={workersData.workers}
             selectedRun={selectedRun}
-            setSelectedRun={setSelectedRun}
+            setSelectedRun={selectRun}
             showChildRuns={showChildRuns}
             setShowChildRuns={setShowChildRuns}
             isConnected={serverStatus.isConnected}

@@ -316,7 +316,9 @@ impl FullStackHarness {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
 
-        let child = self.spawn_logged(&format!("server-{addr}"), &mut child)?;
+        // GitHub artifact uploads reject colons in filenames.
+        let log_label = format!("server-{addr}").replace(':', "-");
+        let child = self.spawn_logged(&log_label, &mut child)?;
         self.temp_files.push(server_config);
         self.children.push(ManagedChild {
             label: format!("server:{addr}"),
@@ -508,17 +510,12 @@ impl FullStackHarness {
         .fetch_one(&self.pool)
         .await?;
 
-        let snapshot: SamplerAggregatorSnapshot = serde_json::from_value(sampler_snapshot)?;
-        match snapshot {
-            SamplerAggregatorSnapshot::HavanaTraining { raw }
-            | SamplerAggregatorSnapshot::HavanaInference { raw } => raw
-                .get("grid")
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("missing havana grid in persisted snapshot")),
-            other => Err(anyhow::anyhow!(
-                "expected havana sampler snapshot, got {other:?}"
-            )),
-        }
+        let snapshot: SavedSampler = serde_json::from_value(sampler_snapshot)?;
+        anyhow::ensure!(
+            snapshot.contains_havana_grid(),
+            "expected saved Havana grid"
+        );
+        Ok(snapshot.state["grid"].clone())
     }
 
     pub(super) async fn latest_task_persisted_observable(
@@ -722,7 +719,7 @@ name = "train-a"
 kind = "sample"
 stop_condition = {{ max_samples = {training_samples} }}
 accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
+sampler = {{ config = {{ kind = "havana_training", seed = 0, bins = 8, samples_for_update = 8, initial_training_rate = 0.1, final_training_rate = 0.01 }} }}
 "#,
     ));
 
@@ -838,7 +835,7 @@ sampler_aggregator = {{ config = {{ kind = "havana_training", seed = 0, bins = 8
 name = "infer-a"
 kind = "sample"
 stop_condition = {{ max_samples = {inference_samples} }}
-sampler_aggregator = {{ config = {{ kind = "havana_inference" }} }}
+sampler = {{ config = {{ kind = "havana_inference" }} }}
 "#,
     ));
 
@@ -1066,10 +1063,6 @@ const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
 
 pub(super) fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerParams) -> Grid<f64> {
     match domain {
-        Domain::Continuous { dims } => Grid::Continuous(
-            ContinuousGrid::new(*dims, params.bins, params.samples_for_update, None, false)
-                .unwrap(),
-        ),
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,

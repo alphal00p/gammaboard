@@ -1,7 +1,7 @@
 use crate::core::BatchTransformConfig;
-use crate::core::{AccumulatorMetricName, EvaluatorConfig, SamplerAggregatorConfig};
-use crate::evaluation::{AccumulatorState, Batch, BatchResult};
-use crate::sampling::{LatentBatch, SamplerAggregatorSnapshot};
+use crate::core::{AccumulatorMetricName, EvaluatorConfig, SamplingConfig};
+use crate::evaluation::{AccumulatorState, BatchResult};
+use crate::sampling::{LatentBatch, SavedSampler};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -43,13 +43,11 @@ impl FromStr for WorkerRole {
     }
 }
 
-/// Desired node-level role assignment managed by the control plane.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DesiredAssignment {
-    pub node_name: String,
+/// A placement or pool target; node identity belongs to the enclosing worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssignmentTarget {
     pub role: WorkerRole,
     pub run_id: i32,
-    pub run_name: Option<String>,
 }
 
 /// One conditional assignment change. A batch is published atomically only if
@@ -57,8 +55,8 @@ pub struct DesiredAssignment {
 #[derive(Debug, Clone)]
 pub struct NodeAssignmentUpdate {
     pub node_uuid: String,
-    pub expected: Option<DesiredAssignment>,
-    pub desired: Option<DesiredAssignment>,
+    pub expected: Option<AssignmentTarget>,
+    pub desired: Option<AssignmentTarget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,9 +66,9 @@ pub struct RegisteredNode {
     pub capabilities: NodeCapabilities,
     /// Operator-owned pool, independent of scheduled placement.
     #[serde(default)]
-    pub pool_assignment: Option<DesiredAssignment>,
-    pub desired_assignment: Option<DesiredAssignment>,
-    pub current_assignment: Option<DesiredAssignment>,
+    pub pool_assignment: Option<AssignmentTarget>,
+    pub desired_assignment: Option<AssignmentTarget>,
+    pub current_assignment: Option<AssignmentTarget>,
     pub last_seen: Option<DateTime<Utc>>,
 }
 
@@ -90,6 +88,54 @@ pub struct NodeLaunchRequest {
     pub error: Option<String>,
 }
 
+/// Runtime-owned work: a sample slice plus its resolved accumulator configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvaluationBatch {
+    pub samples: LatentBatch,
+    pub accumulator: super::AccumulatorConfig,
+}
+
+impl EvaluationBatch {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, crate::evaluation::BatchError> {
+        let mut bytes = Vec::new();
+        self.write_bytes(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    pub(crate) fn write_bytes(
+        &self,
+        bytes: &mut Vec<u8>,
+    ) -> Result<usize, crate::evaluation::BatchError> {
+        let start = bytes.len();
+        bytes.extend_from_slice(crate::compatibility::QUEUE_MAGIC);
+        bincode::serde::encode_into_std_write(
+            &self.accumulator,
+            bytes,
+            bincode::config::standard(),
+        )
+        .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?;
+        self.samples.write_bytes(bytes)?;
+        Ok(bytes.len() - start)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::evaluation::BatchError> {
+        let bytes = bytes
+            .strip_prefix(crate::compatibility::QUEUE_MAGIC)
+            .ok_or_else(|| {
+                crate::evaluation::BatchError::layout(
+                    "unsupported evaluation queue format; recreate the run with matching workers",
+                )
+            })?;
+        let (accumulator, consumed) =
+            bincode::serde::decode_from_slice(bytes, bincode::config::standard())
+                .map_err(|e| crate::evaluation::BatchError::layout(e.to_string()))?;
+        Ok(Self {
+            accumulator,
+            samples: LatentBatch::from_bytes(&bytes[consumed..])?,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BatchClaim {
     pub batch_id: i64,
@@ -97,6 +143,7 @@ pub struct BatchClaim {
     pub task_id: i64,
     pub requires_training_values: bool,
     pub latent_batch: LatentBatch,
+    pub accumulator: super::AccumulatorConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -158,17 +205,6 @@ impl BatchStatus {
     }
 }
 
-/// A concrete batch with metadata from the database.
-#[derive(Debug, Clone)]
-pub struct BatchRecord {
-    pub id: i64,
-    pub run_id: i32,
-    pub batch: Batch,
-    pub status: BatchStatus,
-    pub claimed_by_node_name: Option<String>,
-    pub claimed_by_node_uuid: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLogEvent {
     pub source: String,
@@ -217,12 +253,21 @@ pub struct DerivedResultSnapshot {
 }
 
 /// Occupied wall seconds since runner initialization, using one monotonic clock.
-/// Compute and I/O overlap; concurrent I/O counts once. Missing on old reports.
+/// Compute and I/O overlap; concurrent I/O counts once.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorkerBusyMetrics {
     pub elapsed_seconds: f64,
     pub compute_seconds: f64,
     pub io_seconds: f64,
+}
+
+/// Identity and timing shared by all worker reports. A task may be absent while idle.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkerReportContext {
+    pub epoch: String,
+    pub node_uuid: String,
+    pub task_id: Option<String>,
+    pub busy: WorkerBusyMetrics,
 }
 
 /// Cumulative wall seconds in one runner epoch. Operation costs cover
@@ -239,14 +284,10 @@ pub struct EvaluatorCumulativeMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
 pub struct EvaluatorPerformanceMetrics {
-    /// Identifies a runner incarnation; absent on older snapshots.
-    pub epoch: Option<String>,
-    pub node_uuid: Option<String>,
-    pub task_id: Option<String>,
-    pub cumulative: Option<EvaluatorCumulativeMetrics>,
-    pub busy: Option<WorkerBusyMetrics>,
+    #[serde(flatten)]
+    pub worker: WorkerReportContext,
+    pub cumulative: EvaluatorCumulativeMetrics,
     pub engine_diagnostics: serde_json::Value,
     pub batches_completed: i64,
     pub samples_evaluated: i64,
@@ -271,23 +312,6 @@ pub struct EvaluatorPerformanceMetrics {
     pub submit_stall_ratio: f64,
     #[serde(default)]
     pub completed_samples_total: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct SamplerPerformanceMetrics {
-    pub produced_batches: i64,
-    pub produced_samples: i64,
-    pub avg_produce_time_per_sample_ms: f64,
-    pub std_produce_time_per_sample_ms: f64,
-    pub ingested_batches: i64,
-    pub ingested_samples: i64,
-    pub avg_ingest_time_per_sample_ms: f64,
-    pub std_ingest_time_per_sample_ms: f64,
-    #[serde(default)]
-    pub completed_samples_total: i64,
-    #[serde(default)]
-    pub sampler_uptime_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -374,15 +398,14 @@ pub struct SamplerQueueRuntimeMetrics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SamplerRuntimeMetrics {
-    #[serde(default)]
-    pub node_uuid: Option<String>,
-    #[serde(default)]
-    pub busy: Option<WorkerBusyMetrics>,
-    #[serde(default)]
-    pub runner_epoch: Option<String>,
-    #[serde(default)]
-    pub task_id: Option<String>,
+pub struct SamplerPerformanceMetrics {
+    #[serde(flatten)]
+    pub worker: WorkerReportContext,
+    pub engine_diagnostics: JsonValue,
+    pub queue_config: crate::runners::SamplerQueueConfig,
+    pub target_pending_batches: Option<usize>,
+    pub buffered_generated_samples: usize,
+    pub(crate) checkpoint_state: super::checkpoint::AccumulatorCheckpointState,
     pub produced_batches_total: i64,
     pub produced_samples_total: i64,
     pub ingested_batches_total: i64,
@@ -401,43 +424,17 @@ pub struct SamplerRuntimeMetrics {
     pub queue: SamplerQueueRuntimeMetrics,
 }
 
-impl SamplerRuntimeMetrics {
-    pub fn to_performance_metrics(&self) -> SamplerPerformanceMetrics {
-        SamplerPerformanceMetrics {
-            produced_batches: self.produced_batches_total,
-            produced_samples: self.produced_samples_total,
-            avg_produce_time_per_sample_ms: self.sampler.produce_ms_per_sample.mean.unwrap_or(0.0),
-            std_produce_time_per_sample_ms: self.sampler.produce_ms_per_sample.std_dev,
-            ingested_batches: self.ingested_batches_total,
-            ingested_samples: self.ingested_samples_total,
-            avg_ingest_time_per_sample_ms: self
-                .sampler
-                .training_ingest_ms_per_sample
-                .mean
-                .unwrap_or(0.0),
-            std_ingest_time_per_sample_ms: self.sampler.training_ingest_ms_per_sample.std_dev,
-            completed_samples_total: self.completed_samples_total,
-            sampler_uptime_ms: self.sampler_uptime_ms,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvaluatorPerformanceSnapshot {
+pub struct WorkerPerformanceSnapshot<M> {
     pub run_id: i32,
     pub node_name: String,
-    pub metrics: EvaluatorPerformanceMetrics,
+    pub metrics: M,
     pub rss_bytes: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SamplerAggregatorPerformanceSnapshot {
-    pub run_id: i32,
-    pub node_name: String,
-    pub runtime_metrics: SamplerRuntimeMetrics,
-    pub engine_diagnostics: JsonValue,
-    pub rss_bytes: Option<i64>,
-}
+pub type EvaluatorPerformanceSnapshot = WorkerPerformanceSnapshot<EvaluatorPerformanceMetrics>;
+pub type SamplerAggregatorPerformanceSnapshot =
+    WorkerPerformanceSnapshot<SamplerPerformanceMetrics>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RunSampleProgress {
@@ -456,17 +453,35 @@ pub struct RunStageSnapshot {
     pub name: String,
     pub sequence_nr: Option<i32>,
     pub queue_empty: bool,
-    pub sampler_snapshot: Option<SamplerAggregatorSnapshot>,
+    pub sampler_snapshot: Option<SavedSampler>,
     pub observable_state: Option<AccumulatorState>,
     pub evaluator: Option<EvaluatorConfig>,
-    pub sampler_aggregator: Option<SamplerAggregatorConfig>,
     pub batch_transforms: Vec<BatchTransformConfig>,
+}
+
+impl RunStageSnapshot {
+    pub fn sampler_config(&self) -> Option<&SamplingConfig> {
+        self.sampler_snapshot.as_ref().map(|saved| &saved.config)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ResultSourceRef, WorkerRole};
     use std::str::FromStr;
+
+    #[test]
+    fn worker_reports_require_identity_and_clock() {
+        let report = serde_json::to_value(super::WorkerReportContext::default()).unwrap();
+        for field in ["epoch", "node_uuid", "busy"] {
+            let mut incomplete = report.clone();
+            incomplete.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<super::WorkerReportContext>(incomplete).is_err(),
+                "report silently accepted missing {field}"
+            );
+        }
+    }
 
     #[test]
     fn queue_blocker_survives_persisted_performance_roundtrip() {
@@ -489,6 +504,20 @@ mod tests {
                 .blocker
                 .is_none()
         );
+    }
+
+    #[test]
+    fn queued_samples_roundtrip_with_their_accumulator() {
+        let samples =
+            crate::sampling::LatentBatch::from_batch(&crate::evaluation::Batch::from_iter([
+                crate::evaluation::Point::new(vec![0.25], vec![], 2.0),
+            ]));
+        let work = samples.for_evaluation(crate::core::AccumulatorConfig::scalar());
+        let bytes = work.to_bytes().unwrap();
+        assert_eq!(super::EvaluationBatch::from_bytes(&bytes).unwrap(), work);
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(super::EvaluationBatch::from_bytes(&trailing).is_err());
     }
 
     #[test]

@@ -94,7 +94,7 @@ name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 16 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 "#;
     harness.add_run(&temp_config(raw));
     let run_id = harness.run_id("editor-source").await?;
@@ -255,7 +255,7 @@ accumulator = "scalar"
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 16 }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 [[task_queue]]
 name = "later"
 kind = "sample"
@@ -432,7 +432,7 @@ accumulator = { from_name = "sample" }
         .output()?;
     anyhow::ensure!(response.status.success());
     let exported = runs::parse_run_add_config_toml(std::str::from_utf8(&response.stdout)?)?;
-    assert_eq!(exported.task_queue.unwrap().len(), 4);
+    assert_eq!(exported.integration().unwrap().task_queue.len(), 4);
     harness.cleanup().await
 }
 
@@ -461,7 +461,7 @@ discrete_dims = 0
 kind = "sample"
 stop_condition = { max_samples=100 }
 accumulator = { config="scalar" }
-sampler_aggregator = { config={kind="naive_monte_carlo"} }
+sampler = { config={kind="naive_monte_carlo"} }
 "#,
     );
     let config = gammaboard::api::runs::load_run_add_config_file(config.path())?;
@@ -523,9 +523,7 @@ sampler_aggregator = { config={kind="naive_monte_carlo"} }
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> anyhow::Result<()> {
-    use gammaboard::core::{
-        ControlPlaneStore, DesiredAssignment, NodeAssignmentUpdate, WorkerRole,
-    };
+    use gammaboard::core::{AssignmentTarget, ControlPlaneStore, NodeAssignmentUpdate, WorkerRole};
     use gammaboard::runners::controller_child::{
         ControllerAssignmentPlan, apply_controller_assignment_plan,
     };
@@ -626,8 +624,8 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
         .filter(|n| n.name != "other")
         .map(|n| NodeAssignmentUpdate {
             node_uuid: n.uuid,
-            expected: n.desired_assignment.clone(),
-            desired: Some(DesiredAssignment {
+            expected: n.desired_assignment,
+            desired: Some(AssignmentTarget {
                 run_id: right,
                 ..n.desired_assignment.unwrap()
             }),
@@ -682,11 +680,9 @@ async fn controller_assignments_are_stable_atomic_and_reject_stale_plans() -> an
             .update_desired_assignments(&[NodeAssignmentUpdate {
                 node_uuid: "new-s".into(),
                 expected: None,
-                desired: Some(DesiredAssignment {
-                    node_name: "new-s".into(),
+                desired: Some(AssignmentTarget {
                     run_id: left,
                     role: WorkerRole::SamplerAggregator,
-                    run_name: None,
                 }),
             }])
             .await?,
@@ -702,7 +698,7 @@ async fn full_stack_child_creation_is_atomic_and_idempotent() -> anyhow::Result<
     use gammaboard::api::runs::{ChildRunRequest, create_child_run};
     use gammaboard::core::tasks::ChildRunSource;
     let mut harness = FullStackHarness::new().await?;
-    let child = "name='atomic-child'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nkind='sample'\nstop_condition={max_samples=100}\nmeasurement={quantity='central_value'}\naccumulator={config='scalar'}\nsampler_aggregator={config={kind='naive_monte_carlo'}}\n";
+    let child = "name='atomic-child'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nkind='sample'\nstop_condition={max_samples=100}\nmeasurement={selection = { kind = 'all_component_means' }}\naccumulator={config='scalar'}\nsampler={config={kind='naive_monte_carlo'}}\n";
     let parent = temp_config(&format!(
         "kind='integration_campaign'\nname='atomic-parent'\nstop_condition={{ max_total_samples=100 }}\n[[children]]\nname='a'\nrun='''{child}'''\n"
     ));
@@ -888,7 +884,7 @@ async fn worker_pool_operations_resolve_children_and_preserve_operator_intent() 
         let placements = store.list_desired_assignments(None).await?;
         assert_eq!(
             placements
-                .iter()
+                .values()
                 .filter(|a| a.role == WorkerRole::SamplerAggregator
                     && [left, grandchild].contains(&a.run_id))
                 .count(),

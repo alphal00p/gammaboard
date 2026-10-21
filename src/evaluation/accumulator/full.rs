@@ -1,4 +1,5 @@
 use super::{Accumulator, IngestScalar};
+use crate::core::EngineError;
 use crate::evaluation::batch::Point;
 use serde::{Deserialize, Serialize};
 
@@ -6,8 +7,6 @@ use serde::{Deserialize, Serialize};
 pub struct FullVectorAccumulatorState {
     pub components: Vec<String>,
     pub values_row_major: Vec<f64>,
-    #[serde(default)]
-    pub invalid_entries: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -20,19 +19,21 @@ impl FullVectorAccumulatorState {
         Self {
             components,
             values_row_major: Vec::new(),
-            invalid_entries: Vec::new(),
         }
     }
 
-    pub fn push_vector(&mut self, values: &[f64]) {
-        let index = self.sample_count() as usize;
-        if values.len() != self.components.len() || values.iter().any(|value| !value.is_finite()) {
-            self.invalid_entries.push(index);
-            self.values_row_major
-                .extend(std::iter::repeat_n(0.0, self.components.len()));
-            return;
+    pub fn push_vector(&mut self, values: &[f64]) -> Result<(), EngineError> {
+        if values.len() != self.components.len() {
+            return Err(EngineError::eval("full-vector component count mismatch"));
+        }
+        if let Some(index) = values.iter().position(|value| !value.is_finite()) {
+            return Err(EngineError::eval(format!(
+                "non-finite component {:?}",
+                self.components[index]
+            )));
         }
         self.values_row_major.extend_from_slice(values);
+        Ok(())
     }
 
     pub fn component_index(&self, name: &str) -> Option<usize> {
@@ -53,8 +54,8 @@ impl FullVectorAccumulatorState {
 }
 
 impl IngestScalar for FullVectorAccumulatorState {
-    fn ingest_scalar(&mut self, value: f64, point: &Point) {
-        self.push_vector(&[value * point.total_weight().abs()]);
+    fn ingest_scalar(&mut self, value: f64, point: &Point) -> Result<(), EngineError> {
+        self.push_vector(&[value * point.total_weight().abs()])
     }
 }
 
@@ -70,15 +71,24 @@ impl Accumulator for FullVectorAccumulatorState {
         }
     }
 
-    fn merge(&mut self, other: Self) {
-        let offset = self.sample_count() as usize;
+    fn merge(&mut self, other: Self) -> Result<(), crate::core::EngineError> {
+        let width = self.components.len();
+        if self.components != other.components
+            || width == 0
+            || !self.values_row_major.len().is_multiple_of(width)
+            || !other.values_row_major.len().is_multiple_of(width)
+            || self
+                .values_row_major
+                .iter()
+                .chain(&other.values_row_major)
+                .any(|value| !value.is_finite())
+        {
+            return Err(crate::core::EngineError::engine(
+                "incompatible or malformed full-vector accumulator",
+            ));
+        }
         self.values_row_major.extend(other.values_row_major);
-        self.invalid_entries.extend(
-            other
-                .invalid_entries
-                .into_iter()
-                .map(|index| index + offset),
-        );
+        Ok(())
     }
 
     fn get_persistent(&self) -> Self::Persistent {
@@ -90,79 +100,16 @@ impl Accumulator for FullVectorAccumulatorState {
 
 #[cfg(test)]
 mod tests {
-    use super::FullVectorAccumulatorState;
-    use crate::evaluation::{Accumulator, IngestScalar, Point};
+    use super::*;
 
     #[test]
-    fn full_vector_preserves_scalar_positions_for_non_finite_values() {
-        let mut accumulator =
-            FullVectorAccumulatorState::from_components(vec!["value".to_string()]);
-
-        let finite_point = Point::new(vec![], vec![], 2.0);
-        let nan_point = Point::new(vec![], vec![], 1.0);
-        let inf_point = Point::new(vec![], vec![], f64::INFINITY);
-        accumulator.ingest_scalar(1.0, &finite_point);
-        accumulator.ingest_scalar(f64::NAN, &nan_point);
-        accumulator.ingest_scalar(1.0, &inf_point);
-
-        assert_eq!(accumulator.values_row_major, vec![2.0, 0.0, 0.0]);
-        assert_eq!(accumulator.invalid_entries, vec![1, 2]);
-    }
-
-    #[test]
-    fn full_vector_preserves_multi_component_positions_for_non_finite_values() {
-        let mut accumulator = FullVectorAccumulatorState::from_components(vec![
-            "real".to_string(),
-            "imag".to_string(),
-        ]);
-
-        let finite_point = Point::new(vec![], vec![], 3.0);
-        let nan_point = Point::new(vec![], vec![], 1.0);
-        let inf_point = Point::new(vec![], vec![], f64::INFINITY);
-        let weight = finite_point.total_weight().abs();
-        accumulator.push_vector(&[1.0 * weight, -2.0 * weight]);
-        accumulator.push_vector(&[f64::NAN, 0.0 * nan_point.total_weight().abs()]);
-        accumulator.push_vector(&[1.0 * inf_point.total_weight().abs(), 0.0]);
-
-        assert_eq!(
-            accumulator.values_row_major,
-            vec![3.0, -6.0, 0.0, 0.0, 0.0, 0.0]
-        );
-        assert_eq!(accumulator.invalid_entries, vec![1, 2]);
-    }
-
-    #[test]
-    fn full_vector_scalar_merge_offsets_invalid_entry_positions() {
-        let mut left = FullVectorAccumulatorState::from_components(vec!["value".to_string()]);
-        left.values_row_major = vec![1.0, 0.0];
-        left.invalid_entries = vec![1];
-        let mut right = FullVectorAccumulatorState::from_components(vec!["value".to_string()]);
-        right.values_row_major = vec![2.0, 0.0, 3.0];
-        right.invalid_entries = vec![1];
-
-        left.merge(right);
-
-        assert_eq!(left.values_row_major, vec![1.0, 0.0, 2.0, 0.0, 3.0]);
-        assert_eq!(left.invalid_entries, vec![1, 3]);
-    }
-
-    #[test]
-    fn full_vector_multi_component_merge_offsets_invalid_entry_positions() {
-        let mut left = FullVectorAccumulatorState::from_components(vec![
-            "real".to_string(),
-            "imag".to_string(),
-        ]);
-        left.values_row_major = vec![1.0, 1.0];
-        let mut right = FullVectorAccumulatorState::from_components(vec![
-            "real".to_string(),
-            "imag".to_string(),
-        ]);
-        right.values_row_major = vec![0.0, 0.0, 2.0, -2.0];
-        right.invalid_entries = vec![0];
-
-        left.merge(right);
-
-        assert_eq!(left.values_row_major, vec![1.0, 1.0, 0.0, 0.0, 2.0, -2.0]);
-        assert_eq!(left.invalid_entries, vec![1]);
+    fn invalid_rows_are_rejected_without_placeholders_or_partial_rows() {
+        let mut state =
+            FullVectorAccumulatorState::from_components(vec!["real".into(), "imag".into()]);
+        state.push_vector(&[1.0, 2.0]).unwrap();
+        for values in [&[f64::NAN, 0.0][..], &[1.0, f64::INFINITY], &[1.0]] {
+            assert!(state.push_vector(values).is_err());
+            assert_eq!(state.values_row_major, vec![1.0, 2.0]);
+        }
     }
 }

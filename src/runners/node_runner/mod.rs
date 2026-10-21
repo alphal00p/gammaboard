@@ -9,8 +9,8 @@ mod reconcile;
 mod role_runner;
 
 use crate::core::{
-    AggregationStore, ControlPlaneStore, NodeCapabilities, RunReadStore, RunSpecStore,
-    RunTaskStore, StoreError, WorkQueueStore, WorkerRole,
+    AggregationStore, AssignmentTarget, ControlPlaneStore, NodeCapabilities, RunReadStore,
+    RunSpecStore, RunTaskStore, StoreError, WorkQueueStore, WorkerRole,
 };
 use crate::runners::{TaskControlLoop, TaskControlLoopConfig, role_db_pool_size};
 use crate::stores::init_pg_store;
@@ -98,14 +98,8 @@ struct LeaseRenewalHandle {
     join_handle: JoinHandle<()>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RoleTarget {
-    pub(super) role: WorkerRole,
-    pub(super) run_id: i32,
-}
-
 pub(super) struct ActiveRoleRunner<S: NodeRunnerStore> {
-    target: RoleTarget,
+    target: AssignmentTarget,
     worker: ActiveWorker<S>,
     context_span: tracing::Span,
     runner: Box<dyn RoleRunner>,
@@ -113,8 +107,8 @@ pub(super) struct ActiveRoleRunner<S: NodeRunnerStore> {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(super) struct RetryState {
-    pub(super) blocked_target: Option<RoleTarget>,
-    pub(super) failure_target: Option<RoleTarget>,
+    pub(super) blocked_target: Option<AssignmentTarget>,
+    pub(super) failure_target: Option<AssignmentTarget>,
     pub(super) consecutive_failures: u32,
 }
 
@@ -126,7 +120,7 @@ pub(super) enum StartErrorDisposition {
 }
 
 impl RetryState {
-    fn reset_for_desired_target_change(&mut self, desired_target: Option<RoleTarget>) {
+    fn reset_for_desired_target_change(&mut self, desired_target: Option<AssignmentTarget>) {
         if desired_target != self.failure_target {
             self.failure_target = desired_target;
             self.consecutive_failures = 0;
@@ -136,7 +130,7 @@ impl RetryState {
         }
     }
 
-    fn is_blocked(&self, target: RoleTarget) -> bool {
+    fn is_blocked(&self, target: AssignmentTarget) -> bool {
         self.blocked_target == Some(target)
     }
 
@@ -146,7 +140,7 @@ impl RetryState {
         self.blocked_target = None;
     }
 
-    fn note_failure(&mut self, target: RoleTarget, max_consecutive_failures: u32) -> bool {
+    fn note_failure(&mut self, target: AssignmentTarget, max_consecutive_failures: u32) -> bool {
         if self.failure_target == Some(target) {
             self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         } else {
@@ -162,7 +156,7 @@ impl RetryState {
 
     fn note_start_error(
         &mut self,
-        target: RoleTarget,
+        target: AssignmentTarget,
         error: &StoreError,
         max_consecutive_failures: u32,
     ) -> StartErrorDisposition {
@@ -222,7 +216,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         Duration::from_secs_f64((current.as_secs_f64() * jitter).max(0.0))
     }
 
-    fn current_target(&self) -> Option<RoleTarget> {
+    fn current_target(&self) -> Option<AssignmentTarget> {
         self.active_runner.as_ref().map(|runner| runner.target)
     }
 
@@ -580,6 +574,11 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                                     self.sleep_after_database_error(&err).await;
                                     false
                                 }
+                                Err(err) if err.is_retry_activation() => {
+                                    warn!("restoring role from its durable checkpoint: {err}");
+                                    self.finish_current_assignment().await?;
+                                    false
+                                }
                                 Err(err) => {
                                     warn!("role runner tick failed: {err}");
                                     self.fail_current_assignment(target, &err).await?;
@@ -674,7 +673,7 @@ mod tests {
 
     #[test]
     fn retryable_activation_errors_do_not_consume_start_failure_budget() {
-        let target = RoleTarget {
+        let target = AssignmentTarget {
             role: WorkerRole::SamplerAggregator,
             run_id: 7,
         };

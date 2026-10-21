@@ -116,9 +116,7 @@ impl Measurements {
             // Only include complete reporting intervals; never invent fractional operations.
             if whole && count.is_some() {
                 for &(path, _, _) in SAMPLER_TIMINGS {
-                    let metric = data(interval.last, false)
-                        .pointer(path)
-                        .unwrap_or(&Value::Null);
+                    let metric = data(interval.last).pointer(path).unwrap_or(&Value::Null);
                     if let (Some(n), Some(total)) =
                         (metric["count"].as_u64(), finite(&metric["total"]))
                     {

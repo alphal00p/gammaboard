@@ -1,9 +1,12 @@
+#[cfg(test)]
+use super::gammaloop_config::GammaLoopPreprocessing;
+pub use super::gammaloop_config::{GammaLoopParams, TrainingProjection};
 use crate::core::EngineResultExt;
-use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe, path::PathBuf};
+use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe};
 
 use gammaloop_api::{
     CLISettings,
-    state::{CommandHistory, ProcessRef, RunHistory, State},
+    state::{CommandHistory, RunHistory, State},
 };
 use gammalooprs::graph::GroupId;
 use gammalooprs::initialisation::initialise;
@@ -20,12 +23,12 @@ use gammalooprs::settings::runtime::{
     StabilityLevelSetting,
 };
 use gammalooprs::utils::F;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value as JsonValue, json};
 use symbolica::numerical_integration::Sample;
 
 use crate::{
-    Batch, BatchResult, BuildError, Domain, DomainBranch, EvalError,
+    Batch, BatchResult, Domain, DomainBranch, EngineError,
     core::{
         AccumulatorConfig, AccumulatorMomentConfig,
         TrainingProjection as AccumulatorTrainingProjection,
@@ -65,16 +68,6 @@ struct GammaLoopMetadata {
     reference_gaussian: Option<GaussianReferenceFunction>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TrainingProjection {
-    #[default]
-    Real,
-    Imag,
-    Abs,
-    AbsSq,
-}
-
 impl TrainingProjection {
     fn project(self, value: num::Complex<f64>) -> f64 {
         match self {
@@ -86,71 +79,21 @@ impl TrainingProjection {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct GammaLoopParams {
-    pub state_folder: PathBuf,
-    pub process_id: Option<ProcessRef>,
-    pub integrand_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub graph_groups: Option<Vec<usize>>,
-    pub momentum_space: bool,
-    pub use_f128: bool,
-    pub training_projection: TrainingProjection,
-    /// Replace physics with known normalization and second-moment targets.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reference_gaussian: Option<GaussianReferenceFunction>,
-    pub preprocessing: GammaLoopPreprocessing,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct GammaLoopPreprocessing {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<String>,
-    pub read_only: bool,
-}
-
-impl Default for GammaLoopPreprocessing {
-    fn default() -> Self {
-        Self {
-            commands: Vec::new(),
-            read_only: true,
-        }
-    }
-}
-
-impl Default for GammaLoopParams {
-    fn default() -> Self {
-        Self {
-            state_folder: PathBuf::from("./gammaloop_state"),
-            process_id: None,
-            integrand_name: None,
-            graph_groups: None,
-            momentum_space: false,
-            use_f128: false,
-            training_projection: TrainingProjection::default(),
-            reference_gaussian: None,
-            preprocessing: GammaLoopPreprocessing::default(),
-        }
-    }
-}
-
 impl GammaLoopEvaluator {
     fn load_integrand_and_model(
         mut params: GammaLoopParams,
-    ) -> Result<(ProcessIntegrand, Model, GammaLoopMetadata), BuildError> {
+    ) -> Result<(ProcessIntegrand, Model, GammaLoopMetadata), EngineError> {
         params.state_folder = resolve_resource_path(&params.state_folder).map_err(|err| {
-            BuildError::build(format!(
+            EngineError::build(format!(
                 "failed to resolve gammaloop state_folder '{}': {err}",
                 params.state_folder.display()
             ))
         })?;
         crate::activate_symbolica_oem_license().build_err()?;
         initialise()
-            .map_err(|err| BuildError::build(format!("gammaloop initialization: {err}")))?;
+            .map_err(|err| EngineError::build(format!("gammaloop initialization: {err}")))?;
         if params.momentum_space && params.reference_gaussian.is_some() {
-            return Err(BuildError::invalid_input(
+            return Err(EngineError::invalid_input(
                 "reference_gaussian requires x-space evaluation to exercise sampling maps",
             ));
         }
@@ -169,7 +112,7 @@ impl GammaLoopEvaluator {
         let mut state =
             State::load_with_selection(params.state_folder.clone(), None, None, selection.as_ref())
                 .map_err(|err| {
-                    BuildError::build(format!(
+                    EngineError::build(format!(
                         "failed to load state from {}: {err:#}",
                         params.state_folder.display()
                     ))
@@ -181,7 +124,7 @@ impl GammaLoopEvaluator {
 
         let (process_id, integrand_name) = state
             .find_integrand_ref(params.process_id.as_ref(), params.integrand_name.as_ref())
-            .map_err(|err| BuildError::build(format!("failed to find integrand: {err}")))?;
+            .map_err(|err| EngineError::build(format!("failed to find integrand: {err}")))?;
 
         let model = state
             .resolve_model_for_integrand(process_id, &integrand_name)
@@ -233,7 +176,7 @@ impl GammaLoopEvaluator {
     fn sampling_channels(
         integrand: &ProcessIntegrand,
         selected_groups: Option<&[usize]>,
-    ) -> Result<Vec<SamplingChannelInspection>, BuildError> {
+    ) -> Result<Vec<SamplingChannelInspection>, EngineError> {
         let Some(parameters) = integrand
             .get_settings()
             .sampling
@@ -249,7 +192,7 @@ impl GammaLoopEvaluator {
             .map(|(_, name)| {
                 let graph_id = integrand
                     .find_graph_id_by_name(name)
-                    .ok_or_else(|| BuildError::build(format!("missing master graph '{name}'")))?;
+                    .ok_or_else(|| EngineError::build(format!("missing master graph '{name}'")))?;
                 let setup = match integrand {
                     ProcessIntegrand::Amplitude(amplitude) => {
                         &amplitude.data.graph_terms[graph_id].multi_channeling_setup
@@ -266,14 +209,14 @@ impl GammaLoopEvaluator {
             .collect()
     }
 
-    pub fn resolve_domain_from_params(params: GammaLoopParams) -> Result<Domain, BuildError> {
-        match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Domain, BuildError> {
+    pub fn resolve_domain_from_params(params: GammaLoopParams) -> Result<Domain, EngineError> {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Domain, EngineError> {
             let graph_groups = params.graph_groups.clone();
             let (integrand, _model, metadata) = Self::load_integrand_and_model(params)?;
             Self::build_domain(&integrand, metadata.momentum_space, graph_groups.as_deref())
         })) {
             Ok(result) => result,
-            Err(payload) => Err(BuildError::build(format!(
+            Err(payload) => Err(EngineError::build(format!(
                 "gammaloop domain resolution panicked: {}",
                 Self::panic_message(payload)
             ))),
@@ -284,16 +227,16 @@ impl GammaLoopEvaluator {
         integrand: &ProcessIntegrand,
         momentum_space: bool,
         selected_graph_groups: Option<&[usize]>,
-    ) -> Result<Domain, BuildError> {
+    ) -> Result<Domain, EngineError> {
         fn continuous_leaf(
             integrand: &ProcessIntegrand,
             momentum_space: bool,
             discrete_selection: &[usize],
-        ) -> Result<Domain, BuildError> {
+        ) -> Result<Domain, EngineError> {
             let dims = if momentum_space {
                 let dims = integrand.get_n_dim();
                 if !dims.is_multiple_of(3) {
-                    return Err(BuildError::build(format!(
+                    return Err(EngineError::build(format!(
                         "gammaloop momentum-space domain dimension must be divisible by 3, got {dims}"
                     )));
                 }
@@ -302,7 +245,7 @@ impl GammaLoopEvaluator {
                 integrand
                     .expected_x_space_dimension(discrete_selection)
                     .map_err(|err| {
-                        BuildError::build(format!(
+                        EngineError::build(format!(
                             "failed to infer x-space dimensions for selection {:?}: {err}",
                             discrete_selection
                         ))
@@ -315,7 +258,7 @@ impl GammaLoopEvaluator {
             integrand: &ProcessIntegrand,
             momentum_space: bool,
             group_idx: usize,
-        ) -> Result<Domain, BuildError> {
+        ) -> Result<Domain, EngineError> {
             let settings = integrand.get_settings();
             let SamplingSettings::DiscreteGraphs(discrete_settings) = &settings.sampling else {
                 return continuous_leaf(integrand, momentum_space, &[]);
@@ -327,7 +270,7 @@ impl GammaLoopEvaluator {
             if discrete_settings.sample_orientations {
                 let orientation_count =
                     integrand.group_orientation_count(group_id).ok_or_else(|| {
-                        BuildError::build(format!(
+                        EngineError::build(format!(
                             "failed to infer orientation count for graph group {group_idx}"
                         ))
                     })?;
@@ -338,7 +281,7 @@ impl GammaLoopEvaluator {
                             DiscreteGraphSamplingType::SamplingMultiChanneling(_) => {
                                 let channel_count =
                                     integrand.group_channel_count(group_id).ok_or_else(|| {
-                                        BuildError::build(format!(
+                                        EngineError::build(format!(
                                             "failed to infer channel count for graph group {group_idx}"
                                         ))
                                     })?;
@@ -353,14 +296,14 @@ impl GammaLoopEvaluator {
                                         selection.pop();
                                         Ok(DomainBranch::new(channel_idx, leaf))
                                     })
-                                    .collect::<Result<Vec<_>, BuildError>>()?;
+                                    .collect::<Result<Vec<_>, EngineError>>()?;
                                 Domain::discrete(Some("channel".to_string()), channel_branches)
                             }
                             _ => continuous_leaf(integrand, momentum_space, selection.as_slice())?,
                         };
                         Ok(DomainBranch::new(orientation_idx, domain))
                     })
-                    .collect::<Result<Vec<_>, BuildError>>()?;
+                    .collect::<Result<Vec<_>, EngineError>>()?;
                 return Ok(Domain::discrete(
                     Some("orientation".to_string()),
                     orientation_branches,
@@ -371,7 +314,7 @@ impl GammaLoopEvaluator {
                 DiscreteGraphSamplingType::SamplingMultiChanneling(_) => {
                     let channel_count =
                         integrand.group_channel_count(group_id).ok_or_else(|| {
-                            BuildError::build(format!(
+                            EngineError::build(format!(
                                 "failed to infer channel count for graph group {group_idx}"
                             ))
                         })?;
@@ -382,7 +325,7 @@ impl GammaLoopEvaluator {
                                 continuous_leaf(integrand, momentum_space, selection.as_slice())?;
                             Ok(DomainBranch::new(channel_idx, leaf))
                         })
-                        .collect::<Result<Vec<_>, BuildError>>()?;
+                        .collect::<Result<Vec<_>, EngineError>>()?;
                     Ok(Domain::discrete(
                         Some("channel".to_string()),
                         channel_branches,
@@ -395,7 +338,7 @@ impl GammaLoopEvaluator {
         match integrand.get_settings().sampling.clone() {
             SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => {
                 if selected_graph_groups.is_some() {
-                    return Err(BuildError::build(
+                    return Err(EngineError::build(
                         "gammaloop graph_groups requires discrete graph sampling",
                     ));
                 }
@@ -407,19 +350,19 @@ impl GammaLoopEvaluator {
                     .map(|indices| indices.to_vec())
                     .unwrap_or_else(|| (0..group_count).collect());
                 if group_indices.is_empty() {
-                    return Err(BuildError::build(
+                    return Err(EngineError::build(
                         "gammaloop graph_groups must select at least one graph group",
                     ));
                 }
                 let mut group_branches = Vec::with_capacity(group_indices.len());
                 for (local_group_idx, group_idx) in group_indices.iter().copied().enumerate() {
                     if group_idx >= group_count {
-                        return Err(BuildError::build(format!(
+                        return Err(EngineError::build(format!(
                             "gammaloop graph_groups contains {group_idx}, but the integrand has {group_count} graph groups"
                         )));
                     }
                     if group_indices[..local_group_idx].contains(&group_idx) {
-                        return Err(BuildError::build(format!(
+                        return Err(EngineError::build(format!(
                             "gammaloop graph_groups contains duplicate graph group {group_idx}"
                         )));
                     }
@@ -427,7 +370,7 @@ impl GammaLoopEvaluator {
                     group_branches.push(DomainBranch::new(local_group_idx, branch));
                 }
                 if group_branches.is_empty() {
-                    return Err(BuildError::build(
+                    return Err(EngineError::build(
                         "failed to infer gammaloop domain: no graph groups found",
                     ));
                 }
@@ -471,21 +414,21 @@ impl GammaLoopEvaluator {
     fn call_external<T, E>(
         label: &str,
         action: impl FnOnce() -> Result<T, E>,
-    ) -> Result<T, EvalError>
+    ) -> Result<T, EngineError>
     where
         E: std::fmt::Display,
     {
         match std::panic::catch_unwind(AssertUnwindSafe(action)) {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(err)) => Err(EvalError::eval(format!("{label} failed: {err:#}"))),
-            Err(payload) => Err(EvalError::eval(format!(
+            Ok(Err(err)) => Err(EngineError::eval(format!("{label} failed: {err:#}"))),
+            Err(payload) => Err(EngineError::eval(format!(
                 "{label} panicked: {}",
                 Self::panic_message(payload)
             ))),
         }
     }
 
-    fn run_preprocessing(params: &GammaLoopParams, state: &mut State) -> Result<(), BuildError> {
+    fn run_preprocessing(params: &GammaLoopParams, state: &mut State) -> Result<(), EngineError> {
         let mut run_history = RunHistory::default();
         let mut cli_settings = CLISettings::default();
         cli_settings.state.folder = params.state_folder.clone();
@@ -494,7 +437,7 @@ impl GammaLoopEvaluator {
 
         for (index, raw_command) in params.preprocessing.commands.iter().enumerate() {
             let command = CommandHistory::from_raw_string(raw_command).map_err(|err| {
-                BuildError::build(format!(
+                EngineError::build(format!(
                     "failed to parse preprocessing.commands[{index}] '{raw_command}': {err}"
                 ))
             })?;
@@ -515,13 +458,13 @@ impl GammaLoopEvaluator {
                     &mut default_runtime_settings,
                 )
                 .map_err(|err| {
-                    BuildError::build(format!(
+                    EngineError::build(format!(
                         "failed to execute preprocessing.commands[{index}] '{raw_command}': {err}"
                     ))
                 })?;
 
             if let ControlFlow::Break(_) = execution.flow {
-                return Err(BuildError::build(format!(
+                return Err(EngineError::build(format!(
                     "preprocessing.commands[{index}] triggered flow break and is not supported: '{}'",
                     raw_command
                 )));
@@ -531,8 +474,8 @@ impl GammaLoopEvaluator {
         Ok(())
     }
 
-    pub fn from_params(params: GammaLoopParams) -> Result<Self, BuildError> {
-        match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, BuildError> {
+    pub fn from_params(params: GammaLoopParams) -> Result<Self, EngineError> {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Self, EngineError> {
             let (mut integrand, model, metadata) = Self::load_integrand_and_model(params.clone())?;
             let domain = Self::build_domain(
                 &integrand,
@@ -549,12 +492,14 @@ impl GammaLoopEvaluator {
                     .build_err()?
                     .join()
                     .map_err(|payload| {
-                        BuildError::build(format!(
+                        EngineError::build(format!(
                             "gammaloop warm-up panicked: {}",
                             Self::panic_message(payload)
                         ))
                     })?
-                    .map_err(|err| BuildError::build(format!("failed to warm up integrand: {err}")))
+                    .map_err(|err| {
+                        EngineError::build(format!("failed to warm up integrand: {err}"))
+                    })
             })?;
             Ok(Self {
                 pristine_integrand: integrand.clone(),
@@ -569,7 +514,7 @@ impl GammaLoopEvaluator {
             })
         })) {
             Ok(result) => result,
-            Err(payload) => Err(BuildError::build(format!(
+            Err(payload) => Err(EngineError::build(format!(
                 "gammaloop evaluator initialization panicked: {}",
                 Self::panic_message(payload)
             ))),
@@ -588,17 +533,17 @@ impl GammaLoopEvaluator {
         value
     }
 
-    fn map_graph_group(&self, mut discrete: Vec<usize>) -> Result<Vec<usize>, EvalError> {
+    fn map_graph_group(&self, mut discrete: Vec<usize>) -> Result<Vec<usize>, EngineError> {
         let Some(graph_groups) = &self.graph_groups else {
             return Ok(discrete);
         };
         let Some(local_group) = discrete.first_mut() else {
-            return Err(EvalError::eval(
+            return Err(EngineError::eval(
                 "gammaloop graph_groups requires a graph-group discrete coordinate",
             ));
         };
         *local_group = graph_groups.get(*local_group).copied().ok_or_else(|| {
-            EvalError::eval(format!(
+            EngineError::eval(format!(
                 "gammaloop graph-group coordinate {} is outside the configured {} groups",
                 *local_group,
                 graph_groups.len()
@@ -613,13 +558,13 @@ impl GammaLoopEvaluator {
         points: &[crate::evaluation::Point],
         require_training_values: bool,
         mut values_of: impl FnMut(&EvaluationResult) -> Vec<f64>,
-    ) -> Result<Option<Vec<f64>>, EvalError> {
+    ) -> Result<Option<Vec<f64>>, EngineError> {
         let mut training_values =
             require_training_values.then(|| Vec::with_capacity(evaluation_results.len()));
-        for (result, point) in evaluation_results.iter().zip(points.iter()) {
+        for (sample, (result, point)) in evaluation_results.iter().zip(points.iter()).enumerate() {
             let projected = accumulator
                 .ingest_vector(&values_of(result), point)
-                .map_err(EvalError::eval)?;
+                .map_err(|err| EngineError::eval(format!("sample {sample}: {err}")))?;
             if let Some(training_values) = training_values.as_mut() {
                 training_values.push(projected * point.total_weight());
             }
@@ -631,21 +576,21 @@ impl GammaLoopEvaluator {
         &self,
         evaluation_results: &[EvaluationResult],
         points: &[crate::evaluation::Point],
-    ) -> GammaLoopAccumulatorState {
+    ) -> Result<GammaLoopAccumulatorState, EngineError> {
         let mut state =
-            Self::gammaloop_estimate(evaluation_results, points, self.training_projection);
+            Self::gammaloop_estimate(evaluation_results, points, self.training_projection)?;
         state.bundle = self
             .integrand
             .observable_snapshot_bundle()
             .unwrap_or_default();
-        state
+        Ok(state)
     }
 
     fn gammaloop_estimate(
         evaluation_results: &[EvaluationResult],
         points: &[crate::evaluation::Point],
         training_projection: TrainingProjection,
-    ) -> GammaLoopAccumulatorState {
+    ) -> Result<GammaLoopAccumulatorState, EngineError> {
         let mut estimate = VectorAccumulatorState::from_config(
             vec!["real".to_string(), "imag".to_string()],
             AccumulatorTrainingProjection::Norm,
@@ -660,31 +605,34 @@ impl GammaLoopEvaluator {
                 AccumulatorMomentConfig::MaxOrder4,
             ))
         });
-        for (result, point) in evaluation_results.iter().zip(points.iter()) {
+        for (sample, (result, point)) in evaluation_results.iter().zip(points.iter()).enumerate() {
             if let Some(statistics) = &mut training_norm_sqr {
                 // Project after parameterization, then apply the sampling weight
                 // once (squaring that weight would describe a different estimator).
-                statistics.add_sample_without_discrete_projection(
-                    training_projection.project(Self::project_result_value(result)),
-                    point,
-                );
+                statistics
+                    .add_sample_without_discrete_projection(
+                        training_projection.project(Self::project_result_value(result)),
+                        point,
+                    )
+                    .map_err(|err| {
+                        EngineError::eval(format!("sample {sample}, training projection: {err}"))
+                    })?;
             }
-            let mut debug_point = point.clone();
-            debug_point.integrand_value_re = Some(result.integrand_result.re.0);
-            debug_point.integrand_value_im = Some(result.integrand_result.im.0);
-            if let Some(jacobian) = result.parameterization_jacobian.map(|jac| jac.0) {
-                debug_point.parameterization_jacobian = Some(jacobian);
-                debug_point.add_weight_factor("gammaloop_parameterization_jacobian", jacobian);
-            }
-            // Keep any remaining top-level Jacobian separate. Current GammaLoop's
-            // returned contribution already includes native map/partition factors;
-            // its top-level Jacobian is unity. Older records may have a nonunit one.
-            let value = Self::returned_result_value(result);
+            let evaluation = crate::evaluation::batch::SampleEvaluation {
+                integrand_value_re: result.integrand_result.re.0,
+                integrand_value_im: result.integrand_result.im.0,
+                parameterization_jacobian: result.parameterization_jacobian.map(|jac| jac.0),
+            };
+            // Statistics use the magnitude of sampling/parameterization weights.
+            // Apply the parameterization factor here once; the diagnostic record
+            // is only descriptive and cannot change accumulation.
+            let value = Self::returned_result_value(result)
+                * evaluation.parameterization_jacobian.unwrap_or(1.0).abs();
             estimate
-                .ingest_vector(&[value.re, value.im], &debug_point)
-                .expect("gammaloop estimate vector components should match");
+                .ingest_vector_with_details(&[value.re, value.im], point, Some(&evaluation))
+                .map_err(|err| EngineError::eval(format!("sample {sample}: {err}")))?;
         }
-        GammaLoopAccumulatorState {
+        Ok(GammaLoopAccumulatorState {
             bundle: Default::default(),
             estimate,
             training_projection: Some(training_projection),
@@ -692,17 +640,17 @@ impl GammaLoopEvaluator {
             diagnostics: GammaLoopAccumulatorState::diagnostics_from_evaluation_results(
                 evaluation_results,
             ),
-        }
+        })
     }
 
-    fn evaluate(&mut self, batch: &Batch) -> Result<Vec<EvaluationResult>, EvalError> {
+    fn evaluate(&mut self, batch: &Batch) -> Result<Vec<EvaluationResult>, EngineError> {
         if self.momentum_space {
             let inputs = batch
                 .points()
                 .iter()
                 .map(|point| {
                     if !point.continuous.len().is_multiple_of(3) {
-                        return Err(EvalError::eval(format!(
+                        return Err(EngineError::eval(format!(
                             "momentum-space evaluation expects point dimension divisible by 3, got {}",
                             point.continuous.len()
                         )));
@@ -722,7 +670,7 @@ impl GammaLoopEvaluator {
                         .copied()
                         .map(|dim| {
                             usize::try_from(dim).map_err(|_| {
-                                EvalError::eval(format!(
+                                EngineError::eval(format!(
                                     "batch has negative discrete index {}",
                                     dim
                                 ))
@@ -735,7 +683,7 @@ impl GammaLoopEvaluator {
                     {
                         SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => {
                             if !discrete_dim.is_empty() {
-                                return Err(EvalError::eval(format!(
+                                return Err(EngineError::eval(format!(
                                     "integrand does not use discrete graph sampling, but received discrete dimensions {:?}",
                                     discrete_dim
                                 )));
@@ -781,7 +729,7 @@ impl GammaLoopEvaluator {
                     .copied()
                     .map(|dim| {
                         usize::try_from(dim).map_err(|_| {
-                            EvalError::eval(format!("batch has negative discrete index {}", dim))
+                            EngineError::eval(format!("batch has negative discrete index {}", dim))
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -791,7 +739,7 @@ impl GammaLoopEvaluator {
                         .expected_x_space_dimension(discrete_dim.as_slice())
                 })?;
                 if cont.len() != expected_dimension {
-                    return Err(EvalError::eval(format!(
+                    return Err(EngineError::eval(format!(
                         "expected {expected_dimension} x-space coordinates for this selection, got {}",
                         cont.len()
                     )));
@@ -842,7 +790,7 @@ fn set_top_level_sample_weight(sample: &mut Sample<F<f64>>, integrator_weight: F
 }
 
 impl Evaluator for GammaLoopEvaluator {
-    fn get_domain(&self) -> Domain {
+    fn domain(&self) -> Domain {
         self.domain.clone()
     }
 
@@ -855,13 +803,25 @@ impl Evaluator for GammaLoopEvaluator {
         batch: &Batch,
         accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
-    ) -> Result<BatchResult, EvalError> {
+    ) -> Result<BatchResult, EngineError> {
         if matches!(accumulator, AccumulatorConfig::Gammaloop) {
             // Isolate this batch from prior evaluations, including failed ones.
             self.integrand = self.pristine_integrand.clone();
         }
         let points = batch.points();
         let evaluation_results = self.evaluate(batch)?;
+        for (sample, (result, point)) in evaluation_results.iter().zip(points).enumerate() {
+            let value = Self::project_result_value(result);
+            let weight = point.total_weight();
+            if !(value.re * weight).is_finite()
+                || !(value.im * weight).is_finite()
+                || !(self.training_projection.project(value) * weight).is_finite()
+            {
+                return Err(EngineError::eval(format!(
+                    "sample {sample}: non-finite weighted contribution or training projection"
+                )));
+            }
+        }
         let mut observable_state = AccumulatorState::from_config(accumulator);
         let weighted_values = match accumulator {
             AccumulatorConfig::Empty => {
@@ -884,7 +844,7 @@ impl Evaluator for GammaLoopEvaluator {
             }
             AccumulatorConfig::Gammaloop => {
                 observable_state = AccumulatorState::Gammaloop(
-                    self.batch_gammaloop_observable(&evaluation_results, points),
+                    self.batch_gammaloop_observable(&evaluation_results, points)?,
                 );
                 if options.require_training_values {
                     Some(
@@ -902,9 +862,9 @@ impl Evaluator for GammaLoopEvaluator {
                     None
                 }
             }
-            AccumulatorConfig::Vector { .. } => {
+            AccumulatorConfig::Vector { .. } if !accumulator.is_scalar() => {
                 let AccumulatorState::Vector(accumulator) = &mut observable_state else {
-                    return Err(EvalError::eval(format!(
+                    return Err(EngineError::eval(format!(
                         "gammaloop vector mode does not support accumulator kind {}",
                         observable_state.kind_str()
                     )));
@@ -920,8 +880,8 @@ impl Evaluator for GammaLoopEvaluator {
                     },
                 )?
             }
-            _ => match accumulator.semantic_kind() {
-                crate::evaluation::SemanticAccumulatorKind::Scalar => match &mut observable_state {
+            _ => match accumulator.is_scalar() {
+                true => match &mut observable_state {
                     AccumulatorState::Vector(accumulator) => Self::ingest_vector_batch(
                         accumulator,
                         &evaluation_results,
@@ -939,28 +899,28 @@ impl Evaluator for GammaLoopEvaluator {
                             let value = self
                                 .training_projection
                                 .project(Self::project_result_value(result));
-                            accumulator.push_vector(&[value * point.total_weight().abs()]);
+                            accumulator.push_vector(&[value * point.total_weight().abs()])?;
                         }
                         None
                     }
                     other => {
-                        return Err(EvalError::eval(format!(
+                        return Err(EngineError::eval(format!(
                             "gammaloop scalar mode does not support accumulator kind {}",
                             other.kind_str()
                         )));
                     }
                 },
-                crate::evaluation::SemanticAccumulatorKind::Vector => match &mut observable_state {
+                false => match &mut observable_state {
                     AccumulatorState::FullVector(accumulator) => {
                         for (result, point) in evaluation_results.iter().zip(points.iter()) {
                             let value = Self::project_result_value(result);
                             let weight = point.total_weight().abs();
-                            accumulator.push_vector(&[value.re * weight, value.im * weight]);
+                            accumulator.push_vector(&[value.re * weight, value.im * weight])?;
                         }
                         None
                     }
                     other => {
-                        return Err(EvalError::eval(format!(
+                        return Err(EngineError::eval(format!(
                             "gammaloop vector mode does not support accumulator kind {}",
                             other.kind_str()
                         )));

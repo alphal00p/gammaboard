@@ -27,12 +27,21 @@ pub struct Point {
     pub continuous: Vec<f64>,
     pub discrete: Vec<i64>,
     pub weight_factors: Vec<WeightFactor>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub integrand_value_re: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub integrand_value_im: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+}
+
+/// Evaluation information retained with an extreme contribution, never with inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SampleEvaluation {
+    pub integrand_value_re: f64,
+    pub integrand_value_im: f64,
     pub parameterization_jacobian: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticSample {
+    pub point: Point,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaluation: Option<SampleEvaluation>,
 }
 
 impl Point {
@@ -41,9 +50,6 @@ impl Point {
             continuous,
             discrete,
             weight_factors: vec![WeightFactor::new("sampler_weight", sampler_weight)],
-            integrand_value_re: None,
-            integrand_value_im: None,
-            parameterization_jacobian: None,
         }
     }
 
@@ -75,18 +81,6 @@ impl Point {
             }
         }
         matched.then_some(product)
-    }
-
-    pub fn clone_with_continuous_and_added_factor(
-        &self,
-        continuous: Vec<f64>,
-        label: impl Into<String>,
-        value: f64,
-    ) -> Self {
-        let mut next = self.clone();
-        next.continuous = continuous;
-        next.add_weight_factor(label, value);
-        next
     }
 }
 
@@ -124,15 +118,13 @@ pub struct Batch {
 }
 
 impl Batch {
-    pub fn new(points: Vec<Point>) -> Result<Self, BatchError> {
-        Ok(Self { points })
+    /// Own materialized points. Validate their layout with `Domain::validate_batch`
+    /// at the evaluator boundary; construction itself cannot fail.
+    pub fn new(points: Vec<Point>) -> Self {
+        Self { points }
     }
 
-    pub fn from_points(points: impl IntoIterator<Item = Point>) -> Result<Self, BatchError> {
-        Self::new(points.into_iter().collect())
-    }
-
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.points.len()
     }
 
@@ -144,27 +136,26 @@ impl Batch {
         &self.points
     }
 
-    pub fn point(&self, sample_idx: usize) -> Option<&Point> {
-        self.points.get(sample_idx)
+    pub fn into_points(self) -> Vec<Point> {
+        self.points
     }
 
     pub fn weights(&self) -> Vec<f64> {
         self.points.iter().map(Point::total_weight).collect()
     }
+}
 
-    pub fn to_json(&self) -> JsonValue {
-        serde_json::to_value(self).expect("Batch serialization should never fail")
-    }
-
-    pub fn from_json(value: &JsonValue) -> Result<Self, BatchError> {
-        Ok(serde_json::from_value(value.clone())?)
+impl FromIterator<Point> for Batch {
+    fn from_iter<T: IntoIterator<Item = Point>>(points: T) -> Self {
+        Self::new(points.into_iter().collect())
     }
 }
 
 /// Evaluator output for one batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
-    pub values: Option<Vec<f64>>,
+    /// Weighted training projection; absent when feedback was not requested.
+    pub training_values: Option<Vec<f64>>,
     pub accumulator: AccumulatorState,
 }
 
@@ -173,29 +164,50 @@ impl BatchResult {
         standard()
     }
 
-    pub fn new(values: Option<Vec<f64>>, accumulator: AccumulatorState) -> Self {
+    pub fn new(training_values: Option<Vec<f64>>, accumulator: AccumulatorState) -> Self {
         Self {
-            values,
+            training_values,
             accumulator,
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.values.as_ref().map_or(0, Vec::len)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.values.as_ref().is_none_or(Vec::is_empty)
-    }
-
-    pub fn matches_batch(&self, batch: &Batch) -> bool {
-        self.values
+    pub(crate) fn validate_for_batch(
+        &self,
+        nr_samples: usize,
+        require_training_values: bool,
+    ) -> Result<(), crate::core::EngineError> {
+        self.validate_values()?;
+        if self.training_values.is_some() != require_training_values {
+            return Err(crate::core::EngineError::eval(
+                "feedback presence does not match the batch request",
+            ));
+        }
+        if self
+            .training_values
             .as_ref()
-            .is_none_or(|values| values.len() == batch.size())
+            .is_some_and(|values| values.len() != nr_samples)
+        {
+            return Err(crate::core::EngineError::eval(
+                "training feedback length does not match batch sample count",
+            ));
+        }
+        // Ordinary outputs are one row per input. Observable adapters can report
+        // an independent native integration (e.g. a one-trigger MadGraph run).
+        if matches!(
+            self.accumulator,
+            AccumulatorState::Vector(_) | AccumulatorState::FullVector(_)
+        ) && self.accumulator.sample_count() != nr_samples as i64
+        {
+            return Err(crate::core::EngineError::eval(format!(
+                "accumulator counted {} samples, expected {nr_samples}",
+                self.accumulator.sample_count(),
+            )));
+        }
+        Ok(())
     }
 
-    pub fn values_to_bytes(&self) -> Result<Option<Vec<u8>>, BatchError> {
-        self.values
+    pub(crate) fn training_values_to_bytes(&self) -> Result<Option<Vec<u8>>, BatchError> {
+        self.training_values
             .as_ref()
             .map(|values| {
                 bincode::serde::encode_to_vec(values, Self::binary_config()).map_err(|err| {
@@ -205,7 +217,20 @@ impl BatchResult {
             .transpose()
     }
 
-    pub fn validate_json_safe(&self) -> Result<(), BatchError> {
+    pub(crate) fn validate_values(&self) -> Result<(), crate::core::EngineError> {
+        if let Some(values) = &self.training_values
+            && let Some(sample) = values.iter().position(|value| !value.is_finite())
+        {
+            return Err(crate::core::EngineError::eval(format!(
+                "sample {sample}: non-finite training feedback"
+            )));
+        }
+        self.accumulator.validate_values()
+    }
+
+    pub(crate) fn validate_json_safe(&self) -> Result<(), BatchError> {
+        self.validate_values()
+            .map_err(|err| BatchError::layout(err.to_string()))?;
         let observable_json = self.accumulator.to_json().map_err(|err| {
             BatchError::layout(format!(
                 "failed to serialize batch accumulator payload: {err}"
@@ -217,16 +242,19 @@ impl BatchResult {
         Ok(())
     }
 
-    pub fn values_from_bytes(
+    pub(crate) fn training_values_from_bytes(
         values: Option<&[u8]>,
         accumulator: &JsonValue,
     ) -> Result<Self, BatchError> {
         let parsed_values = match values {
             Some(values) => {
-                let (decoded, _): (Vec<f64>, usize) =
+                let (decoded, consumed): (Vec<f64>, usize) =
                     bincode::serde::decode_from_slice(values, Self::binary_config()).map_err(
                         |err| BatchError::layout(format!("invalid batch values payload: {err}")),
                     )?;
+                if consumed != values.len() {
+                    return Err(BatchError::layout("trailing bytes after training values"));
+                }
                 Some(decoded)
             }
             None => None,
@@ -234,7 +262,11 @@ impl BatchResult {
         let parsed_observable = serde_json::from_value(accumulator.clone()).map_err(|err| {
             BatchError::layout(format!("invalid batch accumulator payload: {err}"))
         })?;
-        Ok(Self::new(parsed_values, parsed_observable))
+        let result = Self::new(parsed_values, parsed_observable);
+        result
+            .validate_values()
+            .map_err(|err| BatchError::layout(err.to_string()))?;
+        Ok(result)
     }
 }
 
@@ -250,33 +282,38 @@ mod tests {
             AccumulatorState::FullVector(FullVectorAccumulatorState {
                 components: vec!["value".to_string()],
                 values_row_major: vec![1.0, f64::NAN],
-                invalid_entries: vec![],
             }),
         );
 
         let err = result
             .validate_json_safe()
             .expect_err("expected non-finite error");
-        assert!(
-            err.to_string()
-                .contains("batch accumulator is not JSON-safe")
-        );
+        assert!(err.to_string().contains("non-finite contribution"));
     }
 
     #[test]
     fn training_values_roundtrip_binary() {
         let result = BatchResult::new(Some(vec![1.0, 2.0, 3.5]), AccumulatorState::empty_scalar());
-        let bytes = result.values_to_bytes().expect("encode values");
-        let restored = BatchResult::values_from_bytes(
+        let bytes = result.training_values_to_bytes().expect("encode values");
+        let restored = BatchResult::training_values_from_bytes(
             bytes.as_deref(),
             &result.accumulator.to_json().expect("accumulator json"),
         )
         .expect("decode values");
-        assert_eq!(restored.values, result.values);
+        assert_eq!(restored.training_values, result.training_values);
+        let mut trailing = bytes.unwrap();
+        trailing.push(0);
+        assert!(
+            BatchResult::training_values_from_bytes(
+                Some(&trailing),
+                &result.accumulator.to_json().unwrap()
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn validate_json_safe_allows_non_finite_training_values() {
+    fn validation_rejects_non_finite_training_feedback() {
         let result = BatchResult::new(
             Some(vec![1.0, f64::NAN, f64::INFINITY]),
             AccumulatorState::empty_scalar(),
@@ -284,6 +321,33 @@ mod tests {
 
         result
             .validate_json_safe()
-            .expect("training values are stored as binary, not json");
+            .expect_err("invalid feedback must not be persisted");
+    }
+    #[test]
+    fn batch_validation_rejects_silent_sample_loss_and_unsolicited_feedback() {
+        let state = AccumulatorState::FullVector(FullVectorAccumulatorState {
+            components: vec!["value".into()],
+            values_row_major: vec![1., 2.],
+        });
+        let result = BatchResult::new(None, state.clone());
+        assert!(result.validate_for_batch(3, false).is_err());
+        assert!(result.validate_for_batch(2, true).is_err());
+        result.validate_for_batch(2, false).unwrap();
+        let result = BatchResult::new(Some(vec![1., 2.]), state);
+        assert!(result.validate_for_batch(2, false).is_err());
+        result.validate_for_batch(2, true).unwrap();
+    }
+    #[test]
+    fn native_observable_counts_are_independent_of_trigger_count() {
+        let mut state = crate::evaluation::GammaLoopAccumulatorState::default();
+        for _ in 0..3 {
+            state
+                .estimate
+                .ingest_vector(&[1., 0.], &crate::Point::new(vec![], vec![], 1.))
+                .unwrap();
+        }
+        BatchResult::new(None, AccumulatorState::Gammaloop(state))
+            .validate_for_batch(1, false)
+            .unwrap();
     }
 }

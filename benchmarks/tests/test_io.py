@@ -73,12 +73,11 @@ class IoMeasurementTests(unittest.TestCase):
         def row(name, t, compute, io):
             m = dict(
                 epoch="e",
-                runner_epoch="e",
                 node_uuid=name,
                 task_id="1",
                 busy=dict(elapsed_seconds=t, compute_seconds=compute, io_seconds=io),
             )
-            return dict(worker_id=name, metrics=m, runtime_metrics=m)
+            return dict(worker_id=name, metrics=m)
 
         measure = dict(
             snapshots=[
@@ -94,7 +93,7 @@ class IoMeasurementTests(unittest.TestCase):
         rates = activity(measure)
         self.assertAlmostEqual(rates["evaluator_compute"], 100 * 10 / 15)
         self.assertEqual(rates["evaluator_io"], 80)
-        measure["snapshots"][-1]["samplers"][0]["runtime_metrics"]["busy"]["io_seconds"] = 11
+        measure["snapshots"][-1]["samplers"][0]["metrics"]["busy"]["io_seconds"] = 11
         with self.assertRaises(ValueError):
             activity(measure)
 

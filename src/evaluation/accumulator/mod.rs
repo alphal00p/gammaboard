@@ -8,7 +8,7 @@ mod gammaloop;
 mod gammaloop;
 mod gammaloop_diagnostics;
 mod gammaloop_statistics;
-mod metrics;
+pub(crate) mod metrics;
 mod scalar;
 mod vector;
 
@@ -23,26 +23,25 @@ pub use self::full::{FullAccumulatorProgress, FullVectorAccumulatorState};
 pub use self::gammaloop::{GammaLoopAccumulatorDigest, GammaLoopAccumulatorState};
 pub use self::gammaloop_diagnostics::GammaLoopDiagnostics;
 pub use self::metrics::{
-    AccumulatorMetricValue, extract_accumulator_metric, extract_accumulator_metric_with_runtime,
-    relative_error,
+    extract_accumulator_metric, extract_accumulator_metric_with_runtime, relative_error,
 };
 pub use self::scalar::ScalarAccumulatorState;
 pub use self::vector::{NamedScalarAccumulator, VectorAccumulatorState};
 
 /// Accumulator payloads are persisted and served through JSON-facing APIs.
 /// Implementations must therefore keep their serialized state JSON-safe and
-/// handle non-finite floating-point contributions explicitly instead of
-/// letting serialization degrade them into `null`.
+/// reject non-finite contributions and moment overflow. Ingestion is batch-local:
+/// discard the whole batch accumulator on error; never publish partial state.
 pub trait IngestScalar {
-    fn ingest_scalar(&mut self, value: f64, point: &Point);
+    fn ingest_scalar(&mut self, value: f64, point: &Point) -> Result<(), EngineError>;
 }
 
 pub trait IngestVector {
-    fn ingest_vector(&mut self, values: &[f64], point: &Point) -> Result<f64, String>;
+    fn ingest_vector(&mut self, values: &[f64], point: &Point) -> Result<f64, EngineError>;
 }
 
 impl IngestVector for VectorAccumulatorState {
-    fn ingest_vector(&mut self, values: &[f64], point: &Point) -> Result<f64, String> {
+    fn ingest_vector(&mut self, values: &[f64], point: &Point) -> Result<f64, EngineError> {
         VectorAccumulatorState::ingest_vector(self, values, point)
     }
 }
@@ -52,7 +51,7 @@ pub trait Accumulator: Clone + Serialize + DeserializeOwned {
     type Digest: Clone + Serialize + DeserializeOwned;
 
     fn sample_count(&self) -> i64;
-    fn merge(&mut self, other: Self);
+    fn merge(&mut self, other: Self) -> Result<(), EngineError>;
     fn get_persistent(&self) -> Self::Persistent;
     fn get_digest(&self, _run_spec: &RunSpec) -> Result<Self::Digest, EngineError>
     where
@@ -90,38 +89,7 @@ pub enum AccumulatorState {
     FullVector(FullVectorAccumulatorState),
 }
 
-pub const SCALAR_COMPONENT_NAME: &str = "value";
-
-fn scalar_value_vector(
-    discrete_projections: Option<crate::core::DiscreteProjectionConfig>,
-    moments: crate::core::AccumulatorMomentConfig,
-) -> VectorAccumulatorState {
-    VectorAccumulatorState::from_config(
-        vec![SCALAR_COMPONENT_NAME.to_string()],
-        crate::core::TrainingProjection::component(SCALAR_COMPONENT_NAME),
-        discrete_projections,
-        moments,
-    )
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum SemanticAccumulatorKind {
-    #[default]
-    Scalar,
-    Vector,
-}
-
 impl AccumulatorState {
-    pub fn from_aggregate_persistent_json(
-        _kind: SemanticAccumulatorKind,
-        value: &JsonValue,
-    ) -> Result<Self, EngineError> {
-        // Scalar accumulators are stored as one-component vectors, so both
-        // semantic kinds deserialize into a vector state.
-        Self::from_vector_persistent_json(value)
-    }
-
     pub fn from_gammaloop_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
         serde_json::from_value(value.clone())
             .map(Self::Gammaloop)
@@ -145,10 +113,6 @@ impl AccumulatorState {
     pub fn from_config(config: &AccumulatorConfig) -> Self {
         match config {
             AccumulatorConfig::Empty => Self::empty(),
-            AccumulatorConfig::Scalar {
-                discrete_projections,
-                moments,
-            } => Self::Vector(scalar_value_vector(discrete_projections.clone(), *moments)),
             AccumulatorConfig::Vector {
                 components,
                 training_projection,
@@ -176,7 +140,7 @@ impl AccumulatorState {
     }
 
     pub fn empty_vector() -> Self {
-        Self::Vector(scalar_value_vector(None, Default::default()))
+        Self::from_config(&AccumulatorConfig::scalar())
     }
 
     pub fn empty_gammaloop() -> Self {
@@ -201,12 +165,12 @@ impl AccumulatorState {
                     .iter()
                     .map(|component| component.name.clone())
                     .collect(),
-                training_projection: state.projection_spec.clone(),
+                training_projection: state.projection_spec(),
                 discrete_projections: state
                     .components
                     .first()
                     .and_then(|component| component.state.discrete_projections.clone()),
-                moments: state.projection.state.moments,
+                moments: state.projection().state.moments,
             },
             Self::Gammaloop(_) => AccumulatorConfig::Gammaloop,
             Self::FullVector(state) => AccumulatorConfig::FullVector {
@@ -215,21 +179,38 @@ impl AccumulatorState {
         }
     }
 
+    pub(crate) fn validate_values(&self) -> Result<(), EngineError> {
+        match self {
+            Self::Empty(_) => Ok(()),
+            Self::Vector(state) => state.validate(),
+            Self::Gammaloop(state) => state.validate_values(),
+            Self::FullVector(state) => {
+                let width = state.components.len();
+                if width == 0 || !state.values_row_major.len().is_multiple_of(width) {
+                    return Err(EngineError::eval("invalid full-vector row layout"));
+                }
+                if let Some(index) = state
+                    .values_row_major
+                    .iter()
+                    .position(|value| !value.is_finite())
+                {
+                    return Err(EngineError::eval(format!(
+                        "sample {}, component {:?}: non-finite contribution",
+                        index / width,
+                        state.components[index % width]
+                    )));
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
         match (self, other) {
-            (Self::Empty(left), Self::Empty(right)) => {
-                Accumulator::merge(left, right);
-                Ok(())
-            }
-            (Self::Vector(left), Self::Vector(right)) => {
-                Accumulator::merge(left, right);
-                Ok(())
-            }
+            (Self::Empty(left), Self::Empty(right)) => Accumulator::merge(left, right),
+            (Self::Vector(left), Self::Vector(right)) => Accumulator::merge(left, right),
             (Self::Gammaloop(left), Self::Gammaloop(right)) => left.merge_in_place(right),
-            (Self::FullVector(left), Self::FullVector(right)) => {
-                Accumulator::merge(left, right);
-                Ok(())
-            }
+            (Self::FullVector(left), Self::FullVector(right)) => Accumulator::merge(left, right),
             (left, right) => Err(EngineError::engine(format!(
                 "cannot merge {} accumulator with {} accumulator",
                 left.kind_str(),
@@ -278,51 +259,41 @@ impl AccumulatorState {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccumulatorState, ScalarAccumulatorState, extract_accumulator_metric};
+    use super::{AccumulatorState, extract_accumulator_metric};
+    use crate::VectorAccumulatorState;
     use crate::core::{
         AccumulatorConfig, AccumulatorMetricName, AccumulatorMetricSelector,
         DiscreteProjectionConfig, DiscreteProjectionNormalization, NamedDiscreteProjection,
         TrainingProjection,
     };
     use crate::evaluation::Point;
-    use crate::{NamedScalarAccumulator, VectorAccumulatorState};
 
     #[test]
     fn persistent_json_roundtrips_without_enum_tag() {
-        let snapshot = AccumulatorState::Vector(VectorAccumulatorState {
-            components: vec![NamedScalarAccumulator {
-                name: "value".to_string(),
-                state: ScalarAccumulatorState {
-                    count: 2,
-                    sum_weighted_value: 3.0,
-                    sum_abs: 4.0,
-                    sum_sq: 5.0,
-                    nan_count: 0,
-                    ..Default::default()
-                },
-            }],
-            projection_spec: TrainingProjection::component("value"),
-            projection: NamedScalarAccumulator {
-                name: "value".to_string(),
-                state: ScalarAccumulatorState {
-                    count: 2,
-                    sum_weighted_value: 3.0,
-                    sum_abs: 4.0,
-                    sum_sq: 5.0,
-                    nan_count: 0,
-                    ..Default::default()
-                },
-            },
-        })
-        .to_persistent_json()
-        .expect("persistent snapshot");
+        let mut vector = VectorAccumulatorState::from_config(
+            vec!["value".into()],
+            TrainingProjection::component("value"),
+            None,
+            Default::default(),
+        );
+        vector
+            .ingest_vector(&[1.0], &Point::new(vec![], vec![], 1.0))
+            .unwrap();
+        vector
+            .ingest_vector(&[2.0], &Point::new(vec![], vec![], 1.0))
+            .unwrap();
+        let snapshot = AccumulatorState::Vector(vector)
+            .to_persistent_json()
+            .expect("persistent snapshot");
 
         assert_eq!(snapshot.get("kind"), None);
     }
 
     #[test]
     fn scalar_state_config_preserves_discrete_projections() {
-        let config = AccumulatorConfig::Scalar {
+        let config = AccumulatorConfig::Vector {
+            components: vec!["value".into()],
+            training_projection: TrainingProjection::component("value"),
             discrete_projections: Some(DiscreteProjectionConfig {
                 normalization: DiscreteProjectionNormalization::Contribution,
                 streams: Vec::new(),
@@ -378,5 +349,61 @@ mod tests {
         assert!(metric.value > 0.0);
         assert!(metric.uncertainty.is_some_and(|value| value > 0.0));
         assert_eq!(metric.sample_count, 4);
+    }
+}
+
+#[cfg(test)]
+mod merge_contract_tests {
+    use super::*;
+    use crate::core::{AccumulatorMomentConfig, TrainingProjection};
+
+    fn vector() -> VectorAccumulatorState {
+        VectorAccumulatorState::from_config(
+            vec!["a".into(), "b".into()],
+            TrainingProjection::component("a"),
+            None,
+            AccumulatorMomentConfig::MaxOrder2,
+        )
+    }
+
+    #[test]
+    fn incompatible_vector_merges_leave_destination_unchanged() {
+        let mut destination = vector();
+        destination
+            .ingest_vector(&[1., 2.], &Point::new(vec![], vec![], 1.))
+            .unwrap();
+        let before = destination.clone();
+        let mut mismatches = vec![];
+        let mut incoming = vector();
+        incoming.components.reverse();
+        mismatches.push(incoming);
+        let mut incoming = vector();
+        incoming.components.pop();
+        mismatches.push(incoming);
+        let incoming = VectorAccumulatorState::from_config(
+            vec!["value".into()],
+            TrainingProjection::Norm,
+            None,
+            Default::default(),
+        );
+        mismatches.push(incoming);
+        let mut incoming = vector();
+        incoming.components[1].state.moments = AccumulatorMomentConfig::MaxOrder4;
+        mismatches.push(incoming);
+        for incoming in mismatches {
+            assert!(destination.merge(incoming).is_err());
+            assert_eq!(destination, before);
+        }
+    }
+
+    #[test]
+    fn incompatible_full_vectors_are_rejected_before_appending() {
+        let mut left = FullVectorAccumulatorState::from_components(vec!["a".into()]);
+        left.push_vector(&[1.]).unwrap();
+        let before = serde_json::to_value(&left).unwrap();
+        let mut right = FullVectorAccumulatorState::from_components(vec!["b".into()]);
+        right.push_vector(&[2.]).unwrap();
+        assert!(left.merge(right).is_err());
+        assert_eq!(serde_json::to_value(left).unwrap(), before);
     }
 }

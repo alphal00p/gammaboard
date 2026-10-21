@@ -1,9 +1,9 @@
+use crate::core::EvaluationBatch;
 use crate::core::{
     BatchFailOutcome, BatchQueueCounts, EvaluatorPerformanceSnapshot, InsertBatchesMetrics,
-    InsertBatchesOutcome, SamplerAggregatorPerformanceSnapshot, StoreError,
+    InsertBatchesOutcome, SamplerAggregatorPerformanceSnapshot, StoreError, WorkerRole,
 };
 use crate::evaluation::BatchResult;
-use crate::sampling::LatentBatch;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -30,7 +30,7 @@ const PG_COPY_BINARY_HEADER: &[u8] = b"PGCOPY\n\xff\r\n\0";
 
 fn encode_batch_inputs_copy_binary(
     batch_ids: &[i64],
-    batches: &[LatentBatch],
+    batches: &[crate::core::EvaluationBatch],
 ) -> Result<(Vec<u8>, usize), sqlx::Error> {
     let mut out = Vec::new();
     let mut payload_bytes = 0;
@@ -65,7 +65,7 @@ pub(crate) async fn insert_batches(
     task_id: i64,
     requires_training_values: bool,
     batch_ids: &[i64],
-    batches: &[LatentBatch],
+    batches: &[crate::core::EvaluationBatch],
 ) -> Result<InsertBatchesOutcome, sqlx::Error> {
     if batches.is_empty() {
         return Ok(InsertBatchesOutcome::default());
@@ -104,7 +104,7 @@ pub(crate) async fn insert_batches(
                 .push_bind(run_id)
                 .push_bind(task_id)
                 .push_bind(requires_training_values)
-                .push_bind(batch.nr_samples as i32)
+                .push_bind(batch.samples.nr_samples as i32)
                 .push_bind("pending");
         },
     );
@@ -212,7 +212,7 @@ pub(crate) async fn claim_batch<'e>(
     run_id: i32,
     node_uuid: &str,
     claim_token: &str,
-) -> Result<Option<(i64, i64, bool, LatentBatch)>, sqlx::Error> {
+) -> Result<Option<(i64, i64, bool, EvaluationBatch)>, sqlx::Error> {
     let row = sqlx::query_as::<_, (i64, i64, bool, Vec<u8>)>(
         r#"
         WITH existing_claim AS (
@@ -265,8 +265,8 @@ pub(crate) async fn claim_batch<'e>(
     .await?;
 
     if let Some((batch_id, task_id, requires_training_values, latent_bytes)) = row {
-        let batch =
-            LatentBatch::from_bytes(&latent_bytes).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let batch = EvaluationBatch::from_bytes(&latent_bytes)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         Ok(Some((batch_id, task_id, requires_training_values, batch)))
     } else {
         Ok(None)
@@ -310,7 +310,7 @@ pub(crate) async fn submit_batch_results(
         .validate_json_safe()
         .map_err(|err| StoreError::store(format!("invalid batch result payload: {err}")))?;
     let accumulator = encode_json("batch accumulator", &result.accumulator)?;
-    let values = result.values_to_bytes().map_err(|err| {
+    let values = result.training_values_to_bytes().map_err(|err| {
         StoreError::store(format!("failed to serialize batch training values: {err}"))
     })?;
     let mut tx = pool.begin().await?;
@@ -417,132 +417,48 @@ pub(crate) async fn insert_evaluator_performance_snapshot(
     pool: &PgPool,
     snapshot: &EvaluatorPerformanceSnapshot,
 ) -> Result<(), sqlx::Error> {
-    let metrics = encode_json("evaluator performance metrics", &snapshot.metrics)?;
-    let row = sqlx::query_scalar::<_, i64>(
-        r#"
-        WITH owner AS (
-            INSERT INTO run_telemetry_workers (run_id, worker_id) VALUES ($1, $2)
-            ON CONFLICT DO NOTHING
-        )
-        INSERT INTO evaluator_performance_history (
-            run_id,
-            worker_id,
-            metrics,
-            rss_bytes
-        )
-        VALUES ($1, $2, $3, $4)
-        RETURNING id
-        "#,
-    )
-    .bind(snapshot.run_id)
-    .bind(&snapshot.node_name)
-    .bind(&metrics)
-    .bind(snapshot.rss_bytes)
-    .fetch_one(pool)
-    .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO evaluator_performance_latest (
-            run_id,
-            worker_id,
-            id,
-            metrics,
-            rss_bytes,
-            created_at
-        )
-        VALUES ($1, $2, $3, $4, $5, now())
-        ON CONFLICT (run_id, worker_id) DO UPDATE
-        SET
-            id = EXCLUDED.id,
-            metrics = EXCLUDED.metrics,
-            rss_bytes = EXCLUDED.rss_bytes,
-            created_at = EXCLUDED.created_at
-        "#,
-    )
-    .bind(snapshot.run_id)
-    .bind(&snapshot.node_name)
-    .bind(row)
-    .bind(&metrics)
-    .bind(snapshot.rss_bytes)
-    .execute(pool)
-    .await?;
-    Ok(())
+    insert_performance_snapshot(pool, WorkerRole::Evaluator, snapshot).await
 }
 
 pub(crate) async fn insert_sampler_aggregator_performance_snapshot(
     pool: &PgPool,
     snapshot: &SamplerAggregatorPerformanceSnapshot,
 ) -> Result<(), sqlx::Error> {
-    let metrics = encode_json(
-        "sampler performance metrics",
-        &snapshot.runtime_metrics.to_performance_metrics(),
-    )?;
-    let runtime_metrics = encode_json("sampler runtime metrics", &snapshot.runtime_metrics)?;
-    let row = sqlx::query_scalar::<_, i64>(
+    insert_performance_snapshot(pool, WorkerRole::SamplerAggregator, snapshot).await
+}
+
+async fn insert_performance_snapshot<M: serde::Serialize>(
+    pool: &PgPool,
+    role: WorkerRole,
+    snapshot: &crate::core::WorkerPerformanceSnapshot<M>,
+) -> Result<(), sqlx::Error> {
+    let metrics = encode_json("worker performance metrics", &snapshot.metrics)?;
+    let role = role.as_str();
+    let row = sqlx::query_scalar::<_, i64>(&format!(
         r#"
         WITH owner AS (
             INSERT INTO run_telemetry_workers (run_id, worker_id) VALUES ($1, $2)
             ON CONFLICT DO NOTHING
         )
-        INSERT INTO sampler_aggregator_performance_history (
-            run_id,
-            worker_id,
-            metrics,
-            runtime_metrics,
-            engine_diagnostics,
-            rss_bytes
-        )
-        VALUES (
-            $1,
-            $2,
-            $3,
-            $4,
-            $5,
-            $6
-        )
-        RETURNING id
-        "#,
-    )
+        INSERT INTO {role}_performance_history (run_id, worker_id, metrics, rss_bytes)
+        VALUES ($1, $2, $3, $4) RETURNING id
+    "#
+    ))
     .bind(snapshot.run_id)
     .bind(&snapshot.node_name)
     .bind(&metrics)
-    .bind(&runtime_metrics)
-    .bind(&snapshot.engine_diagnostics)
     .bind(snapshot.rss_bytes)
     .fetch_one(pool)
     .await?;
-    sqlx::query(
-        r#"
-        INSERT INTO sampler_aggregator_performance_latest (
-            run_id,
-            worker_id,
-            id,
-            metrics,
-            runtime_metrics,
-            engine_diagnostics,
-            rss_bytes,
-            created_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+    sqlx::query(&format!(r#"
+        INSERT INTO {role}_performance_latest (run_id, worker_id, id, metrics, rss_bytes, created_at)
+        VALUES ($1, $2, $3, $4, $5, now())
         ON CONFLICT (run_id, worker_id) DO UPDATE
-        SET
-            id = EXCLUDED.id,
-            metrics = EXCLUDED.metrics,
-            runtime_metrics = EXCLUDED.runtime_metrics,
-            engine_diagnostics = EXCLUDED.engine_diagnostics,
-            rss_bytes = EXCLUDED.rss_bytes,
-            created_at = EXCLUDED.created_at
-        "#,
-    )
-    .bind(snapshot.run_id)
-    .bind(&snapshot.node_name)
-    .bind(row)
-    .bind(&metrics)
-    .bind(&runtime_metrics)
-    .bind(&snapshot.engine_diagnostics)
-    .bind(snapshot.rss_bytes)
-    .execute(pool)
-    .await?;
+        SET id = EXCLUDED.id, metrics = EXCLUDED.metrics,
+            rss_bytes = EXCLUDED.rss_bytes, created_at = EXCLUDED.created_at
+    "#))
+        .bind(snapshot.run_id).bind(&snapshot.node_name).bind(row).bind(&metrics).bind(snapshot.rss_bytes)
+        .execute(pool).await?;
     Ok(())
 }
 

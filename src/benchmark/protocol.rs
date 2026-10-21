@@ -1,7 +1,5 @@
 //! Paired adapter/callback timings through the production Python SDK.
-use crate::core::{
-    AccumulatorConfig, EvaluatorConfig, SamplerAggregatorConfig, TrainingProjection,
-};
+use crate::core::{AccumulatorConfig, EvaluatorConfig, SamplingConfig, TrainingProjection};
 use crate::{Batch, Domain, EvalBatchOptions, Generation, Point};
 use anyhow::{Result, ensure};
 use rand::{Rng, SeedableRng};
@@ -41,9 +39,7 @@ fn config(options: &Config, role: &str, domain: &Domain, feedback: bool, stats: 
         "args":{"stats_path":stats,"feedback":feedback,"benchmark":true}});
     if role == "evaluator" {
         definition["domain"] = json!(domain);
-        definition["components"] = json!(["value"]);
-    } else {
-        definition["requires_training_values"] = json!(feedback);
+        definition["output"] = json!({"kind":"values", "components":["value"]});
     }
     definition
 }
@@ -123,7 +119,7 @@ pub fn measure(options: Config) -> Result<Value> {
                 (0..batch_size)
                     .map(|_| Point::new((0..6).map(|_| rng.random()).collect(), vec![], 2.))
                     .collect(),
-            )?
+            )
         };
         for feedback in [false, true] {
             let path = output.join(format!("eval-{batch_size}-{feedback}.json"));
@@ -161,10 +157,10 @@ pub fn measure(options: Config) -> Result<Value> {
         }
         for feedback in [false, true] {
             let path = output.join(format!("sampler-{batch_size}-{feedback}.json"));
-            let definition: SamplerAggregatorConfig =
+            let definition: SamplingConfig =
                 serde_json::from_value(config(&options, "sampler", &domain, feedback, &path))?;
             let start = Instant::now();
-            let mut sampler = definition.build(domain.clone(), None, None, json!({}))?;
+            let mut sampler = definition.create(domain.clone(), None, json!({}))?;
             let startup = start.elapsed().as_secs_f64();
             let produce = time_calls(
                 || {

@@ -53,72 +53,7 @@ pub(crate) struct ResolvedNodeLaunchGroup {
     pub(crate) capabilities: BTreeMap<String, u64>,
 }
 
-pub(crate) fn derive_capabilities_from_config(config: &JsonValue) -> BTreeMap<String, u64> {
-    let mut caps = BTreeMap::new();
-    let Some(map) = config.as_object() else {
-        return caps;
-    };
-    for (key, value) in map {
-        if key == "gpu" {
-            if let Some(count) = gpu_count_from_config_value(value) {
-                caps.insert("gpu".to_string(), count);
-            }
-            continue;
-        }
-        if matches!(
-            key.as_str(),
-            "cores" | "nr_cores" | "cpus" | "cpus_per_task" | "cpus-per-task"
-        ) {
-            if let Some(number) = value.as_u64() {
-                caps.insert("cpus".to_string(), number);
-            }
-            continue;
-        }
-        if let Some(number) = value.as_u64() {
-            caps.insert(key.clone(), number);
-        }
-    }
-    if let Some(gres) = map.get("gres").and_then(JsonValue::as_str)
-        && let Some(count) = parse_gpu_count_from_gres(gres)
-    {
-        caps.insert("gpu".to_string(), count);
-    }
-    caps
-}
-
-fn gpu_count_from_config_value(value: &JsonValue) -> Option<u64> {
-    if let Some(count) = value.as_u64() {
-        return (count > 0).then_some(count);
-    }
-    let raw = value.as_str()?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    if let Ok(count) = raw.parse::<u64>() {
-        return (count > 0).then_some(count);
-    }
-    parse_gpu_count_from_gres(if raw.starts_with("gpu:") {
-        raw
-    } else {
-        return parse_gpu_count_from_gres(&format!("gpu:{raw}"));
-    })
-}
-
-fn parse_gpu_count_from_gres(gres: &str) -> Option<u64> {
-    for segment in gres.split(',') {
-        let trimmed = segment.trim();
-        if !trimmed.starts_with("gpu:") {
-            continue;
-        }
-        let parts = trimmed.split(':').collect::<Vec<_>>();
-        let last = parts.last().copied().unwrap_or_default();
-        if let Ok(count) = last.parse::<u64>() {
-            return Some(count);
-        }
-        return Some(1);
-    }
-    None
-}
+mod resources;
 
 pub(crate) fn resolve_node_launch_groups(
     payload: &AutoRunNodesRequest,
@@ -148,12 +83,12 @@ pub(crate) fn resolve_node_launch_groups(
                     .filter(|value| !value.is_empty())
                     .unwrap_or("w")
                     .to_string();
-                let capabilities = derive_capabilities_from_config(&group.config);
+                let (config, capabilities) = resources::normalize(&group.config)?;
                 Ok(ResolvedNodeLaunchGroup {
                     count: group.count,
                     name_prefix,
                     max_start_failures: group.max_start_failures,
-                    config: group.config,
+                    config,
                     capabilities,
                 })
             })
@@ -236,7 +171,8 @@ pub async fn resolve_local_requests(
     store: &PgStore,
     runtime: &RuntimeContext,
 ) -> Result<(), ApiError> {
-    let binary = std::env::current_exe().map_err(|e| ApiError::Internal(e.to_string()))?;
+    let binary =
+        crate::runtime_context::self_executable().map_err(|e| ApiError::Internal(e.to_string()))?;
     while let Some((id, args)) = store
         .claim_local_worker_launch()
         .await
@@ -245,7 +181,10 @@ pub async fn resolve_local_requests(
         let mut workers = Vec::new();
         let mut failure = None;
         for group in args["groups"].as_array().into_iter().flatten() {
-            let caps = derive_capabilities_from_config(&group["config"]);
+            let caps: BTreeMap<String, u64> = serde_json::from_value(group["capabilities"].clone())
+                .map_err(|e| {
+                    ApiError::Internal(format!("invalid canonical worker capabilities: {e}"))
+                })?;
             for name in group["node_names"]
                 .as_array()
                 .into_iter()

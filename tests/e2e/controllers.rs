@@ -2,6 +2,158 @@ use super::*;
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn campaign_hard_cap_bounds_large_child_draws_and_covers_every_pilot() -> anyhow::Result<()> {
+    for (max_active, window) in [(1, 64), (2, 64), (1, 4096)] {
+        let mut harness = FullStackHarness::new().await?;
+        let child = r#"
+name = "budget-child"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 4096 }
+accumulator = { config = "scalar" }
+sampler = { config = { kind = "naive_monte_carlo", seed = 17 } }
+"#;
+        let card = format!(
+            r#"
+kind = "integration_campaign"
+name = "hard-cap"
+stop_condition = {{ max_total_samples = 512 }}
+allocation = {{ min_samples_per_child = 32, allocation_window_samples = {window}, max_active_runs = {max_active} }}
+[[children]]
+name = "positive"
+coefficient = 1.0
+run = '''{child}'''
+[[children]]
+name = "negative"
+coefficient = -0.5
+run = '''{child}'''
+"#
+        );
+        harness.add_run(&temp_config(&card));
+        let parent = harness.run_id("hard-cap").await?;
+        harness
+            .start_nodes(&["cap-parent", "cap-s1", "cap-s2", "cap-e1", "cap-e2"])
+            .await?;
+        harness
+            .cli()
+            .args(["node", "auto-assign", &parent.to_string()])
+            .assert()
+            .success();
+        if max_active == 2 {
+            harness
+                .cli()
+                .args([
+                    "node",
+                    "assign",
+                    "cap-s2",
+                    "sampler_aggregator",
+                    &parent.to_string(),
+                ])
+                .assert()
+                .success();
+        }
+        wait_for_task_state(&harness, parent, "completed", Duration::from_secs(90)).await?;
+        let counts: Vec<(i64,i64)> = sqlx::query_as("SELECT t.nr_produced_samples,t.nr_completed_samples FROM run_tasks t JOIN runs r ON r.id=t.run_id WHERE r.parent_run_id=$1")
+            .bind(parent).fetch_all(&harness.pool).await?;
+        let result: JsonValue =
+            sqlx::query_scalar("SELECT measurement_output FROM run_tasks WHERE run_id=$1")
+                .bind(parent)
+                .fetch_one(&harness.pool)
+                .await?;
+        harness.cleanup().await?;
+        assert_eq!(counts.len(), 2);
+        assert_eq!(
+            counts.iter().map(|(produced, _)| produced).sum::<i64>(),
+            512
+        );
+        assert_eq!(
+            counts.iter().map(|(_, completed)| completed).sum::<i64>(),
+            512
+        );
+        assert!(counts.iter().all(|(_, completed)| *completed >= 32));
+        assert_eq!(result["results"][0]["value"], 0.5);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL and Python"]
+async fn campaign_waits_for_the_new_publishing_stage_to_initialize() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let python = std::env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into());
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/json_worker.py")
+        .display()
+        .to_string();
+    let child = format!(
+        r#"
+name = "publication-child"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+[[task_queue]]
+name = "training"
+kind = "sample"
+publish_result = false
+stop_condition = {{ max_samples = 32 }}
+accumulator = {{ config = "scalar" }}
+sampler = {{ config = {{ kind = "naive_monte_carlo" }} }}
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = {{ max_samples = 32 }}
+accumulator = {{ config = "scalar" }}
+evaluator = {{ config = {{ kind = "unit", continuous_dims = 1, value_coordinate = 0 }} }}
+sampler = {{ config = {{ kind = "process_sampler", command = [{python:?}, "-u", {fixture:?}, "sampler"], args = {{ initialize_delay_seconds = 2.0 }} }} }}
+"#
+    );
+    let parent = format!(
+        r#"
+kind = "integration_campaign"
+name = "publication-parent"
+stop_condition = {{ max_total_samples = 1024, absolute_error = 1e-12 }}
+allocation = {{ min_samples_per_child = 8, allocation_window_samples = 8 }}
+[[children]]
+name = "only"
+run = '''{child}'''
+"#
+    );
+    harness.add_run(&temp_config(&parent));
+    let run = harness.run_id("publication-parent").await?;
+    harness
+        .start_nodes(&["publication-parent", "publication-s", "publication-e"])
+        .await?;
+    harness
+        .cli()
+        .args(["node", "auto-assign", &run.to_string()])
+        .assert()
+        .success();
+    wait_for_task_state(&harness, run, "completed", Duration::from_secs(30)).await?;
+    let result: JsonValue =
+        sqlx::query_scalar("SELECT measurement_output FROM run_tasks WHERE run_id=$1")
+            .bind(run)
+            .fetch_one(&harness.pool)
+            .await?;
+    let samples: i64 = sqlx::query_scalar("SELECT COALESCE(sum(t.nr_completed_samples),0)::bigint FROM run_tasks t JOIN runs r ON r.id=t.run_id WHERE r.parent_run_id=$1 AND t.name='inference'")
+        .bind(run).fetch_one(&harness.pool).await?;
+    harness.cleanup().await?;
+    assert!(
+        samples > 0,
+        "campaign converged before inference published anything"
+    );
+    assert_eq!(
+        result["results"][0]["value"], 0.5,
+        "training's constant-one result leaked into inference"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
     harness
@@ -47,12 +199,12 @@ kind = "sample"
 max_samples = 32
 
 [task_queue.measurement]
-quantity = "central_value"
+selection = { kind = 'all_component_means' }
 
 [task_queue.accumulator]
 config = "scalar"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "naive_monte_carlo"
 seed = 1
 
@@ -77,12 +229,12 @@ kind = "sample"
 max_samples = 32
 
 [task_queue.measurement]
-quantity = "central_value"
+selection = { kind = 'all_component_means' }
 
 [task_queue.accumulator]
 config = "scalar"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "naive_monte_carlo"
 seed = 2
 '''
@@ -179,7 +331,7 @@ seed = 2
     let raw = exported["toml"].as_str().unwrap();
     let child_config = gammaboard::api::runs::parse_run_add_config_toml(raw)?;
     assert_eq!(child_config.name, "campaign-result-left");
-    assert_eq!(child_config.task_queue.unwrap().len(), 1);
+    assert_eq!(child_config.integration().unwrap().task_queue.len(), 1);
     let document: toml::Value = toml::from_str(raw)?;
     assert!(document.get("gammaboard").is_none());
     // Controller duplication starts a new orchestration; child duplication is standalone.
@@ -266,9 +418,9 @@ target_batch_eval_ms = 50.0
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 512 }
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = 'all_component_means' } }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 1 } }
 
 '''
 [[children]]
@@ -296,9 +448,9 @@ target_batch_eval_ms = 50.0
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 512 }
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = 'all_component_means' } }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 2 } }
 '''
 "#,
     );
@@ -450,66 +602,93 @@ async fn campaign_follows_child_stages_and_freezes_shared_file() -> anyhow::Resu
     let child_path = dir.path().join("child.toml");
     std::fs::write(
         &child_path,
-        r#"
-name = "child-$(value:9)"
-replacements = { value = 9, final_name = "default-final" }
+        r#"name = "child-$(value:9)"
+
+[replacements]
+value = 9
+final_name = "default-final"
+
 [evaluator]
 kind = "symbolica"
-expr = "1"
 args = ["x"]
+
+[evaluator.source]
+kind = "expression"
+expr = "1"
+
 [[task_queue]]
 name = "training"
 kind = "sample"
-stop_condition = { max_samples = 32 }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 1 } }
+
+[task_queue.stop_condition]
+max_samples = 32
+
+[task_queue.accumulator]
+config = "scalar"
+
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
+seed = 1
+
 [[task_queue]]
 name = "$(final_name:default-final)"
 kind = "sample"
-# A fresh inference accumulator has fewer samples than the training result.
-stop_condition = { max_samples = 16 }
-evaluator = { config = { kind = "symbolica", expr = "0 + $(value:9)", args = ["x"] } }
-accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 2 } }
+
+[task_queue.stop_condition]
+max_samples = 16
+
+[task_queue.evaluator.config]
+kind = "symbolica"
+args = ["x"]
+
+[task_queue.evaluator.config.source]
+kind = "expression"
+expr = "0 + $(value:9)"
+
+[task_queue.accumulator]
+config = "scalar"
+
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
+seed = 2
 "#,
     )?;
     let document = format!(
-        r#"
-kind = "integration_campaign"
+        r#"kind = "integration_campaign"
 name = "stage-campaign"
-stop_condition = {{ absolute_error = 1e-10, max_total_samples = 10000 }}
-allocation = {{ min_samples_per_child = 4, allocation_window_samples = 8 }}
+
+[stop_condition]
+absolute_error = 1e-10
+max_total_samples = 10000
+
+[allocation]
+min_samples_per_child = 4
+allocation_window_samples = 8
+
 [[children]]
 name = "left"
-replacements = {{ value = 2, final_name = "left-inference" }}
-run = {{ file = "{}" }}
+
+[children.replacements]
+value = 2
+final_name = "left-inference"
+
+[children.run]
+file = "{}"
+
 [[children]]
 name = "right"
 coefficient = -0.5
-replacements = {{ value = 3, final_name = "right-inference" }}
-run = {{ file = "{}" }}
+
+[children.replacements]
+value = 3
+final_name = "right-inference"
+
+[children.run]
+file = "{}"
+
 [[children]]
 name = "inline"
-run = '''
-name = "inline-stages"
-[evaluator]
-kind = "symbolica"
-expr = "0"
-args = ["x"]
-[[task_queue]]
-name = "excluded-training"
-kind = "sample"
-publish_result = false
-stop_condition = {{ max_samples = 32 }}
-accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
-[[task_queue]]
-name = "inline-inference"
-kind = "sample"
-stop_condition = {{ max_samples = 16 }}
-accumulator = {{ config = "scalar" }}
-sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
-'''
+run = "name = \"inline-stages\"\n\n[evaluator]\nkind = \"symbolica\"\nargs = [\"x\"]\n\n[evaluator.source]\nkind = \"expression\"\nexpr = \"0\"\n\n[[task_queue]]\nname = \"excluded-training\"\nkind = \"sample\"\npublish_result = false\n\n[task_queue.stop_condition]\nmax_samples = 32\n\n[task_queue.accumulator]\nconfig = \"scalar\"\n\n[task_queue.sampler.config]\nkind = \"naive_monte_carlo\"\n\n[[task_queue]]\nname = \"inline-inference\"\nkind = \"sample\"\n\n[task_queue.stop_condition]\nmax_samples = 16\n\n[task_queue.accumulator]\nconfig = \"scalar\"\n\n[task_queue.sampler.config]\nkind = \"naive_monte_carlo\"\n"
 "#,
         child_path.display(),
         child_path.display()
@@ -535,7 +714,10 @@ sampler_aggregator = {{ config = {{ kind = "naive_monte_carlo" }} }}
         output["combined_measurement"]["results"][0]["value"],
         json!(0.5)
     );
-    assert_eq!(output["total_samples"], json!(144));
+    let total = output["total_samples"].as_i64().unwrap();
+    // Window-bounded generation can converge before exhausting inference's
+    // individual task caps. All training work and final-stage pilots must count.
+    assert!((108..=144).contains(&total));
     for child in output["children"].as_array().unwrap() {
         let task_id: i64 = child["result_source"]["task_id"]
             .as_str()
@@ -582,9 +764,9 @@ discrete_dims = 0
 name = "sample"
 kind = "sample"
 stop_condition = { max_samples = "$(samples:4)" }
-measurement = { quantity = "central_value" }
+measurement = { selection = { kind = 'all_component_means' } }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }
 "#;
     for kind in [
         "integration_campaign",
@@ -608,7 +790,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", seed = 0 } }
                 }
                 "parameter_scan" => "parameters = [{ name = 'scale', values = [3] }]\n[child]",
                 "hyperparameter_tuning" => {
-                    "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', quantity = 'central_value' }\nparameters = { scale = { kind = 'integer', min = 3, max = 3, step = 1 } }\n[child]"
+                    "optimizer = { algorithm = 'grid_search' }\nobjective = { source_task = 'sample', mode = 'minimize', selection = { kind = 'all_component_means' } }\nparameters = { scale = { kind = 'integer', min = 3, max = 3, step = 1 } }\n[child]"
                 }
                 _ => unreachable!(),
             };
@@ -695,7 +877,7 @@ name = "train"
 kind = "sample"
 stop_condition = { max_samples = 100000000 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 [task_queue.queue_tuning]
 max_batch_size = 100
 "#;

@@ -1,6 +1,6 @@
 use super::{
-    ActiveRoleRunner, ActiveWorker, NodeRunner, NodeRunnerStore, RoleTarget, StartErrorDisposition,
-    role_runner::RoleRunner,
+    ActiveRoleRunner, ActiveWorker, AssignmentTarget, NodeRunner, NodeRunnerStore,
+    StartErrorDisposition, role_runner::RoleRunner,
 };
 use crate::core::StoreResultExt;
 
@@ -12,7 +12,6 @@ use crate::runners::{
     EvaluatorRunner, SamplerAggregatorRunner,
     stage_context::{HAVANA_HANDOFF_REQUIRED_ERROR, resolve_stage_context},
 };
-use crate::sampling::StageHandoffOwned;
 use crate::services::stage::resolve_task_source_snapshot;
 use tracing::{Instrument, debug, error, info, warn};
 
@@ -98,9 +97,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
     ) -> Result<
         (
             crate::core::EvaluatorConfig,
-            crate::core::SamplerAggregatorConfig,
+            crate::runners::stage_context::SamplerInitialization,
             Vec<BatchTransformConfig>,
-            Option<StageHandoffOwned>,
         ),
         StoreError,
     > {
@@ -113,9 +111,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         {
             Ok(resolved) => Ok((
                 resolved.evaluator_config,
-                resolved.sampler_config,
+                resolved.sampler,
                 resolved.batch_transforms,
-                resolved.handoff,
             )),
             Err(err) if err.to_string() == HAVANA_HANDOFF_REQUIRED_ERROR => {
                 let reason = err.to_string();
@@ -132,17 +129,15 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         }
     }
 
-    pub(super) async fn resolve_desired_target(&self) -> Result<Option<RoleTarget>, StoreError> {
-        let assignment = self.store.get_desired_assignment(&self.node_name).await?;
-        Ok(assignment.map(|assignment| RoleTarget {
-            role: assignment.role,
-            run_id: assignment.run_id,
-        }))
+    pub(super) async fn resolve_desired_target(
+        &self,
+    ) -> Result<Option<AssignmentTarget>, StoreError> {
+        self.store.get_desired_assignment(&self.node_name).await
     }
 
     pub(super) async fn reconcile(
         &mut self,
-        desired_target: Option<RoleTarget>,
+        desired_target: Option<AssignmentTarget>,
     ) -> Result<(), StoreError> {
         self.retry_state
             .reset_for_desired_target_change(desired_target);
@@ -165,8 +160,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     async fn build_reconciled_runner(
         &mut self,
-        desired_target: Option<RoleTarget>,
-    ) -> Result<Option<(RoleTarget, Box<dyn RoleRunner>)>, StoreError> {
+        desired_target: Option<AssignmentTarget>,
+    ) -> Result<Option<(AssignmentTarget, Box<dyn RoleRunner>)>, StoreError> {
         let Some(target) = desired_target else {
             return Ok(None);
         };
@@ -279,7 +274,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     async fn start(
         &mut self,
-        target: RoleTarget,
+        target: AssignmentTarget,
         runner: Box<dyn RoleRunner>,
     ) -> Result<(), StoreError> {
         let context_span = tracing::span!(
@@ -314,7 +309,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     async fn build_runner_for_target(
         &self,
-        target: RoleTarget,
+        target: AssignmentTarget,
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
         match target.role {
             crate::core::WorkerRole::Evaluator => self.build_evaluator_runner(target).await,
@@ -324,7 +319,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     async fn build_evaluator_runner(
         &self,
-        target: RoleTarget,
+        target: AssignmentTarget,
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
         let Some(spec) = self.store.load_run_spec(target.run_id).await? else {
             warn!("run has no RunSpec; evaluator not started");
@@ -381,7 +376,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     async fn build_sampler_runner(
         &self,
-        target: RoleTarget,
+        target: AssignmentTarget,
     ) -> Result<Option<Box<dyn RoleRunner>>, StoreError> {
         let Some(spec) = self.store.load_run_spec(target.run_id).await? else {
             warn!("run has no RunSpec; sampler-aggregator not started");
@@ -429,7 +424,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .filter(|snapshot| snapshot.task_id == task.id)
             .cloned();
 
-        let (evaluator_config, sampler_config, batch_transforms, handoff) = self
+        let (evaluator_config, sampler_initialization, batch_transforms) = self
             .resolve_effective_sampler_context_with_store(&role_store, worker.run_id, &task)
             .await?;
         let evaluator_domain = evaluator_config.resolve_domain().map_err(|err| {
@@ -483,10 +478,10 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .record_evaluator_metadata(worker.run_id, &evaluator_metadata)
             .await?;
 
-        let sampler = match sampler_config.build(
+        let sampler_config = sampler_initialization.config().clone();
+        let sampler = match sampler_initialization.initialize(
             spec.domain.clone(),
             sample_budget,
-            handoff.as_ref().map(StageHandoffOwned::as_ref),
             evaluator_metadata,
         ) {
             Ok(s) => s,
@@ -599,7 +594,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
         self.reset_reconcile_backoff();
     }
 
-    pub(super) fn note_start_failure(&mut self, target: RoleTarget) -> bool {
+    pub(super) fn note_start_failure(&mut self, target: AssignmentTarget) -> bool {
         let now_blocked = self
             .retry_state
             .note_failure(target, self.config.max_consecutive_start_failures);
@@ -624,7 +619,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
 
     pub(super) async fn fail_current_assignment(
         &mut self,
-        target: RoleTarget,
+        target: AssignmentTarget,
         err: &StoreError,
     ) -> Result<(), StoreError> {
         let now_blocked = self.note_start_failure(target);

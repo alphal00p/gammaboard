@@ -7,7 +7,7 @@ const request = (id, state) => ({ id, state, backend: "local", requested_count: 
   error: state === "failed" ? "worker exited before connecting" : null });
 
 describe("node startup queue", () => {
-  test("keeps outstanding work and failures visible, with successful attempts in collapsed history", () => {
+  test("separates outstanding work from completed and failed launch history", () => {
     render(<NodeLaunchQueue requests={[
       request(1, "fulfilled"), request(2, "pending"), request(3, "starting"),
       request(4, "failed"), request(5, "canceled"),
@@ -15,13 +15,14 @@ describe("node startup queue", () => {
     const queue = within(screen.getByRole("table", { name: "node startup queue" }));
     expect(queue.getByText("pending")).toBeTruthy();
     expect(queue.getByText("starting")).toBeTruthy();
-    expect(queue.getByText("worker exited before connecting")).toBeTruthy();
+    expect(queue.queryByText("worker exited before connecting")).toBeNull();
     expect(queue.queryByText("fulfilled")).toBeNull();
     expect(screen.queryByRole("table", { name: "node launch history" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Launch history (2)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch history (3)" }));
     const history = within(screen.getByRole("table", { name: "node launch history" }));
     expect(history.getByText("fulfilled")).toBeTruthy();
-    expect(history.getAllByText("w-1")).toHaveLength(2);
+    expect(history.getByText("worker exited before connecting")).toBeTruthy();
+    expect(history.getAllByText("w-1")).toHaveLength(3);
   });
 
   test("a fulfilled launch leaves an empty queue even while the worker exists", () => {

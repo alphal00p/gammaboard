@@ -1,5 +1,71 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn local_launch_survives_removing_the_running_executable_path() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let original = harness.bin_path.clone();
+    let executable = harness.artifacts.join(".replaceable-gammaboard");
+    if std::fs::hard_link(&original, &executable).is_err() {
+        std::fs::copy(&original, &executable)?;
+    }
+    harness.bin_path = executable.clone();
+    let server = harness.start_server().await?;
+    harness.bin_path = original;
+    let cookie = login_cookie(&server).await?;
+    std::fs::remove_file(&executable)?;
+    let response = http_post_json(
+        &server,
+        "/api/nodes/auto-run",
+        json!({"count":1,"name_prefix":"replaced"}),
+        Some(&cookie),
+    )
+    .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    anyhow::ensure!(status.is_success(), "launch after unlink failed: {body}");
+    let response: JsonValue = serde_json::from_str(&body)?;
+    let node = response["node_names"][0].as_str().unwrap().to_owned();
+    harness
+        .wait_for(
+            "worker registered after executable replacement",
+            Duration::from_secs(15),
+            || async {
+                Ok(sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM nodes WHERE name=$1 AND lease_expires_at>now())",
+                )
+                .bind(&node)
+                .fetch_one(&harness.pool)
+                .await?)
+            },
+        )
+        .await?;
+    http_post_json(
+        &server,
+        &format!("/api/nodes/{node}/stop"),
+        json!({}),
+        Some(&cookie),
+    )
+    .await?
+    .error_for_status()?;
+    harness
+        .wait_for(
+            "replacement worker stopped",
+            Duration::from_secs(15),
+            || async {
+                Ok(!sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM nodes WHERE name=$1 AND lease_expires_at>now())",
+                )
+                .bind(&node)
+                .fetch_one(&harness.pool)
+                .await?)
+            },
+        )
+        .await?;
+    harness.cleanup().await
+}
+
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_server_queue_tuning_update_applies_to_active_sample_task() -> anyhow::Result<()>
@@ -21,7 +87,7 @@ name = "sample-a"
 kind = "sample"
 stop_condition = { max_samples = 8192 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 
 [sampler_aggregator_runner_params]
 performance_snapshot_interval_ms = 100
@@ -118,7 +184,7 @@ completed_batch_fetch_limit = 64
                 async move {
                     let diag: Option<JsonValue> = sqlx::query_scalar(
                         r#"
-                    SELECT engine_diagnostics
+                    SELECT metrics
                     FROM sampler_aggregator_performance_latest
                     WHERE run_id = $1 AND worker_id = 'w-1'
                     "#,
@@ -129,10 +195,7 @@ completed_batch_fetch_limit = 64
                     let Some(diag) = diag else {
                         return Ok(false);
                     };
-                    Ok(
-                        diag["runner"]["queue_config"]["target_batch_eval_ms"].as_f64()
-                            == Some(50.0),
-                    )
+                    Ok(diag["queue_config"]["target_batch_eval_ms"].as_f64() == Some(50.0))
                 }
             },
         )
@@ -188,7 +251,7 @@ completed_batch_fetch_limit = 64
                 async move {
                     let diag: Option<JsonValue> = sqlx::query_scalar(
                         r#"
-                        SELECT engine_diagnostics
+                        SELECT metrics
                         FROM sampler_aggregator_performance_latest
                         WHERE run_id = $1 AND worker_id = 'w-1'
                         "#,
@@ -200,12 +263,9 @@ completed_batch_fetch_limit = 64
                         return Ok(false);
                     };
                     Ok(
-                        diag["runner"]["queue_config"]["target_batch_eval_ms"].as_f64()
-                            == Some(500.0)
-                            && diag["runner"]["queue_config"]["fixed_batch_size"].as_u64()
-                                == Some(24)
-                            && diag["runner"]["queue_config"]["max_generation_size"].as_u64()
-                                == Some(256),
+                        diag["queue_config"]["target_batch_eval_ms"].as_f64() == Some(500.0)
+                            && diag["queue_config"]["fixed_batch_size"].as_u64() == Some(24)
+                            && diag["queue_config"]["max_generation_size"].as_u64() == Some(256),
                     )
                 }
             },
@@ -259,12 +319,12 @@ kind = "sample"
 max_samples = 1000000
 
 [task_queue.measurement]
-quantity = "central_value"
+selection = { kind = 'all_component_means' }
 
 [task_queue.accumulator]
 config = "scalar"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "naive_monte_carlo"
 '''
 "#,
@@ -766,7 +826,7 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     let claim_response = http_post_json(
         &server_url,
         "/api/node-launch-requests/claim-external",
-        json!({}),
+        json!({"launcher_id":"e2e-launcher"}),
         Some(&cookie),
     )
     .await?;
@@ -778,22 +838,20 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
     );
     assert_eq!(claim_body["request"]["state"].as_str(), Some("starting"));
 
-    let workers = json!([
-        { "node_name": "queued-w-1", "job_id": "test-job-1" },
-        { "node_name": "queued-w-2", "job_id": "test-job-2" }
-    ]);
-    let progress_response = http_post_json(
-        &server_url,
-        &format!("/api/node-launch-requests/{request_id}/progress"),
-        json!({
-            "state": "starting",
-            "started_count": 2,
-            "result": { "workers": workers }
-        }),
-        Some(&cookie),
-    )
-    .await?;
-    assert_eq!(progress_response.status(), reqwest::StatusCode::OK);
+    let token = claim_body["request"]["lease_token"].as_str().unwrap();
+    for (name, job_id) in [("queued-w-1", "101"), ("queued-w-2", "102")] {
+        for state in ["submitting", "submitted"] {
+            let response = http_post_json(
+                &server_url,
+                &format!("/api/node-launch-requests/{request_id}/progress"),
+                json!({"lease_token":token,"node_name":name,"state":state,
+                    "job_id":(state=="submitted").then_some(job_id)}),
+                Some(&cookie),
+            )
+            .await?;
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+        }
+    }
 
     harness.start_nodes(&["queued-w-1", "queued-w-2"]).await?;
     harness

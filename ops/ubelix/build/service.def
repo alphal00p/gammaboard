@@ -1,0 +1,87 @@
+Bootstrap: docker
+From: @NODE_IMAGE@
+Stage: node
+
+Bootstrap: docker
+From: @RUST_IMAGE@
+Stage: builder
+
+%files from node
+    /usr/local/bin/node /usr/local/bin/node
+    /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+%files
+    @SOURCE@ /src
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends python3-dev pkg-config clang gfortran libgmp-dev libmpfr-dev libmpc-dev
+    ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+    cd /src
+    export GAMMABOARD_GIT_REVISION=@REVISION@
+    export CARGO_HOME=/cache/cargo
+    export CARGO_TARGET_DIR=/build/target
+    export CARGO_BUILD_JOBS=@CPUS@
+    export RUSTFLAGS='-C target-cpu=x86-64'
+    export CFLAGS='-O2 -march=x86-64 -mtune=generic'
+    export CXXFLAGS="$CFLAGS"
+    unset NO_SYMBOLICA_OEM_LICENSE
+    @CARGO_BUILD@
+    mkdir -p /out
+    install -m755 /build/target/release/@FAMILY@ /out/@FAMILY@
+    rustc --version > /out/toolchain.txt
+    cargo --version >> /out/toolchain.txt
+    dpkg-query -W > /out/builder-packages.txt
+    if [ '@FAMILY@' = gammaboard ]; then
+        cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features rustls,postgres --root /out/sqlx
+        cp -a migrations /out/migrations
+        cd dashboard
+        npm ci --cache /cache/npm
+        npm run build
+        cp -a build /out/dashboard
+    fi
+
+Bootstrap: docker
+From: @DEBIAN_IMAGE@
+Stage: runtime
+
+%files from builder
+    /out /usr/local/share/build
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl python3 libpython3.11 libgfortran5 libgmp10 libmpfr6 libmpc3 libstdc++6 tzdata nginx postgresql postgresql-contrib
+    # Explicit version; the official package is required for nested process runtimes.
+    curl -fsSL https://github.com/apptainer/apptainer/releases/download/v1.5.0/apptainer_1.5.0_amd64.deb -o /tmp/apptainer.deb
+    apt-get install -y --no-install-recommends /tmp/apptainer.deb
+    rm /tmp/apptainer.deb
+    install -m755 /usr/local/share/build/@FAMILY@ /usr/local/bin/@FAMILY@
+    if [ '@FAMILY@' = gammaboard ]; then
+        install -m755 /usr/local/share/build/sqlx/bin/sqlx /usr/local/bin/sqlx
+        mkdir -p /usr/local/share/gammaboard
+        mv /usr/local/share/build/migrations /usr/local/share/gammaboard/migrations
+        mv /usr/local/share/build/dashboard /usr/local/share/gammaboard/dashboard
+    fi
+    set -- /usr/lib/postgresql/*/bin
+    PG_BINDIR="$1"
+    for bin in initdb pg_ctl psql createdb dropdb pg_dump pg_restore; do
+        ln -sf "${PG_BINDIR}/${bin}" "/usr/local/bin/${bin}"
+    done
+    dpkg-query -W > /usr/local/share/build/runtime-packages.txt
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/usr/local/bin:$PATH
+    export TZ=Etc/UTC
+    export GAMMABOARD_MIGRATIONS_DIR=/usr/local/share/gammaboard/migrations
+
+%runscript
+    exec "$@"
+
+%test
+    /usr/local/bin/@FAMILY@ --help >/dev/null

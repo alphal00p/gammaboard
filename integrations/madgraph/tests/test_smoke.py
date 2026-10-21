@@ -140,7 +140,7 @@ def test_evaluator_exposes_state_metadata() -> None:
             state_path="/fake",
         )
 
-    assert evaluator.metadata["integrand"] == "phase_space_mapping+differential_cross_section"
+    assert evaluator.metadata()["integrand"] == "phase_space_mapping+differential_cross_section"
 
 
 def _native_info() -> dict:
@@ -236,6 +236,7 @@ def test_native_event_evaluator_runs_generated_state(tmp_path) -> None:
         result = evaluator.eval_gammaloop(
             np.zeros((1, 0), dtype=np.int64),
             np.zeros((1, 0), dtype=np.float64),
+            np.ones(1), require_training_values=False,
         )
 
     assert result.state["estimate"]["components"][0]["state"]["count"] == 100
@@ -267,4 +268,5 @@ def test_native_event_evaluator_explains_stale_madspace(tmp_path) -> None:
         evaluator.eval_gammaloop(
             np.zeros((1, 0), dtype=np.int64),
             np.zeros((1, 0), dtype=np.float64),
+            np.ones(1), require_training_values=False,
         )

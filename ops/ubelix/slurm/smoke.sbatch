@@ -12,58 +12,7 @@
 #SBATCH --error=logs/slurm/build/%x-%j.err
 
 set -euo pipefail
-
 PRIVATE_ENV="${HOME}/.config/gammaboard/slurm.env"
-if [[ -f "${PRIVATE_ENV}" ]]; then
-  # Load per-user secrets and cluster-local overrides without tracking them in git.
-  source "${PRIVATE_ENV}"
-fi
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "missing required command: $1" >&2
-    exit 1
-  }
-}
-
+if [[ -f "$PRIVATE_ENV" ]]; then source "$PRIVATE_ENV"; fi
 WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
-mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build"
-
-# Absolute path to SIF image on UBELIX filesystem.
-IMAGE_PATH="${GAMMABOARD_IMAGE:-${WORKSPACE_ROOT}/images/gammaboard/gammaboard.sif}"
-
-# Bind full storage paths (UBELIX scratch/workspace paths are symlinked).
-BIND_PATHS="${GAMMABOARD_BIND_PATHS:-${WORKSPACE_ROOT}}"
-
-require_cmd apptainer
-
-if [[ ! -d "${WORKSPACE_ROOT}" ]]; then
-  echo "missing workspace root: ${WORKSPACE_ROOT}" >&2
-  exit 1
-fi
-if [[ ! -f "${IMAGE_PATH}" ]]; then
-  echo "missing image: ${IMAGE_PATH}" >&2
-  exit 1
-fi
-if [[ ! -e "${BIND_PATHS}" ]]; then
-  echo "missing bind path: ${BIND_PATHS}" >&2
-  exit 1
-fi
-
-echo "node: ${HOSTNAME}"
-echo "workspace_root: ${WORKSPACE_ROOT}"
-echo "image: ${IMAGE_PATH}"
-echo "bind: ${BIND_PATHS}"
-
-# Verify dynamic linker dependencies are present inside image.
-if apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" ldd /usr/local/bin/gammaboard | grep -q "not found"; then
-  echo "gammaboard has missing shared library dependencies" >&2
-  apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" ldd /usr/local/bin/gammaboard >&2
-  exit 1
-fi
-
-# Gate on the public CLI being executable and show the installed version.
-apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --help >/dev/null
-apptainer exec -B "${BIND_PATHS}" "${IMAGE_PATH}" gammaboard --version
-
-echo "smoke check completed"
+exec python3 "${WORKSPACE_ROOT}/ops/build/verify-image.py" "$WORKSPACE_ROOT" "${GAMMABOARD_IMAGE_MANIFEST:-$WORKSPACE_ROOT/images/gammaboard/current.json}"

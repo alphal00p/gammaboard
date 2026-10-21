@@ -1,4 +1,4 @@
-//! Seeded, real-process fault sequences. See docs/recovery-testing.md for the contract.
+//! Seeded, real-process fault sequences. See docs/operations.md#backup-and-recovery for guarantees.
 use super::*;
 use gammaboard::core::{SamplerAggregatorCheckpoint, SamplerQueueTuning};
 use gammaboard::evaluation::AccumulatorState;
@@ -24,7 +24,10 @@ fn check_prefix(value: &JsonValue, offset: i64) -> anyhow::Result<usize> {
     let AccumulatorState::FullVector(state) = AccumulatorState::from_json(value)? else {
         anyhow::bail!("expected the full-vector recovery oracle");
     };
-    anyhow::ensure!(state.invalid_entries.is_empty(), "invalid accepted samples");
+    anyhow::ensure!(
+        state.values_row_major.iter().all(|value| value.is_finite()),
+        "invalid accepted samples"
+    );
     anyhow::ensure!(
         state.values_row_major.len() <= SAMPLES as usize,
         "sample budget exceeded"
@@ -41,7 +44,7 @@ fn check_prefix(value: &JsonValue, offset: i64) -> anyhow::Result<usize> {
 #[test]
 fn exact_oracle_rejects_corruption() {
     let original = json!({"kind":"full_vector", "components":["value"],
-        "invalid_entries":[], "values_row_major":[1.0/32768.0,2.0/32768.0,3.0/32768.0]});
+        "values_row_major":[1.0/32768.0,2.0/32768.0,3.0/32768.0]});
     assert_eq!(check_prefix(&original, 0).unwrap(), 3);
     for corrupted in [
         json!([1.0 / 32768.0, 1.0 / 32768.0, 3.0 / 32768.0]), // duplication
@@ -96,10 +99,10 @@ name = "sample"
 kind = "sample"
 stop_condition = {{ max_samples = {SAMPLES} }}
 accumulator = {{ config = "full_vector" }}
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "process_sampler"
 command = [{python:?}, "-u", {fixture:?}]
-requires_training_values = {training}
+
 args = {{ training = {training}, window = 2047, offset = {offset} }}
 "#
         );
@@ -325,7 +328,9 @@ args = {{ training = {training}, window = 2047, offset = {offset} }}
                 }).await?;
                 self.harness.signal_child("e0", libc::SIGSTOP)?;
                 self.harness.expire_node("e0").await?;
-                self.harness.wait_for("expired worker claims are reclaimed", Duration::from_secs(15), || async {
+                // Suspension can catch a submission transaction holding a row lock.
+                // Allow its 30s idle/statement timeout plus reclamation retries.
+                self.harness.wait_for("expired worker claims are reclaimed", Duration::from_secs(45), || async {
                     Ok(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM batches WHERE run_id=$1 AND status='claimed' AND claimed_by_node_name='e0'")
                         .bind(self.run).fetch_one(&self.harness.pool).await? == 0)
                 }).await?;
@@ -419,12 +424,14 @@ args = {{ training = {training}, window = 2047, offset = {offset} }}
             self.act(action, &mut rng).await?;
         }
         self.event(json!({"faults_stopped":true}))?;
-        self.wait_progress(SAMPLES).await?;
+        // Completion includes every remaining timed batch, unlike the small
+        // progress checks between faults. Keep one bounded completion wait;
+        // final invariants below still require the entire exact sequence.
         wait_for_task_state(
             &self.harness,
             self.run,
             "completed",
-            Duration::from_secs(30),
+            Duration::from_secs(120),
         )
         .await?;
         self.check().await?;
@@ -438,7 +445,7 @@ args = {{ training = {training}, window = 2047, offset = {offset} }}
             check_prefix(&checkpoint.observable_state.to_json()?, self.offset)? == SAMPLES as usize,
             "final exact sequence is incomplete"
         );
-        let sampler = &saved["sampler_snapshot"]["raw"]["sampler_state"];
+        let sampler = &saved["sampler_snapshot"]["state"];
         anyhow::ensure!(
             sampler["produced"] == SAMPLES,
             "sampler lost its generation cursor"
@@ -480,7 +487,7 @@ async fn recovery_state_machine() -> anyhow::Result<()> {
                     Err(anyhow::anyhow!("recovery case exceeded its 180s deadline"))
                 });
             if let Err(error) = &result {
-                let rows: JsonValue = tokio::time::timeout(Duration::from_secs(5),sqlx::query_scalar("SELECT jsonb_build_object('nodes',(SELECT jsonb_agg(to_jsonb(n)) FROM nodes n),'logs',(SELECT jsonb_agg(to_jsonb(l)) FROM runtime_logs l),'runs',(SELECT jsonb_agg(to_jsonb(r)) FROM runs r),'tasks',(SELECT jsonb_agg(to_jsonb(t)) FROM run_tasks t),'checkpoints',(SELECT jsonb_agg(to_jsonb(c)) FROM run_sampler_checkpoints c),'batches',(SELECT jsonb_agg(to_jsonb(b)) FROM batches b))")
+                let rows: JsonValue = tokio::time::timeout(Duration::from_secs(5),sqlx::query_scalar("SELECT jsonb_build_object('sessions',(SELECT jsonb_agg(jsonb_build_object('pid',a.pid,'state',a.state,'query',a.query,'wait_event_type',a.wait_event_type,'wait_event',a.wait_event,'blocking',pg_blocking_pids(a.pid))) FROM pg_stat_activity a WHERE a.datname=current_database()),'nodes',(SELECT jsonb_agg(to_jsonb(n)) FROM nodes n),'logs',(SELECT jsonb_agg(to_jsonb(l)) FROM runtime_logs l),'runs',(SELECT jsonb_agg(to_jsonb(r)) FROM runs r),'tasks',(SELECT jsonb_agg(to_jsonb(t)) FROM run_tasks t),'checkpoints',(SELECT jsonb_agg(to_jsonb(c)) FROM run_sampler_checkpoints c),'batches',(SELECT jsonb_agg(to_jsonb(b)) FROM batches b))")
                     .fetch_one(&test.harness.pool)).await.ok().and_then(Result::ok).unwrap_or(json!(null));
                 std::fs::write(
                     test.harness.artifacts.join("failure.json"),

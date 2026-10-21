@@ -5,7 +5,7 @@ use crate::core::{
     AccumulatorConfig, AggregationStore, ControlPlaneStore, EvaluatorConfig, RunTask, RunTaskInput,
     RunTaskState, RunTaskStore, SamplerQueueTuning, SourceRefSpec,
 };
-use crate::preprocess::{RunAddConfig, preprocess_run_add};
+use crate::preprocess::{IntegrationDefinition, RunDefinition, prepare_run};
 use crate::provenance::RunProvenance;
 use crate::stores::RunProgress;
 use serde::{Deserialize, Serialize};
@@ -96,40 +96,42 @@ impl TaskQueueFile {
 }
 
 /// Parses run-add TOML, merging it over the default run config.
-pub fn parse_run_add_config_toml(raw: &str) -> Result<RunAddConfig, ApiError> {
+pub fn parse_run_add_config_toml(raw: &str) -> Result<RunDefinition, ApiError> {
     super::run_definition::parse(raw, BTreeMap::new(), None)
 }
 
 pub fn parse_run_add_config_toml_from_base(
     raw: &str,
     base: &Path,
-) -> Result<RunAddConfig, ApiError> {
+) -> Result<RunDefinition, ApiError> {
     super::run_definition::parse(raw, BTreeMap::new(), Some(base))
 }
 
 pub fn parse_run_add_config_toml_with_replacements(
     raw: &str,
     replacements: BTreeMap<String, toml::Value>,
-) -> Result<RunAddConfig, ApiError> {
+) -> Result<RunDefinition, ApiError> {
     super::run_definition::parse(raw, replacements, None)
 }
 
-pub fn load_run_add_config_file(path: &Path) -> Result<RunAddConfig, ApiError> {
+pub fn load_run_add_config_file(path: &Path) -> Result<RunDefinition, ApiError> {
     let raw = fs::read_to_string(path)
         .map_err(|e| ApiError::BadRequest(format!("{}: {e}", path.display())))?;
     super::run_definition::parse(&raw, BTreeMap::new(), path.parent())
 }
 
-pub(super) fn parse_integration_value(overlay: toml::Value) -> Result<RunAddConfig, ApiError> {
+pub(super) fn parse_integration_value(
+    overlay: toml::Value,
+) -> Result<IntegrationDefinition, ApiError> {
     let overlay_has_evaluator = toml_has_key(&overlay, "evaluator");
     let mut merged = read_default_run_add_toml()?;
     merge_toml(&mut merged, overlay);
     if !overlay_has_evaluator {
         remove_toml_key(&mut merged, "evaluator");
     }
-    let mut config = parse_run_add_config_value(merged)?;
-    config.kind = "integration".into();
-    Ok(config)
+    merged
+        .try_into()
+        .map_err(|e| ApiError::BadRequest(format!("invalid integration definition: {e}")))
 }
 
 /// Parses task-append TOML supporting `task`, `task_queue`, or both.
@@ -166,9 +168,9 @@ pub struct RunValidation {
 }
 
 /// Validate using the same preflight as creation, without touching the database.
-pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, ApiError> {
-    let processed = preprocess_run_add(config)?;
-    let domain = processed.domain.clone().expect("preflight resolves domain");
+pub fn validate_run(config: RunDefinition, probe: bool) -> Result<RunValidation, ApiError> {
+    let processed = prepare_run(config)?;
+    let domain = processed.domain.clone();
     let mut context = TaskPreflightContext::from_existing_tasks(
         &[],
         processed.integration_params.evaluator.clone(),
@@ -178,7 +180,7 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
     context
         .validated_evaluators
         .extend(processed.integration_params.evaluator.clone());
-    let tasks = processed.resolved_task_queue.as_deref().unwrap_or_default();
+    let tasks = &processed.task_queue;
     let mut probes = 0;
     for (index, task) in tasks.iter().enumerate() {
         context.validate_task(task)?;
@@ -196,7 +198,7 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
                 .map_err(|err| {
                     ApiError::BadRequest(format!("task_queue[{index}].evaluator probe: {err}"))
                 })?;
-            if evaluator.get_domain() != domain {
+            if evaluator.domain() != domain {
                 return Err(ApiError::BadRequest(format!(
                     "task_queue[{index}]: probed evaluator domain differs from run domain"
                 )));
@@ -207,7 +209,7 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
                 .or_else(|| task.task.sampler_config())
             {
                 let _runtime = sampler
-                    .build(domain.clone(), None, None, evaluator.metadata())
+                    .create(domain.clone(), None, evaluator.metadata())
                     .map_err(|err| {
                         ApiError::BadRequest(format!("task_queue[{index}].sampler probe: {err}"))
                     })?;
@@ -215,7 +217,7 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
                 materializer.validate_domain(&domain)?;
             }
             for transform in task.task.batch_transforms_config().unwrap_or_default() {
-                transform.build()?.validate_domain(&domain)?;
+                transform.build(&domain)?;
             }
             probes += 1;
         }
@@ -230,72 +232,50 @@ pub fn validate_run(config: RunAddConfig, probe: bool) -> Result<RunValidation, 
 /// Creates a run, persists the root stage snapshot, and appends initial tasks if provided.
 pub async fn create_run(
     store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),
-    config: RunAddConfig,
+    config: RunDefinition,
 ) -> Result<CreatedRun, ApiError> {
     create_run_with_parent(store, config, None).await
 }
 
 async fn create_run_with_parent(
     store: &(impl ControlPlaneStore + AggregationStore + RunTaskStore),
-    config: RunAddConfig,
+    config: RunDefinition,
     parent: Option<&crate::core::traits::RunParentMetadata>,
 ) -> Result<CreatedRun, ApiError> {
-    let processed = preprocess_run_add(config)?;
-    let domain = processed
-        .domain
-        .as_ref()
-        .ok_or_else(|| ApiError::Internal("preprocessing did not resolve domain".to_string()))?;
-    let resolved_integration_params =
-        processed
-            .resolved_integration_params
-            .as_ref()
-            .ok_or_else(|| {
-                ApiError::Internal("preprocessing did not resolve integration_params".to_string())
-            })?;
+    let processed = prepare_run(config)?;
+    let domain = &processed.domain;
+    let resolved_integration_params = &processed.integration_params;
     let mut integration_params =
         serde_json::to_value(resolved_integration_params).map_err(|err| {
             ApiError::Internal(format!("failed to serialize integration_params: {err}"))
         })?;
     integration_params["run_kind"] = serde_json::json!(processed.kind);
-    let initial_tasks = processed.resolved_task_queue.clone().unwrap_or_default();
-    let mut initial_stage_snapshot = processed
-        .initial_stage_snapshot
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| {
-            ApiError::Internal("preprocessing did not build initial stage snapshot".to_string())
-        })?;
-    initial_stage_snapshot.evaluator = resolved_integration_params.evaluator.clone();
+    let initial_tasks = &processed.task_queue;
+    let initial_stage_snapshot = &processed.initial_stage;
 
     preflight_task_batch(
         store,
         initial_stage_snapshot.run_id,
-        &initial_tasks,
+        initial_tasks,
         resolved_integration_params.evaluator.clone(),
         domain.clone(),
     )
     .await?;
 
-    let run_toml = stored_run_toml(
-        &processed,
-        resolved_integration_params,
-        processed.target.as_ref(),
-        &initial_tasks,
-    )?;
-    let effective_toml = if let Some(document) = &processed.effective_document
-        && processed.kind != "integration"
-    {
-        toml::to_string(document).map_err(|e| ApiError::Internal(e.to_string()))?
+    let run_toml = &processed.original_toml;
+    let effective_toml = if processed.kind != "integration" {
+        toml::to_string(&processed.effective_document)
+            .map_err(|e| ApiError::Internal(e.to_string()))?
     } else {
         canonical_run_toml(
             &processed.name,
             resolved_integration_params,
             processed.target.as_ref(),
-            &initial_tasks,
+            initial_tasks,
         )?
     };
     let provenance = serde_json::to_value(RunProvenance::capture(
-        processed.original_toml.clone(),
+        Some(processed.original_toml.clone()),
         effective_toml,
     ))
     .map_err(|err| ApiError::Internal(format!("failed to serialize run provenance: {err}")))?;
@@ -303,13 +283,13 @@ async fn create_run_with_parent(
     let run_id = store
         .create_run(
             &processed.name,
-            &run_toml,
+            run_toml,
             &provenance,
             &integration_params,
             processed.target.as_ref(),
             domain,
-            &initial_stage_snapshot,
-            &initial_tasks,
+            initial_stage_snapshot,
+            initial_tasks,
             parent,
         )
         .await?;
@@ -525,20 +505,16 @@ pub fn rename_run_definition(raw: &str, name: &str) -> Result<String, ApiError> 
 /// Keep the edited draft, choosing a fresh name only when its name is already used.
 pub async fn prepare_run_duplicate(
     store: &impl crate::core::RunReadStore,
-    mut config: RunAddConfig,
-) -> Result<RunAddConfig, ApiError> {
+    mut config: RunDefinition,
+) -> Result<RunDefinition, ApiError> {
     let base = config.name.clone();
     let mut suffix = 1;
     while !store.get_runs_by_name(&config.name).await?.is_empty() {
         config.name = copy_name(&base, suffix);
         suffix += 1;
     }
-    if let Some(raw) = &mut config.original_toml {
-        *raw = rename_run_definition(raw, &config.name)?;
-    }
-    if let Some(document) = &mut config.effective_document {
-        document["name"] = toml::Value::String(config.name.clone());
-    }
+    config.original_toml = rename_run_definition(&config.original_toml, &config.name)?;
+    config.effective_document["name"] = toml::Value::String(config.name.clone());
     Ok(config)
 }
 
@@ -983,32 +959,17 @@ fn read_default_run_add_toml() -> Result<toml::Value, ApiError> {
     })
 }
 
-fn parse_run_add_config_value(merged: toml::Value) -> Result<RunAddConfig, ApiError> {
-    let parsed: RunAddConfig = merged
-        .try_into()
-        .map_err(|err| ApiError::BadRequest(format!("invalid run-add payload: {err}")))?;
-    let name = parsed.name.trim().to_string();
-    if name.is_empty() {
-        return Err(ApiError::BadRequest(
-            "invalid run name (`name`): expected non-empty string".to_string(),
-        ));
-    }
-    Ok(RunAddConfig { name, ..parsed })
-}
-
-fn stored_run_toml(
-    processed: &RunAddConfig,
-    integration_params: &IntegrationParams,
-    target: Option<&serde_json::Value>,
-    task_queue: &[RunTaskInput],
-) -> Result<String, ApiError> {
-    if let Some(original_toml) = processed.original_toml.as_ref() {
-        return Ok(original_toml.clone());
-    }
-    canonical_run_toml(&processed.name, integration_params, target, task_queue)
-}
-
 fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    // Defaults belong to a tagged variant. Replacing an evaluator kind must not
+    // carry unit-only fields into Symbolica or a process evaluator.
+    if base.get("kind").is_some()
+        && overlay.get("kind").is_some()
+        && base.get("kind") != overlay.get("kind")
+    {
+        *base = overlay;
+        return;
+    }
+
     match (base, overlay) {
         (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
             for (key, value) in overlay_table {
@@ -1040,9 +1001,7 @@ fn remove_toml_key(value: &mut toml::Value, key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
-        RunTaskSpec, SampleStopCondition, SamplerAggregatorConfig, SamplerAggregatorSourceSpec,
-    };
+    use crate::core::{RunTaskSpec, SampleStopCondition, SamplerSourceSpec, SamplingConfig};
     use crate::evaluation::UnitEvaluatorParams;
     use crate::sampling::NaiveMonteCarloSamplerParams;
 
@@ -1054,12 +1013,12 @@ mod tests {
 
     #[test]
     fn definition_export_contains_configuration_without_execution_metadata() {
-        let config = preprocess_run_add(parse_run_add_config_toml(
+        let config = prepare_run(parse_run_add_config_toml(
             "name = 'definition'\ntarget = { kind = 'scalar', value = 1.25 }\n[evaluator]\nkind = 'unit'\n",
         ).unwrap()).unwrap();
         let raw = canonical_run_toml(
             &config.name,
-            &config.resolved_integration_params.unwrap(),
+            &config.integration_params,
             config.target.as_ref(),
             &[],
         )
@@ -1094,16 +1053,16 @@ task_queue = [{
         max_samples = "$(samples:10)",
     },
     accumulator = { config = "scalar", },
-    sampler_aggregator = {
+    sampler = {
         config = '$(sampler:{ kind = "naive_monte_carlo" })',
     },
 }]
 "#;
         let parsed = parse_run_add_config_toml(raw).expect("TOML 1.1 run config");
-        let tasks = parsed.task_queue.as_ref().unwrap();
+        let tasks = &parsed.integration().unwrap().task_queue;
         let RunTaskSpec::Sample {
             stop_condition,
-            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
+            sampler: Some(SamplerSourceSpec::Config { config }),
             ..
         } = &tasks[0].task
         else {
@@ -1112,25 +1071,24 @@ task_queue = [{
         assert_eq!(stop_condition.max_samples, Some(20_000));
         assert_eq!(serde_json::to_value(config).unwrap()["seed"], 42);
 
-        let processed = preprocess_run_add(parsed).expect("preprocess multiline run");
-        let params = processed.resolved_integration_params.as_ref().unwrap();
-        let tasks = processed.resolved_task_queue.as_ref().unwrap();
+        let processed = prepare_run(parsed).expect("preprocess multiline run");
+        let params = &processed.integration_params;
+        let tasks = &processed.task_queue;
         assert_eq!(
-            stored_run_toml(&processed, params, processed.target.as_ref(), tasks).unwrap(),
-            raw,
+            processed.original_toml, raw,
             "reproduction must preserve the submitted layout and comments"
         );
         let canonical =
             canonical_run_toml(&processed.name, params, processed.target.as_ref(), tasks)
                 .expect("serialize effective run");
-        let restored = preprocess_run_add(parse_run_add_config_toml(&canonical).unwrap()).unwrap();
+        let restored = prepare_run(parse_run_add_config_toml(&canonical).unwrap()).unwrap();
         assert_eq!(restored.name, processed.name);
         assert_eq!(
-            serde_json::to_value(restored.resolved_integration_params).unwrap(),
+            serde_json::to_value(restored.integration_params).unwrap(),
             serde_json::to_value(params).unwrap()
         );
         assert_eq!(
-            serde_json::to_value(restored.resolved_task_queue).unwrap(),
+            serde_json::to_value(restored.task_queue).unwrap(),
             serde_json::to_value(tasks).unwrap()
         );
     }
@@ -1146,7 +1104,7 @@ task = {
     kind = "sample",
     stop_condition = { max_samples = "$(samples:10)", },
     accumulator = { config = "scalar", },
-    sampler_aggregator = {
+    sampler = {
         config = {
             kind = "naive_monte_carlo", # Nested tables allow comments too.
         },
@@ -1185,20 +1143,20 @@ fail_on_batch_nrs = "$(enabled_failures:[])"
 kind = "sample"
 stop_condition = { max_samples = "$(samples:8)" }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 "#;
         let config = parse_run_add_config_toml(raw).expect("templated run config");
 
         assert_eq!(config.name, "templated-run");
-        assert_eq!(config.original_toml.as_deref(), Some(raw));
-        let Some(EvaluatorConfig::Unit { params }) = config.integration_params.evaluator else {
+        assert_eq!(config.original_toml, raw);
+        let Some(EvaluatorConfig::Unit { params }) =
+            config.integration().unwrap().params.evaluator.clone()
+        else {
             panic!("expected unit evaluator");
         };
         assert_eq!(params.continuous_dims, 1);
         assert_eq!(params.fail_on_batch_nrs, vec![1, 2]);
-        let Some(tasks) = config.task_queue else {
-            panic!("missing task queue");
-        };
+        let tasks = &config.integration().unwrap().task_queue;
         let RunTaskSpec::Sample { stop_condition, .. } = &tasks[0].task else {
             panic!("expected sample task");
         };
@@ -1226,14 +1184,14 @@ discrete_dims = 0
 kind = "sample"
 stop_condition = { max_samples = "$(samples:8)" }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 "#,
             replacements,
         )
         .expect("run config");
 
         assert_eq!(config.name, "child");
-        let tasks = config.task_queue.expect("tasks");
+        let tasks = &config.integration().unwrap().task_queue;
         let RunTaskSpec::Sample { stop_condition, .. } = &tasks[0].task else {
             panic!("expected sample task");
         };
@@ -1257,23 +1215,11 @@ discrete_dims = 0
 kind = "sample"
 stop_condition = { max_samples = "$(samples:8)" }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 "#;
-        let processed = preprocess_run_add(parse_run_add_config_toml(raw).expect("run config"))
-            .expect("preprocess");
-        let integration_params = processed
-            .resolved_integration_params
-            .as_ref()
-            .expect("resolved integration params");
-        let tasks = processed.resolved_task_queue.clone().unwrap_or_default();
-
-        let stored = stored_run_toml(
-            &processed,
-            integration_params,
-            processed.target.as_ref(),
-            &tasks,
-        )
-        .expect("stored run toml");
+        let processed =
+            prepare_run(parse_run_add_config_toml(raw).expect("run config")).expect("preprocess");
+        let stored = processed.original_toml;
 
         assert_eq!(stored, raw);
     }
@@ -1289,7 +1235,7 @@ name = '$(task_name:"fallback-sample")'
 kind = "sample"
 stop_condition = { max_samples = "$(samples:8)" }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 "#,
         )
         .expect("templated task config")
@@ -1305,13 +1251,15 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
     #[test]
     fn parse_run_add_accepts_task_level_evaluator_sources() {
         let config = parse_run_add_config_toml(
-            r#"
-name = "task-evaluators"
+            r#"name = "task-evaluators"
 
 [evaluator]
 kind = "symbolica"
-expr = "1"
 args = ["x"]
+
+[evaluator.source]
+kind = "expression"
+expr = "1"
 
 [[task_queue]]
 name = "accumulator"
@@ -1321,23 +1269,38 @@ accumulator = "scalar"
 [[task_queue]]
 name = "sample-a"
 kind = "sample"
-stop_condition = { max_samples = 8 }
-evaluator = { config = { kind = "symbolica", expr = "x", args = ["x"] } }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
 accumulator = "latest"
+
+[task_queue.stop_condition]
+max_samples = 8
+
+[task_queue.evaluator.config]
+kind = "symbolica"
+args = ["x"]
+
+[task_queue.evaluator.config.source]
+kind = "expression"
+expr = "x"
+
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
 
 [[task_queue]]
 name = "sample-b"
 kind = "sample"
-stop_condition = { max_samples = 8 }
-evaluator = { from_name = "sample-a" }
-sampler_aggregator = "latest"
+sampler = "latest"
 accumulator = "latest"
+
+[task_queue.stop_condition]
+max_samples = 8
+
+[task_queue.evaluator]
+from_name = "sample-a"
 "#,
         )
         .expect("task-level evaluator config");
 
-        assert_eq!(config.task_queue.expect("tasks").len(), 3);
+        assert_eq!(config.integration().unwrap().task_queue.len(), 3);
     }
 
     #[test]
@@ -1371,12 +1334,12 @@ kind = "sample"
 max_samples = 4
 
 [task_queue.measurement]
-quantity = "central_value"
+selection = { kind = 'all_component_means' }
 
 [task_queue.accumulator]
 config = "scalar"
 
-[task_queue.sampler_aggregator.config]
+[task_queue.sampler.config]
 kind = "naive_monte_carlo"
 '''
 "#,
@@ -1387,7 +1350,7 @@ kind = "naive_monte_carlo"
             parameters,
             max_concurrent_runs,
             ..
-        } = &config.task_queue.expect("tasks")[0].task
+        } = config.controller().unwrap()
         else {
             panic!("expected parameter scan task");
         };
@@ -1437,9 +1400,7 @@ name = "child"
         )
         .expect("run config");
 
-        let RunTaskSpec::ParameterScan { parameters, .. } =
-            &config.task_queue.expect("tasks")[0].task
-        else {
+        let RunTaskSpec::ParameterScan { parameters, .. } = config.controller().unwrap() else {
             panic!("expected parameter scan task");
         };
         assert_eq!(parameters.len(), 2);
@@ -1450,31 +1411,46 @@ name = "child"
     #[test]
     fn parse_run_add_rejects_task_level_evaluator_domain_changes() {
         let config = parse_run_add_config_toml(
-            r#"
-name = "bad-task-evaluator-domain"
+            r#"name = "bad-task-evaluator-domain"
 
 [evaluator]
 kind = "symbolica"
-expr = "1"
 args = ["x"]
+
+[evaluator.source]
+kind = "expression"
+expr = "1"
 
 [[task_queue]]
 kind = "sample"
-stop_condition = { max_samples = 8 }
-evaluator = { config = { kind = "symbolica", expr = "x + y", args = ["x", "y"] } }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
-accumulator = { config = "scalar" }
+
+[task_queue.stop_condition]
+max_samples = 8
+
+[task_queue.evaluator.config]
+kind = "symbolica"
+args = ["x", "y"]
+
+[task_queue.evaluator.config.source]
+kind = "expression"
+expr = "x + y"
+
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
+
+[task_queue.accumulator]
+config = "scalar"
 "#,
         )
         .expect("run config");
         let mut context = TaskPreflightContext::from_existing_tasks(
             &[],
-            config.integration_params.evaluator.clone(),
+            config.integration().unwrap().params.evaluator.clone(),
             Domain::continuous(1),
         )
         .expect("context");
         let err = context
-            .validate_batch(config.task_queue.as_ref().expect("tasks"))
+            .validate_batch(&config.integration().unwrap().task_queue)
             .expect_err("domain-changing evaluator should fail");
 
         assert!(err.to_string().contains("does not match run domain"));
@@ -1554,7 +1530,8 @@ fixed_dims = { "0" = 0 }
         )
         .expect("run config");
 
-        let RunTaskSpec::SetAccumulator { accumulator } = &config.task_queue.unwrap()[0].task
+        let RunTaskSpec::SetAccumulator { accumulator } =
+            &config.integration().unwrap().task_queue[0].task
         else {
             panic!("expected set_accumulator");
         };
@@ -1583,12 +1560,14 @@ fail_on_batch_nrs = [1, 2, 3]
 kind = "sample"
 stop_condition = { max_samples = 8 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 "#,
         )
         .expect("run config");
 
-        let Some(EvaluatorConfig::Unit { params }) = config.integration_params.evaluator else {
+        let Some(EvaluatorConfig::Unit { params }) =
+            config.integration().unwrap().params.evaluator.clone()
+        else {
             panic!("expected unit evaluator");
         };
         assert_eq!(params.fail_on_batch_nrs, vec![1, 2, 3]);
@@ -1609,22 +1588,24 @@ discrete_dims = 0
 kind = "sample"
 stop_condition = { max_samples = 8 }
 accumulator = { config = "scalar" }
-sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr = 1 } }
+sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr = 1 } }
 "#,
         )
         .expect("run config");
 
-        let Some(tasks) = config.task_queue else {
-            panic!("missing task queue");
-        };
+        let tasks = &config.integration().unwrap().task_queue;
         let RunTaskSpec::Sample {
-            sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config { config }),
+            sampler: Some(SamplerSourceSpec::Config { config }),
             ..
         } = &tasks[0].task
         else {
             panic!("expected sample task with sampler config");
         };
-        let SamplerAggregatorConfig::NaiveMonteCarlo { params, .. } = config else {
+        let SamplingConfig {
+            sampler: crate::core::SamplerConfig::NaiveMonteCarlo { params, .. },
+            ..
+        } = config
+        else {
             panic!("expected naive monte carlo config");
         };
         assert_eq!(params.fail_on_materialize_batch_nr, Some(1));
@@ -1641,10 +1622,13 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
                 },
                 measurement: None,
                 evaluator: None,
-                sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
-                    config: SamplerAggregatorConfig::NaiveMonteCarlo {
-                        params: NaiveMonteCarloSamplerParams::default(),
+                sampler: Some(SamplerSourceSpec::Config {
+                    config: SamplingConfig {
+                        sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                            params: NaiveMonteCarloSamplerParams::default(),
+                        },
                         materializer: None,
+                        transforms: None,
                     },
                 }),
                 accumulator,
@@ -1680,15 +1664,7 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
                 .as_path(),
         )
         .expect("integration campaign config");
-        let Some(
-            [
-                RunTaskInput {
-                    task: RunTaskSpec::IntegrationCampaign { children, .. },
-                    ..
-                },
-            ],
-        ) = config.task_queue.as_deref()
-        else {
+        let Some(RunTaskSpec::IntegrationCampaign { children, .. }) = config.controller() else {
             panic!("expected one integration campaign task");
         };
         assert_eq!(children.len(), 3);
@@ -1700,8 +1676,11 @@ sampler_aggregator = { config = { kind = "naive_monte_carlo", fail_on_materializ
             )
             .unwrap_or_else(|err| panic!("invalid child '{}': {err}", child.name));
             let crate::core::EvaluatorConfig::Gammaloop { params } = child_config
-                .integration_params
+                .integration()
+                .unwrap()
+                .params
                 .evaluator
+                .clone()
                 .expect("campaign child evaluator")
             else {
                 panic!("expected gammaloop child evaluator");
@@ -1721,14 +1700,14 @@ name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 8 }
 evaluator = { config = { kind = "unit", continuous_dims = 2, discrete_dims = 0 } }
-sampler_aggregator = { config = { kind = "naive_monte_carlo" } }
+sampler = { config = { kind = "naive_monte_carlo" } }
 accumulator = { config = "scalar" }
 "#,
         )
         .expect("task-local evaluator config");
-        assert!(config.integration_params.evaluator.is_none());
-        let processed = preprocess_run_add(config).expect("preprocessing");
-        assert_eq!(processed.domain, Some(Domain::rectangular(2, 0)));
+        assert!(config.integration().unwrap().params.evaluator.is_none());
+        let processed = prepare_run(config).expect("preprocessing");
+        assert_eq!(processed.domain, Domain::rectangular(2, 0));
     }
 
     #[test]
@@ -1759,8 +1738,8 @@ discrete_dims = 0
 "#,
         )
         .expect("controller-only run config");
-        assert!(config.integration_params.evaluator.is_none());
-        preprocess_run_add(config).expect("controller-only preprocessing");
+        assert!(config.integration().is_none());
+        prepare_run(config).expect("controller-only preprocessing");
     }
 
     #[test]
@@ -1779,10 +1758,13 @@ discrete_dims = 0
                     },
                     measurement: None,
                     evaluator: None,
-                    sampler_aggregator: Some(SamplerAggregatorSourceSpec::Config {
-                        config: SamplerAggregatorConfig::NaiveMonteCarlo {
-                            params: NaiveMonteCarloSamplerParams::default(),
+                    sampler: Some(SamplerSourceSpec::Config {
+                        config: SamplingConfig {
+                            sampler: crate::core::SamplerConfig::NaiveMonteCarlo {
+                                params: NaiveMonteCarloSamplerParams::default(),
+                            },
                             materializer: None,
+                            transforms: None,
                         },
                     }),
                     accumulator: Some(crate::core::AccumulatorSourceSpec::Config {
@@ -1837,10 +1819,8 @@ discrete_dims = 0
                 },
             }])
             .expect_err("gammaloop accumulator should fail for scalar unit evaluator");
-        assert!(
-            error
-                .to_string()
-                .contains("does not support accumulator config \"gammaloop\"")
-        );
+        assert!(error.to_string().contains(
+            "requires accumulator config \"vector\" or \"full_vector\", got \"gammaloop\""
+        ));
     }
 }

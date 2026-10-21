@@ -3,13 +3,232 @@ use gammaboard::core::{
     RunTaskSpec, RunTaskStore, SampleStopCondition, StoreError, TaskMeasurementOutput,
     WorkQueueStore, WorkerRole, next_batch_ids,
 };
-use gammaboard::{Batch, LatentBatchSpec, MeasurementResult, PgStore, Point};
+use gammaboard::{Batch, LatentBatch, MeasurementResult, PgStore, Point};
 use sqlx::postgres::PgPoolOptions;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep};
 
 static TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn campaign_grants_are_atomic_durable_and_include_prior_stages() {
+    let (_guard, store) = locked_test_store().await;
+    let (parent, parent_task, _, _) = reliability_fixture(&store, 0).await;
+    let (left, left_task, _, _) = reliability_fixture(&store, 0).await;
+    let (right, right_task, _, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("UPDATE run_tasks SET task=$2 WHERE id=$1").bind(parent_task)
+        .bind(serde_json::json!({"kind":"integration_campaign","stop_condition":{"max_total_samples":512}}))
+        .execute(store.pool()).await.unwrap();
+    sqlx::query("UPDATE runs SET parent_run_id=$1,parent_task_id=$2 WHERE id=ANY($3)")
+        .bind(parent)
+        .bind(parent_task)
+        .bind(vec![left, right])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .campaign_sample_allowance(left, left_task)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    let left_request = [(left, 4096)];
+    let right_request = [(right, 4096)];
+    let (a, b) = tokio::join!(
+        store.allocate_campaign_samples(parent_task, &left_request),
+        store.allocate_campaign_samples(parent_task, &right_request)
+    );
+    a.unwrap();
+    b.unwrap();
+    let reopened = PgStore::new(store.pool().clone());
+    let grants = reopened
+        .allocate_campaign_samples(parent_task, &[])
+        .await
+        .unwrap();
+    assert_eq!(grants.values().sum::<i64>(), 512);
+    assert_eq!(
+        store
+            .campaign_sample_allowance(left, left_task)
+            .await
+            .unwrap(),
+        Some(grants[&left])
+    );
+    // Replay after recovery uses the existing allowance, never another charge.
+    let replay = reopened
+        .allocate_campaign_samples(parent_task, &[(left, 4096), (right, 4096)])
+        .await
+        .unwrap();
+    assert_eq!(replay, grants);
+    let (winner, winner_task, loser, loser_task) = if grants[&left] > 0 {
+        (left, left_task, right, right_task)
+    } else {
+        (right, right_task, left, left_task)
+    };
+    store
+        .update_run_task_progress(winner_task, 32, 32)
+        .await
+        .unwrap();
+    store.complete_run_task(winner_task).await.unwrap();
+    let finished = store.get_run_progress(winner).await.unwrap().unwrap();
+    assert_eq!(
+        finished.lifecycle_state,
+        gammaboard::stores::RunLifecycleState::Completed
+    );
+    assert!(finished.completed_at.is_some());
+    let reused = store
+        .allocate_campaign_samples(parent_task, &[(loser, 4096)])
+        .await
+        .unwrap();
+    assert_eq!(reused[&winner], 32);
+    assert_eq!(reused[&loser], 480);
+    store
+        .update_run_task_progress(loser_task, 16, 16)
+        .await
+        .unwrap();
+    store.complete_run_task(loser_task).await.unwrap();
+    let task = store.list_run_tasks(loser).await.unwrap().remove(0).task;
+    let next = store
+        .append_run_tasks(
+            loser,
+            &[RunTaskInput {
+                name: Some("inference".into()),
+                task,
+            }],
+        )
+        .await
+        .unwrap()[0]
+        .id;
+    assert_eq!(
+        store.campaign_sample_allowance(loser, next).await.unwrap(),
+        Some(464)
+    );
+    let pending = store.get_run_progress(loser).await.unwrap().unwrap();
+    assert_ne!(
+        pending.lifecycle_state,
+        gammaboard::stores::RunLifecycleState::Completed
+    );
+    assert!(pending.completed_at.is_none());
+    store.remove_run(parent).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn activating_a_new_stage_never_exposes_the_previous_live_accumulator() {
+    use gammaboard::core::AggregationStore;
+    let (_guard, store) = locked_test_store().await;
+    let (run, first, node, _) = reliability_fixture(&store, 0).await;
+    let mut previous =
+        gammaboard::AccumulatorState::from_config(&gammaboard::AccumulatorConfig::scalar());
+    if let gammaboard::AccumulatorState::Vector(vector) = &mut previous {
+        for _ in 0..2 {
+            vector
+                .ingest_vector(&[42.0], &Point::new(vec![], vec![], 1.0))
+                .unwrap();
+        }
+    }
+    let previous = previous.to_json().unwrap();
+    sqlx::query("UPDATE runs SET current_observable=$2 WHERE id=$1")
+        .bind(run)
+        .bind(&previous)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store
+        .persist_task_result_snapshot(run, first, &previous)
+        .await
+        .unwrap();
+    store.update_run_task_progress(first, 2, 2).await.unwrap();
+    store.complete_run_task(first).await.unwrap();
+    let task = store.list_run_tasks(run).await.unwrap().remove(0).task;
+    store
+        .append_run_tasks(
+            run,
+            &[RunTaskInput {
+                name: Some("fresh-stage".into()),
+                task,
+            }],
+        )
+        .await
+        .unwrap();
+    let active = store.activate_next_run_task(run).await.unwrap().unwrap();
+    let initial = store.load_current_accumulator(run).await.unwrap();
+    // Polling an already active/exhausted queue must not clear a valid publication.
+    sqlx::query("UPDATE runs SET current_observable=$2 WHERE id=$1")
+        .bind(run)
+        .bind(&previous)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(store.activate_next_run_task(run).await.unwrap().is_none());
+    let unchanged = store.load_current_accumulator(run).await.unwrap();
+    let history: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM persisted_observable_snapshots WHERE run_id=$1 AND task_id=$2",
+    )
+    .bind(run)
+    .bind(first)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+    assert_eq!(active.nr_completed_samples, 0);
+    assert!(
+        initial.is_none(),
+        "a new active stage exposed the previous stage's result"
+    );
+    assert_eq!(unchanged, Some(previous));
+    assert_eq!(history, 1, "completed-stage history must remain available");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn startup_rejects_unversioned_and_future_database_models() {
+    let (_guard, store) = locked_test_store().await;
+    let schema = format!("compatibility_test_{}", rand::random::<u64>());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let mut url = url::Url::parse(&std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap()).unwrap();
+    url.query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema}"));
+    let error = gammaboard::init_pg_store(url.as_str(), 1)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible GammaBoard database")
+    );
+    sqlx::query(&format!("CREATE TABLE {schema}.gammaboard_compatibility (singleton boolean PRIMARY KEY, model_version integer NOT NULL)")).execute(store.pool()).await.unwrap();
+    sqlx::query(&format!(
+        "INSERT INTO {schema}.gammaboard_compatibility VALUES (true,99)"
+    ))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    assert!(gammaboard::init_pg_store(url.as_str(), 1).await.is_err());
+    sqlx::query(&format!(
+        "UPDATE {schema}.gammaboard_compatibility SET model_version=2"
+    ))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let compatible = gammaboard::init_pg_store(url.as_str(), 1).await.unwrap();
+    compatible.pool().close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(store.pool())
+        .await
+        .unwrap();
+}
 
 #[tokio::test]
 #[ignore = "requires postgres"]
@@ -111,28 +330,23 @@ async fn copy_inputs_round_trip_mixed_payloads_and_row_lengths() {
     let (_test_guard, store) = locked_test_store().await;
     let (run, task, _, _) = reliability_fixture(&store, 0).await;
     let batches = [
-        LatentBatchSpec::from_batch(
-            &Batch::from_points([
-                Point::new(vec![0.25], vec![], 2.0),
-                Point::new(vec![0.5, 0.75, 0.125], vec![7, 2], 3.0),
-            ])
-            .unwrap(),
-        )
-        .build(),
+        LatentBatch::from_batch(&Batch::from_iter([
+            Point::new(vec![0.25], vec![], 2.0),
+            Point::new(vec![0.5, 0.75, 0.125], vec![7, 2], 3.0),
+        ]))
+        .for_evaluation(gammaboard::core::AccumulatorConfig::scalar()),
         LatentBatch {
             nr_samples: 777,
-            accumulator: AccumulatorConfig::scalar(),
             payload: LatentBatchPayload::HavanaInference {
-                rng_state: SerializableMonteCarloRng::new(42, 0),
+                rng_states: vec![SerializableMonteCarloRng::new(42, 0)],
+                offset: 0,
             },
-        },
-        LatentBatchSpec::from_batch(
-            &Batch::from_points(
-                (0..1024).map(|i| Point::new(vec![i as f64 / 1024.0; 6], vec![], 1.0)),
-            )
-            .unwrap(),
-        )
-        .build(),
+        }
+        .for_evaluation(AccumulatorConfig::scalar()),
+        LatentBatch::from_batch(&Batch::from_iter(
+            (0..1024).map(|i| Point::new(vec![i as f64 / 1024.0; 6], vec![], 1.0)),
+        ))
+        .for_evaluation(gammaboard::core::AccumulatorConfig::scalar()),
     ];
     let ids = next_batch_ids(batches.len());
     let outcome = store
@@ -150,7 +364,10 @@ async fn copy_inputs_round_trip_mixed_payloads_and_row_lengths() {
     for ((id, bytes), (expected_id, batch)) in rows.iter().zip(ids.iter().zip(&batches)) {
         assert_eq!(id, expected_id);
         assert_eq!(*bytes, batch.to_bytes().unwrap());
-        assert_eq!(LatentBatch::from_bytes(bytes).unwrap(), *batch);
+        assert_eq!(
+            gammaboard::core::EvaluationBatch::from_bytes(bytes).unwrap(),
+            *batch
+        );
     }
     store.remove_run(run).await.unwrap();
 }
@@ -176,10 +393,9 @@ async fn input_transaction_does_not_block_other_batches_and_counters_commit_atom
         .set_current_assignment(&node, WorkerRole::Evaluator, run)
         .await
         .unwrap();
-    let batch = LatentBatchSpec::from_batch(
-        &Batch::from_points([Point::new(vec![0.5], Vec::new(), 1.0)]).unwrap(),
-    )
-    .build();
+    let batch =
+        LatentBatch::from_batch(&Batch::from_iter([Point::new(vec![0.5], Vec::new(), 1.0)]))
+            .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
     store
         .insert_batches(
             run,
@@ -322,7 +538,7 @@ async fn active_task_accumulates_declared_cpu_time() {
     let run_id: i32 = sqlx::query_scalar(
         r#"
         INSERT INTO runs (name, integration_params, point_spec)
-        VALUES ('cpu-time', '{}'::jsonb, '{"continuous":{"dims":1}}'::jsonb)
+        VALUES ('cpu-time', '{}'::jsonb, '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb)
         RETURNING id
         "#,
     )
@@ -342,7 +558,7 @@ async fn active_task_accumulates_declared_cpu_time() {
                     },
                     measurement: None,
                     evaluator: None,
-                    sampler_aggregator: None,
+                    sampler: None,
                     accumulator: None,
                     queue_tuning: None,
                     batch_transforms: None,
@@ -451,7 +667,7 @@ async fn parent_task_and_run_include_child_cpu_time() {
     let parent_run_id: i32 = sqlx::query_scalar(
         r#"
         INSERT INTO runs (name, integration_params, point_spec)
-        VALUES ('cpu-parent', '{}'::jsonb, '{"continuous":{"dims":1}}'::jsonb)
+        VALUES ('cpu-parent', '{}'::jsonb, '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb)
         RETURNING id
         "#,
     )
@@ -481,7 +697,7 @@ async fn parent_task_and_run_include_child_cpu_time() {
         INSERT INTO runs (
             name, integration_params, point_spec, parent_run_id, parent_task_id
         ) VALUES (
-            'cpu-child', '{}'::jsonb, '{"continuous":{"dims":1}}'::jsonb, $1, $2
+            'cpu-child', '{}'::jsonb, '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb, $1, $2
         )
         RETURNING id
         "#,
@@ -544,7 +760,7 @@ async fn claim_batch_requires_active_assignment() {
         ) VALUES (
             'claim-batch-active',
             '{}'::jsonb,
-            '{"continuous":{"dims":1}}'::jsonb
+            '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -564,8 +780,9 @@ async fn claim_batch_requires_active_assignment() {
 
     let task_id = insert_completed_pause_task(&store, run_id).await;
 
-    let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
-    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batch = Batch::from_iter([Point::new(vec![1.0], Vec::new(), 1.0)]);
+    let latent_batch = LatentBatch::from_batch(&batch)
+        .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
     let batch_ids = next_batch_ids(1);
     store
         .insert_batches(
@@ -604,7 +821,7 @@ async fn task_measurement_output_round_trips() {
         ) VALUES (
             'task-measurement-output',
             '{}'::jsonb,
-            '{"continuous":{"dims":1}}'::jsonb
+            '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -626,7 +843,7 @@ async fn task_measurement_output_round_trips() {
                     },
                     measurement: None,
                     evaluator: None,
-                    sampler_aggregator: None,
+                    sampler: None,
                     accumulator: None,
                     queue_tuning: None,
                     batch_transforms: None,
@@ -684,7 +901,7 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
         ) VALUES (
             'claim-batch-inactive',
             '{}'::jsonb,
-            '{"continuous":{"dims":1}}'::jsonb
+            '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -700,8 +917,9 @@ async fn claim_batch_rejects_unassigned_or_inactive_assignment() {
 
     let task_id = insert_completed_pause_task(&store, run_id).await;
 
-    let batch = Batch::from_points([Point::new(vec![2.0], Vec::new(), 1.0)]).expect("batch");
-    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batch = Batch::from_iter([Point::new(vec![2.0], Vec::new(), 1.0)]);
+    let latent_batch = LatentBatch::from_batch(&batch)
+        .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
     let batch_ids = next_batch_ids(1);
     store
         .insert_batches(
@@ -760,7 +978,7 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
         ) VALUES (
             'claim-batch-single-row',
             '{}'::jsonb,
-            '{"continuous":{"dims":1}}'::jsonb
+            '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -780,8 +998,9 @@ async fn claim_batch_claims_exactly_one_pending_batch() {
 
     let task_id = insert_completed_pause_task(&store, run_id).await;
 
-    let batch = Batch::from_points([Point::new(vec![3.0], Vec::new(), 1.0)]).expect("batch");
-    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batch = Batch::from_iter([Point::new(vec![3.0], Vec::new(), 1.0)]);
+    let latent_batch = LatentBatch::from_batch(&batch)
+        .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
     let batches = vec![
         latent_batch.clone(),
         latent_batch.clone(),
@@ -857,7 +1076,7 @@ async fn sampler_aggregator_desired_assignment_is_unique_per_run() {
         ) VALUES (
             'test-run',
             '{}'::jsonb,
-            '{"continuous":{"dims":0}}'::jsonb
+            '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 0}}'::jsonb
         )
         RETURNING id
         "#,
@@ -912,7 +1131,7 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
         ) VALUES (
             'cleanup-failed-batches',
             '{}'::jsonb,
-            '{"continuous":{"dims":1}}'::jsonb
+            '{"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}'::jsonb
         )
         RETURNING id
         "#,
@@ -923,8 +1142,9 @@ async fn cleanup_consumed_completed_batches_does_not_remove_failed_batches() {
 
     let task_id = insert_completed_pause_task(&store, run_id).await;
 
-    let batch = Batch::from_points([Point::new(vec![1.0], Vec::new(), 1.0)]).expect("batch");
-    let latent_batch = LatentBatchSpec::from_batch(&batch).build();
+    let batch = Batch::from_iter([Point::new(vec![1.0], Vec::new(), 1.0)]);
+    let latent_batch = LatentBatch::from_batch(&batch)
+        .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
     let batch_ids = next_batch_ids(1);
     store
         .insert_batches(run_id, task_id, false, &batch_ids, &[latent_batch])
@@ -1540,7 +1760,7 @@ async fn prefetch_can_claim_fresh_work_while_a_peer_is_idle() {
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn sampler_assignment_reserves_extra_connections_until_the_old_role_stops() {
-    use gammaboard::core::{DesiredAssignment, NodeAssignmentUpdate};
+    use gammaboard::core::{AssignmentTarget, NodeAssignmentUpdate};
     let (_guard, store) = locked_test_store().await;
     let capacity: i64 = sqlx::query_scalar(
         "SELECT (current_setting('max_connections')::bigint -
@@ -1572,11 +1792,9 @@ async fn sampler_assignment_reserves_extra_connections_until_the_old_role_stops(
         .unwrap();
     let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('pool-budget','{}','{\"continuous\":{\"dims\":0}}') RETURNING id")
         .fetch_one(store.pool()).await.unwrap();
-    let sampler = DesiredAssignment {
-        node_name: name.clone(),
+    let sampler = AssignmentTarget {
         role: WorkerRole::SamplerAggregator,
         run_id: run,
-        run_name: None,
     };
     // Both operator assignment and controller placement must roll back when
     // the additional sampler connections would spend the launch reservations.
@@ -1835,15 +2053,20 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         .await
         .unwrap();
     let name = format!("{prefix}-1");
-    let result = serde_json::json!({"workers": [{"node_name": name}]});
-    sqlx::query(
-        "UPDATE node_launch_requests SET state='starting',started_count=1,result=$2 WHERE id=$1",
-    )
-    .bind(request_id)
-    .bind(&result)
-    .execute(store.pool())
-    .await
-    .unwrap();
+    let claim = store
+        .claim_external_launch("history-test", Some(request_id))
+        .await
+        .unwrap()
+        .unwrap();
+    let token = claim["lease_token"].as_str().unwrap();
+    store
+        .update_external_worker(request_id, token, &name, "submitting", None, None)
+        .await
+        .unwrap();
+    store
+        .update_external_worker(request_id, token, &name, "submitted", Some("123"), None)
+        .await
+        .unwrap();
     // Submission alone does not fulfill a request.
     let requests = store.list_node_launch_requests().await.unwrap();
     assert_eq!(
@@ -1894,6 +2117,11 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         .unwrap();
     assert_eq!(node_count, 1);
     // A replacement's live lease cannot fulfill an earlier, incomplete attempt.
+    sqlx::query("UPDATE external_worker_launches SET state='submitted' WHERE request_id=$1")
+        .bind(request_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
     sqlx::query("UPDATE node_launch_requests SET state='starting' WHERE id=$1")
         .bind(request_id)
         .execute(store.pool())
@@ -1940,7 +2168,7 @@ async fn completed_cleanup_preserves_committed_checkpoint_work() {
     let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('checkpoint-cleanup','{}','{\"continuous\":{\"dims\":1}}') RETURNING id")
         .fetch_one(store.pool()).await.unwrap();
     let task = insert_completed_pause_task(&store, run).await;
-    let batch = Batch::from_points([Point::new(vec![1.0], vec![], 1.0)]).unwrap();
+    let batch = Batch::from_iter([Point::new(vec![1.0], vec![], 1.0)]);
     let ids = next_batch_ids(5);
     store
         .insert_batches(
@@ -1948,7 +2176,11 @@ async fn completed_cleanup_preserves_committed_checkpoint_work() {
             task,
             false,
             &ids,
-            &vec![LatentBatchSpec::from_batch(&batch).build(); 5],
+            &vec![
+                LatentBatch::from_batch(&batch)
+                    .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
+                5
+            ],
         )
         .await
         .unwrap();
@@ -2029,10 +2261,10 @@ async fn completed_cleanup_preserves_committed_checkpoint_work() {
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
-async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
+async fn checkpoint_and_stage_publish_atomically() {
     use gammaboard::core::{AggregationStore, RunStageSnapshot, SamplerAggregatorCheckpoint};
     use gammaboard::evaluation::AccumulatorState;
-    use gammaboard::sampling::SamplerAggregatorSnapshot;
+    use gammaboard::sampling::SavedSampler;
     use serde_json::json;
 
     let (_guard, store) = locked_test_store().await;
@@ -2044,19 +2276,26 @@ async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
         .execute(store.pool())
         .await
         .unwrap();
-    let sampler = SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({}) };
+    let sampler = SavedSampler {
+        version: 1,
+        config: gammaboard::core::SamplingConfig {
+            sampler: gammaboard::core::SamplerConfig::NaiveMonteCarlo {
+                params: Default::default(),
+            },
+            materializer: None,
+            transforms: None,
+        },
+        state: json!({}),
+    };
     let observable = AccumulatorState::empty_scalar();
-    // A checkpoint written by the preceding version, including discarded live metrics.
-    let old = json!({
-        "completed_samples":0, "task_id":task, "output_snapshot_id":null, "batches_completed":null,
+    // A current-format checkpoint at the empty initial boundary.
+    let saved = json!({
+        "format_version":1, "completed_samples":0, "task_id":task, "output_snapshot_id":null, "batches_completed":0,
         "sampler_snapshot":sampler, "observable_state":observable,
         "runtime_state":{
             "produced_batches_total":0, "produced_samples_total":0,
             "ingested_batches_total":0, "ingested_samples_total":0,
-            "sampler_uptime_ms_accumulated":10.0, "accumulator_checkpoint_state":"NeedsInitialRoundTrip",
-            "completed_samples_per_second":99.0, "eta_seconds":1.0, "sampler_tick_busy_ratio":0.8,
-            "initial_round_trip_snapshot_pending":false, "pending_persisted_completed_batches":0,
-            "batch_size_current":128
+            "sampler_uptime_ms_accumulated":10.0, "accumulator_checkpoint_state":"NeedsInitialRoundTrip"
         },
         "queue":{"last_completed_batch_id":null,"last_produced_batch_id":null,"batch_size_current":128}
     });
@@ -2065,13 +2304,7 @@ async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
     )
     .bind(run)
     .bind(task)
-    .bind(old)
-    .execute(store.pool())
-    .await
-    .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../migrations/202609110004_compact_checkpoints.sql"
-    ))
+    .bind(saved)
     .execute(store.pool())
     .await
     .unwrap();
@@ -2090,7 +2323,7 @@ async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
     store
         .restore_sampler_checkpoint(run, &checkpoint)
         .await
-        .expect("migrated checkpoint remains restorable");
+        .expect("checkpoint remains restorable");
     let compact = serde_json::to_value(&checkpoint).unwrap();
     assert_eq!(compact["runtime_state"].as_object().unwrap().len(), 6);
     assert_eq!(compact["batches_completed"], 0);
@@ -2104,7 +2337,6 @@ async fn checkpoint_and_stage_publish_atomically_after_schema_compaction() {
         sampler_snapshot: Some(sampler),
         observable_state: Some(observable),
         evaluator: None,
-        sampler_aggregator: None,
         batch_transforms: vec![],
     };
     store
@@ -2160,7 +2392,7 @@ async fn reliability_fixture(store: &PgStore, count: usize) -> (i32, i64, String
     let task: RunTaskSpec = serde_json::from_value(serde_json::json!({
         "kind":"sample", "stop_condition":{"max_samples":100},
         "evaluator":{"config":{"kind":"unit"}},
-        "sampler_aggregator":{"config":{"kind":"naive_monte_carlo"}}
+        "sampler":{"config":{"kind":"naive_monte_carlo"}}
     }))
     .unwrap();
     let task_id = store
@@ -2184,7 +2416,7 @@ async fn reliability_fixture(store: &PgStore, count: usize) -> (i32, i64, String
         .set_current_assignment(&node, WorkerRole::Evaluator, run)
         .await
         .unwrap();
-    let batch = Batch::from_points([Point::new(vec![0.5], Vec::new(), 1.0)]).unwrap();
+    let batch = Batch::from_iter([Point::new(vec![0.5], Vec::new(), 1.0)]);
     let ids = next_batch_ids(count);
     store
         .insert_batches(
@@ -2192,7 +2424,11 @@ async fn reliability_fixture(store: &PgStore, count: usize) -> (i32, i64, String
             task_id,
             false,
             &ids,
-            &vec![LatentBatchSpec::from_batch(&batch).build(); count],
+            &vec![
+                LatentBatch::from_batch(&batch)
+                    .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
+                count
+            ],
         )
         .await
         .unwrap();
@@ -2332,7 +2568,7 @@ async fn idle_evaluator_publishes_current_task_without_receiving_work() {
         runner.tick().await.unwrap();
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let batch = Batch::from_points([Point::new(vec![0.5], Vec::new(), 1.0)]).unwrap();
+    let batch = Batch::from_iter([Point::new(vec![0.5], Vec::new(), 1.0)]);
     let ids = next_batch_ids(8);
     store
         .insert_batches(
@@ -2340,7 +2576,11 @@ async fn idle_evaluator_publishes_current_task_without_receiving_work() {
             next,
             false,
             &ids,
-            &vec![LatentBatchSpec::from_batch(&batch).build(); 8],
+            &vec![
+                LatentBatch::from_batch(&batch)
+                    .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
+                8
+            ],
         )
         .await
         .unwrap();
@@ -2428,7 +2668,7 @@ async fn leader_lookup_tracks_lease_expiry_and_worker_replacement() {
 async fn campaign_stall_checkpoint_jsonb_number_roundtrip_preserves_recovery() {
     use gammaboard::core::{AggregationStore, SamplerAggregatorCheckpoint};
     use gammaboard::evaluation::AccumulatorState;
-    use gammaboard::sampling::SamplerAggregatorSnapshot;
+    use gammaboard::sampling::SavedSampler;
     use serde_json::{Value, json};
 
     let (_guard, store) = locked_test_store().await;
@@ -2447,18 +2687,17 @@ async fn campaign_stall_checkpoint_jsonb_number_roundtrip_preserves_recovery() {
     }
     // The actual Jacobian that prevented campaign 55's GL00 sampler from restarting.
     let mut point = Point::new(vec![0.5], vec![], 1.0);
-    point.parameterization_jacobian = Some(7.553_746_958_286_027e18);
     point.add_weight_factor(
         "gammaloop_parameterization_jacobian",
-        point.parameterization_jacobian.unwrap(),
+        7.553_746_958_286_027e18,
     );
     let AccumulatorState::Vector(mut observable) = AccumulatorState::empty_scalar() else {
         unreachable!()
     };
     observable.ingest_vector(&[1.0], &point).unwrap();
     let checkpoint: SamplerAggregatorCheckpoint = serde_json::from_value(json!({
-        "completed_samples": 1, "task_id": task, "output_snapshot_id": null, "batches_completed": 1,
-        "sampler_snapshot": SamplerAggregatorSnapshot::NaiveMonteCarlo { raw: json!({"seed": 1}) },
+        "format_version":1, "completed_samples": 1, "task_id": task, "output_snapshot_id": null, "batches_completed": 1,
+        "sampler_snapshot": SavedSampler { version: 1, config: gammaboard::core::SamplingConfig { sampler: gammaboard::core::SamplerConfig::NaiveMonteCarlo { params: Default::default() }, materializer: None, transforms: None }, state: json!({"seed": 1}) },
         "observable_state": AccumulatorState::Vector(observable),
         "runtime_state": {
             "produced_batches_total": 3, "produced_samples_total": 3,
@@ -2516,8 +2755,16 @@ async fn campaign_stall_checkpoint_jsonb_number_roundtrip_preserves_recovery() {
             .is_retry_activation()
     );
     let mut changed = loaded.clone();
-    changed.sampler_snapshot = SamplerAggregatorSnapshot::NaiveMonteCarlo {
-        raw: json!({"seed": 2}),
+    changed.sampler_snapshot = SavedSampler {
+        version: 1,
+        config: gammaboard::core::SamplingConfig {
+            sampler: gammaboard::core::SamplerConfig::NaiveMonteCarlo {
+                params: Default::default(),
+            },
+            materializer: None,
+            transforms: None,
+        },
+        state: json!({"seed": 2}),
     };
     store
         .save_sampler_checkpoint(run, &changed, None)
@@ -2859,7 +3106,7 @@ async fn claim_reconciliation_preserves_slow_work_and_releases_only_untracked_cl
 
 struct CountingEvaluator(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 impl gammaboard::evaluation::Evaluator for CountingEvaluator {
-    fn get_domain(&self) -> gammaboard::Domain {
+    fn domain(&self) -> gammaboard::Domain {
         gammaboard::Domain::rectangular(1, 0)
     }
     fn eval_batch(
@@ -2867,7 +3114,7 @@ impl gammaboard::evaluation::Evaluator for CountingEvaluator {
         _batch: &Batch,
         _accumulator: &gammaboard::core::AccumulatorConfig,
         _options: gammaboard::evaluation::EvalBatchOptions,
-    ) -> Result<gammaboard::evaluation::BatchResult, gammaboard::core::EvalError> {
+    ) -> Result<gammaboard::evaluation::BatchResult, gammaboard::core::EngineError> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(empty_batch_result())
     }
@@ -3036,4 +3283,60 @@ async fn launch_connection_budget_rejects_before_creating_workers() {
         .await
         .unwrap();
     assert_eq!(before, after);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn suspended_submission_releases_locks_and_rejects_stale_results() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, node, ids) = reliability_fixture(&store, 1).await;
+    let token = unique_id("suspended-claim");
+    store
+        .claim_batch(run, &node, &token)
+        .await
+        .unwrap()
+        .unwrap();
+    let url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap();
+    let worker_pool = gammaboard::get_pg_pool(&url, 1).await.unwrap();
+    let mut abandoned = worker_pool.begin().await.unwrap();
+    // Simulate suspension after the first submission write, before result/commit.
+    // Use the real production timeout; neither the client nor this test rolls back.
+    sqlx::query("UPDATE batches SET status='completed' WHERE id=$1")
+        .bind(ids[0])
+        .execute(&mut *abandoned)
+        .await
+        .unwrap();
+    store.expire_node_lease(&node).await.unwrap();
+    let reclaimed = tokio::time::timeout(
+        Duration::from_secs(45),
+        store.reclaim_abandoned_batches(run),
+    )
+    .await
+    .expect("abandoned submission must release its lock")
+    .unwrap();
+    assert_eq!(reclaimed, 1);
+    assert!(
+        abandoned.commit().await.is_err(),
+        "expired transaction cannot commit"
+    );
+    assert!(
+        store
+            .submit_batch_results(ids[0], &node, &token, &empty_batch_result(), 1.0)
+            .await
+            .unwrap_err()
+            .is_batch_ownership_lost()
+    );
+    let results: i64 = sqlx::query_scalar("SELECT count(*) FROM batch_results WHERE batch_id=$1")
+        .bind(ids[0])
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(results, 0, "aborted submission must not publish a result");
+    worker_pool.close().await;
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
 }

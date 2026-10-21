@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from gammaboard_process import Evaluator, GammaLoopBatchResult, log, run_evaluator
+from gammaboard_process import GammaLoopEvaluator, GammaLoopBatchResult, log, run_evaluator
 
 
-class MadGraphEventEvaluator(Evaluator):
+class MadGraphEventEvaluator(GammaLoopEvaluator):
     """Run native MG7 event generation and expose its statistics as observables."""
 
     def __init__(
@@ -38,23 +38,18 @@ class MadGraphEventEvaluator(Evaluator):
         self.python = python
         self._completed = False
 
-    @property
     def metadata(self) -> dict[str, Any]:
         return {
             "integrand": "native_madgraph_event_generation",
             "state_path": str(self.state_path),
         }
 
-    def eval(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
-    ) -> np.ndarray:
-        raise RuntimeError(
-            "MadGraphEventEvaluator requires evaluator accumulator = 'gammaloop'"
-        )
-
     def eval_gammaloop(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
+        weights: np.ndarray, *, require_training_values: bool,
     ) -> GammaLoopBatchResult:
+        if require_training_values or not np.array_equal(weights, [1.0]):
+            raise ValueError("MadGraph event generation requires an unweighted inference trigger")
         if len(xs_continuous) != 1:
             raise ValueError(
                 "MadGraph event generation must be triggered by a one-sample task"
@@ -165,10 +160,12 @@ def gammaloop_state_from_info(info: dict[str, Any]) -> dict[str, Any]:
                 {"name": "imag", "state": zero_state},
             ],
             "projection": {
-                "name": "training_projection",
-                "state": real_state,
+                "kind": "norm",
+                "state": {
+                    "name": "training_projection",
+                    "state": real_state,
+                },
             },
-            "projection_spec": {"kind": "norm"},
         },
         "diagnostics": {
             "count_total": count_total,
