@@ -180,6 +180,7 @@ fn reference_maps_preserve_normalization_moments_and_channel_selection() {
                     &AccumulatorConfig::Gammaloop,
                     EvalBatchOptions {
                         require_training_values: false,
+                        stratification: None,
                     },
                 )
                 .unwrap();
@@ -210,8 +211,7 @@ fn reference_maps_preserve_normalization_moments_and_channel_selection() {
     }
 }
 
-#[test]
-fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
+fn histogram_params() -> GammaLoopParams {
     let mut config = params(false, true);
     config.preprocessing.commands.push(
         r#"set process string '
@@ -228,9 +228,15 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
     '"#
         .into(),
     );
-    let mut evaluator = GammaLoopEvaluator::from_params(config).unwrap();
+    config
+}
+
+#[test]
+fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
+    let mut evaluator = GammaLoopEvaluator::from_params(histogram_params()).unwrap();
     let options = EvalBatchOptions {
         require_training_values: true,
+        stratification: None,
     };
     let mut singles = GammaLoopAccumulatorState::default();
     let mut expected = Vec::new();
@@ -305,7 +311,12 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
     // A failed batch must not contaminate the next native observable batch.
     assert!(
         evaluator
-            .evaluate(&Batch::new(vec![Point::new(vec![], vec![0, 0], 1.0)]))
+            .evaluate(
+                &Batch::new(vec![Point::new(vec![], vec![0, 0], 1.0)]),
+                &["real".into(), "imag".into()],
+                EvalBatchOptions::default(),
+                false
+            )
             .is_err()
     );
     let recovered = evaluator
@@ -317,6 +328,219 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
     assert_eq!(
         serde_json::to_value(recovered.bundle).unwrap(),
         serde_json::to_value(singles.bundle).unwrap()
+    );
+}
+
+#[test]
+fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() {
+    use crate::core::{StratificationConfig, StratificationPlan};
+    use crate::evaluation::accumulator::StratifiedAccumulatorState;
+    fn close(a: f64, b: f64) {
+        assert!(
+            (a - b).abs() < 1e-9 * a.abs().max(b.abs()).max(1e-12),
+            "{a} != {b}"
+        );
+    }
+    let mut config = histogram_params();
+    config.training_projection = TrainingProjection::Real;
+    let mut evaluator = GammaLoopEvaluator::from_params(config).unwrap();
+    let bases: Vec<_> = [0.3, 0.5, 0.7]
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| Point::new(vec![x, 0.41, 0.61], vec![0, (i % 2) as i64], 1.))
+        .collect();
+    let units: Vec<_> = bases
+        .iter()
+        .map(|point| {
+            let result = evaluator
+                .eval_batch(
+                    &Batch::new(vec![point.clone()]),
+                    &AccumulatorConfig::Gammaloop,
+                    EvalBatchOptions::default(),
+                )
+                .unwrap();
+            result.accumulator.gammaloop().unwrap().clone()
+        })
+        .collect();
+    let values: Vec<_> = units
+        .iter()
+        .map(|s| vec![s.real_mean(), s.imag_mean()])
+        .collect();
+    assert_ne!(values[0], values[2]);
+    let plan = StratificationPlan {
+        proposal_id: "hybrid-physics".into(),
+        partition: StratificationConfig::Voronoi {
+            centers: vec![values[0].clone(), values[2].clone()],
+            scales: None,
+        },
+        probabilities: Some(vec![0.25, 0.75]),
+        components: vec!["real".into(), "imag".into()],
+    };
+    let labels: Vec<_> = (0..128).map(|i| (i / 3) % 2).collect();
+    let points: Vec<_> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, &k)| {
+            let mut p = bases[i % 3].clone();
+            p = Point::new(
+                p.continuous,
+                p.discrete,
+                (i % 3 + 2) as f64 / plan.probabilities.as_ref().unwrap()[k],
+            );
+            p
+        })
+        .collect();
+    let batch = Batch::new(points);
+    let whole = evaluator
+        .eval_batch(
+            &batch,
+            &AccumulatorConfig::Gammaloop,
+            EvalBatchOptions {
+                require_training_values: true,
+                stratification: Some((&plan, &labels)),
+            },
+        )
+        .unwrap();
+    let AccumulatorState::Stratified(state) = &whole.accumulator else {
+        panic!("expected hybrid")
+    };
+    assert_eq!(state.sample_count(), 128);
+    let mut expected = [vec![], vec![]];
+    let histogram = &state.pooled.as_ref().unwrap().bundle.histograms["graphs"];
+    assert_eq!(histogram.sample_count, 128);
+    let mut sums = vec![0.; histogram.bins.len()];
+    let mut squares = sums.clone();
+    for (i, (&k, point)) in labels.iter().zip(batch.points()).enumerate() {
+        let f = &values[i % 3];
+        let matched = plan.partition.classify(f).unwrap() == k;
+        let w = point.total_weight();
+        let weighted = if matched { w * f[0] } else { 0. };
+        close(whole.training_values.as_ref().unwrap()[i], weighted);
+        expected[k].push(weighted * plan.probabilities.as_ref().unwrap()[k]);
+        if matched {
+            for (b, bin) in units[i % 3].bundle.histograms["graphs"]
+                .bins
+                .iter()
+                .enumerate()
+            {
+                // A native draw's correlated events are summed before squaring.
+                close(bin.sum_weights_squared, bin.sum_weights.powi(2));
+                sums[b] += w * bin.sum_weights;
+                squares[b] += w * w * bin.sum_weights_squared;
+            }
+        }
+    }
+    let mut covariance = 0.;
+    for (k, samples) in expected.iter().enumerate() {
+        let n = samples.len() as f64;
+        let mean = samples.iter().sum::<f64>() / n;
+        let m2 = samples.iter().map(|v| (v - mean).powi(2)).sum::<f64>();
+        close(state.strata[k].mean[0], mean);
+        close(state.strata[k].m2[0], m2);
+        covariance += m2 / (n * (n - 1.));
+    }
+    close(state.covariance().unwrap()[0], covariance);
+    for (i, bin) in histogram.bins.iter().enumerate() {
+        close(bin.sum_weights, sums[i]);
+        close(bin.sum_weights_squared, squares[i]);
+    }
+    assert!((state.mean().unwrap()[0] - state.pooled.as_ref().unwrap().real_mean()).abs() > 1e-12);
+    let mut merged =
+        StratifiedAccumulatorState::new(plan.clone(), AccumulatorConfig::Gammaloop).unwrap();
+    for (points, labels) in batch.points().chunks(17).zip(labels.chunks(17)) {
+        let chunk = evaluator
+            .eval_batch(
+                &Batch::new(points.to_vec()),
+                &AccumulatorConfig::Gammaloop,
+                EvalBatchOptions {
+                    require_training_values: false,
+                    stratification: Some((&plan, labels)),
+                },
+            )
+            .unwrap();
+        let AccumulatorState::Stratified(part) = chunk.accumulator else {
+            panic!()
+        };
+        merged.merge(*part).unwrap();
+    }
+    let restored: StratifiedAccumulatorState =
+        serde_json::from_value(serde_json::to_value(merged).unwrap()).unwrap();
+    close(restored.mean().unwrap()[0], state.mean().unwrap()[0]);
+    close(
+        restored.covariance().unwrap()[0],
+        state.covariance().unwrap()[0],
+    );
+    for (a, b) in restored.pooled.as_ref().unwrap().bundle.histograms["graphs"]
+        .bins
+        .iter()
+        .zip(&histogram.bins)
+    {
+        close(a.sum_weights, b.sum_weights);
+        close(a.sum_weights_squared, b.sum_weights_squared);
+    }
+    let misses: Vec<_> = (0..batch.len())
+        .map(|i| 1 - plan.partition.classify(&values[i % 3]).unwrap())
+        .collect();
+    let missed = evaluator
+        .eval_batch(
+            &batch,
+            &AccumulatorConfig::Gammaloop,
+            EvalBatchOptions {
+                require_training_values: true,
+                stratification: Some((&plan, &misses)),
+            },
+        )
+        .unwrap();
+    let AccumulatorState::Stratified(missed) = missed.accumulator else {
+        panic!()
+    };
+    assert_eq!(missed.sample_count(), 128);
+    assert!(missed.covariance().is_none());
+    let h = &missed.pooled.as_ref().unwrap().bundle.histograms["graphs"];
+    assert_eq!(h.sample_count, 128);
+    assert!(
+        h.bins
+            .iter()
+            .all(|b| b.sum_weights == 0. && b.sum_weights_squared == 0. && b.entry_count == 0)
+    );
+    let mut malformed = state.as_ref().clone();
+    malformed
+        .pooled
+        .as_mut()
+        .unwrap()
+        .bundle
+        .histograms
+        .get_mut("graphs")
+        .unwrap()
+        .sample_count -= 1;
+    assert!(
+        serde_json::from_value::<StratifiedAccumulatorState>(
+            serde_json::to_value(&malformed).unwrap()
+        )
+        .is_err()
+    );
+    let mut destination = state.as_ref().clone();
+    let before = serde_json::to_value(&destination).unwrap();
+    assert!(destination.merge(malformed).is_err());
+    assert_eq!(serde_json::to_value(destination).unwrap(), before);
+    let training_plan = StratificationPlan {
+        probabilities: None,
+        ..plan
+    };
+    let trained = evaluator
+        .eval_batch(
+            &batch,
+            &AccumulatorConfig::Gammaloop,
+            EvalBatchOptions {
+                require_training_values: true,
+                stratification: Some((&training_plan, &labels)),
+            },
+        )
+        .unwrap();
+    assert_eq!(trained.training_values, whole.training_values);
+    assert_eq!(
+        serde_json::to_value(&trained.accumulator.gammaloop().unwrap().bundle).unwrap(),
+        serde_json::to_value(&state.pooled.as_ref().unwrap().bundle).unwrap()
     );
 }
 
@@ -377,8 +601,22 @@ fn quad_override_uses_native_stability_levels_and_preserves_the_reference_value(
             .all(|level| level.precision != Precision::Double)
     );
     let batch = Batch::new(vec![Point::new(vec![0.5, 0.4, 0.6], vec![0, 0], 2.0)]);
-    let expected = double.evaluate(&batch).unwrap();
-    let actual = quad.evaluate(&batch).unwrap();
+    let expected = double
+        .evaluate(
+            &batch,
+            &["real".into(), "imag".into()],
+            EvalBatchOptions::default(),
+            false,
+        )
+        .unwrap();
+    let actual = quad
+        .evaluate(
+            &batch,
+            &["real".into(), "imag".into()],
+            EvalBatchOptions::default(),
+            false,
+        )
+        .unwrap();
     let expected = GammaLoopEvaluator::project_result_value(&expected[0]);
     let actual = GammaLoopEvaluator::project_result_value(&actual[0]);
     assert!(expected.re > 0.0 && expected.im > 0.0);

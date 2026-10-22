@@ -69,7 +69,7 @@ pub use evaluation::{
     FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
     IngestScalar, IngestVector, Materializer, NamedScalarAccumulator, Point, SampleEvaluation,
     ScalarAccumulatorState, VectorAccumulatorState, WeightFactor, extract_accumulator_metric,
-    extract_accumulator_metric_with_runtime, ingest_scalar_values,
+    extract_accumulator_metric_with_runtime,
 };
 pub use sampling::{
     DiscreteSubspace, Generation, LatentBatch, LatentBatchPayload, PdfPoint, Sampler, SavedSampler,

@@ -46,8 +46,10 @@ class MadGraphEventEvaluator(GammaLoopEvaluator):
 
     def eval_gammaloop(
         self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
-        weights: np.ndarray, *, require_training_values: bool,
+        weights: np.ndarray, *, require_training_values: bool, stratification=None,
     ) -> GammaLoopBatchResult:
+        if stratification is not None:
+            raise ValueError("MadGraph event-generation runs do not expose one independent sample per queued point for stratification")
         if require_training_values or not np.array_equal(weights, [1.0]):
             raise ValueError("MadGraph event generation requires an unweighted inference trigger")
         if len(xs_continuous) != 1:

@@ -152,7 +152,7 @@ impl VectorAccumulatorState {
             )))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gammaloop"))]
     pub(crate) fn projection_mut(&mut self) -> &mut NamedScalarAccumulator {
         match &mut self.projection {
             ProjectionState::Component { name } => self

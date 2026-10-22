@@ -157,6 +157,7 @@ fn prepare(size: usize, feedback: bool, bundle: usize) -> Result<Prepared> {
         &AccumulatorConfig::scalar(),
         crate::EvalBatchOptions {
             require_training_values: feedback,
+            stratification: None,
         },
     )?;
     ensure!(

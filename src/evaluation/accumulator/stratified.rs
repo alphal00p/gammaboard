@@ -112,6 +112,8 @@ pub struct StratifiedAccumulatorState {
     pub plan: StratificationPlan,
     pub config: AccumulatorConfig,
     pub strata: Vec<StratumMoments>,
+    /// Native histograms retain masked full-weight, pooled statistics.
+    pub pooled: Option<Box<super::GammaLoopAccumulatorState>>,
 }
 impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -121,12 +123,14 @@ impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
             plan: StratificationPlan,
             config: AccumulatorConfig,
             strata: Vec<StratumMoments>,
+            pooled: Option<Box<super::GammaLoopAccumulatorState>>,
         }
         let saved = Saved::deserialize(deserializer)?;
         let state = Self {
             plan: saved.plan,
             config: saved.config,
             strata: saved.strata,
+            pooled: saved.pooled,
         };
         state.validate().map_err(serde::de::Error::custom)?;
         Ok(state)
@@ -146,19 +150,27 @@ impl StratifiedAccumulatorState {
                 "stratified accumulator needs frozen probabilities",
             ));
         }
-        if config.components() != Some(plan.components.as_slice()) {
+        let layout_matches = match config {
+            AccumulatorConfig::Gammaloop => plan.components == ["real", "imag"],
+            _ => config.components() == Some(plan.components.as_slice()),
+        };
+        if !layout_matches {
             return Err(EngineError::invalid_input(
                 "stratification component mismatch",
             ));
         }
-        Ok(plan.components.len()
-            + usize::from(matches!(
-                config,
-                AccumulatorConfig::Vector {
-                    training_projection: TrainingProjection::Norm,
-                    ..
-                }
-            )))
+        Ok(if matches!(config, AccumulatorConfig::Gammaloop) {
+            4
+        } else {
+            plan.components.len()
+                + usize::from(matches!(
+                    config,
+                    AccumulatorConfig::Vector {
+                        training_projection: TrainingProjection::Norm,
+                        ..
+                    }
+                ))
+        })
     }
 
     pub fn new(plan: StratificationPlan, config: AccumulatorConfig) -> Result<Self, EngineError> {
@@ -166,6 +178,7 @@ impl StratifiedAccumulatorState {
         let strata = vec![StratumMoments::new(width); plan.partition.centers().len()];
         Ok(Self {
             plan,
+            pooled: matches!(config, AccumulatorConfig::Gammaloop).then(Default::default),
             config,
             strata,
         })
@@ -187,6 +200,10 @@ impl StratifiedAccumulatorState {
             ));
         }
         let mut contribution = values.to_vec();
+        if matches!(self.config, AccumulatorConfig::Gammaloop) {
+            let norm = values.iter().fold(0.0_f64, |n, v| n.hypot(*v));
+            contribution.extend([norm, norm * norm]);
+        }
         if matches!(
             &self.config,
             AccumulatorConfig::Vector {
@@ -228,6 +245,14 @@ impl StratifiedAccumulatorState {
                 .filter(|n| *n <= i64::MAX as u64)
                 .ok_or_else(|| EngineError::eval("stratum count overflow"))?;
         }
+        match &self.pooled {
+            Some(pooled) if matches!(self.config, AccumulatorConfig::Gammaloop) => {
+                pooled.validate_values()?;
+                pooled.validate_stratified_samples(count as i64)?;
+            }
+            None if !matches!(self.config, AccumulatorConfig::Gammaloop) => {}
+            _ => return Err(EngineError::eval("incompatible pooled observable state")),
+        }
         Ok(())
     }
     pub fn merge(&mut self, other: Self) -> Result<(), EngineError> {
@@ -239,6 +264,9 @@ impl StratifiedAccumulatorState {
         let mut merged = self.clone();
         for (a, b) in merged.strata.iter_mut().zip(&other.strata) {
             a.merge(b)?;
+        }
+        if let (Some(left), Some(right)) = (&mut merged.pooled, other.pooled) {
+            left.merge_in_place(*right)?;
         }
         merged.validate()?;
         *self = merged;
@@ -270,7 +298,21 @@ impl StratifiedAccumulatorState {
         Some(covariance)
     }
     pub fn metric(&self, selector: &AccumulatorMetricSelector) -> Option<MeasurementResult> {
-        let index = match selector.component.as_deref() {
+        let component = match (selector.component.as_deref(), self.pooled.as_deref()) {
+            (None | Some("training_projection"), Some(pooled)) => {
+                use crate::evaluation::evaluator::gammaloop::TrainingProjection;
+                Some(match pooled.training_projection {
+                    Some(TrainingProjection::Real) => "real",
+                    Some(TrainingProjection::Imag) => "imag",
+                    Some(TrainingProjection::AbsSq) => "norm_squared",
+                    _ => "norm",
+                })
+            }
+            (component, _) => component,
+        };
+        let index = match component {
+            Some("norm") if self.pooled.is_some() => 2,
+            Some("norm_squared") if self.pooled.is_some() => 3,
             None | Some("training_projection") => match &self.config {
                 AccumulatorConfig::Vector {
                     training_projection: TrainingProjection::Norm,

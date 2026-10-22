@@ -136,6 +136,7 @@ pub fn measure(options: Config) -> Result<Value> {
                         &accumulator,
                         EvalBatchOptions {
                             require_training_values: feedback,
+                            stratification: None,
                         },
                     )?));
                     Ok(())

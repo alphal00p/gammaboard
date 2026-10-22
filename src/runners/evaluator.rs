@@ -808,26 +808,13 @@ where
             crate::runners::activity::set("evaluating");
             let started = Instant::now();
             let result = Self::call_with_panic_guard("evaluator.eval_batch", || {
-                if let Some(plan) = &claimed.stratification {
-                    let values = self.evaluator.eval_values(&batch, &plan.components)?;
-                    return crate::evaluation::stratification::accumulate_values(
-                        &batch,
-                        &plan.components,
-                        &values,
-                        &claimed.accumulator,
-                        EvalBatchOptions {
-                            require_training_values: claimed.requires_training_values,
-                        },
-                        Some((plan, labels.as_deref().expect("stratum labels"))),
-                    )
-                    .map_err(EvaluatorRunnerError::Engine);
-                }
                 self.evaluator
                     .eval_batch(
                         &batch,
                         &claimed.accumulator,
                         EvalBatchOptions {
                             require_training_values: claimed.requires_training_values,
+                            stratification: claimed.stratification.as_ref().zip(labels.as_deref()),
                         },
                     )
                     .map_err(EvaluatorRunnerError::Engine)

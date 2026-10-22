@@ -93,6 +93,31 @@ pub enum AccumulatorState {
 }
 
 impl AccumulatorState {
+    pub fn uncertainty_ready(&self) -> bool {
+        match self {
+            Self::Stratified(state) => state.uncertainty_ready(),
+            _ => true,
+        }
+    }
+
+    /// Access native histogram/diagnostic payloads independently of the estimator.
+    /// Its estimate is pooled in a hybrid; primary results use metric extraction.
+    pub fn gammaloop(&self) -> Option<&GammaLoopAccumulatorState> {
+        match self {
+            Self::Gammaloop(state) => Some(state),
+            Self::Stratified(state) => state.pooled.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Per-draw diagnostics retain full sampling weights even in a hybrid.
+    pub fn pooled_vector(&self) -> Option<&VectorAccumulatorState> {
+        match self {
+            Self::Vector(state) => Some(state),
+            _ => self.gammaloop().map(|state| &state.estimate),
+        }
+    }
+
     pub fn from_gammaloop_persistent_json(value: &JsonValue) -> Result<Self, EngineError> {
         serde_json::from_value(value.clone())
             .map(Self::Gammaloop)

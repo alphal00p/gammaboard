@@ -17,4 +17,4 @@ pub use batch::{
 pub use evaluator::{
     GammaLoopParams, ProcessEvaluatorParams, ProcessOutput, SymbolicaParams, UnitEvaluatorParams,
 };
-pub use traits::{BatchTransform, EvalBatchOptions, Evaluator, Materializer, ingest_scalar_values};
+pub use traits::{BatchTransform, EvalBatchOptions, Evaluator, Materializer};

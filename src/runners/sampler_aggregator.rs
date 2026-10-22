@@ -364,87 +364,17 @@ where
         run_progress: RunSampleProgress,
         resume_snapshot: Option<SamplerAggregatorCheckpoint>,
     ) -> Result<Self, StoreError> {
-        let stratified = matches!(
+        evaluator_config
+            .validate_accumulator_config(&observable_state.config())
+            .map_err(|e| StoreError::store(e.to_string()))?;
+        let evaluation_plan = crate::evaluation::stratification::prepare_estimator(
             &task.task,
-            crate::core::RunTaskSpec::Sample {
-                estimator: crate::core::Estimator::Stratified,
-                ..
-            }
-        );
-        let evaluation_plan = match &sampler_config.stratification {
-            Some(partition) => {
-                let config = observable_state.config();
-                partition
-                    .validate_accumulator(&config)
-                    .map_err(|e| StoreError::store(e.to_string()))?;
-                evaluator_config
-                    .validate_accumulator_config(&config)
-                    .map_err(|e| StoreError::store(e.to_string()))?;
-                let plan = if let AccumulatorState::Stratified(state) = &observable_state {
-                    if !stratified
-                        || resume_snapshot.is_none()
-                        || &state.plan.partition != partition
-                    {
-                        return Err(StoreError::store(
-                            "incompatible stratification accumulator handoff",
-                        ));
-                    }
-                    state.plan.clone()
-                } else {
-                    if stratified
-                        && (resume_snapshot.is_some()
-                            || observable_state.sample_count() != 0
-                            || !matches!(
-                                &task.task,
-                                crate::core::RunTaskSpec::Sample {
-                                    accumulator: Some(
-                                        crate::core::tasks::StageSourceSpec::Config { .. }
-                                    ),
-                                    ..
-                                }
-                            ))
-                    {
-                        return Err(StoreError::store(
-                            "stratified inference requires an explicit fresh accumulator",
-                        ));
-                    }
-                    let probabilities = if stratified {
-                        let queries = (0..partition.centers().len())
-                            .map(|k| DiscreteSubspace {
-                                fixed_dims: std::collections::BTreeMap::from([(0, k as i64)]),
-                            })
-                            .collect::<Vec<_>>();
-                        Some(sampler.discrete_pdf_batch(&queries).map_err(|e|StoreError::store(e.to_string()))?.into_iter().collect::<Option<Vec<_>>>().ok_or_else(||StoreError::store("sampler must provide exact discrete probabilities for stratification"))?)
-                    } else {
-                        None
-                    };
-                    crate::core::StratificationPlan {
-                        proposal_id: uuid::Uuid::new_v4().to_string(),
-                        partition: partition.clone(),
-                        probabilities,
-                        components: config.components().unwrap().to_vec(),
-                    }
-                };
-                plan.validate()
-                    .map_err(|e| StoreError::store(e.to_string()))?;
-                if stratified && !matches!(observable_state, AccumulatorState::Stratified(_)) {
-                    observable_state = AccumulatorState::Stratified(Box::new(
-                        crate::evaluation::accumulator::StratifiedAccumulatorState::new(
-                            plan.clone(),
-                            config,
-                        )
-                        .map_err(|e| StoreError::store(e.to_string()))?,
-                    ));
-                }
-                Some(plan)
-            }
-            None if stratified || matches!(observable_state, AccumulatorState::Stratified(_)) => {
-                return Err(StoreError::store(
-                    "stratified estimation requires a matching sampling partition",
-                ));
-            }
-            None => None,
-        };
+            &sampler_config,
+            &mut *sampler,
+            &mut observable_state,
+            resume_snapshot.is_some(),
+        )
+        .map_err(|e| StoreError::store(e.to_string()))?;
         let io = SamplerIo::new(params.io_threads)?;
         let mut runtime_state;
         let queue_checkpoint;
@@ -664,7 +594,7 @@ where
             Some(self.completed_samples_per_second),
         )
         .map_err(RunnerError::Engine)?;
-        let coverage_ready = !matches!(&self.observable_state, AccumulatorState::Stratified(s) if !s.uncertainty_ready());
+        let coverage_ready = self.observable_state.uncertainty_ready();
         let min_samples_reached = coverage_ready
             && stop_condition
                 .min_samples

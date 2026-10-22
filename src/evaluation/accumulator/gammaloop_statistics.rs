@@ -2,6 +2,31 @@ use super::{GammaLoopAccumulatorState, ScalarAccumulatorState};
 use crate::evaluation::evaluator::gammaloop::TrainingProjection;
 
 impl GammaLoopAccumulatorState {
+    /// Hybrid statistics use one independent queued draw, including misses,
+    /// as the unit of every estimate and histogram.
+    pub(crate) fn validate_stratified_samples(
+        &self,
+        expected: i64,
+    ) -> Result<(), crate::core::EngineError> {
+        use super::Accumulator;
+        if self.sample_count() != expected {
+            return Err(crate::core::EngineError::eval(
+                "GammaLoop estimate must count every stratified attempt",
+            ));
+        }
+        #[cfg(feature = "gammaloop")]
+        if self
+            .bundle
+            .histograms
+            .values()
+            .any(|h| h.sample_count as i64 != expected)
+        {
+            return Err(crate::core::EngineError::eval(
+                "GammaLoop histograms must count every stratified attempt, including misses",
+            ));
+        }
+        Ok(())
+    }
     pub fn real_mean(&self) -> f64 {
         self.estimate
             .component("real")

@@ -1,12 +1,37 @@
-use super::{Batch, BatchResult, IngestScalar, Point};
+use super::{Batch, BatchResult};
 use crate::core::{AccumulatorConfig, EngineError};
 use crate::sampling::LatentBatch;
 use crate::utils::domain::Domain;
 use serde_json::{Value as JsonValue, json};
 
-#[derive(Debug, Clone, Copy)]
-pub struct EvalBatchOptions {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvalBatchOptions<'a> {
     pub require_training_values: bool,
+    pub stratification: Option<(&'a crate::core::StratificationPlan, &'a [usize])>,
+}
+
+impl EvalBatchOptions<'_> {
+    pub fn matches(&self, index: usize, values: &[f64]) -> Result<bool, EngineError> {
+        match self.stratification {
+            Some((plan, labels)) => plan.matches(
+                *labels
+                    .get(index)
+                    .ok_or_else(|| EngineError::eval("missing stratum label"))?,
+                values,
+            ),
+            None => Ok(true),
+        }
+    }
+
+    pub fn validate(&self, samples: usize, components: &[String]) -> Result<(), EngineError> {
+        if let Some((plan, labels)) = self.stratification {
+            plan.validate()?;
+            if labels.len() != samples || plan.components != components {
+                return Err(EngineError::eval("stratification batch layout mismatch"));
+            }
+        }
+        Ok(())
+    }
 }
 
 pub trait Evaluator: Send {
@@ -35,32 +60,14 @@ pub trait Evaluator: Send {
         batch: &Batch,
         accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError>;
-}
-
-pub fn ingest_scalar_values<O: IngestScalar + ?Sized>(
-    values: &[f64],
-    points: &[Point],
-    require_training_values: bool,
-    accumulator: &mut O,
-) -> Result<Option<Vec<f64>>, EngineError> {
-    if values.len() != points.len() {
-        return Err(EngineError::eval(format!(
-            "cannot ingest scalar values: values length {} does not match points length {}",
-            values.len(),
-            points.len()
-        )));
+    ) -> Result<BatchResult, EngineError> {
+        let components = accumulator
+            .components()
+            .unwrap_or(&["value".into()])
+            .to_vec();
+        let values = self.eval_values(batch, &components)?;
+        super::stratification::accumulate_values(batch, &components, &values, accumulator, options)
     }
-    let mut training_values = require_training_values.then(|| Vec::with_capacity(values.len()));
-    for (sample, (value, point)) in values.iter().zip(points.iter()).enumerate() {
-        accumulator
-            .ingest_scalar(*value, point)
-            .map_err(|err| EngineError::eval(format!("sample {sample}: {err}")))?;
-        if let Some(training_values) = training_values.as_mut() {
-            training_values.push(*value * point.total_weight());
-        }
-    }
-    Ok(training_values)
 }
 
 pub trait Materializer: Send {

@@ -217,8 +217,9 @@ async fn startup_rejects_unversioned_and_future_database_models() {
     .unwrap();
     assert!(gammaboard::init_pg_store(url.as_str(), 1).await.is_err());
     sqlx::query(&format!(
-        "UPDATE {schema}.gammaboard_compatibility SET model_version=3"
+        "UPDATE {schema}.gammaboard_compatibility SET model_version=$1"
     ))
+    .bind(gammaboard::compatibility::DATABASE_MODEL_VERSION as i32)
     .execute(store.pool())
     .await
     .unwrap();

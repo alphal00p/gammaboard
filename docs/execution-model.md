@@ -330,7 +330,7 @@ the reserved keys `discrete_cardinalities`, `continuous_dims`, or `evaluator_met
 | Role | Python callback | Result |
 | --- | --- | --- |
 | Values evaluator | `eval(xs_discrete, xs_continuous)` | Unweighted `(N,)` for one component, `(N,C)`, or a mapping from every declared component name to an `(N,)` array |
-| Observable evaluator | `eval_gammaloop(xs_discrete, xs_continuous, weights, *, require_training_values)` | `GammaLoopBatchResult(state, training_values)` |
+| Observable evaluator | `eval_gammaloop(xs_discrete, xs_continuous, weights, *, require_training_values, stratification)` | `GammaLoopBatchResult(state, training_values, values)` |
 | Sampler | `generate(max_samples)` | `SampleBatch(xs_discrete, xs_continuous, weights, training_remaining=None)` or `WAITING` / `FINISHED` |
 | Sampler feedback | `feedback(values)` | No return value; `values` is the complete weighted `(N,)` array for one draw |
 | Materializer | `materialize_batch(latent_batch)` | `Batch(xs_discrete, xs_continuous, weights)` |
@@ -380,8 +380,11 @@ runtime separates the stratum label, applies physical transforms, and evaluates
 the original coordinates once. Ordinary scalar/vector outputs are validated,
 classified and gated before accumulation. A miss has zero contribution and zero
 training feedback but still counts as an attempted sample and consumes budget.
-Process evaluators returning opaque native observable bundles cannot use this
-modifier; native GammaLoop scalar/real-imag value output can.
+Native GammaLoop and process observable evaluators support a hybrid: the primary
+real/imaginary integral uses stratified statistics, while histograms retain pooled
+statistics. Their centres have two entries, `[real, imag]`; for a sign split on
+the real part use `[[-1, 0], [1, 0]]`. Native scalar/vector value output continues
+to use its declared component layout.
 
 Training uses `estimator = "pooled"` and full-weight projected feedback. Final
 inference uses `estimator = "stratified"`, a supported sampler handoff and an
@@ -393,6 +396,38 @@ merge using parallel Welford updates. The final mean is the sum of stratum means
 its covariance is the sum of `sample_covariance_k / n_k`. Component errors are
 square roots of its diagonal. Norm training projection remains a separate scalar
 observable: its mean is the integral of the norm, not the norm of the vector mean.
+
+For native histograms, all correlated events/cuts/counterterms from one original
+sampler draw are grouped before squared bin contributions are accumulated. The
+same classifier mask gates every histogram contribution, but the complete weight
+`W` is retained: `H_b = sum_i W_i * mask_i * g_ib / N`. There is no `p_k` factor in
+that pooled histogram estimator. A miss contributes no fills but still counts as
+one attempted sample in every histogram, including underflow/overflow accounting.
+Diagnostics count actual evaluations/events independently of this mask. Invalid
+values still reject a batch even if its classifier would miss.
+
+Histogram totals and the stratified primary estimate are different Monte Carlo
+estimators and need not agree exactly. Histograms retain allocation noise. They
+are labelled as pooled in the dashboard and are not rescaled or normalized to the
+stratified result. Ratios involving both estimators require joint covariance that
+this hybrid does not provide. The integral's per-stratum moments and pooled native
+bundle are checkpointed and merged together; their attempted counts must agree.
+
+The native adapter uses GammaLoop's single-sample evaluation entry points, gates
+events before the one observable commit, and discards event records afterward.
+This neither reevaluates the physics nor transports per-event data to the sampler.
+Scalar/vector adapters share one accumulation path, and the evaluator runner
+passes the optional partition through `EvalBatchOptions` to every adapter.
+
+For Python observable callbacks, `stratification` is either `None` or a
+`StratificationContext`. With a context, compute unweighted `(N,2)` real/imaginary
+values, obtain `mask = stratification.mask(values)`, and apply it before committing
+the native state and full-weight training feedback. Return those **raw** values in
+`GammaLoopBatchResult.values`; the host computes the conditional integral moments.
+When no context is supplied, `values` must be `None`. The callback's state always
+contains its existing pooled statistics, and counts all attempts when stratifying.
+Adapters that launch an independent integration from one trigger, such as MadGraph
+event generation, cannot satisfy this per-draw contract and reject stratification.
 
 Before inference generates work, the runtime validates exact finite positive
 masses summing to one within `1e-12`. It does not renormalize guessed probabilities

@@ -87,13 +87,16 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
     .unwrap();
     let options = EvalBatchOptions {
         require_training_values: true,
+        stratification: None,
     };
     let modes = [
         AccumulatorConfig::Gammaloop,
         AccumulatorConfig::scalar(),
         AccumulatorConfig::vector(
-            vec!["re".into(), "im".into()],
-            crate::core::TrainingProjection::Component { name: "re".into() },
+            vec!["real".into(), "imag".into()],
+            crate::core::TrainingProjection::Component {
+                name: "real".into(),
+            },
         ),
         AccumulatorConfig::Empty,
     ];
@@ -183,7 +186,13 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
         // Parameterization is squared; the Monte Carlo weight is applied once.
         (TrainingProjection::AbsSq, [300.0, 84.5]),
     ] {
-        let whole = GammaLoopEvaluator::gammaloop_estimate(&results, &points, projection).unwrap();
+        let whole = GammaLoopEvaluator::gammaloop_estimate(
+            &results,
+            &points,
+            projection,
+            EvalBatchOptions::default(),
+        )
+        .unwrap();
         let mut merged = GammaLoopAccumulatorState::default();
         for i in 0..2 {
             merged
@@ -192,6 +201,7 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
                         &results[i..i + 1],
                         &points[i..i + 1],
                         projection,
+                        EvalBatchOptions::default(),
                     )
                     .unwrap(),
                 )

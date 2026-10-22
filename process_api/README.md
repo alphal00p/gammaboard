@@ -55,7 +55,9 @@ defines constructor arguments, callback signatures, shapes, and restoration.
 - [Havana sampler](examples/python_sampler_symbolica_havana/README.md): adaptive draws,
   feedback, snapshots, and inference.
 - [GammaLoop observable evaluator](examples/python_gammaloop_observable/src/demo_evaluator.py):
-  weighted native observable state and optional training values.
+  weighted native observable state and optional training values. Its
+  [hybrid run card](examples/python_gammaloop_observable/run-stratified.toml)
+  uses a stratified primary integral and pooled, masked histograms.
 - [Rust/Apptainer evaluator](examples/rust_breit_wigner_evaluator/README.md): a direct
   wire implementation, including ragged coordinate layouts.
 

@@ -1,7 +1,7 @@
 //! Reproducible A/B experiment using the production Symbolica/Havana pipeline.
 use anyhow::{Context, Result, bail};
 use gammaboard::core::{StratificationConfig, StratificationPlan, TrainingProjection};
-use gammaboard::evaluation::stratification::{accumulate_values, physical_batch};
+use gammaboard::evaluation::stratification::physical_batch;
 use gammaboard::evaluation::{AccumulatorState, EvalBatchOptions};
 use gammaboard::sampling::{DiscreteSubspace, Generation, StageHandoff};
 use gammaboard::{AccumulatorConfig, Batch, Evaluator, EvaluatorConfig, SamplingConfig};
@@ -201,17 +201,17 @@ fn evaluate(
 ) -> Result<gammaboard::BatchResult> {
     let options = EvalBatchOptions {
         require_training_values: training,
+        stratification: None,
     };
     Ok(if let Some(plan) = plan {
         let (physical, labels) = physical_batch(batch, plan)?;
-        let values = evaluator.eval_values(&physical, &plan.components)?;
-        accumulate_values(
+        evaluator.eval_batch(
             &physical,
-            &plan.components,
-            &values,
             config,
-            options,
-            Some((plan, &labels)),
+            EvalBatchOptions {
+                stratification: Some((plan, &labels)),
+                ..options
+            },
         )?
     } else {
         evaluator.eval_batch(&batch, config, options)?

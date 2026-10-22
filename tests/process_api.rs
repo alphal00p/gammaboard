@@ -77,6 +77,7 @@ fn process_api_roundtrips() -> Result {
             &accumulator(),
             EvalBatchOptions {
                 require_training_values: true,
+                stratification: None,
             },
         )?;
         let values = result.training_values.unwrap();
@@ -92,6 +93,7 @@ fn process_api_roundtrips() -> Result {
             },
             EvalBatchOptions {
                 require_training_values: false,
+                stratification: None,
             },
         )?;
         let gammaboard::AccumulatorState::FullVector(collected) = collected.accumulator else {
@@ -114,7 +116,8 @@ fn process_api_roundtrips() -> Result {
                     &batch,
                     &accumulator(),
                     EvalBatchOptions {
-                        require_training_values: false
+                        require_training_values: false,
+                        stratification: None
                     }
                 )?
                 .training_values
@@ -129,7 +132,8 @@ fn process_api_roundtrips() -> Result {
                 &bad,
                 &accumulator(),
                 EvalBatchOptions {
-                    require_training_values: false
+                    require_training_values: false,
+                    stratification: None
                 }
             )
             .is_err()
@@ -141,7 +145,8 @@ fn process_api_roundtrips() -> Result {
                 &good,
                 &accumulator(),
                 EvalBatchOptions {
-                    require_training_values: false
+                    require_training_values: false,
+                    stratification: None
                 }
             )
             .is_ok(),
@@ -160,6 +165,7 @@ fn process_api_roundtrips() -> Result {
 }
 
 #[test]
+#[cfg(feature = "gammaloop")]
 #[ignore = "requires Python and NumPy; set GAMMABOARD_PROCESS_PYTHON"]
 fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -182,6 +188,7 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
             &AccumulatorConfig::Gammaloop,
             EvalBatchOptions {
                 require_training_values: required,
+                stratification: None,
             },
         )?;
         let gammaboard::AccumulatorState::Gammaloop(state) = result.accumulator else {
@@ -190,5 +197,73 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
         assert_eq!(state.estimate.components[0].state.sum_weighted_value, 5.625);
         assert_eq!(result.training_values, required.then(|| vec![2.25, 3.375]));
     }
+    let plan = gammaboard::core::StratificationPlan {
+        proposal_id: "process-hybrid".into(),
+        partition: gammaboard::core::StratificationConfig::Voronoi {
+            centers: vec![vec![0., 0.], vec![1.5, 0.]],
+            scales: None,
+        },
+        probabilities: Some(vec![0.25, 0.75]),
+        components: vec!["real".into(), "imag".into()],
+    };
+    let labels: Vec<_> = (0..128).map(|i| (i / 3) % 2).collect();
+    let batch = Batch::new(
+        labels
+            .iter()
+            .enumerate()
+            .map(|(i, &k)| {
+                Point::new(
+                    vec![[0.1, 0.5, 0.9][i % 3]],
+                    vec![],
+                    1. / plan.probabilities.as_ref().unwrap()[k],
+                )
+            })
+            .collect(),
+    );
+    let result = evaluator.eval_batch(
+        &batch,
+        &AccumulatorConfig::Gammaloop,
+        EvalBatchOptions {
+            require_training_values: true,
+            stratification: Some((&plan, &labels)),
+        },
+    )?;
+    let gammaboard::AccumulatorState::Stratified(state) = result.accumulator else {
+        panic!("hybrid state")
+    };
+    let pooled = state.pooled.as_ref().unwrap();
+    let histogram = &pooled.bundle.histograms["x"];
+    let mut sum = 0.;
+    let mut sums = [0.; 20];
+    let mut squares = [0.; 20];
+    let mut conditional = [0.; 2];
+    let mut counts = [0; 2];
+    for (i, (&k, point)) in labels.iter().zip(batch.points()).enumerate() {
+        let x = point.continuous[0];
+        let f = 6. * x * (1. - x);
+        let hit = (f > 0.75) == (k == 1);
+        let contribution = if hit { point.total_weight() * f } else { 0. };
+        assert_eq!(result.training_values.as_ref().unwrap()[i], contribution);
+        sum += contribution;
+        let b = (x * 20.) as usize;
+        sums[b] += contribution;
+        squares[b] += contribution * contribution;
+        conditional[k] += contribution * plan.probabilities.as_ref().unwrap()[k];
+        counts[k] += 1;
+    }
+    assert_eq!(histogram.sample_count, 128);
+    assert!((pooled.real_mean() - sum / 128.).abs() < 1e-12);
+    for (i, b) in histogram.bins.iter().enumerate() {
+        assert!((b.sum_weights - sums[i]).abs() < 1e-12);
+        assert!((b.sum_weights_squared - squares[i]).abs() < 1e-12);
+    }
+    assert!(
+        (state.mean().unwrap()[0]
+            - conditional[0] / counts[0] as f64
+            - conditional[1] / counts[1] as f64)
+            .abs()
+            < 1e-12
+    );
+    assert!(state.covariance().is_some());
     Ok(())
 }

@@ -1,6 +1,6 @@
-# Process wire protocol v7
+# Process wire protocol v8
 
-This is the complete transport contract for `gammaboard-jsonrpc-v7`. The
+This is the complete transport contract for `gammaboard-jsonrpc-v8`. The
 [execution specification](../docs/execution-model.md) defines sampling, weighting,
 feedback ordering, and recovery semantics. The [process guide](README.md) covers
 SDK setup. The protocol has four roles: `evaluator`, `sampler`, `materializer`,
@@ -14,7 +14,7 @@ stdout. Each process handles one synchronous request at a time. Every request ha
 that `id` and contains exactly one of `result` or `error`:
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":"gammaboard-jsonrpc-v7","role":"sampler","domain":{"rectangular":{"discrete_cardinalities":[],"continuous_dims":2}},"args":{},"evaluator_metadata":{},"initialization":{"kind":"fresh"}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":"gammaboard-jsonrpc-v8","role":"sampler","domain":{"rectangular":{"discrete_cardinalities":[],"continuous_dims":2}},"args":{},"evaluator_metadata":{},"initialization":{"kind":"fresh"}}}
 ```
 
 ```json
@@ -53,7 +53,7 @@ All roles receive:
 
 | Parameter | Meaning |
 | --- | --- |
-| `protocol` | Exactly `gammaboard-jsonrpc-v7` |
+| `protocol` | Exactly `gammaboard-jsonrpc-v8` |
 | `role` | One of the four role strings above |
 | `domain` | The structural domain described below |
 | `args` | User construction arguments, as a JSON object |
@@ -85,7 +85,7 @@ an earlier sampler's private state and source arguments to the destination's
 explicit handoff hook; destination `args` configure the new stage. The adapter
 transfers the learned proposal into fresh counters/feedback state. An unsupported
 handoff fails explicitly. The Python hooks are `from_snapshot` and `from_stage`.
-No nullable `snapshot` initialization fallback remains in v7.
+Initialization requires the tagged form above; nullable `snapshot` fallbacks are unsupported.
 
 For stratification, the sampler receives a domain with a new outer categorical
 axis, while ordinary evaluator callbacks receive their original physical domain.
@@ -148,7 +148,7 @@ specified byte length; extra/truncated data is invalid.
 | Role / method | Request JSON parameters | Request binary blocks, in order | Result JSON | Result binary blocks |
 | --- | --- | --- | --- | --- |
 | Evaluator / `eval_batch`, values output | `nr_samples`, `components`, optional coordinate offsets | `D` i64 discrete, `X` f64 continuous | `{}` | `N*C` unweighted f64 component values |
-| Evaluator / `eval_batch`, GammaLoop output | `nr_samples`, `require_training_values` boolean, optional coordinate offsets | `D` i64 discrete, `X` f64 continuous, `N` f64 total weights | `{"gammaloop_state":...}` | `N` weighted f64 training values if requested; otherwise empty |
+| Evaluator / `eval_batch`, GammaLoop output | `nr_samples`, `require_training_values` boolean, `stratification` (object or null), optional coordinate offsets | `D` i64 discrete, `X` f64 continuous, `N` f64 total weights | `{"gammaloop_state":...}` | First `N` weighted f64 training values if requested, then `N*2` unweighted real/imag f64 values if stratifying; omitted blocks have zero length |
 | Sampler / `generate` | Positive integer `max_samples` | Empty | See generation results below | For a batch: `D` i64 discrete, `X` f64 continuous, `N` f64 weights |
 | Sampler / `feedback` | `nr_values` | That many weighted f64 training values | `{"ok":true}` | Empty |
 
@@ -161,6 +161,22 @@ both native state and requested feedback. The native state is current
 and [typed producer](python/src/gammaboard_process/gammaloop.py) for its structure.
 GammaBoard does not apply another weight to that state. Native state may count
 internal integration samples separately from the queued input sample count.
+
+With stratification, the request object is
+`{"partition":{"kind":"voronoi","centers":[...],"scales":[...]},"labels":[...]}`.
+Scales can be omitted (ones); labels identify the requested stratum for every
+original draw. The physical coordinate arrays exclude the outer stratum axis.
+The callback must classify its raw real/imag values, mask contributions before
+observable accumulation, and retain full input weights. A miss produces zero
+training feedback and no histogram fills, but counts as one sample in every
+histogram and primary estimate. All events from one draw remain one statistical
+unit. The response values block is sample-major `(real,imag)` and contains the
+unmasked values, including on misses. Every value must be finite. No guessed or
+recomputed probabilities are needed by this callback: the host alone applies its
+frozen `p_k` to the primary integral estimator. The native state remains pooled.
+The host requires every native estimate/histogram count to equal `nr_samples`
+when stratifying. Independent integrations triggered by one queue point are
+therefore not valid stratified observable producers.
 
 Generation results are one of:
 

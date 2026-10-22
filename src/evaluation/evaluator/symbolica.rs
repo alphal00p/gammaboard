@@ -7,11 +7,8 @@ use std::{
 
 use crate::utils::domain::Domain;
 use crate::{
-    Batch, BatchResult, EngineError,
-    core::AccumulatorConfig,
-    evaluation::{EvalBatchOptions, Evaluator},
-    resources::resolve_resource_path,
-    runtime_context::evaluator_tmp_dir,
+    Batch, EngineError, core::AccumulatorConfig, evaluation::Evaluator,
+    resources::resolve_resource_path, runtime_context::evaluator_tmp_dir,
 };
 use serde::{Deserialize, Serialize};
 use symbolica::evaluate::{
@@ -521,27 +518,6 @@ impl Evaluator for SymbolicaEngine {
         }
         Ok(values)
     }
-
-    fn eval_batch(
-        &mut self,
-        batch: &Batch,
-        accumulator: &AccumulatorConfig,
-        options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError> {
-        let components = accumulator
-            .components()
-            .unwrap_or(&["value".to_string()])
-            .to_vec();
-        let values = self.eval_values(batch, &components)?;
-        crate::evaluation::stratification::accumulate_values(
-            batch,
-            &components,
-            &values,
-            accumulator,
-            options,
-            None,
-        )
-    }
 }
 
 #[cfg(test)]
@@ -585,6 +561,7 @@ mod tests {
                 &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: true,
+                    stratification: None,
                 },
             )
             .expect("evaluate batch");
@@ -626,6 +603,7 @@ mod tests {
                 &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: true,
+                    stratification: None,
                 },
             )
             .expect("evaluate batch");
@@ -658,6 +636,7 @@ mod tests {
                 },
                 EvalBatchOptions {
                     require_training_values: false,
+                    stratification: None,
                 },
             )
             .expect("evaluate batch");
@@ -690,6 +669,7 @@ mod tests {
                 &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: true,
+                    stratification: None,
                 },
             )
             .expect("evaluate batch");
@@ -723,6 +703,7 @@ mod tests {
                 &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: true,
+                    stratification: None,
                 },
             )
             .expect("evaluate batch");
@@ -770,6 +751,7 @@ mod tests {
                 &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: true,
+                    stratification: None,
                 },
             )
             .expect("evaluate batch");
@@ -791,6 +773,7 @@ mod tests {
                 &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: false,
+                    stratification: None,
                 },
             )
             .expect_err("complex output should reject scalar accumulator");

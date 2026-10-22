@@ -1,10 +1,11 @@
-use crate::core::{AccumulatorConfig, EngineError};
-use crate::evaluation::{
-    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, IngestScalar,
-    ingest_scalar_values,
-};
+#[cfg(test)]
+use crate::AccumulatorState;
+use crate::core::EngineError;
+use crate::evaluation::{Batch, Evaluator};
 use crate::utils::domain::Domain;
 use crate::utils::synthetic_timing::{TimingModel, TimingStats};
+#[cfg(test)]
+use crate::{AccumulatorConfig, EvalBatchOptions};
 use serde::{Deserialize, Serialize};
 
 /// Synthetic evaluator returning one, or a selected continuous coordinate.
@@ -52,18 +53,6 @@ impl UnitEvaluator {
         evaluator.cpu_iterations_per_sample = params.cpu_iterations_per_sample;
         evaluator.value_coordinate = params.value_coordinate;
         Ok(evaluator)
-    }
-
-    fn scalar_ingestor(state: &mut AccumulatorState) -> Result<&mut dyn IngestScalar, EngineError> {
-        match state {
-            AccumulatorState::Empty(accumulator) => Ok(accumulator),
-            AccumulatorState::Vector(accumulator) => Ok(accumulator),
-            AccumulatorState::FullVector(accumulator) => Ok(accumulator),
-            other => Err(EngineError::eval(format!(
-                "unit evaluator scalar mode does not support accumulator kind {}",
-                other.kind_str()
-            ))),
-        }
     }
 
     fn should_fail_on_batch(&self, batch_nr: usize) -> bool {
@@ -168,23 +157,6 @@ impl Evaluator for UnitEvaluator {
         };
         Ok(values)
     }
-
-    fn eval_batch(
-        &mut self,
-        batch: &Batch,
-        accumulator: &AccumulatorConfig,
-        options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError> {
-        let values = self.eval_values(batch, &["value".into()])?;
-        let mut observable_state = AccumulatorState::from_config(accumulator);
-        let weighted_values = ingest_scalar_values(
-            &values,
-            batch.points(),
-            options.require_training_values,
-            Self::scalar_ingestor(&mut observable_state)?,
-        )?;
-        Ok(BatchResult::new(weighted_values, observable_state))
-    }
 }
 
 /// Fixed work rather than a wall-clock spin, so contention remains measurable.
@@ -225,6 +197,7 @@ mod tests {
                     &AccumulatorConfig::scalar(),
                     EvalBatchOptions {
                         require_training_values,
+                        stratification: None,
                     },
                 )
                 .unwrap();
@@ -232,6 +205,23 @@ mod tests {
                 result.training_values,
                 require_training_values.then(|| vec![0.25, 2.25])
             );
+            let full = evaluator
+                .eval_batch(
+                    &batch,
+                    &AccumulatorConfig::FullVector {
+                        components: vec!["value".into()],
+                    },
+                    EvalBatchOptions {
+                        require_training_values,
+                        stratification: None,
+                    },
+                )
+                .unwrap();
+            assert_eq!(full.training_values, result.training_values);
+            let AccumulatorState::FullVector(full) = full.accumulator else {
+                panic!()
+            };
+            assert_eq!(full.values_row_major, vec![0.25, 2.25]);
             let AccumulatorState::Vector(accumulator) = result.accumulator else {
                 panic!("expected vector accumulator");
             };
@@ -261,7 +251,8 @@ mod tests {
                     &batch,
                     &AccumulatorConfig::scalar(),
                     EvalBatchOptions {
-                        require_training_values: true
+                        require_training_values: true,
+                        stratification: None
                     }
                 )
                 .is_err()
@@ -283,6 +274,7 @@ mod tests {
                 &AccumulatorConfig::scalar(),
                 EvalBatchOptions {
                     require_training_values: true,
+                    stratification: None,
                 },
             )
             .expect("result");

@@ -62,17 +62,22 @@ impl StratificationConfig {
     }
     pub fn validate_accumulator(&self, config: &AccumulatorConfig) -> Result<(), EngineError> {
         self.validate()?;
-        let AccumulatorConfig::Vector { components, .. } = config else {
-            return Err(EngineError::invalid_input(
-                "Voronoi stratification requires a statistical scalar/vector accumulator; aggregate observable output is unsupported",
-            ));
-        };
-        if components.len() != self.centers()[0].len() {
+        let width = Self::components(config)?.len();
+        if width != self.centers()[0].len() {
             return Err(EngineError::invalid_input(
                 "Voronoi center width must match the evaluator output components",
             ));
         }
         Ok(())
+    }
+    pub fn components(config: &AccumulatorConfig) -> Result<Vec<String>, EngineError> {
+        match config {
+            AccumulatorConfig::Vector { components, .. } => Ok(components.clone()),
+            AccumulatorConfig::Gammaloop => Ok(vec!["real".into(), "imag".into()]),
+            _ => Err(EngineError::invalid_input(
+                "stratification requires a statistical scalar/vector or GammaLoop accumulator",
+            )),
+        }
     }
     pub fn sampling_domain(&self, physical: &Domain) -> Domain {
         // An outer branch gives Havana a separate conditional grid per stratum.
@@ -148,6 +153,12 @@ impl StratificationPlan {
             ));
         }
         Ok(())
+    }
+    pub fn matches(&self, label: usize, values: &[f64]) -> Result<bool, EngineError> {
+        if label >= self.partition.centers().len() {
+            return Err(EngineError::eval("invalid stratum label"));
+        }
+        Ok(self.partition.classify(values)? == label)
     }
     pub fn id(&self) -> String {
         // Canonical immutable definition; equality also guards every accumulator merge.

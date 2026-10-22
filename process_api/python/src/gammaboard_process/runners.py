@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 from .batches import Batch, GenerationStatus, SampleBatch
-from .gammaloop import GammaLoopBatchResult
+from .gammaloop import GammaLoopBatchResult, StratificationContext
 from .protocol import (
     PROTOCOL,
     ProtocolIo,
@@ -124,7 +124,9 @@ class _EvaluatorWorker:
                 required = params["require_training_values"]
                 if not isinstance(required, bool):
                     raise TypeError("require_training_values must be a boolean")
-                return self._eval_batch_gammaloop(xs_discrete, xs_continuous, weights, required)
+                partition = params["stratification"]
+                context = StratificationContext(partition, nr_samples) if partition is not None else None
+                return self._eval_batch_gammaloop(xs_discrete, xs_continuous, weights, required, context)
             raw_values = self.evaluator.eval(xs_discrete, xs_continuous)
             values = _normalize_evaluator_values(raw_values, nr_samples, self.components)
             values_row_major = np.ascontiguousarray(
@@ -136,10 +138,12 @@ class _EvaluatorWorker:
     def _eval_batch_gammaloop(
         self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
         weights: np.ndarray, require_training_values: bool,
+        stratification: StratificationContext | None,
     ) -> dict[str, Any]:
         result = self.evaluator.eval_gammaloop(
             xs_discrete, xs_continuous, weights,
             require_training_values=require_training_values,
+            stratification=stratification,
         )
         if not isinstance(result, GammaLoopBatchResult):
             raise TypeError("eval_gammaloop must return GammaLoopBatchResult")
@@ -153,6 +157,15 @@ class _EvaluatorWorker:
             response["__binary__"] = values.tobytes()
         elif result.training_values is not None:
             raise ValueError("GammaLoop inference must not return training values")
+        if stratification is not None:
+            raw = np.asarray(result.values, dtype="<f8")
+            # Validate the same classification inputs as the Rust host.
+            mask = stratification.mask(raw)
+            if require_training_values and (values[~mask] != 0).any():
+                raise ValueError("stratum misses must return zero training feedback")
+            response["__binary__"] = response.get("__binary__", b"") + np.ascontiguousarray(raw).tobytes()
+        elif result.values is not None:
+            raise ValueError("GammaLoop values are only requested for stratification")
         return response
 
     def _validate_points(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> None:

@@ -241,9 +241,9 @@ fn assert_strata_match_reference(
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "gammaloop"))]
 #[tokio::test]
-#[ignore = "requires disposable postgres with CREATE DATABASE privilege"]
+#[ignore = "requires disposable postgres and numpy"]
 async fn stratified_sigkill_with_outstanding_work_replays_the_frozen_sample_stream()
 -> anyhow::Result<()> {
     use gammaboard::{
@@ -251,14 +251,20 @@ async fn stratified_sigkill_with_outstanding_work_replays_the_frozen_sample_stre
         sampling::{Generation, SavedSampler, StageHandoff},
     };
     let mut harness = FullStackHarness::new().await?;
-    let config = temp_config(
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let python = std::env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into());
+    let command=serde_json::to_string(&vec![
+        "env".to_string(),format!("PYTHONPATH={}:{}",root.join("process_api/python/src").display(),root.join("process_api/examples/python_gammaloop_observable/src").display()),python,
+        "-c".into(),"import time; import demo_evaluator as d; from gammaboard_process import run_evaluator; d._f=lambda x: (time.sleep(0.02), x)[1]; run_evaluator(d.PolynomialEvaluator)".into(),
+    ])?;
+    let config = temp_config(&format!(
         r#"
 name="stratified-crash"
 [evaluator]
-kind="unit"
-continuous_dims=1
-value_coordinate=0
-timing={overhead_seconds=0.02}
+kind="process_evaluator"
+command={command}
+domain={{rectangular={{discrete_cardinalities=[],continuous_dims=1}}}}
+output={{kind="gammaloop"}}
 [sampler_aggregator_runner_params]
 frontend_sync_interval_ms=50
 min_tick_time_ms=1
@@ -269,18 +275,18 @@ max_generation_size=113
 name="train"
 kind="sample"
 publish_result=false
-stop_condition={max_samples=512}
-accumulator={config="scalar"}
-sampler={config={kind="havana_training",seed=17,bins=8,samples_for_update=128,stratification={kind="voronoi",centers=[[0.25],[0.75]]}}}
+stop_condition={{max_samples=512}}
+accumulator={{config="gammaloop"}}
+sampler={{config={{kind="havana_training",seed=17,bins=8,samples_for_update=128,stratification={{kind="voronoi",centers=[[0.25,0.0],[0.75,0.0]]}}}}}}
 [[task_queue]]
 name="infer"
 kind="sample"
 estimator="stratified"
-stop_condition={max_samples=8192}
-accumulator={config="scalar"}
-sampler={config={kind="havana_inference",seed=18},from_stage="train"}
-"#,
-    );
+stop_condition={{max_samples=8192}}
+accumulator={{config="gammaloop"}}
+sampler={{config={{kind="havana_inference",seed=18}},from_stage="train"}}
+"#
+    ));
     harness.add_run(&config);
     let run = harness.run_id("stratified-crash").await?;
     harness.start_nodes(&["crash-s", "crash-e"]).await?;
@@ -335,6 +341,8 @@ sampler={config={kind="havana_inference",seed=18},from_stage="train"}
     let mut sampler = config.from_stage(&domain, source)?;
     let mut materializer = config.build_materializer(&domain, Some(source))?;
     let mut reference = vec![vec![], vec![]];
+    let mut histogram_sums = [0.; 20];
+    let mut histogram_squares = [0.; 20];
     let mut remaining = 8192;
     while remaining > 0 {
         let Generation::Batch { batch, .. } = sampler.generate(remaining.min(79))? else {
@@ -345,6 +353,10 @@ sampler={config={kind="havana_inference",seed=18},from_stage="train"}
             let k = point.discrete[0] as usize;
             let x = point.continuous[0];
             let hit = k == usize::from(x > 0.5);
+            let bin = (x * 20.) as usize;
+            let weighted = if hit { x * point.total_weight() } else { 0. };
+            histogram_sums[bin] += weighted;
+            histogram_squares[bin] += weighted * weighted;
             reference[k].push((
                 if hit {
                     x * point.total_weight() * state.plan.probabilities.as_ref().unwrap()[k]
@@ -356,6 +368,21 @@ sampler={config={kind="havana_inference",seed=18},from_stage="train"}
         }
     }
     assert_strata_match_reference(&state, &reference);
+    let pooled = state
+        .pooled
+        .as_ref()
+        .context("recovered hybrid histograms")?;
+    assert_eq!(pooled.bundle.histograms["x"].sample_count, 8192);
+    for (i, bin) in pooled.bundle.histograms["x"].bins.iter().enumerate() {
+        assert!(
+            (bin.sum_weights - histogram_sums[i]).abs() < 1e-9 * histogram_sums[i].abs().max(1.)
+        );
+        assert!(
+            (bin.sum_weights_squared - histogram_squares[i]).abs()
+                < 1e-9 * histogram_squares[i].abs().max(1.)
+        );
+    }
+    assert!((pooled.real_mean() - histogram_sums.iter().sum::<f64>() / 8192.).abs() < 1e-12);
     harness.cleanup().await
 }
 

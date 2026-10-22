@@ -13,7 +13,7 @@ def _f(x: np.ndarray) -> np.ndarray:
     return 6.0 * x * (1.0 - x)
 
 
-def _histogram_snapshot(xs: np.ndarray, weights: np.ndarray) -> dict:
+def _histogram_snapshot(xs: np.ndarray, weights: np.ndarray, mask: np.ndarray) -> dict:
     bin_width = (X_MAX - X_MIN) / N_BINS
     bins = [
         {
@@ -32,7 +32,9 @@ def _histogram_snapshot(xs: np.ndarray, weights: np.ndarray) -> dict:
                  "entry_count": 0, "sum_weights": 0.0, "sum_weights_squared": 0.0, "mitigated_fill_count": 0}
     overflow = {**underflow}
     in_range = 0
-    for x, w in zip(xs.tolist(), weights.tolist()):
+    for x, w, matched in zip(xs.tolist(), weights.tolist(), mask.tolist()):
+        if not matched:
+            continue
         idx = int((x - X_MIN) / bin_width)
         if idx < 0:
             underflow["entry_count"] += 1
@@ -92,16 +94,18 @@ class PolynomialEvaluator(GammaLoopEvaluator):
 
     def eval_gammaloop(
         self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
-        weights: np.ndarray, *, require_training_values: bool,
+        weights: np.ndarray, *, require_training_values: bool, stratification,
     ) -> GammaLoopBatchResult:
         x = xs_continuous[:, 0]
-        values = _f(x) * weights
+        raw_values = np.column_stack((_f(x), np.zeros(len(x))))
+        mask = stratification.mask(raw_values) if stratification is not None else np.ones(len(x), dtype=bool)
+        values = raw_values[:, 0] * weights * mask
         n = len(x)
         s = float(values.sum())
         s2 = float((values**2).sum())
         zero = _scalar_state(n, 0.0, 0.0)
         state = {
-            "bundle": {"histograms": {"x": _histogram_snapshot(x, values)}},
+            "bundle": {"histograms": {"x": _histogram_snapshot(x, values, mask)}},
             "estimate": {
                 "components": [
                     {"name": "real", "state": _scalar_state(n, s, s2)},
@@ -118,5 +122,6 @@ class PolynomialEvaluator(GammaLoopEvaluator):
         }
         return GammaLoopBatchResult(
             state=state,
+            values=raw_values if stratification is not None else None,
             training_values=np.abs(values).tolist() if require_training_values else None,
         )

@@ -9,7 +9,7 @@ from numpy.typing import ArrayLike
 from .batches import Batch, GenerationStatus, SampleBatch
 
 if TYPE_CHECKING:
-    from .gammaloop import GammaLoopBatchResult
+    from .gammaloop import GammaLoopBatchResult, StratificationContext
 
 
 class _EvaluatorBase(ABC):
@@ -44,7 +44,7 @@ class GammaLoopEvaluator(_EvaluatorBase):
     @abstractmethod
     def eval_gammaloop(
         self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
-        weights: np.ndarray, *, require_training_values: bool,
+        weights: np.ndarray, *, require_training_values: bool, stratification: StratificationContext | None,
     ) -> GammaLoopBatchResult:
         """Evaluate a batch and return a GammaLoop accumulator state.
 
@@ -55,6 +55,9 @@ class GammaLoopEvaluator(_EvaluatorBase):
         :class:`~gammaboard_process.gammaloop.ObservableSnapshotBundle`) and a
         list of weighted per-sample training values when requested, otherwise None.
         Apply the supplied total weights exactly once to state and feedback.
+        ``stratification`` is None or a StratificationContext. Use its ``mask``
+        on raw real/imag values before accumulating observables. Count misses as
+        zero samples, and return unmasked (N,2) values in the result when present.
 
         """
 

@@ -97,6 +97,8 @@ the branch; its dimensionality must match the geometry. Task append files accept
 - `moments = 2` is the default; `4` enables uncertainty estimates requiring fourth
   moments. Component projections reuse component statistics.
 - `full_vector` retains every weighted value; size grows with sample count.
+  Scalar collections can also return training feedback. Multi-component
+  collections have no training projection and require feedback-free sampling.
 - `gammaloop` retains native observable/histogram state and complex estimates.
 
 Optional `discrete_projections` specifies `items` with `name`, `dims`, and
@@ -204,6 +206,13 @@ The frozen sampler supplies it through `discrete_pdf`. See the
 Symbolica can evaluate named real vectors using
 `source = { kind = "expressions", components = ["x", "y", "z"], exprs = ["t", "2*t", "-t"] }`.
 The accumulator component order must agree. Existing `kind = "expression"`
-retains scalar or complex real/imag output. Stratification currently requires a
-statistical scalar/vector accumulator, not `full_vector` or an opaque observable
-bundle. Raster and PDF-inspection tasks retain their existing semantics.
+retains scalar or complex real/imag output. Stratification requires a statistical
+scalar/vector accumulator or a GammaLoop-compatible observable producer satisfying
+the masking contract; `full_vector` is unsupported. Raster and PDF-inspection
+tasks retain their existing semantics.
+
+With `accumulator = { config = "gammaloop" }`, Voronoi centres are pairs of
+`[real, imag]`. For example, `centers = [[-1, 0], [1, 0]]` splits by real-part sign.
+The primary integral is stratified; native histograms remain masked, full-weight
+pooled estimates. Histogram totals need not equal the stratified central value.
+Process observable callbacks must implement the protocol-v8 masking contract.

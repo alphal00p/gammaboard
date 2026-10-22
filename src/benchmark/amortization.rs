@@ -89,6 +89,7 @@ pub fn measure(config: Config) -> Result<Value> {
                             &accumulator_config,
                             EvalBatchOptions {
                                 require_training_values: feedback,
+                                stratification: None,
                             },
                         )?;
                         let seconds = start.elapsed().as_secs_f64();

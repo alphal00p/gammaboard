@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::core::{AccumulatorConfig, EngineError};
 use crate::evaluation::{
-    AccumulatorState, Batch, BatchResult, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
+    Batch, BatchResult, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
 };
 use crate::process_runtime::{build_process_worker_command, default_process_args};
 use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker};
@@ -107,65 +107,39 @@ impl Evaluator for ProcessEvaluator {
         accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EngineError> {
-        let mut observable_state = AccumulatorState::from_config(accumulator);
         let mut inputs = pack_eval_inputs(batch, &self.worker.domain);
-
-        if let AccumulatorState::Gammaloop(gl_state) = &mut observable_state {
+        if matches!(accumulator, AccumulatorConfig::Gammaloop) {
             for point in batch.points() {
                 inputs
                     .binary
                     .extend_from_slice(&point.total_weight().to_le_bytes());
             }
-            let (new_state, training_values) = self.worker.eval_batch_gammaloop(
-                &inputs,
-                batch.len(),
-                options.require_training_values,
-            )?;
-            *gl_state = new_state;
-            return Ok(BatchResult::new(training_values, observable_state));
+            let response = self
+                .worker
+                .eval_batch_gammaloop(&inputs, batch.len(), options)?;
+            return crate::evaluation::stratification::finish_gammaloop(
+                batch,
+                response.values.as_deref(),
+                response.state,
+                response.training_values,
+                options,
+            );
         }
-
         let values = self.worker.eval_batch(&inputs, batch.len())?;
-        let mut training_values = options
-            .require_training_values
-            .then(|| Vec::with_capacity(batch.len()));
-        match &mut observable_state {
-            AccumulatorState::Vector(vector_state) => {
-                for (sample_idx, point) in batch.points().iter().enumerate() {
-                    let start = sample_idx * self.worker.output.components().len();
-                    let end = start + self.worker.output.components().len();
-                    let projected = vector_state
-                        .ingest_vector(&values[start..end], point)
-                        .map_err(|err| EngineError::eval(format!("sample {sample_idx}: {err}")))?;
-                    if let Some(training_values) = training_values.as_mut() {
-                        training_values.push(projected * point.total_weight());
-                    }
-                }
-            }
-            AccumulatorState::FullVector(full_state) => {
-                for (sample_idx, point) in batch.points().iter().enumerate() {
-                    let start = sample_idx * self.worker.output.components().len();
-                    let end = start + self.worker.output.components().len();
-                    let weight = point.total_weight().abs();
-                    let weighted = values[start..end]
-                        .iter()
-                        .map(|value| value * weight)
-                        .collect::<Vec<_>>();
-                    full_state
-                        .push_vector(&weighted)
-                        .map_err(|err| EngineError::eval(format!("sample {sample_idx}: {err}")))?;
-                }
-                training_values = None;
-            }
-            other => {
-                return Err(EngineError::eval(format!(
-                    "process_evaluator requires vector or full_vector accumulator config, got {}",
-                    other.kind_str()
-                )));
-            }
-        }
-        Ok(BatchResult::new(training_values, observable_state))
+        crate::evaluation::stratification::accumulate_values(
+            batch,
+            self.worker.output.components(),
+            &values,
+            accumulator,
+            options,
+        )
     }
+}
+
+struct GammaLoopResponse {
+    state: GammaLoopAccumulatorState,
+    training_values: Option<Vec<f64>>,
+    values: Option<Vec<f64>>,
 }
 
 struct PackedEvalInputs {
@@ -318,11 +292,14 @@ impl ProcessRuntimeWorker {
         &mut self,
         inputs: &PackedEvalInputs,
         nr_samples: usize,
-        require_training_values: bool,
-    ) -> Result<(GammaLoopAccumulatorState, Option<Vec<f64>>), EngineError> {
+        options: EvalBatchOptions<'_>,
+    ) -> Result<GammaLoopResponse, EngineError> {
+        let require_training_values = options.require_training_values;
+        options.validate(nr_samples, &["real".into(), "imag".into()])?;
         let mut params = serde_json::json!({
             "nr_samples": nr_samples,
             "require_training_values": require_training_values,
+            "stratification": options.stratification.map(|(plan,labels)| serde_json::json!({"partition":plan.partition,"labels":labels})),
         });
         add_required_offsets(&mut params, inputs);
         let (response, response_binary) = self
@@ -338,22 +315,19 @@ impl ProcessRuntimeWorker {
                 .clone(),
         )
         .map_err(|err| EngineError::eval(format!("failed to parse gammaloop_state: {err}")))?;
-        let training_values = if require_training_values {
-            let values = unpack_f64_le(&response_binary, "training values")?;
-            if values.len() != nr_samples {
-                return Err(EngineError::eval(
-                    "GammaLoop training value count does not match batch",
-                ));
-            }
-            Some(values)
-        } else {
-            if !response_binary.is_empty() {
-                return Err(EngineError::eval(
-                    "unexpected GammaLoop training values for inference",
-                ));
-            }
-            None
-        };
+        let decoded = unpack_f64_le(&response_binary, "GammaLoop values")?;
+        let feedback_len = usize::from(require_training_values) * nr_samples;
+        let values_len = usize::from(options.stratification.is_some()) * nr_samples * 2;
+        if decoded.len() != feedback_len + values_len {
+            return Err(EngineError::eval(
+                "GammaLoop response length does not match requested feedback and real/imag values",
+            ));
+        }
+        let training_values = require_training_values.then(|| decoded[..feedback_len].to_vec());
+        let values = options
+            .stratification
+            .is_some()
+            .then(|| decoded[feedback_len..].to_vec());
         state.validate_values()?;
         if let Some(values) = &training_values
             && let Some(sample) = values.iter().position(|value| !value.is_finite())
@@ -362,7 +336,11 @@ impl ProcessRuntimeWorker {
                 "sample {sample}: non-finite training feedback"
             )));
         }
-        Ok((state, training_values))
+        Ok(GammaLoopResponse {
+            state,
+            training_values,
+            values,
+        })
     }
 
     fn expect_ack(response: Value) -> Result<Value, String> {

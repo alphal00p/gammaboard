@@ -1,0 +1,41 @@
+# Same polynomial/histogram producer, with a stratified integral and pooled bins.
+# Requires the example virtualenv described in process_api/README.md.
+# The exact integral of 6*x*(1-x) over [0,1] is 1.
+name = "python-gammaloop-hybrid-stratification"
+target = { kind = "scalar", value = 1.0 }
+
+[evaluator]
+kind = "process_evaluator"
+command = ["$resources/../process_api/examples/python_gammaloop_observable/.venv/bin/python", "-u", "-m", "run_evaluator"]
+cwd = "$resources/../process_api/examples/python_gammaloop_observable/src"
+domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 1 } }
+output = { kind = "gammaloop" }
+
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = 16384 }
+accumulator = { config = "gammaloop" }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = 17
+bins = 16
+samples_for_update = 1024
+initial_training_rate = 0.5
+final_training_rate = 0.1
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+centers = [[0.0, 0.0], [1.5, 0.0]]
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+stop_condition = { max_samples = 65536 }
+accumulator = { config = "gammaloop" }
+[task_queue.sampler]
+from_stage = "train"
+[task_queue.sampler.config]
+kind = "havana_inference"
+seed = 18

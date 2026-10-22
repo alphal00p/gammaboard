@@ -159,7 +159,7 @@ pub(crate) fn estimate_for_stop(
 ) -> Result<Option<ProjectedEstimate>, EngineError> {
     let default = AccumulatorMetricSelector {
         name: AccumulatorMetricName::Mean,
-        component: matches!(state, AccumulatorState::Gammaloop(_)).then(|| "norm".into()),
+        component: state.gammaloop().is_some().then(|| "norm".into()),
     };
     Ok(
         extract_accumulator_metric_with_runtime(state, selector.unwrap_or(&default), rate)?

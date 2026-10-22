@@ -381,7 +381,7 @@ fn accumulator_matches_requested_config(
             accumulator,
             AccumulatorState::Vector(_) | AccumulatorState::Stratified(_)
         ),
-        AccumulatorConfig::Gammaloop => matches!(accumulator, AccumulatorState::Gammaloop(_)),
+        AccumulatorConfig::Gammaloop => accumulator.gammaloop().is_some(),
         AccumulatorConfig::FullVector { .. } => {
             matches!(accumulator, AccumulatorState::FullVector(_))
         }
@@ -447,58 +447,46 @@ fn real_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelSta
     if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
     }
-    let points = match accumulator {
-        AccumulatorState::Stratified(state) => {
-            let metric = state.metric(&crate::core::AccumulatorMetricSelector {
-                name: crate::core::AccumulatorMetricName::Mean,
-                component: None,
-            })?;
-            vec![PlotPoint::timeseries(
-                metric.sample_count as f64,
-                metric.value,
-                Some(metric.uncertainty?),
-            )]
-        }
-        AccumulatorState::Vector(state) => {
-            let projection = &state.projection().state;
-            vec![PlotPoint::timeseries(
-                projection.count as f64,
-                projection.mean(),
-                Some(projection.stderr()),
-            )]
-        }
-        AccumulatorState::Gammaloop(state) => vec![PlotPoint::timeseries(
-            state.sample_count() as f64,
-            state.real_mean(),
-            Some(state.real_stderr()),
-        )],
-        _ => Vec::new(),
-    };
-    Some(
-        scalar_timeseries_panel_with_smoothing("real_estimate_history", points, Some(true))
-            .with_x_axis(PlotXAxis::CompletedSamples),
-    )
+    let component = accumulator
+        .gammaloop()
+        .is_some()
+        .then(|| "real".to_string());
+    estimate_history_panel(&accumulator, component, "real_estimate_history")
 }
 
 fn imag_estimate_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
+    accumulator.gammaloop()?;
+    estimate_history_panel(&accumulator, Some("imag".into()), "imag_estimate_history")
+}
+
+fn estimate_history_panel(
+    accumulator: &AccumulatorState,
+    component: Option<String>,
+    name: &str,
+) -> Option<PanelState> {
     if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
     }
-    match accumulator {
-        AccumulatorState::Gammaloop(state) => Some(
-            scalar_timeseries_panel_with_smoothing(
-                "imag_estimate_history",
-                vec![PlotPoint::timeseries(
-                    state.sample_count() as f64,
-                    state.imag_mean(),
-                    Some(state.imag_stderr()),
-                )],
-                Some(true),
-            )
-            .with_x_axis(PlotXAxis::CompletedSamples),
-        ),
-        _ => None,
-    }
+    let estimate = crate::evaluation::extract_accumulator_metric(
+        accumulator,
+        &crate::core::AccumulatorMetricSelector {
+            name: crate::core::AccumulatorMetricName::Mean,
+            component,
+        },
+    )
+    .ok()??;
+    Some(
+        scalar_timeseries_panel_with_smoothing(
+            name,
+            vec![PlotPoint::timeseries(
+                estimate.sample_count as f64,
+                estimate.value,
+                Some(estimate.uncertainty?),
+            )],
+            Some(true),
+        )
+        .with_x_axis(PlotXAxis::CompletedSamples),
+    )
 }
 
 fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
@@ -559,45 +547,31 @@ fn estimate_summary_panel(
 }
 
 fn max_weight_summary_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    let entries = match accumulator {
-        AccumulatorState::Vector(state) => vec![
-            key_value(
-                "max_weight_impact",
-                "Projection Impact",
-                state.projection().state.max_weight_impact(),
-            ),
-            key_value(
-                "max_weighted_positive",
-                "Projection Max +",
-                state.projection().state.max_weighted_positive,
-            ),
-            key_value(
-                "max_weighted_negative",
-                "Projection Max -",
-                state.projection().state.max_weighted_negative,
-            ),
-        ],
-        AccumulatorState::Gammaloop(state) => {
-            vec![
-                key_value(
-                    "max_weight_impact",
-                    "Projection Impact",
-                    state.estimate.projection().state.max_weight_impact(),
-                ),
-                key_value(
-                    "max_weighted_positive",
-                    "Projection Max +",
-                    state.estimate.projection().state.max_weighted_positive,
-                ),
-                key_value(
-                    "max_weighted_negative",
-                    "Projection Max -",
-                    state.estimate.projection().state.max_weighted_negative,
-                ),
-            ]
-        }
-        _ => return None,
-    };
+    let projection = &accumulator.pooled_vector()?.projection().state;
+    let mut entries = vec![
+        key_value(
+            "max_weight_impact",
+            "Projection Impact",
+            projection.max_weight_impact(),
+        ),
+        key_value(
+            "max_weighted_positive",
+            "Projection Max +",
+            projection.max_weighted_positive,
+        ),
+        key_value(
+            "max_weighted_negative",
+            "Projection Max -",
+            projection.max_weighted_negative,
+        ),
+    ];
+    if matches!(accumulator, AccumulatorState::Stratified(_)) {
+        entries.push(key_value(
+            "weight_basis",
+            "Weight basis",
+            "Full sampling weights (pooled)",
+        ));
+    }
     Some(key_value_panel("max_weight_summary", entries))
 }
 
@@ -611,56 +585,27 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
         "Impact".to_string(),
         "Point".to_string(),
     ];
-    let rows = match accumulator {
-        AccumulatorState::Vector(state) => {
-            let mut rows = Vec::new();
-            for component in &state.components {
-                let impact = component.state.max_weight_impact();
-                push_max_weight_row(
-                    &mut rows,
-                    &component.name,
-                    "+",
-                    component.state.max_weighted_positive,
-                    impact,
-                    component.state.max_weighted_positive_sample.as_ref(),
-                );
-                push_max_weight_row(
-                    &mut rows,
-                    &component.name,
-                    "-",
-                    component.state.max_weighted_negative,
-                    impact,
-                    component.state.max_weighted_negative_sample.as_ref(),
-                );
-            }
-            rows
-        }
-        AccumulatorState::Gammaloop(state) => {
-            let estimate = &state.estimate;
-            let mut rows = Vec::new();
-            for component in &estimate.components {
-                let impact = component.state.max_weight_impact();
-                push_max_weight_row(
-                    &mut rows,
-                    &component.name,
-                    "+",
-                    component.state.max_weighted_positive,
-                    impact,
-                    component.state.max_weighted_positive_sample.as_ref(),
-                );
-                push_max_weight_row(
-                    &mut rows,
-                    &component.name,
-                    "-",
-                    component.state.max_weighted_negative,
-                    impact,
-                    component.state.max_weighted_negative_sample.as_ref(),
-                );
-            }
-            rows
-        }
-        _ => return None,
-    };
+    let estimate = accumulator.pooled_vector()?;
+    let mut rows = Vec::new();
+    for component in &estimate.components {
+        let impact = component.state.max_weight_impact();
+        push_max_weight_row(
+            &mut rows,
+            &component.name,
+            "+",
+            component.state.max_weighted_positive,
+            impact,
+            component.state.max_weighted_positive_sample.as_ref(),
+        );
+        push_max_weight_row(
+            &mut rows,
+            &component.name,
+            "-",
+            component.state.max_weighted_negative,
+            impact,
+            component.state.max_weighted_negative_sample.as_ref(),
+        );
+    }
     Some(table_panel_with_payload(
         "max_weight_points",
         columns,
@@ -752,6 +697,9 @@ fn stratified_summary_entries(
         key_value("estimator", "Estimator", "stratified"),
         key_value("plan", "Partition ID", state.plan.id()),
     ];
+    if state.pooled.is_some() {
+        entries.push(key_value("histogram_estimator", "Histogram estimator", "Pooled, masked full-weight samples; histogram totals can differ from the stratified integral"));
+    }
     let means = state.mean();
     let covariance = state.covariance();
     let width = state.strata[0].mean.len();
@@ -1139,9 +1087,7 @@ fn estimate_eta_seconds(
 
 #[cfg(feature = "gammaloop")]
 fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    let AccumulatorState::Gammaloop(state) = accumulator else {
-        return None;
-    };
+    let state = accumulator.gammaloop()?;
     let mut payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
     if let JsonValue::Object(payload) = &mut payload {
         payload.insert(
@@ -1153,7 +1099,15 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
         );
     }
 
-    super::observable::histogram_bundle_panel("gammaloop_histogram_bundle", "Observable", payload)
+    super::observable::histogram_bundle_panel(
+        "gammaloop_histogram_bundle",
+        if matches!(accumulator, AccumulatorState::Stratified(_)) {
+            "Observables (pooled; full sampling weights)"
+        } else {
+            "Observable"
+        },
+        payload,
+    )
 }
 
 fn discrete_projection_bundle_panel(
@@ -1627,9 +1581,7 @@ fn discrete_pdf_key(key: &[i64]) -> String {
 }
 
 fn gammaloop_evaluation_diagnostics_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    let AccumulatorState::Gammaloop(state) = accumulator else {
-        return None;
-    };
+    let state = accumulator.gammaloop()?;
     Some(key_value_panel(
         "gammaloop_evaluation_diagnostics",
         gammaloop_diagnostics_entries(&state.diagnostics),
@@ -1726,9 +1678,7 @@ fn gammaloop_diagnostics_entries(
 }
 
 fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    let AccumulatorState::Gammaloop(state) = accumulator else {
-        return None;
-    };
+    let state = accumulator.gammaloop()?;
     let diagnostics = &state.diagnostics;
     let total_eval_ms = diagnostics.avg_eval_time_ms();
     if !total_eval_ms.is_finite() || total_eval_ms <= 0.0 {
@@ -2297,6 +2247,76 @@ mod stratification_panels {
     use super::*;
     use crate::core::{StratificationConfig, StratificationPlan};
     use crate::evaluation::accumulator::StratifiedAccumulatorState;
+    #[test]
+    fn hybrid_history_uses_conditional_errors_and_keeps_pooled_diagnostics() {
+        let config = AccumulatorConfig::Gammaloop;
+        let plan = StratificationPlan {
+            proposal_id: "hybrid-history".into(),
+            partition: StratificationConfig::Voronoi {
+                centers: vec![vec![-1., -2.], vec![1., 2.]],
+                scales: None,
+            },
+            probabilities: Some(vec![0.25, 0.75]),
+            components: vec!["real".into(), "imag".into()],
+        };
+        let mut state = StratifiedAccumulatorState::new(plan, config.clone()).unwrap();
+        state.pooled.as_mut().unwrap().training_projection =
+            Some(crate::evaluation::evaluator::gammaloop::TrainingProjection::Imag);
+        for _ in 0..64 {
+            for (k, values, w, hit) in [(0, [0., 0.], 4., false), (1, [1., 2.], 4. / 3., true)] {
+                state.push(k, &values, w, hit).unwrap();
+                state
+                    .pooled
+                    .as_mut()
+                    .unwrap()
+                    .estimate
+                    .ingest_vector(&values, &crate::Point::new(vec![], vec![], w))
+                    .unwrap();
+            }
+        }
+        let accumulator = AccumulatorState::Stratified(Box::new(state.clone()));
+        assert!(real_estimate_history_panel(accumulator.clone()).is_none());
+        assert!(imag_estimate_history_panel(accumulator.clone()).is_none());
+        assert!(max_weight_summary_panel(accumulator.clone()).is_some());
+        assert!(max_weight_points_panel(accumulator).is_some());
+        for _ in 0..2 {
+            state.push(0, &[-1., -2.], 4., true).unwrap();
+            state
+                .pooled
+                .as_mut()
+                .unwrap()
+                .estimate
+                .ingest_vector(&[-1., -2.], &crate::Point::new(vec![], vec![], 4.))
+                .unwrap();
+        }
+        let expected = state.mean().unwrap();
+        let accumulator = AccumulatorState::Stratified(Box::new(state));
+        let restored = decode_aggregate_persisted_accumulator(
+            &config,
+            &accumulator.to_persistent_json().unwrap(),
+        )
+        .unwrap();
+        assert!(accumulator_matches_requested_config(&restored, &config));
+        for (index, panel) in [
+            real_estimate_history_panel(restored.clone()),
+            imag_estimate_history_panel(restored.clone()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let PanelState::ScalarTimeseries { points, .. } = panel.unwrap() else {
+                panic!()
+            };
+            assert_eq!(points[0].y, expected[index]);
+            assert!(points[0].y_min.unwrap() < points[0].y);
+        }
+        let entries =
+            serde_json::to_string(&base_estimate_summary_entries(&restored, None)).unwrap();
+        assert!(entries.contains("Pooled, masked full-weight"));
+        #[cfg(feature = "gammaloop")]
+        assert!(gammaloop_histogram_bundle_panel(restored).is_some());
+    }
+
     #[test]
     fn stratified_history_retains_estimator_identity_and_shows_zero_accounting() {
         let config = AccumulatorConfig::scalar();

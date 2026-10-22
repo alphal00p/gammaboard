@@ -3,6 +3,44 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import numpy as np
+
+
+class StratificationContext:
+    """Mask for native pooled observables; never changes their full weights.
+
+    Classify the unweighted real/imaginary integrand, then apply the returned
+    mask to all observable contributions from the same original draw. Count
+    every draw, including misses. Return the raw values in GammaLoopBatchResult.
+    """
+
+    def __init__(self, payload: dict, nr_samples: int):
+        partition = payload["partition"]
+        if partition["kind"] != "voronoi":
+            raise ValueError("unsupported stratification partition")
+        self.centers = np.asarray(partition["centers"], dtype=np.float64)
+        self.scales = np.asarray(partition.get("scales", [1.0, 1.0]), dtype=np.float64)
+        self.labels = np.asarray(payload["labels"])
+        if (self.centers.ndim != 2 or self.centers.shape[1] != 2 or len(self.centers) == 0
+                or not np.isfinite(self.centers).all()
+                or self.scales.shape != (2,) or not np.isfinite(self.scales).all()
+                or (self.scales <= 0).any()):
+            raise ValueError("invalid real/imaginary Voronoi partition")
+        if (self.labels.shape != (nr_samples,) or self.labels.dtype.kind not in "iu"
+                or (self.labels < 0).any() or (self.labels >= len(self.centers)).any()):
+            raise ValueError("invalid stratum labels")
+
+    def mask(self, values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float64)
+        if values.shape != (len(self.labels), 2) or not np.isfinite(values).all():
+            raise ValueError("stratification needs finite unweighted (N,2) real/imag values")
+        with np.errstate(over="ignore", invalid="ignore"):
+            delta = (values[:, None, :] - self.centers[None, :, :]) / self.scales
+            distances = np.hypot.reduce(delta, axis=2)
+        if not np.isfinite(distances).all():
+            raise ValueError("Voronoi distance overflow")
+        return np.argmin(distances, axis=1) == self.labels
+
 
 class HistogramBinSnapshot(dict):
     """Dict shape for a single histogram bin.
@@ -76,7 +114,7 @@ class ObservableSnapshotBundle(dict):
 
 @dataclass(slots=True)
 class GammaLoopBatchResult:
-    """Return value from :meth:`~gammaboard_process.Evaluator.eval_gammaloop`.
+    """Return value from :meth:`~gammaboard_process.GammaLoopEvaluator.eval_gammaloop`.
 
     ``state`` must be a JSON-serializable dict matching the
     ``GammaLoopAccumulatorState`` schema expected by GammaBoard.  It must
@@ -95,17 +133,16 @@ class GammaLoopBatchResult:
     and the projection must count every sample, including finite zeros. Final values,
     required moments, and feedback must be finite; an invalid result rejects the batch.
 
-    Example::
+    ``values`` must be the finite unmasked ``(N,2)`` real/imag array when a
+    ``StratificationContext`` was supplied, and None otherwise. Histograms and
+    the native estimate use the context's mask with full weights, counting every
+    original draw. The host applies its frozen stratum probabilities only to
+    the separate primary integral estimator. Never apply them to ``state``.
 
-        from gammaboard_process import GammaLoopBatchResult
-
-        def eval_gammaloop(self, xs_discrete, xs_continuous, weights, *, require_training_values):
-            state_dict = my_gammaloop_run.eval_batch(
-                xs_continuous, weights=weights, require_training_values=require_training_values
-            )
-            training = state_dict.pop("training_values", None)
-            return GammaLoopBatchResult(state=state_dict, training_values=training)
+    See examples/python_gammaloop_observable for a complete producer.
     """
 
     state: dict[str, Any]
     training_values: list[float] | None = None
+    # Raw unweighted (N,2) real/imag values, required exactly when stratifying.
+    values: Any | None = None

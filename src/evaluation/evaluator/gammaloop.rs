@@ -1,7 +1,10 @@
 #[cfg(test)]
 use super::gammaloop_config::GammaLoopPreprocessing;
 pub use super::gammaloop_config::{GammaLoopParams, TrainingProjection};
+#[cfg(test)]
+use crate::AccumulatorState;
 use crate::core::EngineResultExt;
+use gammalooprs::integrands::process::EvaluationTarget;
 use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe};
 
 use gammaloop_api::{
@@ -13,7 +16,7 @@ use gammalooprs::initialisation::initialise;
 use gammalooprs::integrands::HasIntegrand;
 use gammalooprs::integrands::evaluation::EvaluationResult;
 use gammalooprs::integrands::process::{
-    EvaluationTarget, GaussianReferenceFunction, MomentumSpaceEvaluationInput, ProcessIntegrand,
+    GaussianReferenceFunction, MomentumSpaceEvaluationInput, ProcessIntegrand,
     SamplingChannelInspection,
 };
 use gammalooprs::model::Model;
@@ -33,10 +36,7 @@ use crate::{
         AccumulatorConfig, AccumulatorMomentConfig,
         TrainingProjection as AccumulatorTrainingProjection,
     },
-    evaluation::{
-        AccumulatorState, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
-        VectorAccumulatorState,
-    },
+    evaluation::{EvalBatchOptions, Evaluator, GammaLoopAccumulatorState, VectorAccumulatorState},
     resources::resolve_resource_path,
 };
 
@@ -552,33 +552,18 @@ impl GammaLoopEvaluator {
         Ok(discrete)
     }
 
-    fn ingest_vector_batch(
-        accumulator: &mut VectorAccumulatorState,
-        evaluation_results: &[EvaluationResult],
-        points: &[crate::evaluation::Point],
-        require_training_values: bool,
-        mut values_of: impl FnMut(&EvaluationResult) -> Vec<f64>,
-    ) -> Result<Option<Vec<f64>>, EngineError> {
-        let mut training_values =
-            require_training_values.then(|| Vec::with_capacity(evaluation_results.len()));
-        for (sample, (result, point)) in evaluation_results.iter().zip(points.iter()).enumerate() {
-            let projected = accumulator
-                .ingest_vector(&values_of(result), point)
-                .map_err(|err| EngineError::eval(format!("sample {sample}: {err}")))?;
-            if let Some(training_values) = training_values.as_mut() {
-                training_values.push(projected * point.total_weight());
-            }
-        }
-        Ok(training_values)
-    }
-
     fn batch_gammaloop_observable(
         &self,
         evaluation_results: &[EvaluationResult],
         points: &[crate::evaluation::Point],
+        options: EvalBatchOptions<'_>,
     ) -> Result<GammaLoopAccumulatorState, EngineError> {
-        let mut state =
-            Self::gammaloop_estimate(evaluation_results, points, self.training_projection)?;
+        let mut state = Self::gammaloop_estimate(
+            evaluation_results,
+            points,
+            self.training_projection,
+            options,
+        )?;
         state.bundle = self
             .integrand
             .observable_snapshot_bundle()
@@ -590,6 +575,7 @@ impl GammaLoopEvaluator {
         evaluation_results: &[EvaluationResult],
         points: &[crate::evaluation::Point],
         training_projection: TrainingProjection,
+        options: EvalBatchOptions<'_>,
     ) -> Result<GammaLoopAccumulatorState, EngineError> {
         let mut estimate = VectorAccumulatorState::from_config(
             vec!["real".to_string(), "imag".to_string()],
@@ -606,12 +592,18 @@ impl GammaLoopEvaluator {
             ))
         });
         for (sample, (result, point)) in evaluation_results.iter().zip(points.iter()).enumerate() {
+            let raw = Self::project_result_value(result);
+            let matched = options.matches(sample, &[raw.re, raw.im])?;
             if let Some(statistics) = &mut training_norm_sqr {
                 // Project after parameterization, then apply the sampling weight
                 // once (squaring that weight would describe a different estimator).
                 statistics
                     .add_sample_without_discrete_projection(
-                        training_projection.project(Self::project_result_value(result)),
+                        if matched {
+                            training_projection.project(raw)
+                        } else {
+                            0.
+                        },
                         point,
                     )
                     .map_err(|err| {
@@ -628,6 +620,18 @@ impl GammaLoopEvaluator {
             // is only descriptive and cannot change accumulation.
             let value = Self::returned_result_value(result)
                 * evaluation.parameterization_jacobian.unwrap_or(1.0).abs();
+            if !(value.re * point.total_weight()).is_finite()
+                || !(value.im * point.total_weight()).is_finite()
+            {
+                return Err(EngineError::eval(
+                    "non-finite weighted GammaLoop contribution",
+                ));
+            }
+            let value = if matched {
+                value
+            } else {
+                num::Complex::new(0., 0.)
+            };
             estimate
                 .ingest_vector_with_details(&[value.re, value.im], point, Some(&evaluation))
                 .map_err(|err| EngineError::eval(format!("sample {sample}: {err}")))?;
@@ -643,126 +647,204 @@ impl GammaLoopEvaluator {
         })
     }
 
-    fn evaluate(&mut self, batch: &Batch) -> Result<Vec<EvaluationResult>, EngineError> {
-        if self.momentum_space {
-            let inputs = batch
-                .points()
-                .iter()
-                .map(|point| {
-                    if !point.continuous.len().is_multiple_of(3) {
-                        return Err(EngineError::eval(format!(
-                            "momentum-space evaluation expects point dimension divisible by 3, got {}",
-                            point.continuous.len()
-                        )));
-                    }
-                    let loop_momenta = point
-                        .continuous
-                        .as_chunks::<3>().0.iter()
-                        .map(|coords| gammalooprs::momentum::ThreeMomentum {
-                            px: F(coords[0]),
-                            py: F(coords[1]),
-                            pz: F(coords[2]),
-                        })
-                        .collect::<Vec<_>>();
-                    let discrete_dim = point
-                        .discrete
-                        .iter()
-                        .copied()
-                        .map(|dim| {
-                            usize::try_from(dim).map_err(|_| {
-                                EngineError::eval(format!(
-                                    "batch has negative discrete index {}",
-                                    dim
-                                ))
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let discrete_dim = self.map_graph_group(discrete_dim)?;
-
-                    let (group_id, orientation, channel_id) = match &self.integrand.get_settings().sampling
-                    {
-                        SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => {
-                            if !discrete_dim.is_empty() {
-                                return Err(EngineError::eval(format!(
-                                    "integrand does not use discrete graph sampling, but received discrete dimensions {:?}",
-                                    discrete_dim
-                                )));
-                            }
-                            (None, None, None)
-                        }
-                        SamplingSettings::DiscreteGraphs(_) => Self::call_external(
-                            "resolve_discrete_selection",
-                            || self.integrand.resolve_discrete_selection(discrete_dim.as_slice()),
-                        )?,
-                    };
-
-                    Ok(MomentumSpaceEvaluationInput {
-                        loop_momenta,
-                        integrator_weight: F(point.total_weight()),
-                        graph_id: None,
-                        group_id,
-                        orientation,
-                        channel_id,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let results = Self::call_external("evaluate_momentum_configurations_raw", || {
-                self.integrand.evaluate_momentum_configurations_raw(
-                    &self.model,
-                    inputs.as_slice(),
-                    false,
-                )
-            })?;
-
-            return Ok(results.samples);
+    fn momentum_input(
+        &self,
+        point: &crate::Point,
+    ) -> Result<MomentumSpaceEvaluationInput, EngineError> {
+        if !point.continuous.len().is_multiple_of(3) {
+            return Err(EngineError::eval(format!(
+                "momentum-space evaluation expects point dimension divisible by 3, got {}",
+                point.continuous.len()
+            )));
         }
-
-        let samples = batch
-            .points()
+        let loop_momenta = point
+            .continuous
+            .as_chunks::<3>()
+            .0
             .iter()
-            .map(|point| {
-                let cont = point.continuous.iter().map(|&x| F(x)).collect::<Vec<_>>();
-                let discrete_dim = point
-                    .discrete
-                    .iter()
-                    .copied()
-                    .map(|dim| {
-                        usize::try_from(dim).map_err(|_| {
-                            EngineError::eval(format!("batch has negative discrete index {}", dim))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let discrete_dim = self.map_graph_group(discrete_dim)?;
-                let expected_dimension = Self::call_external("expected_x_space_dimension", || {
-                    self.integrand
-                        .expected_x_space_dimension(discrete_dim.as_slice())
-                })?;
-                if cont.len() != expected_dimension {
+            .map(|coords| gammalooprs::momentum::ThreeMomentum {
+                px: F(coords[0]),
+                py: F(coords[1]),
+                pz: F(coords[2]),
+            })
+            .collect::<Vec<_>>();
+        let discrete_dim = point
+            .discrete
+            .iter()
+            .copied()
+            .map(|dim| {
+                usize::try_from(dim).map_err(|_| {
+                    EngineError::eval(format!("batch has negative discrete index {}", dim))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let discrete_dim = self.map_graph_group(discrete_dim)?;
+
+        let (group_id, orientation, channel_id) = match &self.integrand.get_settings().sampling {
+            SamplingSettings::Default(_) | SamplingSettings::MultiChanneling(_) => {
+                if !discrete_dim.is_empty() {
                     return Err(EngineError::eval(format!(
-                        "expected {expected_dimension} x-space coordinates for this selection, got {}",
-                        cont.len()
+                        "integrand does not use discrete graph sampling, but received discrete dimensions {:?}",
+                        discrete_dim
                     )));
                 }
-                Ok(havana_sample(cont, discrete_dim.as_slice(), F(point.total_weight())))
+                (None, None, None)
+            }
+            SamplingSettings::DiscreteGraphs(_) => {
+                Self::call_external("resolve_discrete_selection", || {
+                    self.integrand
+                        .resolve_discrete_selection(discrete_dim.as_slice())
+                })?
+            }
+        };
+
+        Ok(MomentumSpaceEvaluationInput {
+            loop_momenta,
+            integrator_weight: F(point.total_weight()),
+            graph_id: None,
+            group_id,
+            orientation,
+            channel_id,
+        })
+    }
+
+    fn sampling_point(&self, point: &crate::Point) -> Result<Sample<F<f64>>, EngineError> {
+        let cont = point.continuous.iter().map(|&x| F(x)).collect::<Vec<_>>();
+        let discrete_dim = point
+            .discrete
+            .iter()
+            .copied()
+            .map(|dim| {
+                usize::try_from(dim).map_err(|_| {
+                    EngineError::eval(format!("batch has negative discrete index {}", dim))
+                })
             })
-            .collect::<Result<Vec<Sample<F<f64>>>, _>>()?;
-
-        let results = Self::call_external("evaluate_samples_raw", || {
-            self.integrand.evaluate_samples_raw(
-                self.reference_gaussian.as_ref().map_or(
-                    EvaluationTarget::Physical(&self.model),
-                    EvaluationTarget::Reference,
-                ),
-                samples.as_slice(),
-                1,
-                false,
-                false,
-                Default::default(),
-            )
+            .collect::<Result<Vec<_>, _>>()?;
+        let discrete_dim = self.map_graph_group(discrete_dim)?;
+        let expected_dimension = Self::call_external("expected_x_space_dimension", || {
+            self.integrand
+                .expected_x_space_dimension(discrete_dim.as_slice())
         })?;
+        if cont.len() != expected_dimension {
+            return Err(EngineError::eval(format!(
+                "expected {expected_dimension} x-space coordinates for this selection, got {}",
+                cont.len()
+            )));
+        }
+        Ok(havana_sample(
+            cont,
+            discrete_dim.as_slice(),
+            F(point.total_weight()),
+        ))
+    }
 
-        Ok(results.samples)
+    fn evaluate(
+        &mut self,
+        batch: &Batch,
+        components: &[String],
+        options: EvalBatchOptions<'_>,
+        record_observables: bool,
+    ) -> Result<Vec<EvaluationResult>, EngineError> {
+        if components != ["real", "imag"] && components != ["value"] {
+            return Err(EngineError::invalid_input(
+                "GammaLoop values require value or real/imag components",
+            ));
+        }
+        options.validate(batch.len(), components)?;
+        if record_observables {
+            self.integrand = self.pristine_integrand.clone();
+        }
+        let mut results = Vec::with_capacity(batch.len());
+        for (index, point) in batch.points().iter().enumerate() {
+            let mut result = if self.momentum_space {
+                let input = self.momentum_input(point)?;
+                Self::call_external("evaluate_momentum_configuration", || {
+                    self.integrand
+                        .evaluate_momentum_configuration(&self.model, &input, false)
+                })?
+            } else {
+                let sample = self.sampling_point(point)?;
+                Self::call_external("evaluate_sample", || match &self.reference_gaussian {
+                    // The integration overlay reports its normalized reference
+                    // moment in Im. Its configuration forbids native observables.
+                    Some(reference) => self
+                        .integrand
+                        .evaluate_samples_raw(
+                            EvaluationTarget::Reference(reference),
+                            std::slice::from_ref(&sample),
+                            1,
+                            false,
+                            false,
+                            Default::default(),
+                        )
+                        .map(|mut batch| batch.samples.remove(0)),
+                    None => match &mut self.integrand {
+                        ProcessIntegrand::Amplitude(integrand) => integrand.evaluate_sample(
+                            &sample,
+                            &self.model,
+                            F(point.total_weight()),
+                            1,
+                            false,
+                            Default::default(),
+                        ),
+                        ProcessIntegrand::CrossSection(integrand) => integrand.evaluate_sample(
+                            &sample,
+                            &self.model,
+                            F(point.total_weight()),
+                            1,
+                            false,
+                            Default::default(),
+                        ),
+                    },
+                })?
+            };
+            let value = Self::project_result_value(&result);
+            if !value.re.is_finite() || !value.im.is_finite() {
+                return Err(EngineError::eval("non-finite GammaLoop integrand value"));
+            }
+            let projected = [self.training_projection.project(value)];
+            let complex = [value.re, value.im];
+            let values = if components.len() == 1 {
+                projected.as_slice()
+            } else {
+                complex.as_slice()
+            };
+            let matched = options.matches(index, values)?;
+            if !matched {
+                result.event_groups.clear();
+            }
+            if record_observables {
+                // One commit per original draw, even on a miss. Native processing
+                // groups correlated events before accumulating squared bin sums.
+                Self::call_external("process_evaluation_result", || {
+                    self.integrand.process_evaluation_result(&result);
+                    Ok::<_, EngineError>(())
+                })?;
+            }
+            result.event_groups.clear();
+            results.push(result);
+        }
+        Ok(results)
+    }
+
+    fn values(&self, results: &[EvaluationResult], components: &[String]) -> Vec<f64> {
+        if components.len() == 1 {
+            results
+                .iter()
+                .map(|r| {
+                    self.training_projection
+                        .project(Self::project_result_value(r))
+                })
+                .collect()
+        } else {
+            results
+                .iter()
+                .flat_map(|r| {
+                    let v = Self::project_result_value(r);
+                    [v.re, v.im]
+                })
+                .collect()
+        }
     }
 }
 
@@ -803,28 +885,8 @@ impl Evaluator for GammaLoopEvaluator {
         batch: &Batch,
         components: &[String],
     ) -> Result<Vec<f64>, EngineError> {
-        let results = self.evaluate(batch)?;
-        if components == ["real".to_string(), "imag".to_string()] {
-            Ok(results
-                .iter()
-                .flat_map(|result| {
-                    let value = Self::project_result_value(result);
-                    [value.re, value.im]
-                })
-                .collect())
-        } else if components == ["value".to_string()] {
-            Ok(results
-                .iter()
-                .map(|result| {
-                    self.training_projection
-                        .project(Self::project_result_value(result))
-                })
-                .collect())
-        } else {
-            Err(EngineError::invalid_input(
-                "GammaLoop values require value or real/imag components",
-            ))
-        }
+        let results = self.evaluate(batch, components, EvalBatchOptions::default(), false)?;
+        Ok(self.values(&results, components))
     }
 
     fn eval_batch(
@@ -833,131 +895,60 @@ impl Evaluator for GammaLoopEvaluator {
         accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EngineError> {
-        if matches!(accumulator, AccumulatorConfig::Gammaloop) {
-            // Isolate this batch from prior evaluations, including failed ones.
-            self.integrand = self.pristine_integrand.clone();
-        }
-        let points = batch.points();
-        let evaluation_results = self.evaluate(batch)?;
-        for (sample, (result, point)) in evaluation_results.iter().zip(points).enumerate() {
-            let value = Self::project_result_value(result);
-            let weight = point.total_weight();
-            if !(value.re * weight).is_finite()
-                || !(value.im * weight).is_finite()
-                || !(self.training_projection.project(value) * weight).is_finite()
-            {
-                return Err(EngineError::eval(format!(
-                    "sample {sample}: non-finite weighted contribution or training projection"
-                )));
-            }
-        }
-        let mut observable_state = AccumulatorState::from_config(accumulator);
-        let weighted_values = match accumulator {
-            AccumulatorConfig::Empty => {
-                observable_state = AccumulatorState::empty();
-                if options.require_training_values {
-                    Some(
-                        evaluation_results
-                            .iter()
-                            .map(|result| {
-                                self.training_projection
-                                    .project(Self::project_result_value(result))
-                            })
-                            .zip(points.iter())
-                            .map(|(value, point)| value * point.total_weight())
-                            .collect(),
-                    )
-                } else {
-                    None
-                }
-            }
-            AccumulatorConfig::Gammaloop => {
-                observable_state = AccumulatorState::Gammaloop(
-                    self.batch_gammaloop_observable(&evaluation_results, points)?,
-                );
-                if options.require_training_values {
-                    Some(
-                        evaluation_results
-                            .iter()
-                            .map(|result| {
-                                self.training_projection
-                                    .project(Self::project_result_value(result))
-                            })
-                            .zip(points.iter())
-                            .map(|(value, point)| value * point.total_weight())
-                            .collect(),
-                    )
-                } else {
-                    None
-                }
-            }
-            AccumulatorConfig::Vector { .. } if !accumulator.is_scalar() => {
-                let AccumulatorState::Vector(accumulator) = &mut observable_state else {
-                    return Err(EngineError::eval(format!(
-                        "gammaloop vector mode does not support accumulator kind {}",
-                        observable_state.kind_str()
-                    )));
-                };
-                Self::ingest_vector_batch(
-                    accumulator,
-                    &evaluation_results,
-                    points,
-                    options.require_training_values,
-                    |result| {
-                        let value = Self::project_result_value(result);
-                        vec![value.re, value.im]
-                    },
-                )?
-            }
-            _ => match accumulator.is_scalar() {
-                true => match &mut observable_state {
-                    AccumulatorState::Vector(accumulator) => Self::ingest_vector_batch(
-                        accumulator,
-                        &evaluation_results,
-                        points,
-                        options.require_training_values,
-                        |result| {
-                            vec![
-                                self.training_projection
-                                    .project(Self::project_result_value(result)),
-                            ]
-                        },
-                    )?,
-                    AccumulatorState::FullVector(accumulator) => {
-                        for (result, point) in evaluation_results.iter().zip(points.iter()) {
-                            let value = self
-                                .training_projection
-                                .project(Self::project_result_value(result));
-                            accumulator.push_vector(&[value * point.total_weight().abs()])?;
-                        }
-                        None
-                    }
-                    other => {
-                        return Err(EngineError::eval(format!(
-                            "gammaloop scalar mode does not support accumulator kind {}",
-                            other.kind_str()
-                        )));
-                    }
-                },
-                false => match &mut observable_state {
-                    AccumulatorState::FullVector(accumulator) => {
-                        for (result, point) in evaluation_results.iter().zip(points.iter()) {
-                            let value = Self::project_result_value(result);
-                            let weight = point.total_weight().abs();
-                            accumulator.push_vector(&[value.re * weight, value.im * weight])?;
-                        }
-                        None
-                    }
-                    other => {
-                        return Err(EngineError::eval(format!(
-                            "gammaloop vector mode does not support accumulator kind {}",
-                            other.kind_str()
-                        )));
-                    }
-                },
-            },
+        let native = matches!(accumulator, AccumulatorConfig::Gammaloop);
+        let components = if native {
+            vec!["real".into(), "imag".into()]
+        } else {
+            accumulator
+                .components()
+                .unwrap_or(&["value".into()])
+                .to_vec()
         };
-        Ok(BatchResult::new(weighted_values, observable_state))
+        let results = self.evaluate(batch, &components, options, native)?;
+        let values = self.values(&results, &components);
+        if !native {
+            return crate::evaluation::stratification::accumulate_values(
+                batch,
+                &components,
+                &values,
+                accumulator,
+                options,
+            );
+        }
+        let state = self.batch_gammaloop_observable(&results, batch.points(), options)?;
+        let training_values = if options.require_training_values {
+            Some(
+                results
+                    .iter()
+                    .zip(batch.points())
+                    .enumerate()
+                    .map(|(i, (result, point))| {
+                        let value = Self::project_result_value(result);
+                        let projected =
+                            self.training_projection.project(value) * point.total_weight();
+                        if !projected.is_finite() {
+                            return Err(EngineError::eval(
+                                "non-finite GammaLoop training feedback",
+                            ));
+                        }
+                        Ok(if options.matches(i, &[value.re, value.im])? {
+                            projected
+                        } else {
+                            0.
+                        })
+                    })
+                    .collect::<Result<Vec<_>, EngineError>>()?,
+            )
+        } else {
+            None
+        };
+        crate::evaluation::stratification::finish_gammaloop(
+            batch,
+            Some(&values),
+            state,
+            training_values,
+            options,
+        )
     }
 }
 

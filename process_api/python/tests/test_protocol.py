@@ -189,7 +189,7 @@ def test_gammaloop_weights_feedback_and_owned_arrays(monkeypatch):
     retained = []
     class Evaluator(GammaLoopEvaluator):
         def __init__(self, **kwargs): pass
-        def eval_gammaloop(self, discrete, continuous, weights, *, require_training_values):
+        def eval_gammaloop(self, discrete, continuous, weights, *, require_training_values, stratification):
             assert all(a.flags.writeable and a.flags.owndata for a in (discrete, continuous, weights))
             retained.append(weights)
             values = continuous[:, 0] * weights
@@ -202,7 +202,7 @@ def test_gammaloop_weights_feedback_and_owned_arrays(monkeypatch):
                                  "domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}, "args": {}})
     binary = np.array([0.25, 0.75, 2., 3.], dtype="<f8").tobytes()
     for required in [True, False]:
-        result = worker.handle("eval_batch", {"nr_samples": 2, "require_training_values": required}, binary)
+        result = worker.handle("eval_batch", {"nr_samples": 2, "require_training_values": required, "stratification": None}, binary)
         assert result["gammaloop_state"] == {"sum": 2.75}
         if required:
             np.testing.assert_array_equal(np.frombuffer(result["__binary__"], dtype="<f8"), [0.5, 2.25])
@@ -210,7 +210,7 @@ def test_gammaloop_weights_feedback_and_owned_arrays(monkeypatch):
             assert "__binary__" not in result
         retained[-1][:] = 0
     with pytest.raises(ValueError, match="input length"):
-        worker.handle("eval_batch", {"nr_samples": 2, "require_training_values": True}, binary[:-1])
+        worker.handle("eval_batch", {"nr_samples": 2, "require_training_values": True, "stratification": None}, binary[:-1])
     with pytest.raises(TypeError, match="must implement eval"):
         worker.handle("initialize", {"protocol": PROTOCOL, "role": "evaluator", "output": {"kind":"values", "components":["value"]},
                                      "domain": {"rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}}})

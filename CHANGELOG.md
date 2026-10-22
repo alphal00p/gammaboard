@@ -10,6 +10,10 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
   [Tetrahedron A/B results](benchmarks/stratification/README.md) include uncertainty
   calibration and the observed finite-sample tail limitation.
 - Named real-vector Symbolica expressions and matching train/inference run cards.
+- Hybrid GammaLoop stratification: conditional primary integral moments alongside
+  masked, full-weight pooled histograms. Native and process adapters share the
+  estimator path; protocol v8, database model 4 and saved-state/queue model 3
+  require matching components and a fresh database.
 - Stratified uncertainty stays unavailable across measurements, campaigns and UI
   until coverage is adequate; crash/replay and transformed-domain tests verify the
   end-to-end contract. Uniform sampling now includes discrete selection weights.
@@ -29,7 +33,7 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
 - Shared local, ITPhlies, and UBELIX workflows; backup/restore and worker recreation.
 - Consolidated accumulator, measurement, sampler-state, and extension interfaces.
   Scalar configuration remains shorthand for a one-component statistical vector.
-- Process protocol **v7**: explicit fresh/restore/stage-handoff initialization,
+- Process protocol **v8**: explicit fresh/restore/stage-handoff initialization,
   shared batch types, mandatory sampler restoration, and weighted observable feedback.
 - Whole-batch validation rejects invalid samples/overflow without publishing
   partial results. Database disconnects and suspended submissions recover safely.
