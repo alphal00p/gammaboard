@@ -22,8 +22,8 @@ pub struct GammaLoopAccumulatorDigest {
     pub primary_histogram_title: Option<String>,
     pub real_mean: f64,
     pub imag_mean: f64,
-    pub real_error: f64,
-    pub imag_error: f64,
+    pub real_error: Option<f64>,
+    pub imag_error: Option<f64>,
 }
 
 impl GammaLoopAccumulatorState {

@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from gammaboard_process import GammaLoopEvaluator, GammaLoopBatchResult, log, run_evaluator
+from gammaboard_process import (
+    GammaLoopEvaluator,
+    GammaLoopBatchResult,
+    log,
+    run_evaluator,
+)
 
 
 class MadGraphEventEvaluator(GammaLoopEvaluator):
@@ -16,13 +21,15 @@ class MadGraphEventEvaluator(GammaLoopEvaluator):
     def __init__(
         self,
         *,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
+        domain,
         state_path: str,
         python: str | None = None,
     ) -> None:
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         if discrete_cardinalities:
-            raise ValueError("MadGraph event generation does not use discrete dimensions")
+            raise ValueError(
+                "MadGraph event generation does not use discrete dimensions"
+            )
         if int(continuous_dims) != 0:
             raise ValueError(
                 "MadGraph event generation expects a zero-dimensional trigger domain"
@@ -45,13 +52,22 @@ class MadGraphEventEvaluator(GammaLoopEvaluator):
         }
 
     def eval_gammaloop(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
-        weights: np.ndarray, *, require_training_values: bool, stratification=None,
+        self,
+        xs_discrete: np.ndarray,
+        xs_continuous: np.ndarray,
+        weights: np.ndarray,
+        *,
+        require_training_values: bool,
+        stratification=None,
     ) -> GammaLoopBatchResult:
         if stratification is not None:
-            raise ValueError("MadGraph event-generation runs do not expose one independent sample per queued point for stratification")
+            raise ValueError(
+                "MadGraph event-generation runs do not expose one independent sample per queued point for stratification"
+            )
         if require_training_values or not np.array_equal(weights, [1.0]):
-            raise ValueError("MadGraph event generation requires an unweighted inference trigger")
+            raise ValueError(
+                "MadGraph event generation requires an unweighted inference trigger"
+            )
         if len(xs_continuous) != 1:
             raise ValueError(
                 "MadGraph event generation must be triggered by a one-sample task"
@@ -194,7 +210,10 @@ def _histogram_snapshot(
     name = str(raw["name"])
     x_min = _finite_float(raw["min"], f"histogram {name}.min")
     x_max = _finite_float(raw["max"], f"histogram {name}.max")
-    values = [_finite_float(value, f"histogram {name}.bin_values") for value in raw["bin_values"]]
+    values = [
+        _finite_float(value, f"histogram {name}.bin_values")
+        for value in raw["bin_values"]
+    ]
     errors = [
         max(0.0, _finite_float(value, f"histogram {name}.bin_errors"))
         for value in raw["bin_errors"]
@@ -208,7 +227,9 @@ def _histogram_snapshot(
     bin_count = len(values) - 2
     width = (x_max - x_min) / bin_count
 
-    def bin_snapshot(index: int, lower: float | None, upper: float | None) -> dict[str, Any]:
+    def bin_snapshot(
+        index: int, lower: float | None, upper: float | None
+    ) -> dict[str, Any]:
         state = _scalar_state_from_mean_error(
             sample_count, values[index], errors[index]
         )

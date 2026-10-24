@@ -48,7 +48,7 @@ impl ScalarAccumulatorState {
     }
 
     pub fn add_sample(&mut self, value: f64, point: &Point) -> Result<(), EngineError> {
-        self.add_sample_with_details(value, point, None)
+        self.add_sample_with_details(value, point, None, None)
     }
 
     pub(crate) fn add_sample_with_details(
@@ -56,6 +56,7 @@ impl ScalarAccumulatorState {
         value: f64,
         point: &Point,
         evaluation: Option<&SampleEvaluation>,
+        stratum: Option<crate::evaluation::batch::StratumPair<'_>>,
     ) -> Result<(), EngineError> {
         let sums = self.sums_with_sample(value, point)?;
         if !point.discrete.is_empty() {
@@ -66,9 +67,10 @@ impl ScalarAccumulatorState {
                 value,
                 point,
                 evaluation,
+                stratum,
             )?;
         }
-        self.accept_sample(value, point, evaluation, sums);
+        self.accept_sample(value, point, evaluation, stratum, sums);
         Ok(())
     }
 
@@ -77,16 +79,17 @@ impl ScalarAccumulatorState {
         value: f64,
         point: &Point,
     ) -> Result<(), EngineError> {
-        self.add_plain_sample(value, point, None)
+        self.add_plain_sample(value, point, None, None)
     }
     pub(super) fn add_plain_sample(
         &mut self,
         value: f64,
         point: &Point,
         evaluation: Option<&SampleEvaluation>,
+        stratum: Option<crate::evaluation::batch::StratumPair<'_>>,
     ) -> Result<(), EngineError> {
         let sums = self.sums_with_sample(value, point)?;
-        self.accept_sample(value, point, evaluation, sums);
+        self.accept_sample(value, point, evaluation, stratum, sums);
         Ok(())
     }
 
@@ -122,6 +125,7 @@ impl ScalarAccumulatorState {
         value: f64,
         point: &Point,
         evaluation: Option<&SampleEvaluation>,
+        stratum: Option<crate::evaluation::batch::StratumPair<'_>>,
         sums: [f64; 5],
     ) {
         [
@@ -132,7 +136,12 @@ impl ScalarAccumulatorState {
             self.sum_four,
         ] = sums;
         self.count += 1;
-        self.update_extrema(value * point.total_weight().abs(), point, evaluation);
+        self.update_extrema(
+            value * point.total_weight().abs(),
+            point,
+            evaluation,
+            stratum,
+        );
     }
 
     pub(crate) fn validate(&self) -> Result<(), EngineError> {
@@ -154,7 +163,7 @@ impl ScalarAccumulatorState {
         mean_from_sums(self.sum_abs, self.count)
     }
 
-    pub fn mean_abs_stderr(&self) -> f64 {
+    pub fn mean_abs_stderr(&self) -> Option<f64> {
         stderr_from_sums(self.sum_abs, self.sum_sq, self.count)
     }
 
@@ -162,7 +171,7 @@ impl ScalarAccumulatorState {
         variance_from_sums(self.sum_weighted_value, self.sum_sq, self.count)
     }
 
-    pub fn stderr(&self) -> f64 {
+    pub fn stderr(&self) -> Option<f64> {
         stderr_from_sums(self.sum_weighted_value, self.sum_sq, self.count)
     }
 
@@ -177,7 +186,8 @@ impl ScalarAccumulatorState {
     }
 
     pub fn signal_to_noise(&self) -> f64 {
-        signal_to_noise_ratio(self.mean_abs(), self.stderr())
+        self.stderr()
+            .map_or(0.0, |error| signal_to_noise_ratio(self.mean_abs(), error))
     }
 
     pub fn rsd(&self) -> f64 {
@@ -206,7 +216,7 @@ impl ScalarAccumulatorState {
             self.variance(),
             self.variance_stderr(),
             self.mean_abs(),
-            self.stderr(),
+            self.stderr()?,
         )
     }
 
@@ -228,31 +238,28 @@ impl ScalarAccumulatorState {
         numer / denom
     }
 
-    fn update_extrema(
+    pub(crate) fn update_extrema(
         &mut self,
         weighted_value: f64,
         point: &Point,
         evaluation: Option<&SampleEvaluation>,
+        stratum: Option<crate::evaluation::batch::StratumPair<'_>>,
     ) {
         if weighted_value >= 0.0
             && (self.max_weighted_positive_sample.is_none()
                 || weighted_value > self.max_weighted_positive)
         {
             self.max_weighted_positive = weighted_value;
-            self.max_weighted_positive_sample = Some(DiagnosticSample {
-                point: point.clone(),
-                evaluation: evaluation.copied(),
-            });
+            self.max_weighted_positive_sample =
+                Some(DiagnosticSample::new(point, evaluation, stratum));
         }
         if weighted_value < 0.0
             && (self.max_weighted_negative_sample.is_none()
                 || weighted_value < self.max_weighted_negative)
         {
             self.max_weighted_negative = weighted_value;
-            self.max_weighted_negative_sample = Some(DiagnosticSample {
-                point: point.clone(),
-                evaluation: evaluation.copied(),
-            });
+            self.max_weighted_negative_sample =
+                Some(DiagnosticSample::new(point, evaluation, stratum));
         }
     }
 
@@ -372,15 +379,14 @@ fn variance_from_sums(sum: f64, sum_sq: f64, count: i64) -> f64 {
     let count_f = count as f64;
     let mean = sum / count_f;
     let second_moment = sum_sq / count_f;
-    (second_moment - mean * mean).max(0.0)
+    if count < 2 {
+        return 0.0;
+    }
+    (second_moment - mean * mean).max(0.0) * count_f / (count_f - 1.0)
 }
 
-fn stderr_from_sums(sum: f64, sum_sq: f64, count: i64) -> f64 {
-    if count <= 0 {
-        0.0
-    } else {
-        (variance_from_sums(sum, sum_sq, count) / count as f64).sqrt()
-    }
+fn stderr_from_sums(sum: f64, sum_sq: f64, count: i64) -> Option<f64> {
+    (count >= 2).then(|| (variance_from_sums(sum, sum_sq, count) / count as f64).sqrt())
 }
 
 fn variance_stderr_from_sums(
@@ -402,7 +408,7 @@ fn variance_stderr_from_sums(
     let centered_fourth =
         fourth - 4.0 * mean * third + 6.0 * mean * mean * second - 3.0 * mean.powi(4);
     let variance_of_variance = (centered_fourth - variance * variance).max(0.0) / count_f;
-    let stderr = variance_of_variance.sqrt();
+    let stderr = variance_of_variance.sqrt() * count_f / (count_f - 1.0);
     stderr.is_finite().then_some(stderr)
 }
 
@@ -484,6 +490,19 @@ fn merge_negative_extrema(
 mod tests {
     use super::ScalarAccumulatorState;
     use crate::evaluation::Point;
+
+    #[test]
+    fn error_requires_two_attempts_and_uses_sample_variance() {
+        let mut state = ScalarAccumulatorState::plain();
+        assert_eq!(state.stderr(), None);
+        let point = Point::new(vec![], vec![], 1.0);
+        state.add_sample(1.0, &point).unwrap();
+        assert_eq!(state.mean(), 1.0);
+        assert_eq!(state.stderr(), None);
+        state.add_sample(3.0, &point).unwrap();
+        assert_eq!(state.variance(), 2.0);
+        assert_eq!(state.stderr(), Some(1.0));
+    }
 
     #[test]
     fn zero_error_ratio_distinguishes_constant_signal_from_undefined_zero() {

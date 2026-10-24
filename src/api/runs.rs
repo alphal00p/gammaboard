@@ -1007,27 +1007,30 @@ impl TaskPreflightContext {
             return Ok(Some(config));
         }
 
-        match &task.task {
-            crate::core::RunTaskSpec::Sample { .. } => match task.task.sample_accumulator_source() {
-                Some(SourceRefSpec::Latest) => self.current_accumulator.clone().ok_or_else(|| {
-                    ApiError::BadRequest(
-                        "sample task has no effective accumulator configuration; set one explicitly first or add a prior accumulator-producing task".to_string(),
-                    )
-                }).map(Some),
-                Some(SourceRefSpec::FromName(source_name)) => self
-                    .effective_accumulator_by_name
-                    .get(&source_name)
-                    .cloned()
+        match task.task.accumulator_config_source() {
+            Some(SourceRefSpec::Latest) => {
+                self.current_accumulator
+                    .clone()
                     .ok_or_else(|| {
-                        ApiError::BadRequest(format!(
-                            "sample task references accumulator source task '{}' but no effective accumulator is available from it",
-                            source_name
-                        ))
+                        ApiError::BadRequest(concat!(
+                        "task has no effective accumulator configuration; set one explicitly ",
+                        "first or add a prior accumulator-producing task"
+                    ).to_string())
                     })
-                    .map(Some),
-                None => Ok(None),
-            },
-            _ => Ok(None),
+                    .map(Some)
+            }
+            Some(SourceRefSpec::FromName(source_name)) => self
+                .effective_accumulator_by_name
+                .get(&source_name)
+                .cloned()
+                .ok_or_else(|| {
+                    ApiError::BadRequest(format!(
+                        "task references accumulator source task '{source_name}' \
+                         but no effective accumulator is available from it"
+                    ))
+                })
+                .map(Some),
+            None => Ok(None),
         }
     }
 
@@ -1771,7 +1774,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
         assert!(
             error
                 .to_string()
-                .contains("sample task has no effective accumulator configuration")
+                .contains("task has no effective accumulator configuration")
         );
     }
 

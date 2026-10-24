@@ -1313,13 +1313,21 @@ impl RunTaskSpec {
                 accumulator: Some(AccumulatorSourceSpec::Config { config }),
                 ..
             } => Ok(Some(config.clone())),
-            Self::PdfAdaptationImage { .. } | Self::PdfAdaptationPlotLine { .. } => {
-                Ok(Some(AccumulatorConfig::Empty))
-            }
             Self::Image { accumulator, .. } | Self::PlotLine { accumulator, .. } => {
                 Ok(Some(accumulator.full_config()))
             }
             _ => Ok(None),
+        }
+    }
+
+    /// Layout/projection provenance. PDF diagnostics use fresh statistics with
+    /// the sampled stage's configuration; they never inherit its accumulated values.
+    pub fn accumulator_config_source(&self) -> Option<SourceRefSpec> {
+        match self {
+            Self::PdfAdaptationImage { .. } | Self::PdfAdaptationPlotLine { .. } => {
+                self.sample_sampler_source()
+            }
+            _ => self.sample_accumulator_source(),
         }
     }
 
@@ -1697,6 +1705,8 @@ pub struct ParameterScanOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperparameterTrialOutput {
+    pub objective_estimator: Option<super::EstimateKind>,
+    pub objective_basic: Option<super::BasicEstimate>,
     pub index: usize,
     pub parameters: serde_json::Value,
     #[serde(flatten)]
@@ -2390,9 +2400,10 @@ max = 1.0
             },
         ] {
             assert_eq!(task.sample_sampler_source(), Some(SourceRefSpec::Latest));
+            assert_eq!(task.new_accumulator_config().unwrap(), None);
             assert_eq!(
-                task.new_accumulator_config().unwrap(),
-                Some(AccumulatorConfig::Empty)
+                task.accumulator_config_source(),
+                Some(SourceRefSpec::Latest)
             );
             let (RunTaskSpec::PdfAdaptationImage { sampler, .. }
             | RunTaskSpec::PdfAdaptationPlotLine { sampler, .. }) = &mut task

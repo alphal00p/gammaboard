@@ -1066,6 +1066,7 @@ pub(super) fn build_direct_havana_grid(domain: &Domain, params: &HavanaSamplerPa
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,
+            ..
         } => build_direct_rectangular_havana_grid(*continuous_dims, discrete_cardinalities, params),
         Domain::Discrete { branches, .. } => {
             let bins = branches

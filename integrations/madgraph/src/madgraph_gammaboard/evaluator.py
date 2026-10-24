@@ -10,14 +10,14 @@ class MadGraphEvaluator(Evaluator):
     def __init__(
         self,
         *,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
+        domain,
         state_path: str,
         madgraph_root: str | None = None,
         subprocess_index: int = 0,
         flavor_index: int = 0,
         output: list[str] | None = None,
     ) -> None:
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         if discrete_cardinalities:
             raise ValueError("MadGraph evaluator does not use discrete dimensions")
         self.state = MadSpaceState.load(

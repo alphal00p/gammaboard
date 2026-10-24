@@ -166,16 +166,7 @@ fn summary_projector() -> TaskPanelProjector {
                             Some(component) => component,
                             None => "Estimate",
                         },
-                        result.uncertainty.map_or_else(
-                            || json!(result.value),
-                            |error| {
-                                json!({
-                                    "kind": "estimate",
-                                    "value": result.value,
-                                    "error": error,
-                                })
-                            },
-                        ),
+                        json!({"kind":"estimate", "value":result.value, "error":result.uncertainty, "estimator":result.estimator, "basic":result.basic, "sample_count":result.sample_count}),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -205,6 +196,7 @@ fn summary_projector() -> TaskPanelProjector {
                             result.value,
                             error,
                             value,
+                            result.estimator,
                         ));
                     }
                 }
@@ -325,7 +317,11 @@ fn child_columns(result_keys: &[ResultKey], absolute: bool) -> Vec<String> {
             _ => format!("{label} err (%)"),
         });
     }
-    columns.extend(["var ctrb (%)".to_string(), "samples".to_string()]);
+    columns.extend([
+        "var ctrb (%)".to_string(),
+        "samples".to_string(),
+        "estimator".to_string(),
+    ]);
     columns
 }
 
@@ -453,6 +449,11 @@ fn child_row(
             .max()
             .map_or(JsonValue::Null, |samples| json!(samples)),
     );
+    row.push(
+        results
+            .first()
+            .map_or(JsonValue::Null, |result| json!(result.estimator)),
+    );
     row
 }
 
@@ -490,6 +491,8 @@ mod tests {
         TaskMeasurementOutput::Completed {
             results: vec![
                 MeasurementResult {
+                    estimator: crate::core::EstimateKind::Pooled,
+                    basic: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("real".to_string()),
                     value: real.0,
@@ -497,6 +500,8 @@ mod tests {
                     sample_count: samples,
                 },
                 MeasurementResult {
+                    estimator: crate::core::EstimateKind::Pooled,
+                    basic: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("imag".to_string()),
                     value: imag.0,
@@ -571,7 +576,8 @@ mod tests {
         let variance = child_variance(&children[0]).unwrap();
         let row = child_row(&children[0], false, &keys, Some(variance), false, None);
 
-        assert_eq!(row.len(), 12);
+        assert_eq!(row.len(), 13);
+        assert_eq!(row[12], json!("pooled"));
         assert_eq!(row[1], json!("running"));
         assert_eq!(row[4], json!(3.0));
         assert_eq!(row[5], json!(0.4));
@@ -657,7 +663,8 @@ mod tests {
                 "imag err",
                 "imag err (%)",
                 "var ctrb (%)",
-                "samples"
+                "samples",
+                "estimator"
             ]
         );
         assert_eq!(child_columns(&keys, true)[4], "abs real");

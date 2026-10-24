@@ -633,7 +633,12 @@ impl GammaLoopEvaluator {
                 num::Complex::new(0., 0.)
             };
             estimate
-                .ingest_vector_with_details(&[value.re, value.im], point, Some(&evaluation))
+                .ingest_vector_with_details(
+                    &[value.re, value.im],
+                    point,
+                    Some(&evaluation),
+                    options.stratum_assignment(sample, &[raw.re, raw.im])?,
+                )
                 .map_err(|err| EngineError::eval(format!("sample {sample}: {err}")))?;
         }
         Ok(GammaLoopAccumulatorState {
@@ -921,8 +926,7 @@ impl Evaluator for GammaLoopEvaluator {
                 results
                     .iter()
                     .zip(batch.points())
-                    .enumerate()
-                    .map(|(i, (result, point))| {
+                    .map(|(result, point)| {
                         let value = Self::project_result_value(result);
                         let projected =
                             self.training_projection.project(value) * point.total_weight();
@@ -931,11 +935,7 @@ impl Evaluator for GammaLoopEvaluator {
                                 "non-finite GammaLoop training feedback",
                             ));
                         }
-                        Ok(if options.matches(i, &[value.re, value.im])? {
-                            projected
-                        } else {
-                            0.
-                        })
+                        Ok(projected)
                     })
                     .collect::<Result<Vec<_>, EngineError>>()?,
             )

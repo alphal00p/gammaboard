@@ -390,7 +390,7 @@ args = {{ training = {training}, window = 2047, offset = {offset} }}
         );
         if self.training {
             anyhow::ensure!(
-                saved["runtime_state"]["generation"]["training_groups"][0]["values"]
+                saved["runtime_state"]["generation"]["training_groups"][0]["feedback"]["unmasked_values"]
                     .as_array()
                     .is_some_and(|values| !values.is_empty()),
                 "fixture did not checkpoint partial training feedback"

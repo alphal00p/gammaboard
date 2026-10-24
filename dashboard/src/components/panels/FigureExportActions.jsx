@@ -1,3 +1,4 @@
+import { rasterAxes } from './pdfDiagnostics';
 import { useState } from "react";
 import { Alert, Button, Stack } from "@mui/material";
 
@@ -37,6 +38,70 @@ const downloadJsonFile = (baseName, payload) => {
     `${JSON.stringify(payload, null, 2)}\n`,
     "application/json;charset=utf-8",
   );
+};
+
+const csvCell = (value) => {
+  if (value == null) return "";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+};
+
+export const figureCsv = (payload) => {
+  const state = payload?.state || payload;
+  let columns;
+  let rows;
+  if (state?.kind === "strata") {
+    columns = ["scope","samples","wall_time_ms","sampler_uptime_ms","estimator","prefix","component","attempts","matches","exact_probability","mean","error","basic_mean","basic_error"];
+    rows = state.frames.flatMap(frame => [
+      ...frame.rows.flatMap(row => state.components.map((component,j) => ["stratum",frame.samples,frame.wall_time_ms,frame.sampler_uptime_ms,state.estimator,row.prefix,component,row.attempts,row.matches,row.probability,row.estimates[j]?.mean,row.estimates[j]?.error,null,null])),
+      ...state.components.map((component,j) => ["total",frame.samples,frame.wall_time_ms,frame.sampler_uptime_ms,state.estimator,null,component,frame.samples,null,null,frame.total[j]?.mean,frame.total[j]?.error,frame.basic?.[j]?.mean,frame.basic?.[j]?.error]),
+    ]);
+  } else if (state?.kind === "pdf_comparison") {
+    const {data,geometry}=state, axes=rasterAxes(geometry);
+    const prefixes=data.strata?.prefixes||[[]];
+    columns=["record_type","x","x_end","y","prefix","exact_probability","actual_prefix","unmasked_projection","joint_pdf","conditional_pdf","target_label","source_integral_reference"];
+    rows=prefixes.flatMap((prefix,k)=>{
+      const p=data.strata?data.strata.probabilities[k]:1;
+      const grid=data.integrand_values.map((v,i)=>{
+        const pdf=data.strata?data.strata.pdf_values[k][i]:data.pdf_values[i];
+        const actual=data.strata?.actual_strata[i];
+        return ["grid",axes.x[i%axes.x.length],null,axes.y?.[Math.floor(i/axes.x.length)],prefix,p,actual==null?null:prefixes[actual],v,pdf,p!=null&&p>0&&pdf!=null?pdf/p:null,data.target_label,data.global_abs_integrand_norm];
+      });
+      const steps=data.pdf_steps?.densities[k]?.map((pdf,i)=>["pdf_interval",data.pdf_steps.edges[i],data.pdf_steps.edges[i+1],null,prefix,p,null,null,pdf,p!=null&&p>0&&pdf!=null?pdf/p:null,data.target_label,data.global_abs_integrand_norm])||[];
+      return [...grid,...steps];
+    });
+  } else if (Array.isArray(state?.points) && state.points.some(point => Object.hasOwn(point,"pdf"))) {
+    columns = ["record_type","x","y","target","pdf","actual_stratum","normalization","relative_mismatch","log_ratio","coverage"];
+    rows = state.points.map(point=>["grid",point.x,point.y,point.target,point.pdf,point.actual_stratum,state.normalization,point.relative_mismatch,point.log_ratio,point.coverage]);
+    for (const [x,pdf] of state.pdf_steps||[]) rows.push(["pdf_step",x,null,null,pdf,null,state.normalization,null,null,null]);
+  } else if (Array.isArray(state?.rows) && Array.isArray(state?.columns)) {
+    columns = [...state.columns];
+    rows = state.rows.map((row) => [...row]);
+    for (const key of ["estimator", "weight_basis"]) {
+      if (state.payload?.[key] && !columns.includes(key)) {
+        columns.push(key);
+        rows.forEach((row) => row.push(state.payload[key]));
+      }
+    }
+  } else {
+    columns = ["quantity", "x", "estimator", "value", "primary_error", "strat_err", "basic_mean", "basic_err", "uncertainty_status", "samples"];
+    const row = (name, x, value, error, estimator, basic, samples) => [name, x, estimator, value, error,
+      estimator === "stratified" ? error : null,
+      basic?.mean ?? (estimator === "pooled" ? value : null),
+      basic?.error ?? (estimator === "pooled" ? error : null),
+      error == null ? "unavailable" : "estimated_from_samples", samples];
+    if (Array.isArray(state?.entries)) {
+      rows = state.entries.filter((entry) => entry.value?.kind === "estimate").map((entry) =>
+        row(entry.label, null, entry.value.value, entry.value.error, entry.value.estimator, entry.value.basic, entry.value.sample_count));
+    } else if (Array.isArray(state?.points) || Array.isArray(state?.series)) {
+      const series = state.series || [{ label: payload.panel_id || "value", points: state.points }];
+      rows = series.flatMap((s) => (s.points || []).map((point) => row(s.label, point.x, point.y,
+        point.error,
+        point.estimator, point.basic, point.x_completed_samples_total ?? (state.x_axis === "completed_samples" ? point.x : null))));
+    } else return null;
+  }
+  if (!rows.length) return null;
+  return [columns, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 };
 
 const downloadSvgFromElement = (baseName, element) => {
@@ -98,6 +163,7 @@ const FigureExportActions = ({
   onResetView = null,
 }) => {
   const [error, setError] = useState(null);
+  const csv = figureCsv(payload);
   const handleDownloadImage = async () => {
     setError(null);
     try {
@@ -128,9 +194,10 @@ const FigureExportActions = ({
       <Button size="small" variant="outlined" onClick={() => downloadJsonFile(baseName, payload)}>
         JSON
       </Button>
-      <Button size="small" variant="outlined" onClick={handleDownloadImage}>
+      {csv != null && <Button size="small" variant="outlined" onClick={() => downloadTextFile(`${sanitizeFigureFilename(baseName)}.csv`, csv, "text/csv;charset=utf-8")}>CSV</Button>}
+      {imageFormat && <Button size="small" variant="outlined" onClick={handleDownloadImage}>
         {imageFormat.toUpperCase()}
-      </Button>
+      </Button>}
       {error && <Alert severity="error">{error}</Alert>}
     </Stack>
   );

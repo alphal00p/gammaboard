@@ -1,0 +1,50 @@
+# Matched sine A/B example: integral_0^(2*pi) sin(x) dx = 0.
+# x=2*pi*t on [0,1], including the Jacobian 2*pi.
+name = "sine-stratified"
+target = { kind = "scalar", value = 0.0 }
+
+[evaluator]
+kind = "symbolica"
+args = ["t"]
+[evaluator.source]
+kind = "expression"
+expr = "2*pi*sin(2*pi*t)"
+
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 1000
+[sampler_aggregator_runner_params.queue]
+fixed_batch_size = 32768
+max_generation_size = 262144
+
+[[task_queue]]
+name = "train"
+kind = "sample"
+estimator = "pooled"
+publish_result = false
+stop_condition = { max_samples = 33_554_432 }
+accumulator = { config = "scalar" }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = 20261024
+bins = 2048
+samples_for_update = 262144
+initial_training_rate = 1.5
+final_training_rate = 0.2
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 } }
+centers = { "0" = [-1.0], "1" = [1.0] }
+scales = [1.0]
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+# Fixed budgets compare variance at the same sample cost.
+stop_condition = { max_samples = 268_435_456 }
+accumulator = { config = "scalar" }
+[task_queue.sampler]
+from_stage = "train"
+[task_queue.sampler.config]
+kind = "havana_inference"
+seed = 20261025

@@ -32,6 +32,7 @@ pub struct HavanaInferenceSamplerParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HavanaSamplerSnapshot {
+    domain: Domain,
     batches_produced: usize,
     samples_produced: usize,
     batches_ingested: usize,
@@ -44,6 +45,7 @@ pub struct HavanaSamplerSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HavanaInferenceSamplerSnapshot {
+    domain: Domain,
     batches_produced: usize,
     samples_produced: usize,
     grid: Grid<f64>,
@@ -89,6 +91,7 @@ fn validate_havana_sampler_params(
 }
 
 pub struct HavanaSampler {
+    domain: Domain,
     reusable_samples: Vec<Sample<f64>>,
     batches_produced: usize,
     samples_produced: usize,
@@ -104,6 +107,7 @@ pub struct HavanaSampler {
 }
 
 pub struct HavanaInferenceSampler {
+    domain: Domain,
     batches_produced: usize,
     samples_produced: usize,
     grid: Grid<f64>,
@@ -112,6 +116,7 @@ pub struct HavanaInferenceSampler {
 
 impl HavanaSampler {
     fn new(
+        domain: Domain,
         grid: Grid<f64>,
         rng: SerializableMonteCarloRng,
         samples_for_update: usize,
@@ -120,6 +125,7 @@ impl HavanaSampler {
         final_training_rate: f64,
     ) -> Self {
         Self {
+            domain,
             reusable_samples: Vec::new(),
             batches_produced: 0,
             samples_produced: 0,
@@ -183,6 +189,7 @@ impl HavanaSampler {
 
     fn to_snapshot(&self) -> HavanaSamplerSnapshot {
         HavanaSamplerSnapshot {
+            domain: self.domain.clone(),
             batches_produced: self.batches_produced,
             samples_produced: self.samples_produced,
             batches_ingested: self.batches_ingested,
@@ -202,9 +209,15 @@ impl HavanaSampler {
         crate::activate_symbolica_oem_license()
             .map_err(|err| EngineError::build(err.to_string()))?;
         validate_havana_sampler_params(&params, domain)?;
+        if snapshot.domain != *domain {
+            return Err(EngineError::build(
+                "Havana snapshot domain does not match the requested layout",
+            ));
+        }
         validate_havana_grid_domain(&snapshot.grid, domain, "havana snapshot")?;
 
         Ok(Self {
+            domain: domain.clone(),
             reusable_samples: Vec::new(),
             batches_produced: snapshot.batches_produced,
             samples_produced: snapshot.samples_produced,
@@ -238,6 +251,7 @@ impl HavanaSampler {
         let grid = build_havana_grid(domain, &params)?;
 
         Ok(HavanaSampler::new(
+            domain.clone(),
             grid,
             rng,
             params.samples_for_update,
@@ -252,6 +266,7 @@ impl HavanaSampler {
         params: HavanaInferenceSamplerParams,
     ) -> HavanaInferenceSampler {
         HavanaInferenceSampler {
+            domain: self.domain,
             batches_produced: 0,
             samples_produced: 0,
             grid: self.grid,
@@ -320,8 +335,14 @@ impl HavanaInferenceSampler {
     ) -> Result<Self, EngineError> {
         crate::activate_symbolica_oem_license()
             .map_err(|err| EngineError::build(err.to_string()))?;
+        if snapshot.domain != *domain {
+            return Err(EngineError::build(
+                "Havana snapshot domain does not match the requested layout",
+            ));
+        }
         validate_havana_grid_domain(&snapshot.grid, domain, "havana inference snapshot")?;
         Ok(Self {
+            domain: domain.clone(),
             batches_produced: snapshot.batches_produced,
             samples_produced: snapshot.samples_produced,
             grid: snapshot.grid,
@@ -331,6 +352,7 @@ impl HavanaInferenceSampler {
 
     fn to_snapshot(&self) -> HavanaInferenceSamplerSnapshot {
         HavanaInferenceSamplerSnapshot {
+            domain: self.domain.clone(),
             batches_produced: self.batches_produced,
             samples_produced: self.samples_produced,
             grid: self.grid.clone(),
@@ -437,10 +459,10 @@ fn grid_pdf(grid: &Grid<f64>, point: &PdfPoint) -> Result<Option<f64>, EngineErr
                         return Ok(0.0);
                     }
                 }
-                let discrete_pdf = discrete_bins
+                let discrete_mass = discrete_bins
                     .iter()
                     .fold(1.0, |acc, bins| acc / (*bins as f64));
-                Ok(discrete_pdf * continuous_grid_pdf(continuous_grid, continuous)?)
+                Ok(discrete_mass * continuous_grid_pdf(continuous_grid, continuous)?)
             }
         }
     }
@@ -458,6 +480,7 @@ fn grid_pdf(grid: &Grid<f64>, point: &PdfPoint) -> Result<Option<f64>, EngineErr
 
 fn grid_discrete_subspace_pdf(
     grid: &Grid<f64>,
+    domain: &Domain,
     fixed_dims: &std::collections::BTreeMap<usize, i64>,
     depth: usize,
 ) -> Result<f64, EngineError> {
@@ -497,15 +520,29 @@ fn grid_discrete_subspace_pdf(
             if let Some(value) = fixed_dims.get(&depth) {
                 let value = usize::try_from(*value).map_err(|_| {
                     EngineError::engine(format!(
-                        "negative discrete index {value} in havana discrete_pdf query"
+                        "negative discrete index {value} in havana discrete_mass query"
                     ))
                 })?;
+                let value = match domain {
+                    Domain::Discrete { branches, .. } => {
+                        match branches.iter().position(|b| b.index == value) {
+                            Some(index) => index,
+                            None => return Ok(0.0),
+                        }
+                    }
+                    _ => value,
+                };
                 let Some(bin) = grid.bins.get(value) else {
                     return Ok(0.0);
                 };
                 let pdf = bin_probability(value);
                 let child_pdf = match bin.sub_grid.as_ref() {
-                    Some(sub_grid) => grid_discrete_subspace_pdf(sub_grid, fixed_dims, depth + 1)?,
+                    Some(sub_grid) => grid_discrete_subspace_pdf(
+                        sub_grid,
+                        &crate::sampling::havana_grid::branch_domain(domain, value),
+                        fixed_dims,
+                        depth + 1,
+                    )?,
                     None => {
                         if fixed_dims.keys().any(|dim| *dim > depth) {
                             0.0
@@ -520,7 +557,12 @@ fn grid_discrete_subspace_pdf(
             let mut pdf = 0.0;
             for (index, bin) in grid.bins.iter().enumerate() {
                 let child_pdf = match bin.sub_grid.as_ref() {
-                    Some(sub_grid) => grid_discrete_subspace_pdf(sub_grid, fixed_dims, depth + 1)?,
+                    Some(sub_grid) => grid_discrete_subspace_pdf(
+                        sub_grid,
+                        &crate::sampling::havana_grid::branch_domain(domain, index),
+                        fixed_dims,
+                        depth + 1,
+                    )?,
                     None => {
                         if fixed_dims.keys().any(|dim| *dim > depth) {
                             0.0
@@ -542,7 +584,7 @@ fn grid_discrete_subspace_pdf(
                 if let Some(value) = fixed_dims.get(&(depth + axis)) {
                     let value = usize::try_from(*value).map_err(|_| {
                         EngineError::engine(format!(
-                            "negative discrete index {value} in havana uniform discrete_pdf query"
+                            "negative discrete index {value} in havana uniform discrete_mass query"
                         ))
                     })?;
                     if value >= *nr_bins {
@@ -594,6 +636,7 @@ impl Sampler for HavanaSampler {
         for sample in &mut samples {
             self.grid.sample(&mut self.rng, sample);
             let (continuous, weight) = sample_components(sample, &mut discrete)?;
+            crate::sampling::havana_grid::map_discrete_path(&self.domain, &mut discrete, true)?;
             builder.push(&discrete, continuous, weight);
         }
         self.pending_training_samples.push_back(samples);
@@ -608,7 +651,8 @@ impl Sampler for HavanaSampler {
         ))
     }
 
-    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
+    fn feedback(&mut self, feedback: &crate::sampling::Feedback) -> Result<(), EngineError> {
+        let training_values = feedback.values();
         let Some(samples) = self.pending_training_samples.front() else {
             return Err(EngineError::engine(format!(
                 "havana sampler received {} training weights with no pending training batch",
@@ -677,18 +721,31 @@ impl Sampler for HavanaSampler {
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         points
             .iter()
-            .map(|point| grid_pdf(&self.grid, point))
+            .map(|point| {
+                let mut mapped = point.clone();
+                if crate::sampling::havana_grid::map_discrete_path(
+                    &self.domain,
+                    &mut mapped.0,
+                    false,
+                )
+                .is_err()
+                {
+                    return Ok(Some(0.0));
+                }
+                grid_pdf(&self.grid, &mapped)
+            })
             .collect()
     }
 
-    fn discrete_pdf_batch(
+    fn discrete_mass_batch(
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
         subspaces
             .iter()
             .map(|subspace| {
-                grid_discrete_subspace_pdf(&self.grid, &subspace.fixed_dims, 0).map(Some)
+                grid_discrete_subspace_pdf(&self.grid, &self.domain, &subspace.fixed_dims, 0)
+                    .map(Some)
             })
             .collect()
     }
@@ -728,8 +785,8 @@ impl Sampler for HavanaInferenceSampler {
         ))
     }
 
-    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        if !training_values.is_empty() {
+    fn feedback(&mut self, feedback: &crate::sampling::Feedback) -> Result<(), EngineError> {
+        if !feedback.is_empty() {
             return Err(EngineError::engine(
                 "havana inference sampler does not accept training weights",
             ));
@@ -756,18 +813,31 @@ impl Sampler for HavanaInferenceSampler {
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         points
             .iter()
-            .map(|point| grid_pdf(&self.grid, point))
+            .map(|point| {
+                let mut mapped = point.clone();
+                if crate::sampling::havana_grid::map_discrete_path(
+                    &self.domain,
+                    &mut mapped.0,
+                    false,
+                )
+                .is_err()
+                {
+                    return Ok(Some(0.0));
+                }
+                grid_pdf(&self.grid, &mapped)
+            })
             .collect()
     }
 
-    fn discrete_pdf_batch(
+    fn discrete_mass_batch(
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
         subspaces
             .iter()
             .map(|subspace| {
-                grid_discrete_subspace_pdf(&self.grid, &subspace.fixed_dims, 0).map(Some)
+                grid_discrete_subspace_pdf(&self.grid, &self.domain, &subspace.fixed_dims, 0)
+                    .map(Some)
             })
             .collect()
     }
@@ -831,7 +901,9 @@ mod tests {
                         serde_json::to_value(samples).unwrap(),
                     );
                     if !training {
-                        sampler.feedback(&vec![1.0; 128]).unwrap();
+                        sampler
+                            .feedback(&crate::sampling::Feedback::new((vec![1.0; 128]).to_vec()))
+                            .unwrap();
                     }
                 }
             }
@@ -855,7 +927,9 @@ mod tests {
             .and_then(|generated| generated.into_batch())
             .expect("produce");
         sampler
-            .feedback(&[1.0, 2.0, 3.0, 4.0, 5.0])
+            .feedback(&crate::sampling::Feedback::new(
+                ([1.0, 2.0, 3.0, 4.0, 5.0]).to_vec(),
+            ))
             .expect("ingest");
         let _ = sampler
             .generate(3)
@@ -921,8 +995,14 @@ mod tests {
             ));
             for size in draws {
                 let values: Vec<_> = (0..size).map(|i| 1.0 + i as f64).collect();
-                assert!(sampler.feedback(&values[..size - 1]).is_err());
-                sampler.feedback(&values).unwrap();
+                assert!(
+                    sampler
+                        .feedback(&crate::sampling::Feedback::new(values[..size - 1].to_vec()))
+                        .is_err()
+                );
+                sampler
+                    .feedback(&crate::sampling::Feedback::new(values.clone()))
+                    .unwrap();
                 assert_eq!(sampler.reusable_samples.len(), size);
             }
         }
@@ -948,7 +1028,9 @@ mod tests {
             .and_then(|generated| generated.into_batch())
             .expect("produce training batch");
         sampler
-            .feedback(&[1.0, 2.0, 3.0, 4.0])
+            .feedback(&crate::sampling::Feedback::new(
+                ([1.0, 2.0, 3.0, 4.0]).to_vec(),
+            ))
             .expect("ingest training batch");
 
         let snapshot = crate::core::SamplingConfig {
@@ -1028,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn havana_discrete_pdf_handles_ragged_subspaces() {
+    fn havana_discrete_mass_handles_ragged_subspaces() {
         let domain = Domain::discrete(
             Some("d0".to_string()),
             [
@@ -1059,7 +1141,7 @@ mod tests {
             .expect("build havana sampler");
 
         let values = sampler
-            .discrete_pdf_batch(&[
+            .discrete_mass_batch(&[
                 DiscreteSubspace {
                     fixed_dims: BTreeMap::from([(0, 0)]),
                 },
@@ -1083,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    fn havana_discrete_pdf_falls_back_to_uniform_for_all_zero_grid_probabilities() {
+    fn havana_discrete_mass_falls_back_to_uniform_for_all_zero_grid_probabilities() {
         let domain = Domain::discrete(
             Some("d0".to_string()),
             [
@@ -1108,7 +1190,7 @@ mod tests {
         }
 
         let values = sampler
-            .discrete_pdf_batch(&[
+            .discrete_mass_batch(&[
                 DiscreteSubspace {
                     fixed_dims: BTreeMap::from([(0, 0)]),
                 },
@@ -1138,7 +1220,9 @@ mod tests {
             .and_then(|generated| generated.into_batch())
             .expect("produce training batch");
         sampler
-            .feedback(&[1.0, 2.0, 3.0, 4.0])
+            .feedback(&crate::sampling::Feedback::new(
+                ([1.0, 2.0, 3.0, 4.0]).to_vec(),
+            ))
             .expect("ingest training batch");
 
         let snapshot = crate::core::SamplingConfig {
@@ -1201,7 +1285,7 @@ mod tests {
                 .and_then(|generated| generated.into_batch())
                 .expect("produce training batch");
             training
-                .feedback(&[1.0; 16])
+                .feedback(&crate::sampling::Feedback::new(([1.0; 16]).to_vec()))
                 .expect("ingest training weights");
 
             let training_snapshot = crate::core::SamplingConfig {

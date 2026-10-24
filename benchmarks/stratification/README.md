@@ -1,5 +1,12 @@
 # Scaled Voronoi stratification: tetrahedron path A/B
 
+The current example uses two stratum dimensions with centre keys `(0,0)`,
+`(0,1)`, `(1,0)`, `(1,1)`. The earlier single-axis measurements below are historical;
+the [prefix-model validation](../../docs/validation/2026-10-22-stratum-prefixes.md)
+records the new live sine/tetrahedron runs, 32 repeated pairs, and an independent
+frozen-proposal variance check. [Machine-readable results](prefix-validation.json)
+include the observed finite-budget uncertainty limitation.
+
 The experiment integrates the vector path itself over unit parameter time:
 
 \[
@@ -84,14 +91,14 @@ matched evaluation budget; the extra classification/covariance work has a cost.
 ```bash
 cargo run --locked --example stratification_ab -- \
   --trials 128 --training 131072 --inference 131072 \
-  --output benchmarks/stratification/tetrahedron-results.json
-python benchmarks/stratification/report.py benchmarks/stratification/tetrahedron-results.json
+  --output benchmarks/stratification/tetrahedron-prefix-repetitions.json
+python benchmarks/stratification/report.py benchmarks/stratification/tetrahedron-prefix-repetitions.json
 
 cargo run --locked --example stratification_ab -- \
   --trials 64 --training 131072 --inference 1048576 \
-  --output benchmarks/stratification/tetrahedron-long-inference.json
+  --output benchmarks/stratification/tetrahedron-prefix-long-inference.json
 python benchmarks/stratification/report.py \
-  benchmarks/stratification/tetrahedron-long-inference.json --output-prefix long-
+  benchmarks/stratification/tetrahedron-prefix-long-inference.json --output-prefix long-
 ```
 
 The plotter requires NumPy and Matplotlib. The result files include source/build
@@ -101,7 +108,8 @@ subsequent display/validation changes do not alter the fixed-budget estimator.
 For distributed execution, use the matching
 [stratified](../../resources/templates/runs/tetrahedron-stratified.toml) and
 [ordinary](../../resources/templates/runs/tetrahedron-ordinary.toml) cards.
-Both were validated and executed in an isolated model-3 deployment. The ordinary
+The historical cards were validated and executed in an isolated model-3 deployment.
+The current cards have been rerun on model 5; see the prefix-model validation. The ordinary
 run was assigned workers through the webapp; the completed stratified task exposed
 per-stratum attempted/matched counts, probabilities and component estimates without
 browser errors. The sampler summary now displays the lifted sampling domain.

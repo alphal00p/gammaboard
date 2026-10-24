@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscreteAxisRole {
+    #[default]
+    Integrand,
+    Stratum,
+}
+
 /// Structural domain tree for concrete sample layouts.
 ///
 /// This mirrors the shape of nested discrete/continuous grids without carrying
@@ -9,9 +17,13 @@ use serde::{Deserialize, Serialize};
 pub enum Domain {
     Discrete {
         axis_label: Option<String>,
+        #[serde(default)]
+        axis_role: DiscreteAxisRole,
         branches: Vec<DomainBranch>,
     },
     Rectangular {
+        #[serde(default)]
+        strata_dims: usize,
         discrete_cardinalities: Vec<usize>,
         continuous_dims: usize,
     },
@@ -37,6 +49,7 @@ impl Domain {
         discrete_cardinalities: impl IntoIterator<Item = usize>,
     ) -> Self {
         Self::Rectangular {
+            strata_dims: 0,
             discrete_cardinalities: discrete_cardinalities.into_iter().collect(),
             continuous_dims,
         }
@@ -48,8 +61,184 @@ impl Domain {
     ) -> Self {
         Self::Discrete {
             axis_label: axis_label.into(),
+            axis_role: DiscreteAxisRole::Integrand,
             branches: branches.into_iter().collect(),
         }
+    }
+
+    /// A compact, entirely discrete stratum prefix; attach the integrand later.
+    pub fn strata(cardinalities: Vec<usize>) -> Self {
+        Self::Rectangular {
+            strata_dims: cardinalities.len(),
+            discrete_cardinalities: cardinalities,
+            continuous_dims: 0,
+        }
+    }
+
+    /// Validate structural labels and the left-bound stratum rule on every path.
+    pub fn validate(&self) -> Result<(), String> {
+        fn visit(domain: &Domain, integrand_seen: bool) -> Result<(), String> {
+            match domain {
+                Domain::Rectangular {
+                    strata_dims,
+                    discrete_cardinalities,
+                    ..
+                } => {
+                    if discrete_cardinalities.contains(&0)
+                        || *strata_dims > discrete_cardinalities.len()
+                    {
+                        return Err("invalid rectangular cardinalities or strata_dims".into());
+                    }
+                    if integrand_seen && *strata_dims != 0 {
+                        return Err(
+                            "stratum dimensions must be left-bound, before integrand dimensions"
+                                .into(),
+                        );
+                    }
+                    Ok(())
+                }
+                Domain::Discrete {
+                    axis_role,
+                    branches,
+                    ..
+                } => {
+                    if branches.is_empty()
+                        || branches.iter().any(|b| b.index > i64::MAX as usize)
+                        || branches
+                            .windows(2)
+                            .any(|pair| pair[0].index >= pair[1].index)
+                    {
+                        return Err(
+                            "domain branches must be nonempty with strictly increasing labels"
+                                .into(),
+                        );
+                    }
+                    let stratum = *axis_role == DiscreteAxisRole::Stratum;
+                    if integrand_seen && stratum {
+                        return Err(
+                            "stratum dimensions must be left-bound, before integrand dimensions"
+                                .into(),
+                        );
+                    }
+                    for branch in branches {
+                        visit(&branch.domain, integrand_seen || !stratum)?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+        visit(self, false)
+    }
+
+    /// Enumerate valid joint strata, without expanding any integrand coordinates.
+    pub fn stratum_prefixes(&self) -> Result<Vec<Vec<i64>>, String> {
+        fn visit(domain: &Domain, prefix: &mut Vec<i64>, out: &mut Vec<Vec<i64>>) {
+            match domain {
+                Domain::Discrete {
+                    axis_role: DiscreteAxisRole::Stratum,
+                    branches,
+                    ..
+                } => {
+                    for branch in branches {
+                        prefix.push(branch.index as i64);
+                        visit(&branch.domain, prefix, out);
+                        prefix.pop();
+                    }
+                }
+                Domain::Discrete { .. } => out.push(prefix.clone()),
+                Domain::Rectangular {
+                    strata_dims,
+                    discrete_cardinalities,
+                    ..
+                } => {
+                    fn product(dims: &[usize], prefix: &mut Vec<i64>, out: &mut Vec<Vec<i64>>) {
+                        if let Some((&n, tail)) = dims.split_first() {
+                            for i in 0..n {
+                                prefix.push(i as i64);
+                                product(tail, prefix, out);
+                                prefix.pop();
+                            }
+                        } else {
+                            out.push(prefix.clone());
+                        }
+                    }
+                    product(&discrete_cardinalities[..*strata_dims], prefix, out);
+                }
+            }
+        }
+        self.validate()?;
+        let mut out = Vec::new();
+        visit(self, &mut Vec::new(), &mut out);
+        Ok(out)
+    }
+
+    /// Append an integrand domain to an independently specified stratum-only tree.
+    pub fn with_integrand(&self, integrand: &Domain) -> Result<Domain, String> {
+        if integrand.stratum_prefixes()? != vec![Vec::<i64>::new()]
+            || self.stratum_prefixes()?.iter().any(Vec::is_empty)
+        {
+            return Err(
+                "expected a stratum-only prefix and an unstratified integrand domain".into(),
+            );
+        }
+        fn append(prefix: &Domain, integrand: &Domain) -> Result<Domain, String> {
+            match prefix {
+                Domain::Discrete {
+                    axis_label,
+                    axis_role: DiscreteAxisRole::Stratum,
+                    branches,
+                } => {
+                    let branches = branches
+                        .iter()
+                        .map(|b| Ok(DomainBranch::new(b.index, append(&b.domain, integrand)?)))
+                        .collect::<Result<_, String>>()?;
+                    Ok(Domain::Discrete {
+                        axis_label: axis_label.clone(),
+                        axis_role: DiscreteAxisRole::Stratum,
+                        branches,
+                    })
+                }
+                Domain::Rectangular {
+                    strata_dims,
+                    discrete_cardinalities,
+                    continuous_dims: 0,
+                } if *strata_dims == discrete_cardinalities.len() => {
+                    if let Domain::Rectangular {
+                        discrete_cardinalities: tail,
+                        continuous_dims,
+                        ..
+                    } = integrand
+                    {
+                        return Ok(Domain::Rectangular {
+                            strata_dims: *strata_dims,
+                            discrete_cardinalities: discrete_cardinalities
+                                .iter()
+                                .chain(tail)
+                                .copied()
+                                .collect(),
+                            continuous_dims: *continuous_dims,
+                        });
+                    }
+                    let mut result = integrand.clone();
+                    for &n in discrete_cardinalities.iter().rev() {
+                        result = Domain::Discrete {
+                            axis_label: None,
+                            axis_role: DiscreteAxisRole::Stratum,
+                            branches: (0..n)
+                                .map(|i| DomainBranch::new(i, result.clone()))
+                                .collect(),
+                        };
+                    }
+                    Ok(result)
+                }
+                _ => Err(concat!(
+                    "stratification domain must contain only stratum dimensions ",
+                    "and zero continuous dimensions"
+                )
+                .into()),
+            }
+        }
+        append(self, integrand)
     }
 
     pub fn fixed_continuous_dims(&self) -> Option<usize> {
@@ -105,6 +294,7 @@ impl Domain {
             Self::Rectangular {
                 discrete_cardinalities,
                 continuous_dims,
+                ..
             } => {
                 if discrete.len() > discrete_cardinalities.len() {
                     return Err(format!(
@@ -181,6 +371,7 @@ impl Domain {
             Self::Rectangular {
                 discrete_cardinalities,
                 continuous_dims,
+                ..
             } => {
                 if discrete.len() != discrete_cardinalities.len() {
                     return Err(format!(
@@ -332,7 +523,7 @@ mod tests {
         let json = serde_json::to_value(&continuous).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"rectangular": {"discrete_cardinalities": [], "continuous_dims": 6}})
+            serde_json::json!({"rectangular": {"strata_dims": 0, "discrete_cardinalities": [], "continuous_dims": 6}})
         );
         assert_eq!(serde_json::from_value::<Domain>(json).unwrap(), continuous);
         assert!(

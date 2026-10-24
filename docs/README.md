@@ -17,3 +17,15 @@ Cluster-specific commands: [UBELIX](../ops/ubelix/README.md) and
 
 [Stratification example and A/B results](../benchmarks/stratification/README.md):
 scaled output-space Voronoi cells with Symbolica and Havana.
+
+[Stratum-prefix validation](validation/2026-10-22-stratum-prefixes.md): ragged labels,
+rich feedback, process/recovery tests, and live sine/tetrahedron comparisons.
+
+[Statistics consistency validation](validation/2026-10-22-statistics-consistency.md):
+selected and pooled estimates, uncertainty availability, diagnostics, and browser exports.
+
+[Stratum plot showcase](validation/2026-10-23-stratum-plots.md): convergence and
+allocation plots, conditional PDF comparisons, membership maps, and live examples.
+
+[Unified PDF diagnostics](validation/2026-10-23-unified-pdf-diagnostics.md): restored
+diagnostics, exact native bins, bounded comparisons, shared controls and validation.

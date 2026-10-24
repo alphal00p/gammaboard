@@ -233,7 +233,35 @@ pub struct RuntimeLogEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BasicEstimate {
+    pub mean: f64,
+    pub error: Option<f64>,
+}
+
+/// Identity of the estimator whose uncertainty drives measurements and control.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EstimateKind {
+    #[default]
+    Pooled,
+    Stratified,
+    Combined,
+}
+
+impl EstimateKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pooled => "pooled",
+            Self::Stratified => "stratified",
+            Self::Combined => "combined",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeasurementResult {
+    pub estimator: EstimateKind,
+    pub basic: Option<BasicEstimate>,
     pub name: AccumulatorMetricName,
     pub component: Option<String>,
     pub value: f64,

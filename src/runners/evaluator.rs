@@ -782,7 +782,7 @@ where
             })?;
             let labels = if let Some(plan) = &claimed.stratification {
                 let (physical, strata) =
-                    crate::evaluation::stratification::physical_batch(batch, plan)?;
+                    crate::evaluation::stratification::integrand_batch(batch, plan)?;
                 batch = physical;
                 Some(strata)
             } else {

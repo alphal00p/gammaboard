@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from torch._tensor import Tensor
 from dataclasses import dataclass, asdict, field
 
-from gammaboard_process import GenerationStatus, SampleBatch, Sampler
+from gammaboard_process import Domain, Feedback, GenerationStatus, SampleBatch, Sampler
 from madnis.integrator import Integrator, Integrand, losses
 from madnis.integrator import SampleBatch as MadnisSampleBatch
 
@@ -18,6 +18,7 @@ class FlowConfig:
     """
     Config for the Normalizing Flow module which generates the continuous samples.
     """
+
     uniform_latent: bool = True
     permutations: Literal["log"] = "log"
     layers: int = 3
@@ -33,6 +34,7 @@ class TransformerConfig:
     """
     Config for the Transformer module which generates the discrete samples.
     """
+
     embedding_dim: int = 64
     feedforward_dim: int = 64
     heads: int = 4
@@ -45,6 +47,7 @@ class MadeConfig:
     """
     Config for the MADE module which generates the discrete samples. Alternative to Transformer (but worse).
     """
+
     layers: int = 3
     nodes_per_feature: int = 64
 
@@ -79,6 +82,7 @@ class MadnisConfig:
         made_config:
             See ``MadeConfig`` dataclass for details
     """
+
     seed: int = 42
     training_steps: int = 100
     training_batch_size: int = 1000
@@ -89,8 +93,9 @@ class MadnisConfig:
     use_scheduler: bool = True
     save_path: str | None = None
     scheduler_type: Literal["cosineannealing"] = "cosineannealing"
-    loss_type: Literal["variance", "variance_softclip",
-                       "kl_divergence", "kl_divergence_softclip"] = "kl_divergence"
+    loss_type: Literal[
+        "variance", "variance_softclip", "kl_divergence", "kl_divergence_softclip"
+    ] = "kl_divergence"
     discrete_dims_position: Literal["first", "last"] = "first"
     discrete_model: Literal["transformer", "made"] = "transformer"
     flow_config: FlowConfig = field(default_factory=FlowConfig)
@@ -100,7 +105,9 @@ class MadnisConfig:
     @classmethod
     def from_dict(cls, config_dict: dict[str, Any]) -> MadnisConfig:
         flow_config = FlowConfig(**config_dict.get("flow_config", {}))
-        transformer_config = TransformerConfig(**config_dict.get("transformer_config", {}))
+        transformer_config = TransformerConfig(
+            **config_dict.get("transformer_config", {})
+        )
         made_config = MadeConfig(**config_dict.get("made_config", {}))
         return cls(
             seed=config_dict.get("seed", 42),
@@ -159,8 +166,7 @@ class MadnisSampler(Sampler):
     def __init__(
         self,
         *,
-        discrete_cardinalities: List[int],
-        continuous_dims: int,
+        domain: Domain,
         cfg: MadnisConfig | None = None,
         seed: int = 42,
         training_steps: int = 100,
@@ -172,8 +178,9 @@ class MadnisSampler(Sampler):
         use_scheduler: bool = True,
         save_path: str | None = None,
         scheduler_type: Literal["cosineannealing"] = "cosineannealing",
-        loss_type: Literal["variance", "variance_softclip",
-                           "kl_divergence", "kl_divergence_softclip"] = "kl_divergence",
+        loss_type: Literal[
+            "variance", "variance_softclip", "kl_divergence", "kl_divergence_softclip"
+        ] = "kl_divergence",
         discrete_dims_position: Literal["first", "last"] = "first",
         discrete_model: Literal["transformer", "made"] = "transformer",
         flow_config: dict[str, Any] | FlowConfig | None = None,
@@ -193,6 +200,7 @@ class MadnisSampler(Sampler):
         madnis_blob: bytes | None = None,
         evaluator_metadata: dict[str, Any] | None = None,
     ):
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         torch.set_default_dtype(torch.float64)
 
         self.discrete_cardinalities: List[int] = discrete_cardinalities
@@ -200,9 +208,14 @@ class MadnisSampler(Sampler):
         self.evaluator_metadata: dict[str, Any] = evaluator_metadata or {}
         self.gammaloop_metadata = parse_gammaloop_metadata(self.evaluator_metadata)
         if not isinstance(self.discrete_cardinalities, list) or any(
-                cardinality <= 0 for cardinality in self.discrete_cardinalities):
-            raise TypeError("discrete_cardinalities must be a list of positive integers")
-        self.discrete_cardinalities = [int(cardinality) for cardinality in self.discrete_cardinalities]
+            cardinality <= 0 for cardinality in self.discrete_cardinalities
+        ):
+            raise TypeError(
+                "discrete_cardinalities must be a list of positive integers"
+            )
+        self.discrete_cardinalities = [
+            int(cardinality) for cardinality in self.discrete_cardinalities
+        ]
         if self.continuous_dims <= 0:
             raise ValueError("continuous_dims must be > 0")
 
@@ -249,7 +262,7 @@ class MadnisSampler(Sampler):
         self.pending_training_samples: List[Tensor] = pending_training_samples or []
         self.pending_training_probs: List[Tensor] = pending_training_probs or []
         if torch_cpu_rng_state is not None:
-            if torch_gpu_rng_state is not None and self.device.type == 'cuda':
+            if torch_gpu_rng_state is not None and self.device.type == "cuda":
                 torch.cuda.set_rng_state(torch_gpu_rng_state)
             torch.set_rng_state(torch_cpu_rng_state)
         else:
@@ -257,8 +270,11 @@ class MadnisSampler(Sampler):
             torch.cuda.manual_seed(self.cfg.seed)
         if madnis_blob is not None:
             import io
+
             buffer = io.BytesIO(madnis_blob)
-            self.madnis: Integrator = torch.load(buffer, map_location=self.device, weights_only=False)
+            self.madnis: Integrator = torch.load(
+                buffer, map_location=self.device, weights_only=False
+            )
         else:
             self.madnis: Integrator = self._get_madnis_integrator()
 
@@ -267,23 +283,24 @@ class MadnisSampler(Sampler):
         cls,
         *,
         snapshot: dict[str, Any],
-        discrete_cardinalities: List[int],
-        continuous_dims: int,
+        domain: Domain,
         init_args: dict[str, Any] | None = None,
         evaluator_metadata: dict[str, Any] | None = None,
     ) -> MadnisSampler:
 
         save_path = snapshot.get("save_path")
         if save_path is None:
-            raise ValueError("Snapshot is missing 'save_path' key required for loading the Integrator state.")
+            raise ValueError(
+                "Snapshot is missing 'save_path' key required for loading the Integrator state."
+            )
         try:
             import pickle
-            with open(save_path, 'rb') as f:
+
+            with open(save_path, "rb") as f:
                 state: Dict[str, Any] = pickle.load(f)
 
             instance = cls(
-                discrete_cardinalities=discrete_cardinalities,
-                continuous_dims=int(continuous_dims),
+                domain=domain,
                 cfg=MadnisConfig.from_dict(init_args or {}),
                 trained_samples=snapshot.get("trained_samples"),
                 total_trained_samples=snapshot.get("total_trained_samples"),
@@ -302,29 +319,46 @@ class MadnisSampler(Sampler):
             instance.madnis.integrand = instance._get_madnis_integrand()
             ch_remap = (
                 None
-                if instance.madnis.group_channels and not instance.madnis.group_channels_uniform
+                if instance.madnis.group_channels
+                and not instance.madnis.group_channels_uniform
                 else instance.madnis.integrand.remap_channels
             )
             instance.madnis.loss = instance._get_loss()
-            if hasattr(instance.madnis.flow, 'channel_remap_function'):
+            if hasattr(instance.madnis.flow, "channel_remap_function"):
                 instance.madnis.flow.channel_remap_function = ch_remap
-            if hasattr(instance.madnis.flow, 'continuous_flow') and instance.madnis.flow.continuous_flow is not None:
+            if (
+                hasattr(instance.madnis.flow, "continuous_flow")
+                and instance.madnis.flow.continuous_flow is not None
+            ):
                 instance.madnis.flow.continuous_flow.channel_remap_function = ch_remap
-            if hasattr(instance.madnis.flow, 'discrete_flow') and instance.madnis.flow.discrete_flow is not None:
-                instance.madnis.flow.discrete_flow.prior_prob_function = instance._madnis_discrete_prior_prob_function
-                if hasattr(instance.madnis.flow.discrete_flow, 'channel_remap_function'):
+            if (
+                hasattr(instance.madnis.flow, "discrete_flow")
+                and instance.madnis.flow.discrete_flow is not None
+            ):
+                instance.madnis.flow.discrete_flow.prior_prob_function = (
+                    instance._madnis_discrete_prior_prob_function
+                )
+                if hasattr(
+                    instance.madnis.flow.discrete_flow, "channel_remap_function"
+                ):
                     instance.madnis.flow.discrete_flow.channel_remap_function = ch_remap
         except Exception as e:
-            raise RuntimeError(f"Failed to load MadNIS Integrator state from file '{save_path}': {e}")
+            raise RuntimeError(
+                f"Failed to load MadNIS Integrator state from file '{save_path}': {e}"
+            )
 
         return instance
 
     def snapshot(self) -> Dict[str, Any]:
         if self.madnis is None:
-            raise RuntimeError("MadnisSampler not properly initialized with an Integrator instance.")
+            raise RuntimeError(
+                "MadnisSampler not properly initialized with an Integrator instance."
+            )
 
         if self.cfg.save_path is None:
-            raise ValueError("save_path is required to create a restorable MadNIS snapshot")
+            raise ValueError(
+                "save_path is required to create a restorable MadNIS snapshot"
+            )
 
         tmp_integrand = self.madnis.integrand
         tmp_loss = self.madnis.loss
@@ -337,44 +371,68 @@ class MadnisSampler(Sampler):
             self.madnis.integrand = None
             self.madnis.loss = None
             self.madnis.flow.prior_prob_function = None
-            if hasattr(self.madnis.flow, 'channel_remap_function'):
+            if hasattr(self.madnis.flow, "channel_remap_function"):
                 self.madnis.flow.channel_remap_function = None
-            if hasattr(self.madnis.flow, 'continuous_flow') and self.madnis.flow.continuous_flow is not None:
+            if (
+                hasattr(self.madnis.flow, "continuous_flow")
+                and self.madnis.flow.continuous_flow is not None
+            ):
                 self.madnis.flow.continuous_flow.channel_remap_function = None
-            if hasattr(self.madnis.flow, 'discrete_flow') and self.madnis.flow.discrete_flow is not None:
+            if (
+                hasattr(self.madnis.flow, "discrete_flow")
+                and self.madnis.flow.discrete_flow is not None
+            ):
                 self.madnis.flow.discrete_flow.prior_prob_function = None
-                if hasattr(self.madnis.flow.discrete_flow, 'channel_remap_function'):
+                if hasattr(self.madnis.flow.discrete_flow, "channel_remap_function"):
                     self.madnis.flow.discrete_flow.channel_remap_function = None
 
             from pathlib import Path
             import pickle
             import io
+
             Path(self.cfg.save_path).parent.mkdir(parents=True, exist_ok=True)
             buffer = io.BytesIO()
             torch.save(self.madnis, buffer)
-            with open(self.cfg.save_path, 'wb') as f:
-                pickle.dump(dict(
-                    pending_weights=self.pending_weights,
-                    pending_training_samples=self.pending_training_samples,
-                    pending_training_probs=self.pending_training_probs,
-                    torch_cpu_rng_state=torch.get_rng_state(),
-                    torch_gpu_rng_state=torch.cuda.get_rng_state() if self.device.type == 'cuda' else None,
-                    madnis_blob=buffer.getvalue(),
-                ), f)
+            with open(self.cfg.save_path, "wb") as f:
+                pickle.dump(
+                    dict(
+                        pending_weights=self.pending_weights,
+                        pending_training_samples=self.pending_training_samples,
+                        pending_training_probs=self.pending_training_probs,
+                        torch_cpu_rng_state=torch.get_rng_state(),
+                        torch_gpu_rng_state=torch.cuda.get_rng_state()
+                        if self.device.type == "cuda"
+                        else None,
+                        madnis_blob=buffer.getvalue(),
+                    ),
+                    f,
+                )
 
         except Exception as e:
-            raise RuntimeError(f"Failed to save MadNIS Integrator state to file '{self.cfg.save_path}': {e}")
+            raise RuntimeError(
+                f"Failed to save MadNIS Integrator state to file '{self.cfg.save_path}': {e}"
+            )
         finally:
             self.madnis.integrand = tmp_integrand
             self.madnis.loss = tmp_loss
-            self.madnis.flow.prior_prob_function = self._madnis_discrete_prior_prob_function
-            if hasattr(self.madnis.flow, 'channel_remap_function'):
+            self.madnis.flow.prior_prob_function = (
+                self._madnis_discrete_prior_prob_function
+            )
+            if hasattr(self.madnis.flow, "channel_remap_function"):
                 self.madnis.flow.channel_remap_function = tmp_ch_remap
-            if hasattr(self.madnis.flow, 'continuous_flow') and self.madnis.flow.continuous_flow is not None:
+            if (
+                hasattr(self.madnis.flow, "continuous_flow")
+                and self.madnis.flow.continuous_flow is not None
+            ):
                 self.madnis.flow.continuous_flow.channel_remap_function = tmp_ch_remap
-            if hasattr(self.madnis.flow, 'discrete_flow') and self.madnis.flow.discrete_flow is not None:
-                self.madnis.flow.discrete_flow.prior_prob_function = self._madnis_discrete_prior_prob_function
-                if hasattr(self.madnis.flow.discrete_flow, 'channel_remap_function'):
+            if (
+                hasattr(self.madnis.flow, "discrete_flow")
+                and self.madnis.flow.discrete_flow is not None
+            ):
+                self.madnis.flow.discrete_flow.prior_prob_function = (
+                    self._madnis_discrete_prior_prob_function
+                )
+                if hasattr(self.madnis.flow.discrete_flow, "channel_remap_function"):
                     self.madnis.flow.discrete_flow.channel_remap_function = tmp_ch_remap
         snapshot: Dict[str, int | str | float] = dict(
             trained_samples=self.trained_samples,
@@ -400,7 +458,10 @@ class MadnisSampler(Sampler):
         nr_samples = max_samples if remaining is None else min(max_samples, remaining)
         with torch.no_grad():
             x_all, prob = self.madnis.flow.sample(
-                nr_samples, return_prob=True, device=self.device, dtype=torch.float64,
+                nr_samples,
+                return_prob=True,
+                device=self.device,
+                dtype=torch.float64,
             )
         discrete, continuous = self._madnis_output_to_disc_cont(x_all)
         weights = 1 / prob.numpy(force=True)
@@ -413,10 +474,19 @@ class MadnisSampler(Sampler):
         self.produced_batches += 1
         self.produced_samples += nr_samples
 
-        return SampleBatch(xs_discrete=discrete, xs_continuous=continuous, weights=weights, training_remaining=remaining)
+        return SampleBatch(
+            xs_discrete=discrete,
+            xs_continuous=continuous,
+            weights=weights,
+            training_remaining=remaining,
+        )
 
-    def feedback(self, training_values: NDArray) -> None:
-        if self._training_samples_remaining() is None and not self.pending_training_samples:
+    def feedback(self, feedback: Feedback) -> None:
+        training_values = feedback.values
+        if (
+            self._training_samples_remaining() is None
+            and not self.pending_training_samples
+        ):
             return
         training_values = np.asarray(training_values)
         if training_values.ndim != 1:
@@ -426,7 +496,10 @@ class MadnisSampler(Sampler):
             raise ValueError("more training feedback than generated samples")
         self.pending_weights.append(training_values)
 
-        if self.trained_samples >= self.cfg.training_batch_size and received == self.trained_samples:
+        if (
+            self.trained_samples >= self.cfg.training_batch_size
+            and received == self.trained_samples
+        ):
             self._train_step()
 
     def diagnostics(self) -> Dict[str, Any]:
@@ -443,9 +516,7 @@ class MadnisSampler(Sampler):
             diagnostics["gammaloop_metadata"] = asdict(self.gammaloop_metadata)
         return diagnostics
 
-    def pdf(
-        self, xs_discrete: NDArray, xs_continuous: NDArray
-    ) -> NDArray | None:
+    def pdf(self, xs_discrete: NDArray, xs_continuous: NDArray) -> NDArray | None:
         """Return per-sample PDF values if supported.
 
         Return a float64 array with shape (nr_samples,) or None to signal that
@@ -459,7 +530,9 @@ class MadnisSampler(Sampler):
         elif self.madnis.integrand.discrete_dims_position == "last":
             x_all = np.hstack([xs_continuous, xs_discrete])
         else:
-            raise ValueError(f"Invalid discrete_dims_position: {self.madnis.integrand.discrete_dims_position}")
+            raise ValueError(
+                f"Invalid discrete_dims_position: {self.madnis.integrand.discrete_dims_position}"
+            )
         prob = np.empty((n_samples,), dtype=np.float64)
         x_all = torch.as_tensor(
             x_all.astype(np.float64),
@@ -472,11 +545,19 @@ class MadnisSampler(Sampler):
             n = min(self.cfg.max_batch_size, n_samples - n_eval)
             with torch.no_grad():
                 if xs_continuous.shape[1] > 0:
-                    prob[n_eval:n_eval+n] = self.madnis.flow.prob(
-                        x_all[n_eval:n_eval+n, :]).numpy(force=True).reshape(-1)
+                    prob[n_eval : n_eval + n] = (
+                        self.madnis.flow.prob(x_all[n_eval : n_eval + n, :])
+                        .numpy(force=True)
+                        .reshape(-1)
+                    )
                 else:
-                    prob[n_eval:n_eval+n] = self.madnis.flow.discrete_flow.prob(
-                        x_all[n_eval:n_eval+n, :]).numpy(force=True).reshape(-1)
+                    prob[n_eval : n_eval + n] = (
+                        self.madnis.flow.discrete_flow.prob(
+                            x_all[n_eval : n_eval + n, :]
+                        )
+                        .numpy(force=True)
+                        .reshape(-1)
+                    )
             n_eval += n
         return prob
 
@@ -486,17 +567,19 @@ class MadnisSampler(Sampler):
             major, minor = torch.cuda.get_device_capability(cuda_id)
             if (7, 0) <= (major, minor) < (12, 0):
                 torch.cuda.set_device(cuda_id)
-                return torch.device(f'cuda:{cuda_id}')
-        return torch.device('cpu')
+                return torch.device(f"cuda:{cuda_id}")
+        return torch.device("cpu")
 
-    def _get_scheduler(self, T_max: int, scheduler_type: str | None
-                       ) -> torch.optim.lr_scheduler.CosineAnnealingLR | None:
+    def _get_scheduler(
+        self, T_max: int, scheduler_type: str | None
+    ) -> torch.optim.lr_scheduler.CosineAnnealingLR | None:
         if scheduler_type is None:
             return None
         match scheduler_type.lower():
-            case 'cosineannealing':
+            case "cosineannealing":
                 return torch.optim.lr_scheduler.CosineAnnealingLR(
-                    self.madnis.optimizer, T_max=T_max)
+                    self.madnis.optimizer, T_max=T_max
+                )
             case _:
                 return None
 
@@ -515,12 +598,24 @@ class MadnisSampler(Sampler):
 
     def _train_step(self) -> None:
         # Feedback may be partitioned differently from generation after queue slicing.
-        lengths = [sum(len(chunk) for chunk in parts) for parts in
-                   [self.pending_weights, self.pending_training_samples, self.pending_training_probs]]
+        lengths = [
+            sum(len(chunk) for chunk in parts)
+            for parts in [
+                self.pending_weights,
+                self.pending_training_samples,
+                self.pending_training_probs,
+            ]
+        ]
         if len(set(lengths)) != 1:
-            raise ValueError(f"incomplete MADNIS training window: feedback/samples/probabilities={lengths}")
-        weighted_values = torch.cat([torch.from_numpy(w).to(device=self.device, dtype=torch.float64)
-                                     for w in self.pending_weights])
+            raise ValueError(
+                f"incomplete MADNIS training window: feedback/samples/probabilities={lengths}"
+            )
+        weighted_values = torch.cat(
+            [
+                torch.from_numpy(w).to(device=self.device, dtype=torch.float64)
+                for w in self.pending_weights
+            ]
+        )
         x_all = torch.cat(self.pending_training_samples, dim=0)
         probs = torch.cat(self.pending_training_probs, dim=0)
         # GammaBoard returns f/q; MADNIS expects f and applies its own 1/q weight.
@@ -542,7 +637,9 @@ class MadnisSampler(Sampler):
         self.pending_training_probs.clear()
         self.pending_weights.clear()
 
-    def _madnis_discrete_prior_prob_function(self, indices: Tensor, dim: int = 0) -> Tensor:
+    def _madnis_discrete_prior_prob_function(
+        self, indices: Tensor, dim: int = 0
+    ) -> Tensor:
         """
         Implements a default flat prior.
         """
@@ -551,18 +648,25 @@ class MadnisSampler(Sampler):
             return torch.zeros(indices.shape, dtype=torch.float64, device=self.device)
 
         disc_dim = self.discrete_cardinalities[num_disc_input]
-        return torch.full((len(indices), disc_dim), 1.0 / disc_dim, dtype=torch.float64, device=self.device)
+        return torch.full(
+            (len(indices), disc_dim),
+            1.0 / disc_dim,
+            dtype=torch.float64,
+            device=self.device,
+        )
 
     def _madnis_eval(self, x_all: Tensor) -> Tensor:
-        raise NotImplementedError("This should not get called, since we are sidestepping the usual training process.")
+        raise NotImplementedError(
+            "This should not get called, since we are sidestepping the usual training process."
+        )
 
     def _madnis_output_to_disc_cont(self, x_all: Tensor) -> Tuple[NDArray, NDArray]:
         if self.madnis.integrand.discrete_dims_position == "first":
-            discrete = x_all[:, :len(self.discrete_cardinalities)].numpy(force=True)
-            continuous = x_all[:, len(self.discrete_cardinalities):].numpy(force=True)
+            discrete = x_all[:, : len(self.discrete_cardinalities)].numpy(force=True)
+            continuous = x_all[:, len(self.discrete_cardinalities) :].numpy(force=True)
         else:
-            discrete = x_all[:, -len(self.discrete_cardinalities):].numpy(force=True)
-            continuous = x_all[:, :-len(self.discrete_cardinalities)].numpy(force=True)
+            discrete = x_all[:, -len(self.discrete_cardinalities) :].numpy(force=True)
+            continuous = x_all[:, : -len(self.discrete_cardinalities)].numpy(force=True)
         return discrete, continuous
 
     def _get_madnis_integrand(self) -> Integrand:
@@ -579,8 +683,10 @@ class MadnisSampler(Sampler):
             self._get_madnis_integrand(),
             device=self.device,
             discrete_flow_kwargs=asdict(
-                self.cfg.transformer_config if self.cfg.discrete_model == "transformer"
-                else self.cfg.made_config),
+                self.cfg.transformer_config
+                if self.cfg.discrete_model == "transformer"
+                else self.cfg.made_config
+            ),
             loss=self._get_loss(),
             batch_size=self.cfg.training_batch_size,
             discrete_model=self.cfg.discrete_model,

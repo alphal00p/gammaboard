@@ -523,15 +523,34 @@ fn combine_measurements(states: &[ChildState]) -> Option<Vec<MeasurementResult>>
         let mut value = 0.0;
         let mut variance = 0.0;
         let mut sample_count = 0i64;
+        let mut basic_mean = 0.0;
+        let mut basic_variance = Some(0.0);
+        let mut has_basic = false;
         for child in states {
             let result = child.results()?.iter().find(|result| {
                 result.name == template.name && result.component == template.component
             })?;
             value += child.coefficient * result.value;
+            let (mean, error) = match &result.basic {
+                Some(basic) => {
+                    has_basic = true;
+                    (basic.mean, basic.error)
+                }
+                None => (result.value, result.uncertainty),
+            };
+            basic_mean += child.coefficient * mean;
+            basic_variance = basic_variance
+                .zip(error)
+                .map(|(sum, e)| sum + child.coefficient.powi(2) * e.powi(2));
             variance += child.coefficient.powi(2) * result.uncertainty?.powi(2);
             sample_count = sample_count.saturating_add(result.sample_count);
         }
         combined.push(MeasurementResult {
+            estimator: crate::core::EstimateKind::Combined,
+            basic: (has_basic && basic_mean.is_finite()).then(|| crate::core::BasicEstimate {
+                mean: basic_mean,
+                error: basic_variance.filter(|v| v.is_finite()).map(f64::sqrt),
+            }),
             name: template.name,
             component: template.component.clone(),
             value,
@@ -648,6 +667,8 @@ mod tests {
             completed_samples_per_second: Some(10.0),
             measurement: Some(TaskMeasurementOutput::Completed {
                 results: vec![MeasurementResult {
+                    estimator: crate::core::EstimateKind::Pooled,
+                    basic: None,
                     name: AccumulatorMetricName::Mean,
                     component: None,
                     value,
@@ -670,6 +691,8 @@ mod tests {
         child.measurement = Some(TaskMeasurementOutput::Completed {
             results: vec![
                 MeasurementResult {
+                    estimator: crate::core::EstimateKind::Pooled,
+                    basic: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("real".to_string()),
                     value: real.0,
@@ -677,6 +700,8 @@ mod tests {
                     sample_count: samples,
                 },
                 MeasurementResult {
+                    estimator: crate::core::EstimateKind::Pooled,
+                    basic: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("imag".to_string()),
                     value: imag.0,
@@ -696,6 +721,22 @@ mod tests {
         assert_eq!(results[0].value, 5.0);
         assert!((results[0].uncertainty.unwrap() - 0.73_f64.sqrt()).abs() < 1e-12);
         assert_eq!(results[0].sample_count, 30);
+        assert_eq!(results[0].estimator, crate::core::EstimateKind::Combined);
+        let mut children = [child(1, 2.0, 3.0, 0.4, 10), child(2, -1.0, 1.0, 0.3, 20)];
+        if let Some(TaskMeasurementOutput::Completed { results }) = &mut children[0].measurement {
+            results[0].estimator = crate::core::EstimateKind::Stratified;
+            results[0].basic = Some(crate::core::BasicEstimate {
+                mean: 10.0,
+                error: Some(0.1),
+            });
+        }
+        let compared = combine_measurements(&children).unwrap();
+        assert_eq!(compared[0].value, results[0].value);
+        assert_eq!(compared[0].uncertainty, results[0].uncertainty);
+        assert_eq!(compared[0].basic.as_ref().unwrap().mean, 19.0);
+        assert!(
+            (compared[0].basic.as_ref().unwrap().error.unwrap() - 0.13_f64.sqrt()).abs() < 1e-12
+        );
     }
 
     #[test]
@@ -761,7 +802,12 @@ mod tests {
         let plan = StratificationPlan {
             proposal_id: "campaign".into(),
             partition: StratificationConfig::Voronoi {
-                centers: vec![vec![0.], vec![1.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![0.], vec![1.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: Some(vec![0.5, 0.5]),
@@ -812,6 +858,8 @@ mod tests {
     #[test]
     fn error_target_waits_for_every_child_pilot() {
         let results = [MeasurementResult {
+            estimator: crate::core::EstimateKind::Pooled,
+            basic: None,
             name: AccumulatorMetricName::Mean,
             component: None,
             value: 1.5,

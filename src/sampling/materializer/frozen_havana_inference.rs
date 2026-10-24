@@ -7,6 +7,7 @@ use crate::utils::domain::Domain;
 use symbolica::numerical_integration::{Grid, Sample};
 
 pub struct HavanaInferenceMaterializer {
+    domain: Domain,
     grid: Grid<f64>,
 }
 
@@ -29,7 +30,11 @@ impl HavanaInferenceMaterializer {
                 ))
             })?;
 
-        Ok(Self { grid })
+        let domain: Domain = serde_json::from_value(snapshot.state["domain"].clone())
+            .map_err(|err| EngineError::build(format!("invalid Havana domain: {err}")))?;
+        domain.validate().map_err(EngineError::build)?;
+        validate_havana_grid_domain(&grid, &domain, "havana materializer")?;
+        Ok(Self { grid, domain })
     }
 }
 
@@ -56,7 +61,13 @@ impl Materializer for HavanaInferenceMaterializer {
         let mut points = Vec::with_capacity(latent_batch.nr_samples);
         for _ in 0..latent_batch.nr_samples {
             self.grid.sample(&mut rng, &mut sample);
-            points.push(sample_to_point(&sample)?);
+            let mut point = sample_to_point(&sample)?;
+            crate::sampling::havana_grid::map_discrete_path(
+                &self.domain,
+                &mut point.discrete,
+                true,
+            )?;
+            points.push(point);
         }
         Ok(Batch::new(points))
     }
@@ -92,7 +103,9 @@ mod tests {
             .and_then(|generated| generated.into_batch())
             .expect("produce training batch");
         training
-            .feedback(&[1.0, 2.0, 3.0, 4.0])
+            .feedback(&crate::sampling::Feedback::new(
+                ([1.0, 2.0, 3.0, 4.0]).to_vec(),
+            ))
             .expect("ingest training weights");
 
         let snapshot = training_config.snapshot(&mut *training).expect("snapshot");

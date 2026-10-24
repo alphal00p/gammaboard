@@ -12,8 +12,17 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
 - Named real-vector Symbolica expressions and matching train/inference run cards.
 - Hybrid GammaLoop stratification: conditional primary integral moments alongside
   masked, full-weight pooled histograms. Native and process adapters share the
-  estimator path; protocol v8, database model 4 and saved-state/queue model 3
-  require matching components and a fresh database.
+  estimator path.
+- Left-bound stratum prefixes support rectangular, ragged and sparse domains.
+  Typed Python domains and a shared coordinate codec cover all process roles;
+  rich feedback retains unmasked values and requested/actual prefixes while
+  exposing masked values to generic samplers.
+- Explicit pooled training statistics and separate stratified/basic inference
+  estimates, including uncertainty availability, extrema and export metadata.
+- Per-stratum contributions, allocation, hit rates and variance shares in the
+  dashboard. Ordinary and stratified PDF diagnostics share density, mismatch,
+  distribution, coverage and membership views, with exact native Havana bins,
+  paged comparisons, linked navigation and exports.
 - Stratified uncertainty stays unavailable across measurements, campaigns and UI
   until coverage is adequate; crash/replay and transformed-domain tests verify the
   end-to-end contract. Uniform sampling now includes discrete selection weights.
@@ -33,11 +42,15 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
 - Shared local, ITPhlies, and UBELIX workflows; backup/restore and worker recreation.
 - Consolidated accumulator, measurement, sampler-state, and extension interfaces.
   Scalar configuration remains shorthand for a one-component statistical vector.
-- Process protocol **v8**: explicit fresh/restore/stage-handoff initialization,
-  shared batch types, mandatory sampler restoration, and weighted observable feedback.
+- Process protocol **v9**: explicit fresh/restore/stage-handoff initialization,
+  shared batch types, mandatory sampler restoration and rich weighted feedback.
+  Normalized joint PDFs and optionally unspecified discrete masses replace the
+  separate global PDF normalization callback; stratum-prefix masses must be exact.
 - Whole-batch validation rejects invalid samples/overflow without publishing
   partial results. Database disconnects and suspended submissions recover safely.
 
-**Upgrade:** a fresh database and matching workers are required. Old checkpoints
-and queue formats cannot be resumed. Export run definitions before resetting;
-see [deployment](docs/deployment.md#upgrading-this-revision).
+**Upgrade:** protocol v9, database model 6, checkpoint model 5 and queue envelope 4
+require a fresh database and matching workers. Old checkpoints and queue formats
+cannot be resumed. Export run definitions before resetting; see
+[compatibility](docs/compatibility.md) and
+[deployment](docs/deployment.md#upgrading-this-revision).

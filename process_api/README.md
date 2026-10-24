@@ -9,7 +9,7 @@ python -m pip install ./process_api/python
 | Reference | Contents |
 | --- | --- |
 | [Execution model](../docs/execution-model.md) | Full sampler → materializer → transforms → evaluator → feedback contract, ownership, weights, budgets, and recovery |
-| [Wire protocol](protocol.md) | JSON-RPC v6 framing, every role/method, binary arrays, and errors |
+| [Wire protocol](protocol.md) | Current JSON-RPC framing, every role/method, binary arrays, and errors |
 | [Python interfaces](python/src/gammaboard_process/abc.py) | Typed callbacks and their defaults |
 | [Batch types](python/src/gammaboard_process/batches.py) | `Batch`, `SampleBatch`, `WAITING`, and `FINISHED` |
 

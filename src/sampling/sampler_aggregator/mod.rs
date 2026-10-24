@@ -37,12 +37,27 @@ fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> 
             let value = state.projection().state.mean_abs();
             (value.is_finite() && value > 0.0).then_some(value)
         }
+        AccumulatorState::Stratified(state)
+            if matches!(
+                &state.config,
+                crate::core::AccumulatorConfig::Vector {
+                    training_projection: crate::core::TrainingProjection::Norm,
+                    ..
+                }
+            ) =>
+        {
+            state
+                .mean()
+                .and_then(|v| v.last().copied())
+                .filter(|v| v.is_finite() && *v > 0.0)
+        }
         _ => None,
     }
 }
 
 impl SamplingConfig {
-    pub fn sampling_domain(&self, physical: &Domain) -> Result<Domain, EngineError> {
+    pub fn sampling_domain(&self, integrand: &Domain) -> Result<Domain, EngineError> {
+        integrand.validate().map_err(EngineError::invalid_input)?;
         match &self.stratification {
             Some(partition) => {
                 partition.validate()?;
@@ -50,16 +65,14 @@ impl SamplingConfig {
                     self.sampler,
                     crate::core::SamplerConfig::RasterPlane { .. }
                         | crate::core::SamplerConfig::RasterLine { .. }
-                        | crate::core::SamplerConfig::PdfAdaptationRasterPlane { .. }
-                        | crate::core::SamplerConfig::PdfAdaptationRasterLine { .. }
                 ) {
                     return Err(EngineError::invalid_input(
                         "raster samplers do not support stratification",
                     ));
                 }
-                Ok(partition.sampling_domain(physical))
+                partition.sampling_domain(integrand)
             }
-            None => Ok(physical.clone()),
+            None => Ok(integrand.clone()),
         }
     }
     pub fn inherit_stratification(&self, source: &SavedSampler) -> Result<Self, EngineError> {
@@ -81,6 +94,7 @@ impl SamplingConfig {
         domain: &Domain,
         evaluator_metadata: JsonValue,
     ) -> Result<Box<dyn Sampler>, EngineError> {
+        let integrand_domain = domain;
         let sampling_domain = self.sampling_domain(domain)?;
         let domain = &sampling_domain;
         match self {
@@ -147,7 +161,7 @@ impl SamplingConfig {
                         geometry: params.geometry.clone(),
                     },
                     snapshot,
-                    domain,
+                    integrand_domain,
                 )?))
             }
             Self {
@@ -165,7 +179,7 @@ impl SamplingConfig {
                         geometry: params.geometry.clone(),
                     },
                     snapshot,
-                    domain,
+                    integrand_domain,
                 )?))
             }
             Self {
@@ -352,6 +366,7 @@ impl SamplingConfig {
             .sampler_snapshot
             .ok_or_else(|| EngineError::build("stage handoff requires a saved sampler"))?;
         let config = self.inherit_stratification(snapshot)?;
+        let integrand_domain = domain;
         let sampling_domain = config.sampling_domain(domain)?;
         let domain = &sampling_domain;
         match &config {
@@ -368,8 +383,9 @@ impl SamplingConfig {
                         },
                         snapshot.clone(),
                         global_abs_integrand_norm,
-                        domain,
-                    )?,
+                        integrand_domain,
+                    )?
+                    .with_target_config(source.observable_state.map(|state| state.config())),
                 ))
             }
             Self {
@@ -385,8 +401,9 @@ impl SamplingConfig {
                         },
                         snapshot.clone(),
                         global_abs_integrand_norm,
-                        domain,
-                    )?,
+                        integrand_domain,
+                    )?
+                    .with_target_config(source.observable_state.map(|state| state.config())),
                 ))
             }
             Self {

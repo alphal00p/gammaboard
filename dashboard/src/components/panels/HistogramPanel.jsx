@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, Typography } from "@mui/material";
 import { asArray } from "../../utils/collections";
-import { formatScientific } from "../../utils/formatters";
+import { formatScientific, numberOrNaN } from "../../utils/formatters";
 import FigureExportActions from "./FigureExportActions";
 import { EmptyPlotPanel } from "./BasicPanels";
 import {
@@ -271,14 +271,14 @@ const HistogramPanel = ({
               const relative = displayOverlayBins.map((bin) => {
                 if (!bin) return null;
                 const value = Number(bin?.value);
-                const error = Number(bin?.error);
+                const error = numberOrNaN(bin?.error);
                 if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
                 return Math.abs(error / value);
               });
               const absoluteError = values.map((value, index) => {
                 if (!Number.isFinite(value)) return null;
                 const sourceBin = displayOverlayBins[index];
-                const err = Number(sourceBin?.error);
+                const err = numberOrNaN(sourceBin?.error);
                 if (!Number.isFinite(err) || err <= 0) return null;
                 const sourceValue = Number(sourceBin?.value);
                 if (!Number.isFinite(sourceValue)) return null;
@@ -370,14 +370,14 @@ const HistogramPanel = ({
             const relative = displayOverlayBins.map((bin) => {
               if (!bin) return null;
               const value = Number(bin?.value);
-              const error = Number(bin?.error);
+              const error = numberOrNaN(bin?.error);
               if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) return null;
               return Math.abs(error / value);
             });
             const absoluteError = values.map((value, index) => {
               if (!Number.isFinite(value)) return null;
               const sourceBin = displayOverlayBins[index];
-              const err = Number(sourceBin?.error);
+              const err = numberOrNaN(sourceBin?.error);
               if (!Number.isFinite(err) || err <= 0) return null;
               const sourceValue = Number(sourceBin?.value);
               if (!Number.isFinite(sourceValue)) return null;
@@ -515,7 +515,7 @@ const HistogramPanel = ({
         .map((bin, index) => {
           const x = isDiscrete ? null : Number(bin?.x);
           const y = Number(bin?.value);
-          const err = Number(bin?.error);
+          const err = numberOrNaN(bin?.error);
           if (isDiscrete) {
             if (!Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
             const yLowRaw = y - Math.abs(err);

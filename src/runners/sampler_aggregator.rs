@@ -39,6 +39,37 @@ use thiserror::Error;
 
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const TASK_CONFIG_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Integrand-coordinate marginals sum disjoint joint queries over every stratum
+/// prefix. Prefix lengths may differ, so there is no single dimension offset.
+fn integrand_mass_queries(
+    subspaces: &[DiscreteSubspace],
+    partition: Option<&crate::core::StratificationConfig>,
+) -> (usize, Vec<DiscreteSubspace>) {
+    let prefixes = partition
+        .map(|p| p.prefixes().cloned().collect::<Vec<_>>())
+        .unwrap_or_else(|| vec![vec![]]);
+    let queries = subspaces
+        .iter()
+        .flat_map(|subspace| {
+            prefixes.iter().map(|prefix| {
+                let fixed_dims = prefix
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .chain(
+                        subspace
+                            .fixed_dims
+                            .iter()
+                            .map(|(&dim, &value)| (dim + prefix.len(), value)),
+                    )
+                    .collect();
+                DiscreteSubspace { fixed_dims }
+            })
+        })
+        .collect();
+    (prefixes.len(), queries)
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplerAggregatorRunnerParams {
     pub performance_snapshot_interval_ms: u64,
@@ -144,7 +175,7 @@ struct CompletedIngestStats {
     completed_samples_delta: i64,
 }
 
-fn collect_discrete_pdf_subspaces(
+fn collect_discrete_mass_subspaces(
     state: &AccumulatorState,
     config: &crate::core::DiscreteProjectionConfig,
     bin_limit: usize,
@@ -155,7 +186,7 @@ fn collect_discrete_pdf_subspaces(
             if !discrete_projection_includes_stream(config, stream_name) {
                 continue;
             }
-            collect_discrete_pdf_subspaces_from_bins(
+            collect_discrete_mass_subspaces_from_bins(
                 &component.discrete_bins,
                 config,
                 bin_limit,
@@ -174,7 +205,7 @@ fn discrete_projection_includes_stream(
     config.streams.is_empty() || config.streams.iter().any(|candidate| candidate == stream)
 }
 
-fn collect_discrete_pdf_subspaces_from_bins(
+fn collect_discrete_mass_subspaces_from_bins(
     bins: &BTreeMap<String, crate::evaluation::accumulator::DiscreteProjectionBinState>,
     config: &crate::core::DiscreteProjectionConfig,
     bin_limit: usize,
@@ -1115,7 +1146,7 @@ where
             }
 
             if batch.requires_training_values {
-                let training_values = batch.result.training_values.as_deref().ok_or_else(|| {
+                let training_values = batch.result.feedback.as_ref().ok_or_else(|| {
                     RunnerError::Engine(EngineError::engine(format!(
                         "completed batch {} requires training but has no training values",
                         batch.batch_id
@@ -1133,7 +1164,7 @@ where
                     let _compute = self.busy.compute();
                     self.runtime_state
                         .generation
-                        .accept_training_values(training_values)?
+                        .accept_feedback(training_values)?
                 };
                 if let Some(values) = assembled {
                     let ingest_started = Instant::now();
@@ -1377,15 +1408,15 @@ where
         }
 
         let mut engine_diagnostics = self.sampler.diagnostics();
-        if let Some(discrete_pdf) = self.discrete_pdf_diagnostics()? {
+        if let Some(discrete_mass) = self.discrete_mass_diagnostics()? {
             match &mut engine_diagnostics {
                 JsonValue::Object(object) => {
-                    object.insert("discrete_pdf".to_string(), discrete_pdf);
+                    object.insert("discrete_mass".to_string(), discrete_mass);
                 }
                 other => {
                     engine_diagnostics = json!({
                         "sampler": other.clone(),
-                        "discrete_pdf": discrete_pdf,
+                        "discrete_mass": discrete_mass,
                     });
                 }
             }
@@ -1415,7 +1446,7 @@ where
         Ok(())
     }
 
-    fn discrete_pdf_diagnostics(&mut self) -> Result<Option<JsonValue>, RunnerError> {
+    fn discrete_mass_diagnostics(&mut self) -> Result<Option<JsonValue>, RunnerError> {
         let Some(config) = self
             .observable_state
             .config()
@@ -1425,7 +1456,7 @@ where
             return Ok(None);
         };
         let projected =
-            collect_discrete_pdf_subspaces(&self.observable_state, &config, config.bin_limit())?;
+            collect_discrete_mass_subspaces(&self.observable_state, &config, config.bin_limit())?;
         if projected.is_empty() {
             return Ok(None);
         }
@@ -1433,7 +1464,31 @@ where
             .iter()
             .map(|(_, _, subspace)| subspace.clone())
             .collect::<Vec<_>>();
-        let values = self.sampler.discrete_pdf_batch(&subspaces)?;
+        let (width, queries) = integrand_mass_queries(
+            &subspaces,
+            self.evaluation_plan.as_ref().map(|p| &p.partition),
+        );
+        let mapping_known = self.sampler_config.materializer.is_none()
+            && !self
+                .batch_transforms
+                .iter()
+                .any(|t| matches!(t, BatchTransformConfig::ProcessBatchTransform { .. }));
+        let joint = if mapping_known {
+            self.sampler.discrete_mass_batch(&queries)?
+        } else {
+            vec![None; queries.len()]
+        };
+        if joint.len() != queries.len() {
+            return Err(
+                crate::core::EngineError::engine("discrete mass response length mismatch").into(),
+            );
+        }
+        let values = joint.chunks_exact(width).map(|group| {
+            group
+                .iter()
+                .copied()
+                .try_fold(0.0, |sum, value| value.map(|v| sum + v))
+        });
         let mut projections = serde_json::Map::new();
         for ((projection_name, key, _), value) in projected.into_iter().zip(values) {
             let entry = projections
@@ -1447,7 +1502,7 @@ where
             }
         }
         Ok(Some(json!({
-            "schema": "gammaboard-discrete-pdf-v1",
+            "schema": "gammaboard-discrete-mass-v1",
             "projections": projections,
         })))
     }
@@ -1506,6 +1561,72 @@ mod tests {
     use super::{SamplerAggregatorCheckpoint, SamplerProgress, no_progress_is_terminal};
     use crate::core::SamplerQueueCheckpoint;
     use crate::sampling::SavedSampler;
+
+    #[test]
+    fn integrand_mass_queries_marginalize_ragged_stratum_prefixes() {
+        use super::integrand_mass_queries;
+        use crate::{DiscreteAxisRole, Domain, DomainBranch};
+        use crate::{DiscreteSubspace, SamplingConfig};
+        let leaf = Domain::strata(vec![]);
+        let domain = Domain::Discrete {
+            axis_label: None,
+            axis_role: DiscreteAxisRole::Stratum,
+            branches: vec![
+                DomainBranch::new(0, leaf.clone()),
+                DomainBranch::new(
+                    1,
+                    Domain::Discrete {
+                        axis_label: None,
+                        axis_role: DiscreteAxisRole::Stratum,
+                        branches: [0, 1, 3]
+                            .into_iter()
+                            .map(|i| DomainBranch::new(i, leaf.clone()))
+                            .collect(),
+                    },
+                ),
+            ],
+        };
+        let partition = crate::core::StratificationConfig::Voronoi {
+            centers: domain
+                .stratum_prefixes()
+                .unwrap()
+                .into_iter()
+                .enumerate()
+                .map(|(i, prefix)| (prefix, vec![i as f64]))
+                .collect(),
+            domain,
+            scales: None,
+        };
+        let subspaces = [DiscreteSubspace {
+            fixed_dims: [(0, 2)].into(),
+        }];
+        let (width, queries) = integrand_mass_queries(&subspaces, Some(&partition));
+        assert_eq!(width, 4);
+        assert_eq!(queries[0].fixed_dims, [(0, 0), (1, 2)].into());
+        assert_eq!(queries[3].fixed_dims, [(0, 1), (1, 3), (2, 2)].into());
+        let mut config: SamplingConfig =
+            serde_json::from_value(json!({"kind":"naive_monte_carlo"})).unwrap();
+        config.stratification = Some(partition);
+        let mut sampler = config
+            .create(
+                Domain::rectangular_with_cardinalities(1, [4]),
+                None,
+                json!({}),
+            )
+            .unwrap();
+        let values = sampler.discrete_mass_batch(&queries).unwrap();
+        assert!(
+            (values
+                .into_iter()
+                .collect::<Option<Vec<_>>>()
+                .unwrap()
+                .iter()
+                .sum::<f64>()
+                - 0.25)
+                .abs()
+                < 1e-14
+        );
+    }
     use serde_json::json;
 
     #[test]

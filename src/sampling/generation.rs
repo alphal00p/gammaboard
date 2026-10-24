@@ -18,6 +18,18 @@ mod tests {
 
     #[test]
     fn ragged_draw_restores_its_split_cursor_and_feedback_metadata() {
+        fn feedback(values: Vec<f64>) -> crate::sampling::Feedback {
+            let requested = values.iter().map(|v| *v as usize % 4).collect();
+            let actual = values.iter().map(|v| (*v as usize + 1) % 4).collect();
+            crate::sampling::Feedback {
+                unmasked_values: values,
+                strata: Some(crate::sampling::StratumAssignments {
+                    prefixes: vec![vec![0], vec![1, 0], vec![1, 1], vec![1, 3]],
+                    requested,
+                    actual,
+                }),
+            }
+        }
         use crate::evaluation::{Batch, Point};
         use crate::sampling::LatentBatch;
         let original = Batch::new(
@@ -32,7 +44,12 @@ mod tests {
         state.record_draw(9);
         state.record_draw(2);
         let mut chunks = state.take_batches(2, 2).unwrap();
-        assert!(state.accept_training_values(&[0.0, 1.0]).unwrap().is_none());
+        assert!(
+            state
+                .accept_feedback(&feedback(([0.0, 1.0]).to_vec()))
+                .unwrap()
+                .is_none()
+        );
         let snapshot = serde_json::to_value(state).unwrap();
         let mut restored: GenerationBuffer = serde_json::from_value(snapshot).unwrap();
         assert!(restored.requires_feedback());
@@ -45,24 +62,32 @@ mod tests {
         assert_eq!(recovered, original.points());
         assert!(
             restored
-                .accept_training_values(&[2.0, 3.0])
+                .accept_feedback(&feedback(([2.0, 3.0]).to_vec()))
                 .unwrap()
                 .is_none()
         );
         assert!(
             restored
-                .accept_training_values(&[4.0, 5.0, 6.0])
+                .accept_feedback(&feedback(([4.0, 5.0, 6.0]).to_vec()))
                 .unwrap()
                 .is_none()
         );
         assert_eq!(
-            restored.accept_training_values(&[7.0, 8.0]).unwrap(),
-            Some((0..9).map(|i| i as f64).collect())
+            restored
+                .accept_feedback(&feedback(([7.0, 8.0]).to_vec()))
+                .unwrap(),
+            Some(feedback((0..9).map(|i| i as f64).collect()))
         );
-        assert!(restored.accept_training_values(&[9.0, 10.0, 11.0]).is_err());
+        assert!(
+            restored
+                .accept_feedback(&feedback(([9.0, 10.0, 11.0]).to_vec()))
+                .is_err()
+        );
         assert_eq!(
-            restored.accept_training_values(&[9.0, 10.0]).unwrap(),
-            Some(vec![9.0, 10.0])
+            restored
+                .accept_feedback(&feedback(([9.0, 10.0]).to_vec()))
+                .unwrap(),
+            Some(feedback(vec![9.0, 10.0]))
         );
         assert!(!restored.has_outstanding());
         restored.finished = true;
@@ -89,7 +114,7 @@ struct BufferedDraw {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TrainingGroup {
     samples: usize,
-    values: Vec<f64>,
+    feedback: crate::sampling::Feedback,
 }
 
 impl GenerationBuffer {
@@ -204,27 +229,27 @@ impl GenerationBuffer {
     pub fn record_draw(&mut self, samples: usize) {
         self.training_groups.push_back(TrainingGroup {
             samples,
-            values: Vec::new(),
+            feedback: crate::sampling::Feedback::default(),
         });
     }
 
     /// Ordered evaluator results cannot cross a generation boundary. Return
     /// exactly one original draw's weights once all its fragments have arrived.
-    pub fn accept_training_values(
+    pub fn accept_feedback(
         &mut self,
-        values: &[f64],
-    ) -> Result<Option<Vec<f64>>, EngineError> {
+        values: &crate::sampling::Feedback,
+    ) -> Result<Option<crate::sampling::Feedback>, EngineError> {
         let group = self.training_groups.front_mut().ok_or_else(|| {
             EngineError::engine("training result has no matching generated batch")
         })?;
-        if values.len() > group.samples - group.values.len() {
+        if values.len() > group.samples - group.feedback.len() {
             return Err(EngineError::engine(
                 "training result crosses a generation boundary",
             ));
         }
-        group.values.extend_from_slice(values);
-        if group.values.len() == group.samples {
-            Ok(Some(self.training_groups.pop_front().unwrap().values))
+        group.feedback.append(values)?;
+        if group.feedback.len() == group.samples {
+            Ok(Some(self.training_groups.pop_front().unwrap().feedback))
         } else {
             Ok(None)
         }

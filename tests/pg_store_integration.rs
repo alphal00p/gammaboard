@@ -862,6 +862,8 @@ async fn task_measurement_output_round_trips() {
             task_id,
             &TaskMeasurementOutput::Completed {
                 results: vec![MeasurementResult {
+                    estimator: gammaboard::core::EstimateKind::Pooled,
+                    basic: None,
                     name: AccumulatorMetricName::Mean,
                     component: None,
                     value: 1.25,
@@ -3344,5 +3346,38 @@ async fn suspended_submission_releases_locks_and_rejects_stale_results() {
         .execute(store.pool())
         .await
         .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn plot_history_uses_only_preceding_reports_from_the_same_task() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, task, node, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("INSERT INTO run_telemetry_workers (run_id,worker_id) VALUES ($1,$2)")
+        .bind(run)
+        .bind(&node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    for (seconds, report_task, uptime) in [(1, task, 1000.), (2, task + 1, 9000.), (4, task, 4000.)]
+    {
+        let mut report = serde_json::to_value(gammaboard::core::WorkerReportContext {
+            task_id: Some(report_task.to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        report["sampler_uptime_ms"] = serde_json::json!(uptime);
+        sqlx::query("INSERT INTO sampler_aggregator_performance_history (run_id,worker_id,metrics,created_at) VALUES ($1,$2,$3,to_timestamp($4))").bind(run).bind(&node).bind(report).bind(seconds as f64).execute(store.pool()).await.unwrap();
+    }
+    for seconds in [0., 3.] {
+        sqlx::query("INSERT INTO persisted_observable_snapshots (run_id,task_id,persisted_observable,created_at) VALUES ($1,$2,'{}'::jsonb,to_timestamp($3))").bind(run).bind(task).bind(seconds).execute(store.pool()).await.unwrap();
+    }
+    let snapshots = store
+        .get_task_output_snapshots(run, task, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(snapshots[0].sampler_uptime_ms, Some(1000.));
+    assert_eq!(snapshots[1].sampler_uptime_ms, None);
     store.remove_run(run).await.unwrap();
 }

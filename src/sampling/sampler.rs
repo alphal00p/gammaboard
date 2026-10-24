@@ -66,20 +66,19 @@ pub trait Sampler: Send {
     /// Draws may be smaller, e.g. at a training boundary, but never empty.
     /// The limit can change between draws without changing feedback boundaries.
     fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError>;
-    /// One weighted scalar per sample of the oldest feedback-bearing draw.
+    /// One complete feedback object for the oldest feedback-bearing draw.
+    /// Generic samplers consume `feedback.values()`; unmasked values and the
+    /// requested/actual prefixes are available to specialized training algorithms.
     /// Calls preserve generation order and never split or combine draws.
-    fn feedback(&mut self, values: &[f64]) -> Result<(), EngineError>;
+    fn feedback(&mut self, feedback: &super::Feedback) -> Result<(), EngineError>;
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         Ok(vec![None; points.len()])
     }
-    fn discrete_pdf_batch(
+    fn discrete_mass_batch(
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
         Ok(vec![None; subspaces.len()])
-    }
-    fn global_pdf_norm(&mut self) -> Result<f64, EngineError> {
-        Ok(1.0)
     }
     fn persisted_output(&mut self) -> Result<Option<JsonValue>, EngineError> {
         Ok(None)
@@ -182,8 +181,12 @@ mod tests {
         assert!(saved.state.get("params").is_none());
         let mut restored = saved.clone().restore(&domain, json!({})).unwrap();
         assert_eq!(restored.generate(5).unwrap(), Generation::Waiting);
-        original.feedback(&[1.; 7]).unwrap();
-        restored.feedback(&[1.; 7]).unwrap();
+        original
+            .feedback(&crate::sampling::Feedback::new(([1.; 7]).to_vec()))
+            .unwrap();
+        restored
+            .feedback(&crate::sampling::Feedback::new(([1.; 7]).to_vec()))
+            .unwrap();
         assert_eq!(original.generate(5).unwrap(), restored.generate(5).unwrap());
         let changed = SamplingConfig {
             stratification: None,

@@ -4,6 +4,7 @@ use crate::{
     core::{AccumulatorConfig, EngineError},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,24 +18,40 @@ pub enum Estimator {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StratificationConfig {
     Voronoi {
-        centers: Vec<Vec<f64>>,
+        domain: Domain,
+        #[serde(with = "prefix_centers")]
+        centers: BTreeMap<Vec<i64>, Vec<f64>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scales: Option<Vec<f64>>,
     },
 }
 
 impl StratificationConfig {
-    pub fn centers(&self) -> &[Vec<f64>] {
+    pub fn centers(&self) -> &BTreeMap<Vec<i64>, Vec<f64>> {
         match self {
             Self::Voronoi { centers, .. } => centers,
         }
     }
     pub fn validate(&self) -> Result<(), EngineError> {
-        let Self::Voronoi { centers, scales } = self;
-        let width = centers.first().map_or(0, Vec::len);
+        let Self::Voronoi {
+            centers, scales, ..
+        } = self;
+        let prefixes = self
+            .domain()
+            .stratum_prefixes()
+            .map_err(EngineError::invalid_input)?;
+        self.domain()
+            .with_integrand(&Domain::continuous(0))
+            .map_err(EngineError::invalid_input)?;
+        if !centers.keys().eq(prefixes.iter()) {
+            return Err(EngineError::invalid_input(
+                "Voronoi centers must exactly cover all complete stratum prefixes in the domain",
+            ));
+        }
+        let width = centers.values().next().map_or(0, Vec::len);
         if width == 0
             || centers
-                .iter()
+                .values()
                 .any(|c| c.len() != width || c.iter().any(|v| !v.is_finite()))
         {
             return Err(EngineError::invalid_input(
@@ -42,9 +59,9 @@ impl StratificationConfig {
             ));
         }
         if centers
-            .iter()
+            .values()
             .enumerate()
-            .any(|(i, c)| centers[..i].contains(c))
+            .any(|(i, c)| centers.values().take(i).any(|old| old == c))
         {
             return Err(EngineError::invalid_input(
                 "Voronoi centers must be distinct",
@@ -63,7 +80,7 @@ impl StratificationConfig {
     pub fn validate_accumulator(&self, config: &AccumulatorConfig) -> Result<(), EngineError> {
         self.validate()?;
         let width = Self::components(config)?.len();
-        if width != self.centers()[0].len() {
+        if width != self.centers().values().next().map_or(0, Vec::len) {
             return Err(EngineError::invalid_input(
                 "Voronoi center width must match the evaluator output components",
             ));
@@ -79,25 +96,39 @@ impl StratificationConfig {
             )),
         }
     }
-    pub fn sampling_domain(&self, physical: &Domain) -> Domain {
-        // An outer branch gives Havana a separate conditional grid per stratum.
-        Domain::discrete(
-            Some("stratum".into()),
-            self.centers().iter().enumerate().map(|(index, _)| {
-                crate::utils::domain::DomainBranch {
-                    index,
-                    domain: Box::new(physical.clone()),
-                }
-            }),
-        )
+    pub fn domain(&self) -> &Domain {
+        match self {
+            Self::Voronoi { domain, .. } => domain,
+        }
+    }
+    pub fn prefixes(&self) -> impl ExactSizeIterator<Item = &Vec<i64>> {
+        self.centers().keys()
+    }
+    pub fn prefix(&self, label: usize) -> &[i64] {
+        self.prefixes().nth(label).expect("validated stratum label")
+    }
+    pub fn label(&self, prefix: &[i64]) -> Result<usize, EngineError> {
+        self.prefixes()
+            .position(|p| p == prefix)
+            .ok_or_else(|| EngineError::eval("unknown stratum prefix"))
+    }
+    pub fn sampling_domain(&self, integrand: &Domain) -> Result<Domain, EngineError> {
+        self.validate()?;
+        self.domain()
+            .with_integrand(integrand)
+            .map_err(EngineError::invalid_input)
     }
     pub fn classify(&self, values: &[f64]) -> Result<usize, EngineError> {
-        let Self::Voronoi { centers, scales } = self;
-        if values.len() != centers[0].len() || values.iter().any(|v| !v.is_finite()) {
+        let Self::Voronoi {
+            centers, scales, ..
+        } = self;
+        if values.len() != centers.values().next().map_or(0, Vec::len)
+            || values.iter().any(|v| !v.is_finite())
+        {
             return Err(EngineError::eval("invalid Voronoi classification values"));
         }
         let mut best = (0, f64::INFINITY);
-        for (k, center) in centers.iter().enumerate() {
+        for (k, center) in centers.values().enumerate() {
             let distance =
                 values
                     .iter()
@@ -138,7 +169,7 @@ impl StratificationPlan {
             ));
         }
         self.partition.validate()?;
-        if self.components.len() != self.partition.centers()[0].len() {
+        if self.components.len() != self.partition.centers().values().next().map_or(0, Vec::len) {
             return Err(EngineError::invalid_input(
                 "stratification plan component layout mismatch",
             ));
@@ -170,18 +201,74 @@ impl StratificationPlan {
     }
 }
 
+/// Canonical decimal tuple keys work in TOML, JSON and persisted binary payloads.
+mod prefix_centers {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        centers: &BTreeMap<Vec<i64>, Vec<f64>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(centers.len()))?;
+        for (prefix, center) in centers {
+            map.serialize_entry(
+                &prefix
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                center,
+            )?;
+        }
+        map.end()
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<Vec<i64>, Vec<f64>>, D::Error> {
+        let raw = BTreeMap::<String, Vec<f64>>::deserialize(deserializer)?;
+        raw.into_iter()
+            .map(|(key, value)| {
+                let prefix = key
+                    .split(',')
+                    .map(str::parse::<i64>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(serde::de::Error::custom)?;
+                if prefix.iter().any(|v| *v < 0)
+                    || prefix
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                        != key
+                {
+                    return Err(serde::de::Error::custom(
+                        "stratum keys must be canonical comma-separated nonnegative integers",
+                    ));
+                }
+                Ok((prefix, value))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn scaled_voronoi_preserves_units_and_uses_stable_ties() {
         let raw = StratificationConfig::Voronoi {
-            centers: vec![vec![0., 0.], vec![2., 10.]],
+            domain: crate::Domain::strata(vec![2]),
+            centers: vec![vec![0., 0.], vec![2., 10.]]
+                .into_iter()
+                .enumerate()
+                .map(|(k, c)| (vec![k as i64], c))
+                .collect(),
             scales: None,
         };
         assert_eq!(raw.classify(&[0., 8.]).unwrap(), 1);
         let scaled = StratificationConfig::Voronoi {
-            centers: raw.centers().to_vec(),
+            domain: raw.domain().clone(),
+            centers: raw.centers().clone(),
             scales: Some(vec![1., 10.]),
         };
         assert_eq!(scaled.classify(&[0., 8.]).unwrap(), 0);
@@ -190,7 +277,8 @@ mod tests {
         for bad in [vec![], vec![0., 1.], vec![1., f64::INFINITY]] {
             assert!(
                 StratificationConfig::Voronoi {
-                    centers: raw.centers().to_vec(),
+                    domain: raw.domain().clone(),
+                    centers: raw.centers().clone(),
                     scales: Some(bad)
                 }
                 .validate()
@@ -203,7 +291,12 @@ mod tests {
         let plan = StratificationPlan {
             proposal_id: "p".into(),
             partition: StratificationConfig::Voronoi {
-                centers: vec![vec![-1.], vec![1.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![-1.], vec![1.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: Some(vec![0.2, 0.8]),

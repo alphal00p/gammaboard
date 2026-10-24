@@ -2,11 +2,11 @@
 use serde::{Deserialize, Deserializer};
 
 /// Fresh database schema; checkpoint and queue formats have independent versions.
-pub const DATABASE_MODEL_VERSION: u32 = 4;
+pub const DATABASE_MODEL_VERSION: u32 = 6;
 
-pub const MODEL_VERSION: u32 = 3;
+pub const MODEL_VERSION: u32 = 5;
 pub const PERFORMANCE_SCHEMA_VERSION: u32 = 2;
-pub(crate) const QUEUE_MAGIC: &[u8; 4] = b"GBQ\x03";
+pub(crate) const QUEUE_MAGIC: &[u8; 4] = b"GBQ\x04";
 
 pub(crate) fn deserialize_model_version<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -47,7 +47,7 @@ mod tests {
             format_version: u32,
         }
         assert_eq!(
-            serde_json::from_str::<Envelope>("{\"format_version\":3}")
+            serde_json::from_str::<Envelope>("{\"format_version\":5}")
                 .unwrap()
                 .format_version,
             MODEL_VERSION

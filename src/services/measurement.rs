@@ -440,7 +440,7 @@ mod tests {
         let absolute = absolute_component_results(&accumulator, &signed);
         assert_eq!(signed[0].value, -4.5);
         assert_eq!(absolute[0].value, 7.5);
-        assert!((absolute[0].uncertainty.unwrap() - 4.5 / 2.0_f64.sqrt()).abs() < 1e-12);
+        assert!((absolute[0].uncertainty.unwrap() - 4.5).abs() < 1e-12);
         assert_ne!(absolute[0].uncertainty, signed[0].uncertainty);
         assert_eq!(signed[1].value, 0.0);
         assert_eq!(absolute[1].value, 2.0);
@@ -496,6 +496,8 @@ mod tests {
         let mut task = sample_task(7, "sample", 1);
         task.measurement_output = Some(TaskMeasurementOutput::Completed {
             results: vec![MeasurementResult {
+                estimator: crate::core::EstimateKind::Pooled,
+                basic: None,
                 name: AccumulatorMetricName::Mean,
                 component: None,
                 value: 2.0,

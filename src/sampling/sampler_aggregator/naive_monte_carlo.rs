@@ -173,22 +173,22 @@ impl Sampler for NaiveMonteCarloSamplerAggregator {
         ))
     }
 
-    fn feedback(&mut self, values: &[f64]) -> Result<(), EngineError> {
-        if values.is_empty() {
+    fn feedback(&mut self, feedback: &crate::sampling::Feedback) -> Result<(), EngineError> {
+        let samples = feedback.len();
+        if samples == 0 {
             return Ok(());
         }
-        if self.params.training_window_samples == 0 || values.len() > self.pending_training_samples
-        {
+        if self.params.training_window_samples == 0 || samples > self.pending_training_samples {
             return Err(EngineError::engine("unexpected synthetic training values"));
         }
         self.params.ingest_timing.wait(
-            values.len(),
+            samples,
             self.returned_samples ^ 0x696e67,
             &mut self.ingest_stats,
         )?;
-        self.pending_training_samples -= values.len();
-        self.window_returned += values.len();
-        self.returned_samples += values.len() as u64;
+        self.pending_training_samples -= samples;
+        self.window_returned += samples;
+        self.returned_samples += samples as u64;
         if self.window_returned == self.params.training_window_samples {
             self.params.update_timing.wait(
                 self.window_returned,
@@ -210,25 +210,25 @@ impl Sampler for NaiveMonteCarloSamplerAggregator {
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
-        if let Some((continuous_dims, 0)) = self.domain.fixed_rectangular_dims() {
-            return Ok(points
-                .iter()
-                .map(|(discrete, continuous)| {
-                    if !discrete.is_empty() || continuous.len() != continuous_dims {
-                        return None;
-                    }
-                    if continuous.iter().all(|value| (0.0..=1.0).contains(value)) {
-                        Some(1.0)
-                    } else {
-                        Some(0.0)
-                    }
-                })
-                .collect());
-        }
-        Ok(vec![None; points.len()])
+        points
+            .iter()
+            .map(|(discrete, continuous)| {
+                let Ok(width) = self.domain.continuous_dims_at_discrete_path(discrete) else {
+                    return Ok(None);
+                };
+                if continuous.len() != width || continuous.iter().any(|x| !x.is_finite()) {
+                    return Ok(None);
+                }
+                if continuous.iter().any(|x| !(0.0..=1.0).contains(x)) {
+                    return Ok(Some(0.0));
+                }
+                let fixed = discrete.iter().copied().enumerate().collect();
+                discrete_subspace_probability(&self.domain, &fixed, 0).map(Some)
+            })
+            .collect()
     }
 
-    fn discrete_pdf_batch(
+    fn discrete_mass_batch(
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
@@ -312,6 +312,7 @@ fn sample_domain_point(
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,
+            ..
         } => {
             if discrete_cardinalities.contains(&0) {
                 return Err(EngineError::engine(
@@ -358,6 +359,7 @@ mod tests {
                 Domain::Rectangular {
                     discrete_cardinalities,
                     continuous_dims,
+                    ..
                 } => (
                     discrete_cardinalities
                         .iter()
@@ -476,7 +478,8 @@ mod tests {
                 .and_then(|generated| generated.into_batch())
                 .is_err()
         );
-        s.feedback(&[1.0; 4]).unwrap();
+        s.feedback(&crate::sampling::Feedback::new(([1.0; 4]).to_vec()))
+            .unwrap();
         assert_eq!(s.updates, 0);
         let raw = s.snapshot().unwrap();
         let mut restored = NaiveMonteCarloSamplerAggregator::from_snapshot(
@@ -486,7 +489,9 @@ mod tests {
         )
         .unwrap();
         for runtime in [&mut s, &mut restored] {
-            runtime.feedback(&[1.0; 6]).unwrap();
+            runtime
+                .feedback(&crate::sampling::Feedback::new(([1.0; 6]).to_vec()))
+                .unwrap();
             assert_eq!(runtime.training_samples_remaining(), Some(10));
             assert_eq!(runtime.updates, 1);
         }
@@ -499,10 +504,16 @@ mod tests {
                 .and_then(|generated| generated.into_batch())
                 .unwrap()
         );
-        restored.feedback(&[1.0; 10]).unwrap();
+        restored
+            .feedback(&crate::sampling::Feedback::new(([1.0; 10]).to_vec()))
+            .unwrap();
         assert_eq!(restored.updates, 2);
         assert_eq!(restored.update_stats.calls, 2);
-        assert!(restored.feedback(&[1.0]).is_err());
+        assert!(
+            restored
+                .feedback(&crate::sampling::Feedback::new(([1.0]).to_vec()))
+                .is_err()
+        );
     }
     #[test]
     fn barrier_checkpoint_preserves_elapsed_time_without_serializing_clock() {
@@ -523,7 +534,9 @@ mod tests {
         .unwrap();
         assert_eq!(restored.training_barrier_seconds, saved);
         assert!(restored.barrier_since.is_some());
-        restored.feedback(&[1.0; 10]).unwrap();
+        restored
+            .feedback(&crate::sampling::Feedback::new(([1.0; 10]).to_vec()))
+            .unwrap();
         assert!(restored.barrier_since.is_none());
         assert!(restored.training_barrier_seconds >= saved);
     }

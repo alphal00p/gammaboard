@@ -84,7 +84,7 @@ where
     }
 
     if let Some(source_snapshot) =
-        resolve_task_source_snapshot(store, run_id, task, task.task.sample_accumulator_source())
+        resolve_task_source_snapshot(store, run_id, task, task.task.accumulator_config_source())
             .await?
         && let Some(accumulator) = source_snapshot.observable_state
     {

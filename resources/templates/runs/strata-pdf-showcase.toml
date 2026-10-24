@@ -1,0 +1,47 @@
+# Two signed bumps: inference strata diagnostics plus a shared 2D PDF slice.
+name = "strata-pdf-showcase"
+[evaluator]
+kind = "symbolica"
+args = ["x", "y"]
+[evaluator.source]
+kind = "expression"
+expr = "exp(-60*((x-0.25)^2+(y-0.25)^2))-0.7*exp(-60*((x-0.75)^2+(y-0.75)^2))"
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 100
+[sampler_aggregator_runner_params.queue]
+fixed_batch_size = 2048
+max_generation_size = 8192
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = 131072 }
+accumulator = { config = "scalar" }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = 20261023
+bins = 64
+samples_for_update = 4096
+initial_training_rate = 0.5
+final_training_rate = 0.1
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 } }
+centers = { "0" = [-0.5], "1" = [0.5] }
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+stop_condition = { max_samples = 262144 }
+accumulator = { config = "scalar" }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = 20261024 } }
+[[task_queue]]
+name = "stratum-pdf"
+kind = "pdf_adaptation_image"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0, 0.0]
+u_vector = [1.0, 0.0]
+v_vector = [0.0, 1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = 65 }
+v_linspace = { start = 0.0, stop = 1.0, count = 65 }

@@ -30,7 +30,8 @@ initial_training_rate = 0.5
 final_training_rate = 0.1
 [task_queue.sampler.config.stratification]
 kind = "voronoi"
-centers = [[1.0, 1.0, 1.0], [-1.0, 1.0, -1.0], [-1.0, -1.0, 1.0], [1.0, -1.0, -1.0]]
+domain = { rectangular = { strata_dims = 2, discrete_cardinalities = [2, 2], continuous_dims = 0 } }
+centers = { "0,0" = [1.0, 1.0, 1.0], "0,1" = [-1.0, 1.0, -1.0], "1,0" = [-1.0, -1.0, 1.0], "1,1" = [1.0, -1.0, -1.0] }
 scales = [1.0, 1.0, 1.0]
 
 [[task_queue]]

@@ -310,7 +310,7 @@ pub(crate) async fn submit_batch_results(
         .validate_json_safe()
         .map_err(|err| StoreError::store(format!("invalid batch result payload: {err}")))?;
     let accumulator = encode_json("batch accumulator", &result.accumulator)?;
-    let values = result.training_values_to_bytes().map_err(|err| {
+    let values = result.feedback_to_bytes().map_err(|err| {
         StoreError::store(format!("failed to serialize batch training values: {err}"))
     })?;
     let mut tx = pool.begin().await?;

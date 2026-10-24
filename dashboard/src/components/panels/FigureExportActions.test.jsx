@@ -31,3 +31,20 @@ test("raster images download with an honest PNG extension", () => {
   fireEvent.click(screen.getByRole("button", { name: "PNG" }));
   expect(name).toBe("heatmap.png");
 });
+
+
+test("CSV keeps the chosen estimator and never substitutes basic error for a missing primary error", async () => {
+  const { figureCsv } = await import("./FigureExportActions");
+  const csv = figureCsv({ state: { entries: [{ label: "x,y", value: { kind: "estimate", value: 1.5, error: null, estimator: "stratified", basic: { mean: 1.8, error: .7 }, sample_count: 4 } }] } });
+  expect(csv).toContain("estimator,value,primary_error,strat_err,basic_mean,basic_err,uncertainty_status,samples");
+  expect(csv).toContain('"x,y",,stratified,1.5,,,1.8,0.7,unavailable,4');
+  const zero = figureCsv({ state: { entries: [{ label: "constant", value: { kind: "estimate", value: 0, error: 0, estimator: "pooled", sample_count: 2 } }] } });
+  expect(zero).toContain("constant,,pooled,0,0,,0,0,estimated_from_samples,2");
+});
+
+
+test("history CSV preserves tiny explicit errors even when band endpoints round together", async () => {
+  const { figureCsv } = await import("./FigureExportActions");
+  const csv = figureCsv({ state: { x_axis: "completed_samples", points: [{ x: 32, y: 1e20, error: .5, y_min: 1e20, y_max: 1e20, estimator: "stratified", basic: { mean: 1e20, error: 1 } }] } });
+  expect(csv).toContain("stratified,100000000000000000000,0.5,0.5,100000000000000000000,1,estimated_from_samples,32");
+});

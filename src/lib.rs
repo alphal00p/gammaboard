@@ -72,8 +72,8 @@ pub use evaluation::{
     extract_accumulator_metric_with_runtime,
 };
 pub use sampling::{
-    DiscreteSubspace, Generation, LatentBatch, LatentBatchPayload, PdfPoint, Sampler, SavedSampler,
-    StageHandoff, StageHandoffOwned,
+    DiscreteSubspace, Feedback, Generation, LatentBatch, LatentBatchPayload, PdfPoint, Sampler,
+    SavedSampler, StageHandoff, StageHandoffOwned, StratumAssignments,
 };
 pub use stores::PgStore;
 pub use stores::{
@@ -81,7 +81,7 @@ pub use stores::{
 };
 pub use stores::{get_pg_pool, init_pg_store};
 pub use symbolica_license::activate_symbolica_oem_license;
-pub use utils::domain::{Domain, DomainBranch};
+pub use utils::domain::{DiscreteAxisRole, Domain, DomainBranch};
 pub type BinResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 #[cfg(test)]

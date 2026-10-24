@@ -1,4 +1,7 @@
+export const numberOrNaN = (value) => value == null ? Number.NaN : Number(value);
+
 export const formatScientific = (value, digits = 6, fallback = "n/a") => {
+  if (value == null) return fallback;
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   if (n === 0) return "0e+0";
@@ -6,6 +9,7 @@ export const formatScientific = (value, digits = 6, fallback = "n/a") => {
 };
 
 export const formatCompactNumber = (value, fallback = "n/a") => {
+  if (value == null) return fallback;
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   if (n === 0) return "0";
@@ -27,7 +31,7 @@ export const formatDateTime = (value, fallback = "n/a") => {
 
 export const formatCentralValueWithError = (value, error, fallback = "n/a") => {
   const central = Number(value);
-  if (!Number.isFinite(central)) return fallback;
+  if (value == null || !Number.isFinite(central)) return fallback;
   const uncertainty = Number(error);
   if (!Number.isFinite(uncertainty) || uncertainty <= 0) {
     return formatScientific(central, 6, fallback);
@@ -49,12 +53,19 @@ export const formatCentralValueWithError = (value, error, fallback = "n/a") => {
 };
 
 export const formatF64Full = (value, fallback = "n/a") => {
+  if (value == null) return fallback;
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return numeric.toExponential(16);
 };
 
 export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
+  if (value != null && Number.isFinite(Number(value)) && error == null) {
+    const text = formatScientific(value, 6, fallback);
+    const [mantissa, exponent] = Number(value).toExponential(6).split("e");
+    const latex = Number(exponent) === 0 ? mantissa : `${mantissa}\\times 10^{${Number(exponent)}}`;
+    return { text, latex, relative_percent: null, relative_percent_text: null, latex_with_relative: latex };
+  }
   const central = Number(value);
   const uncertainty = Number(error);
   const relativePercentValue =
@@ -83,11 +94,11 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
   const exponent = scaleSource === 0 ? 0 : Math.max(-323, Math.floor(Math.log10(scaleSource)));
   const scale = 10 ** exponent;
   const scaledValue = central / scale;
-  // Two significant uncertainty digits, referring to the last displayed digits
-  // of the mean. Round before choosing precision to handle carries (9.99 -> 10).
+  // Mean and parenthesized absolute error share the displayed exponent and
+  // decimal scale. Round the uncertainty first to handle carries (9.99 -> 10).
   const [errorMantissa, errorExponent] = uncertainty.toExponential(1).split("e");
   const decimals = uncertainty === 0 ? 6 : Math.max(0, exponent - Number(errorExponent) + 1);
-  const errorText = uncertainty === 0 ? "0" : String(Math.round(Number(errorMantissa) * 10));
+
   // toFixed accepts up to 100 fractional digits. Preserve exceptionally small
   // uncertainties without incorrectly rounding them to zero in the UI.
   if (decimals > 100) {
@@ -95,10 +106,19 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
     const latex = `${central.toExponential(16)}\\;\\left(\\sigma=${uncertainty.toExponential(1)}\\right)`;
     return { text, latex, relative_percent: relativePercentValue, relative_percent_text: relativePercentText, latex_with_relative: appendRelativeToLatex(latex) };
   }
-  const valueText = scaledValue.toFixed(decimals);
-  const latex = `${valueText}(${errorText})\\times 10^{${exponent}}`;
+  let valueText = scaledValue.toFixed(decimals);
+  let errorText = uncertainty === 0 ? "0" : (Number(`${errorMantissa}e${errorExponent}`) / scale).toFixed(decimals);
+  while (valueText.includes(".") && errorText.includes(".") && valueText.endsWith("0") && errorText.endsWith("0")) {
+    valueText = valueText.slice(0, -1);
+    errorText = errorText.slice(0, -1);
+  }
+  valueText = valueText.replace(/\.$/, "");
+  errorText = errorText.replace(/\.$/, "");
+  const suffix = exponent === 0 ? "" : ` × 10^${exponent}`;
+  const latexSuffix = exponent === 0 ? "" : `\\times 10^{${exponent}}`;
+  const latex = `${valueText}(${errorText})${latexSuffix}`;
   return {
-    text: `${valueText}(${errorText}) × 10^${exponent}`,
+    text: `${valueText}(${errorText})${suffix}`,
     latex,
     relative_percent: relativePercentValue,
     relative_percent_text: relativePercentText,

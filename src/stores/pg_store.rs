@@ -965,16 +965,14 @@ impl WorkQueueStore for PgStore {
         .map_err(map_sqlx)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
-            let result = BatchResult::training_values_from_bytes(
-                row.values.as_deref(),
-                &row.batch_observable,
-            )
-            .map_err(|err| {
-                store_err(format!(
-                    "failed to deserialize batch result payload for batch_id={}: {err}",
-                    row.batch_id
-                ))
-            })?;
+            let result =
+                BatchResult::feedback_from_bytes(row.values.as_deref(), &row.batch_observable)
+                    .map_err(|err| {
+                        store_err(format!(
+                            "failed to deserialize batch result payload for batch_id={}: {err}",
+                            row.batch_id
+                        ))
+                    })?;
 
             out.push(CompletedBatch {
                 batch_id: row.batch_id,

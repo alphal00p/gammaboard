@@ -9,6 +9,7 @@ mod observable;
 mod parameter_scan;
 mod pdf_adaptation;
 mod sample;
+mod strata;
 
 use crate::core::{
     AccumulatorConfig, AccumulatorSourceSpec, BatchTransformConfig, EngineError, RunTask,
@@ -245,12 +246,11 @@ impl RunTaskSpec {
                 geometry, display, ..
             } => full_accumulator::image_projectors(geometry.clone(), *display),
             Self::PdfAdaptationImage { geometry, .. } => {
-                pdf_adaptation::projectors(geometry.clone(), crate::core::ImageDisplayMode::Auto)
+                pdf_adaptation::projectors(geometry.clone())
             }
-            Self::PdfAdaptationPlotLine { geometry, .. } => pdf_adaptation::line_projectors(
-                geometry.clone(),
-                crate::core::LineDisplayMode::Auto,
-            ),
+            Self::PdfAdaptationPlotLine { geometry, .. } => {
+                pdf_adaptation::line_projectors(geometry.clone())
+            }
             Self::PlotLine {
                 geometry,
                 display,
@@ -316,11 +316,17 @@ fn build_task_summary_entries(
             ));
         }
         RunTaskSpec::Sample {
+            estimator,
             stop_condition,
             sampler,
             accumulator,
             ..
         } => {
+            entries.push(key_value(
+                "estimator",
+                "Estimator",
+                serde_json::json!(estimator),
+            ));
             entries.push(key_value(
                 "samples",
                 "Samples",
@@ -992,6 +998,7 @@ fn required_downsample_level(point_count: usize) -> u8 {
 
 fn history_point_count(panel: &PanelState) -> Option<usize> {
     match panel {
+        PanelState::Strata { frames, .. } => Some(frames.len()),
         PanelState::ScalarTimeseries { points, .. } => Some(points.len()),
         PanelState::MultiTimeseries { series, .. } => Some(
             series
@@ -1010,6 +1017,15 @@ fn downsample_panel_state(panel: &mut PanelState, level: u8) {
     }
     let stride = 1usize << level;
     match panel {
+        PanelState::Strata { frames, .. } => {
+            let last = frames.last().cloned();
+            *frames = frames.iter().step_by(stride).cloned().collect();
+            if let Some(last) = last
+                && frames.last().is_none_or(|f| f.samples != last.samples)
+            {
+                frames.push(last);
+            }
+        }
         PanelState::ScalarTimeseries { points, .. } => {
             *points = downsample_points(points, stride);
         }
@@ -1162,8 +1178,8 @@ mod tests {
             "total_samples": 100, "selected_child_run_ids": [],
             "allocation_started_total_samples": 100, "children": [],
             "combined_measurement": {"status": "completed", "results": [
-                {"name": "mean", "component": "real", "value": 1.5, "uncertainty": 0.1, "sample_count": 100},
-                {"name": "mean", "component": "imag", "value": -0.5, "uncertainty": 0.2, "sample_count": 100}
+                {"name": "mean","estimator":"pooled","basic":null, "component": "real", "value": 1.5, "uncertainty": 0.1, "sample_count": 100},
+                {"name": "mean","estimator":"pooled","basic":null, "component": "imag", "value": -0.5, "uncertainty": 0.2, "sample_count": 100}
             ]}
         })).unwrap());
         let target =
@@ -1242,6 +1258,7 @@ mod tests {
         let task = run_task(inherited_vector_sample_task());
         let accumulator = AccumulatorState::empty();
         let snapshot = TaskOutputSnapshot {
+            sampler_uptime_ms: None,
             id: "9".to_string(),
             run_id: 1,
             task_id: "1".to_string(),
@@ -1270,6 +1287,7 @@ mod tests {
             created_at: None,
         };
         let persisted = TaskOutputSnapshot {
+            sampler_uptime_ms: None,
             id: "9".to_string(),
             run_id: 1,
             task_id: "1".to_string(),
@@ -1337,13 +1355,13 @@ mod tests {
             created_at: None,
         };
         let persisted = TaskOutputSnapshot {
+            sampler_uptime_ms: None,
             id: "9".to_string(),
             run_id: 1,
             task_id: "1".to_string(),
             persisted_output: serde_json::json!({
                 "processed": 4,
                 "global_abs_integrand_norm": null,
-                "global_pdf_norm": 1.0,
                 "integrand_values": [-1.0, 2.0, -3.0, 4.0],
                 "pdf_values": [1.0, 2.0, 3.0, 4.0],
             }),
@@ -1377,7 +1395,10 @@ mod tests {
                         )
                         .expect("PDF panel response");
                     for descriptor in source.panel_specs() {
-                        if matches!(descriptor.kind, PanelKind::Select) {
+                        if matches!(
+                            descriptor.kind,
+                            PanelKind::Select | PanelKind::PdfComparison
+                        ) {
                             continue;
                         }
                         assert!(
@@ -1389,29 +1410,15 @@ mod tests {
                             descriptor.panel_id
                         );
                     }
-                    if matches!(task, RunTaskSpec::PdfAdaptationImage { .. }) {
-                        let panel = response
-                            .updates
-                            .iter()
-                            .find(|update| update.panel.panel_id() == "pdf_adaptation_log_pdf")
-                            .expect("PDF image");
-                        let PanelState::Image2d {
-                            width,
-                            height,
-                            values,
-                            invalid_indices,
-                            ..
-                        } = &panel.panel
-                        else {
-                            panic!("expected PDF image data");
-                        };
-                        assert_eq!((*width, *height), (2, 2));
-                        assert_eq!(values.len(), 4);
-                        assert!(invalid_indices.is_none());
-                        assert!((f64::from(values[0]) - (1.0_f64 / 2.5).log10()).abs() < 1e-7);
-                        assert!((f64::from(values[3]) - (4.0_f64 / 2.5).log10()).abs() < 1e-7);
-                    }
-                    assert_eq!(response.cursor.as_deref(), Some("9:0"));
+                    let comparison = response
+                        .updates
+                        .iter()
+                        .find(|update| update.panel.panel_id() == "pdf_comparison")
+                        .expect("shared PDF panel");
+                    let PanelState::PdfComparison { data, .. } = &comparison.panel else {
+                        panic!("expected PDF comparison")
+                    };
+                    assert_eq!(data["pdf_values"], serde_json::json!([1.0, 2.0, 3.0, 4.0]));
                 }
             }
         }

@@ -6,7 +6,7 @@ import sys
 import traceback
 from typing import Any
 
-PROTOCOL = "gammaboard-jsonrpc-v8"
+PROTOCOL = "gammaboard-jsonrpc-v9"
 JSON_RPC_VERSION = "2.0"
 
 
@@ -20,7 +20,9 @@ class ProtocolIo:
         install_print_redirect("info")
 
     def send_frame(self, payload: dict[str, Any], binary: bytes = b"") -> None:
-        body = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        body = json.dumps(payload, separators=(",", ":"), allow_nan=False).encode(
+            "utf-8"
+        )
         header = f"Content-Length: {len(body)}\r\n"
         if binary:
             header += f"Binary-Length: {len(binary)}\r\n"
@@ -54,7 +56,9 @@ class ProtocolIo:
         binary = _read_exact(binary_length) if binary_length else b""
         return json.loads(body.decode("utf-8")), binary
 
-    def send_result(self, req_id: Any, result: dict[str, Any], binary: bytes = b"") -> None:
+    def send_result(
+        self, req_id: Any, result: dict[str, Any], binary: bytes = b""
+    ) -> None:
         self.send_frame(
             {"jsonrpc": JSON_RPC_VERSION, "id": req_id, "result": result}, binary
         )
@@ -85,53 +89,10 @@ def _read_exact(length: int) -> bytes:
     return b"".join(chunks)
 
 
-def fixed_domain_shape(domain: dict[str, Any]) -> tuple[list[int], int]:
-    if not isinstance(domain, dict):
-        raise ValueError("domain must be an object")
-    if "rectangular" in domain:
-        rectangular = domain["rectangular"]
-        return (
-            [int(value) for value in rectangular.get("discrete_cardinalities", [])],
-            int(rectangular["continuous_dims"]),
-        )
-    if "discrete" not in domain:
-        raise ValueError(f"unsupported domain shape: {domain!r}")
-    branches = domain["discrete"].get("branches") or []
-    if not branches:
-        raise ValueError("homogeneous Python wrapper requires non-empty discrete branches")
-    tail_cardinalities = None
-    tail_continuous_dims = None
-    for branch in branches:
-        cardinalities, continuous = fixed_domain_shape(branch["domain"])
-        if tail_cardinalities is None:
-            tail_cardinalities = cardinalities
-            tail_continuous_dims = continuous
-        elif cardinalities != tail_cardinalities or continuous != tail_continuous_dims:
-            raise ValueError("homogeneous Python wrapper does not support inhomogeneous domains")
-    return [len(branches), *tail_cardinalities], int(tail_continuous_dims)
-
-
-def require_homogeneous_offsets(
-    params: dict[str, Any], field: str, nr_samples: int, width: int, role: str
-) -> None:
-    raw = params.get(field)
-    if raw is None:
-        return
-    offsets = [int(value) for value in raw]
-    if len(offsets) != nr_samples + 1 or any(
-        offset != index * width for index, offset in enumerate(offsets)
-    ):
-        raise ValueError(
-            f"python {role} wrapper only supports homogeneous batches; "
-            f"{field}={offsets} does not match fixed width {width}"
-        )
-
-
 def instantiate_user_object(
     target: Any,
     *,
-    discrete_cardinalities: list[int],
-    continuous_dims: int,
+    domain,
     init_args: dict[str, Any],
     snapshot: Any = None,
     evaluator_metadata: Any = None,
@@ -139,33 +100,35 @@ def instantiate_user_object(
     if not isinstance(init_args, dict):
         raise TypeError("args must be an object")
     if not isinstance(target, type):
-        raise TypeError("run_evaluator(...) and run_sampler(...) require passing a class, not an instance")
-    if (
-        "discrete_cardinalities" in init_args
-        or "continuous_dims" in init_args
-        or "evaluator_metadata" in init_args
-    ):
         raise TypeError(
-            "process args must not define reserved keys 'discrete_cardinalities', 'continuous_dims', or 'evaluator_metadata'"
+            "run_evaluator(...) and run_sampler(...) require passing a class, not an instance"
         )
-    metadata_kwargs = {} if evaluator_metadata is None else {"evaluator_metadata": evaluator_metadata}
+    if "domain" in init_args or "evaluator_metadata" in init_args:
+        raise TypeError(
+            "process args must not define reserved keys 'domain' or 'evaluator_metadata'"
+        )
+    metadata_kwargs = (
+        {} if evaluator_metadata is None else {"evaluator_metadata": evaluator_metadata}
+    )
     if snapshot is not None:
         from_snapshot = getattr(target, "from_snapshot", None)
         if from_snapshot is None:
-            raise TypeError("class must define from_snapshot(...) when restoring from snapshot")
+            raise TypeError(
+                "class must define from_snapshot(...) when restoring from snapshot"
+            )
         try:
             return from_snapshot(
                 snapshot=snapshot,
-                discrete_cardinalities=discrete_cardinalities,
-                continuous_dims=continuous_dims,
+                domain=domain,
                 init_args=init_args,
                 **metadata_kwargs,
             )
         except NotImplementedError as exc:
-            raise TypeError("class must override from_snapshot(...) when restoring from snapshot") from exc
+            raise TypeError(
+                "class must override from_snapshot(...) when restoring from snapshot"
+            ) from exc
     return target(
-        discrete_cardinalities=discrete_cardinalities,
-        continuous_dims=continuous_dims,
+        domain=domain,
         **metadata_kwargs,
         **init_args,
     )

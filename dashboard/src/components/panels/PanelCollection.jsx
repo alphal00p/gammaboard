@@ -24,6 +24,8 @@ import {
 import FigureExportActions, { escapeXml } from "./FigureExportActions";
 import TablePanel from "./TablePanel";
 import HistogramPanel from "./HistogramPanel";
+import StrataPanel from "./StrataPanel";
+import PdfComparisonPanel from "./PdfComparisonPanel";
 import {
   buildHistogramData,
   fitDomain,
@@ -38,11 +40,8 @@ import {
   HISTORY_X_AXIS_MODE_WALL_TIME,
   buildDataZoom,
   extractSharedHistoryView,
-  extractSharedImageZoom,
-  isObject,
   isSharedHistoryTimeseriesPanelSpec,
   mergeSharedHistoryView,
-  mergeSharedImageZoom,
   normalizeZoomRange,
   readDataZoomRanges,
   readHistoryXAxisModeFromPanelValue,
@@ -178,7 +177,7 @@ const formatTimeseriesXAxisValue = (value, mode, isTimestamp, originMs) => {
   if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) return formatAxisValue(numeric);
   return isTimestamp ? formatElapsedTime(numeric - originMs) : formatAxisValue(numeric);
 };
-const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs) => (params) => {
+const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs, sources = []) => (params) => {
   const seen = new Set();
   const entries = asArray(params).filter((entry) => {
     // ECharts axis tooltips can include silent custom series (range/error bars).
@@ -200,9 +199,23 @@ const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs) => (params
           : escapeXml(formatAxisValue(axisValue));
   const lines = entries.map((entry) => {
     const rawValue = Array.isArray(entry?.value) ? entry.value[1] : entry?.value;
-    return `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${rawValue != null && Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
+    const label = `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${rawValue != null && Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
+    const source = sources.find((item) => item.label === entry.seriesName);
+    const point = asArray(source?.points).findLast((p) => Number(p.x) === axisValue);
+    if (!point?.estimator) return label;
+    const error = point.error;
+    const basic = point.basic ? `<br/>basic mean: ${formatScientific(point.basic.mean)}; basic error: ${formatScientific(point.basic.error)}` : "";
+    return `${label}<br/>estimator: ${escapeXml(point.estimator)}; error: ${formatScientific(error)}${basic}`;
   });
   return [header, ...lines].join("<br/>");
+};
+const estimatorCaption = (points) => {
+  const estimators = [...new Set(asArray(points).map((point) => point.estimator).filter(Boolean))];
+  return estimators.length === 1 ? estimators[0] : estimators.length ? "mixed estimators" : null;
+};
+const estimateSeriesLabel = (label, points) => {
+  const estimator = estimatorCaption(points);
+  return estimator ? `${label} (${estimator})` : label;
 };
 const buildMultiSeriesData = (seriesList) => {
   const rows = new Map();
@@ -278,23 +291,6 @@ const panelColumnSpan = (descriptor) => {
   }
 };
 
-const extractSharedPdfImageView = (value) => {
-  if (!isObject(value)) return null;
-  const shared = {};
-  const zoom = extractSharedImageZoom(value);
-  if (zoom?.zoom) shared.zoom = zoom.zoom;
-  if (zoom?.yZoom) shared.yZoom = zoom.yZoom;
-  return Object.keys(shared).length > 0 ? shared : null;
-};
-const mergeSharedPdfImageView = (current, sharedView) => {
-  return mergeSharedImageZoom(current, sharedView);
-};
-
-const isPdfAdaptationImagePanelSpec = (spec) =>
-  spec?.kind === "image2d" &&
-  typeof spec?.panel_id === "string" &&
-  spec.panel_id.startsWith("pdf_adaptation_");
-
 const buildErrorBarData = (points) =>
   asArray(points)
     .map((point) => {
@@ -317,6 +313,9 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const nativeAxis = state?.x_axis || "numeric";
   const historyXAxisMode = resolveTimeseriesXAxisMode(value, nativeAxis, asArray(state?.points));
   const points = remapAndSortTimeseriesPoints(state?.points, historyXAxisMode, nativeAxis);
+  const estimatorLabel = estimatorCaption(points);
+  const meanLabel = estimatorLabel ? `${title} (${estimatorLabel})` : title;
+  const errorLabel = estimatorLabel ? `uncertainty (${estimatorLabel})` : "uncertainty";
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
   const targetValue = Number(state?.target);
   const hasTargetLine = state?.target != null && Number.isFinite(targetValue);
@@ -373,7 +372,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
     return segments;
   }, [points]);
   const hasUncertaintyBand = isHistoryPanel && bandSegments.length > 0;
-  const showLegend = hasUncertaintyBand || errorBarData.length > 0 || hasTargetLine;
+  const showLegend = hasUncertaintyBand || errorBarData.length > 0 || hasTargetLine || estimatorLabel != null;
   useEffect(() => {
     if (!isHistoryPanel || !tailPinned || typeof onValueChange !== "function" || !panelId) return;
     const normalized = normalizeZoomRange(zoomRange) || FULL_ZOOM;
@@ -437,14 +436,14 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       },
       tooltip: {
         trigger: "axis",
-        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
+        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs, [{ label: meanLabel, points }]),
       },
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
         ...(hasUncertaintyBand
           ? [
               {
-                name: "uncertainty",
+                name: errorLabel,
                 type: "custom",
                 data: bandSegments,
                 clip: true,
@@ -474,11 +473,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
               },
             ]
           : errorBarData.length > 0
-            ? [buildErrorBarSeries({ name: "uncertainty", data: errorBarData })]
+            ? [buildErrorBarSeries({ name: errorLabel, data: errorBarData })]
             : []),
         {
           type: "line",
-          name: title || "Value",
+          name: meanLabel || "Value",
           data: meanData,
           smooth: Boolean(state?.smooth),
           showSymbol: false,
@@ -511,6 +510,8 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       meanData,
       hasTargetLine,
       showLegend,
+      meanLabel,
+      errorLabel,
       state?.smooth,
       targetValue,
       title,
@@ -575,6 +576,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   );
   const series = asArray(state?.series).map((item) => ({
     ...item,
+    label: estimateSeriesLabel(item.label, item.points),
     points: remapAndSortTimeseriesPoints(item?.points, historyXAxisMode, nativeAxis),
   }));
   const data = buildMultiSeriesData(series);
@@ -646,7 +648,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
       },
       tooltip: {
         trigger: "axis",
-        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
+        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs, series),
       },
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: series.flatMap((item, index) => {
@@ -1497,6 +1499,10 @@ const PanelRenderer = ({
 }) => {
   if (!descriptor) return null;
   switch (descriptor.kind) {
+    case "strata":
+      return state ? <StrataPanel title={descriptor.label} state={state} value={value} onValueChange={onValueChange}/> : null;
+    case "pdf_comparison":
+      return state ? <PdfComparisonPanel title={descriptor.label} state={state} value={value} onValueChange={onValueChange}/> : null;
     case "select":
       return (
         <SelectPanel title={descriptor.label} descriptor={descriptor} value={value} onValueChange={onValueChange} />
@@ -1608,37 +1614,9 @@ const PanelCollection = ({
     [panelSpecs],
   );
   const sharedHistoryPanelIdSet = useMemo(() => new Set(sharedHistoryPanelIds), [sharedHistoryPanelIds]);
-  const sharedPdfImagePanelIds = useMemo(
-    () =>
-      asArray(panelSpecs)
-        .filter((spec) => isPdfAdaptationImagePanelSpec(spec))
-        .map((spec) => spec?.panel_id)
-        .filter((id) => typeof id === "string"),
-    [panelSpecs],
-  );
-  const sharedPdfImagePanelIdSet = useMemo(() => new Set(sharedPdfImagePanelIds), [sharedPdfImagePanelIds]);
   const handlePanelValueChange = useCallback(
     (panelId, nextValue, shouldTriggerPoll = true) => {
       if (typeof onPanelValueChange !== "function") return;
-      if (sharedPdfImagePanelIdSet.has(panelId)) {
-        const sharedImageView = extractSharedPdfImageView(nextValue);
-        if (!sharedImageView) {
-          onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
-          return;
-        }
-        const targetIds = sharedPdfImagePanelIds;
-        if (targetIds.length <= 1) {
-          onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
-          return;
-        }
-        targetIds.forEach((targetId, index) => {
-          const sourceValue = targetId === panelId ? nextValue : panelValues?.[targetId];
-          const mergedValue = mergeSharedPdfImageView(sourceValue, sharedImageView);
-          const trigger = shouldTriggerPoll && index === targetIds.length - 1;
-          onPanelValueChange(targetId, mergedValue, trigger);
-        });
-        return;
-      }
       if (!sharedHistoryPanelIdSet.has(panelId)) {
         onPanelValueChange(panelId, nextValue, shouldTriggerPoll);
         return;
@@ -1660,7 +1638,7 @@ const PanelCollection = ({
         onPanelValueChange(targetId, mergedValue, trigger);
       });
     },
-    [onPanelValueChange, panelValues, sharedHistoryPanelIdSet, sharedHistoryPanelIds, sharedPdfImagePanelIdSet, sharedPdfImagePanelIds],
+    [onPanelValueChange, panelValues, sharedHistoryPanelIdSet, sharedHistoryPanelIds],
   );
 
   return (

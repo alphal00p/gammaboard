@@ -177,7 +177,9 @@ pub fn measure(options: Config) -> Result<Value> {
                 },
                 repetitions,
             )?;
-            let values: Vec<_> = batch.points().iter().map(|p| p.continuous[0]).collect();
+            let values = crate::sampling::Feedback::new(
+                batch.points().iter().map(|p| p.continuous[0]).collect(),
+            );
             let ingest = if feedback {
                 time_calls(
                     || {

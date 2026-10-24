@@ -5,7 +5,7 @@ import itertools
 import math
 from typing import Any
 
-from gammaboard_process import GenerationStatus, SampleBatch, Sampler
+from gammaboard_process import Domain, Feedback, GenerationStatus, SampleBatch, Sampler
 from symbolica import NumericalIntegrator, Probe, Sample
 
 
@@ -62,8 +62,7 @@ class SymbolicaHavanaSampler(Sampler):
     def __init__(
         self,
         *,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
+        domain: Domain,
         seed: int = 0,
         bins: int = 64,
         samples_for_update: int = 10_240,
@@ -76,6 +75,7 @@ class SymbolicaHavanaSampler(Sampler):
         integrator: NumericalIntegrator | None = None,
         evaluator_metadata: dict[str, object] | None = None,
     ) -> None:
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         self.discrete_cardinalities = [int(value) for value in discrete_cardinalities]
         self.continuous_dims = int(continuous_dims)
         self.evaluator_metadata = evaluator_metadata or {}
@@ -130,8 +130,7 @@ class SymbolicaHavanaSampler(Sampler):
         cls,
         *,
         snapshot: dict[str, Any],
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
+        domain: Domain,
         init_args: dict[str, Any],
         evaluator_metadata: dict[str, object] | None = None,
     ) -> "SymbolicaHavanaSampler":
@@ -141,12 +140,13 @@ class SymbolicaHavanaSampler(Sampler):
             raise ValueError("snapshot missing grid_b64")
 
         sampler = cls(
-            discrete_cardinalities=discrete_cardinalities,
-            continuous_dims=continuous_dims,
+            domain=domain,
             seed=int(snapshot.get("seed", args.get("seed", 0))),
             bins=int(snapshot.get("bins", args.get("bins", 64))),
             samples_for_update=int(
-                snapshot.get("samples_for_update", args.get("samples_for_update", 10_240))
+                snapshot.get(
+                    "samples_for_update", args.get("samples_for_update", 10_240)
+                )
             ),
             stop_training_after_n_samples=int(
                 snapshot.get(
@@ -155,10 +155,14 @@ class SymbolicaHavanaSampler(Sampler):
                 )
             ),
             initial_training_rate=float(
-                snapshot.get("initial_training_rate", args.get("initial_training_rate", 0.1))
+                snapshot.get(
+                    "initial_training_rate", args.get("initial_training_rate", 0.1)
+                )
             ),
             final_training_rate=float(
-                snapshot.get("final_training_rate", args.get("final_training_rate", 0.1))
+                snapshot.get(
+                    "final_training_rate", args.get("final_training_rate", 0.1)
+                )
             ),
             inference=bool(args.get("inference", False)),
             grid_path=args.get("grid_path"),
@@ -176,7 +180,9 @@ class SymbolicaHavanaSampler(Sampler):
                 raise ValueError("snapshot is missing pending training draws")
             for index, size in enumerate(sizes, start=sampler.batches_ingested):
                 rng = NumericalIntegrator.rng(sampler.seed, index)
-                sampler.pending_samples.append(list(sampler.integrator.sample(size, rng)))
+                sampler.pending_samples.append(
+                    list(sampler.integrator.sample(size, rng))
+                )
         return sampler
 
     def pending_training_sample_count(self) -> int:
@@ -197,20 +203,24 @@ class SymbolicaHavanaSampler(Sampler):
         current_window_end = (
             (self.samples_ingested // self.samples_for_update) + 1
         ) * self.samples_for_update
-        inflight_or_ingested = self.samples_ingested + self.pending_training_sample_count()
+        inflight_or_ingested = (
+            self.samples_ingested + self.pending_training_sample_count()
+        )
         return min(remaining, max(0, current_window_end - inflight_or_ingested))
 
     def current_training_rate(self) -> float:
-        progress = min(self.samples_ingested, self.stop_training_after_n_samples) / float(
-            self.stop_training_after_n_samples
-        )
+        progress = min(
+            self.samples_ingested, self.stop_training_after_n_samples
+        ) / float(self.stop_training_after_n_samples)
         if self.initial_training_rate <= 0.0 or self.final_training_rate <= 0.0:
-            return self.initial_training_rate + (
-                self.final_training_rate - self.initial_training_rate
-            ) * progress
-        return self.initial_training_rate * (
-            self.final_training_rate / self.initial_training_rate
-        ) ** progress
+            return (
+                self.initial_training_rate
+                + (self.final_training_rate - self.initial_training_rate) * progress
+            )
+        return (
+            self.initial_training_rate
+            * (self.final_training_rate / self.initial_training_rate) ** progress
+        )
 
     def generate(self, max_samples: int) -> SampleBatch | GenerationStatus:
         if not self.inference and self.remaining_training_samples_to_produce() == 0:
@@ -233,7 +243,8 @@ class SymbolicaHavanaSampler(Sampler):
             training_remaining=remaining,
         )
 
-    def feedback(self, training_values: Any) -> None:
+    def feedback(self, feedback: Feedback) -> None:
+        training_values = feedback.values
         if self.inference:
             return
         if not self.pending_samples:
@@ -242,14 +253,19 @@ class SymbolicaHavanaSampler(Sampler):
         samples = self.pending_samples[0]
         values = [float(value) for value in training_values]
         if len(values) != len(samples):
-            raise ValueError("training value count does not match the pending sample count")
+            raise ValueError(
+                "training value count does not match the pending sample count"
+            )
 
         self.pending_samples.pop(0)
         before = self.samples_ingested
-        train_len = min(self.stop_training_after_n_samples - self.samples_ingested, len(values))
+        train_len = min(
+            self.stop_training_after_n_samples - self.samples_ingested, len(values)
+        )
         if train_len > 0:
             raw_values = [
-                values[index] / sample_weight(samples[index]) for index in range(train_len)
+                values[index] / sample_weight(samples[index])
+                for index in range(train_len)
             ]
             self.integrator.add_training_samples(samples[:train_len], raw_values)
 
@@ -258,9 +274,13 @@ class SymbolicaHavanaSampler(Sampler):
 
         previous_window = before // self.samples_for_update
         current_window = self.samples_ingested // self.samples_for_update
-        final_partial_window = (self.samples_ingested == self.stop_training_after_n_samples
-                                and self.samples_ingested % self.samples_for_update != 0)
-        for _ in range(max(0, current_window - previous_window) + int(final_partial_window)):
+        final_partial_window = (
+            self.samples_ingested == self.stop_training_after_n_samples
+            and self.samples_ingested % self.samples_for_update != 0
+        )
+        for _ in range(
+            max(0, current_window - previous_window) + int(final_partial_window)
+        ):
             rate = self.current_training_rate()
             self.integrator.update(rate, rate)
 
@@ -283,7 +303,9 @@ class SymbolicaHavanaSampler(Sampler):
             ):
                 values.append(0.0)
                 continue
-            if any(not math.isfinite(value) or value < 0.0 or value > 1.0 for value in c):
+            if any(
+                not math.isfinite(value) or value < 0.0 or value > 1.0 for value in c
+            ):
                 values.append(0.0)
                 continue
 
@@ -291,11 +313,13 @@ class SymbolicaHavanaSampler(Sampler):
             values.append(pdf_from_probe_weight(self.integrator.probe(probe)))
         return values
 
-    def discrete_pdf(self, subspaces: list[dict[str, Any]]) -> list[float]:
+    def discrete_mass(self, subspaces: list[dict[str, Any]]) -> list[float]:
         values: list[float] = []
         for subspace in subspaces:
             fixed_dims = parse_fixed_dims(subspace)
-            if any(dim < 0 or dim >= len(self.discrete_cardinalities) for dim in fixed_dims):
+            if any(
+                dim < 0 or dim >= len(self.discrete_cardinalities) for dim in fixed_dims
+            ):
                 values.append(0.0)
                 continue
             if any(
@@ -316,7 +340,9 @@ class SymbolicaHavanaSampler(Sampler):
                 for dim in range(len(self.discrete_cardinalities))
             ]
             for path in itertools.product(*ranges):
-                total += pdf_from_probe_weight(self.integrator.probe(Probe.discrete(list(path))))
+                total += pdf_from_probe_weight(
+                    self.integrator.probe(Probe.discrete(list(path)))
+                )
             values.append(total)
         return values
 

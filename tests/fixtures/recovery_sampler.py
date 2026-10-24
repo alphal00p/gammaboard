@@ -3,6 +3,7 @@
 Every point has an identifiable dyadic value and a non-unit importance weight.
 Feedback must match the oldest draw exactly. No benchmark or production switches.
 """
+
 from collections import deque
 from pathlib import Path
 import sys
@@ -14,8 +15,8 @@ from gammaboard_process import GenerationStatus, SampleBatch, run_sampler
 
 
 class RecoverySampler:
-    def __init__(self, *, continuous_dims, discrete_cardinalities,
-                 training=False, window=73, offset=0, **kwargs):
+    def __init__(self, *, domain, training=False, window=73, offset=0, **kwargs):
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         assert continuous_dims == 1 and not discrete_cardinalities
         self.training = training
         self.window = window
@@ -26,7 +27,11 @@ class RecoverySampler:
         self.feedback_calls = 0
 
     def generate(self, max_samples):
-        if self.training and self.produced % self.window == 0 and self.accepted < self.produced:
+        if (
+            self.training
+            and self.produced % self.window == 0
+            and self.accepted < self.produced
+        ):
             return GenerationStatus.WAITING
         remaining = self.window - self.produced % self.window
         size = min(max_samples, remaining) if self.training else max_samples
@@ -35,23 +40,33 @@ class RecoverySampler:
         if self.training:
             self.pending.append((start, size))
         x = (self.offset + np.arange(start, start + size) + 1) / 65536.0
-        return SampleBatch(np.empty((size, 0), dtype=np.int64), x[:, None],
-                           np.full(size, 2.0),
-                           training_remaining=remaining if self.training else None)
+        return SampleBatch(
+            np.empty((size, 0), dtype=np.int64),
+            x[:, None],
+            np.full(size, 2.0),
+            training_remaining=remaining if self.training else None,
+        )
 
-    def feedback(self, values):
+    def feedback(self, feedback):
+        values = feedback.values
         assert self.training and self.pending, "unsolicited/duplicate feedback"
         start, size = self.pending[0]
         expected = (self.offset + np.arange(start, start + size) + 1) / 32768.0
         assert start == self.accepted, "feedback order changed"
-        assert np.array_equal(values, expected), "feedback values/weights/draw boundaries changed"
+        assert np.array_equal(values, expected), (
+            "feedback values/weights/draw boundaries changed"
+        )
         self.pending.popleft()
         self.accepted += size
         self.feedback_calls += 1
 
     def snapshot(self):
-        return dict(produced=self.produced, accepted=self.accepted,
-                    pending=list(self.pending), feedback_calls=self.feedback_calls)
+        return dict(
+            produced=self.produced,
+            accepted=self.accepted,
+            pending=list(self.pending),
+            feedback_calls=self.feedback_calls,
+        )
 
     @classmethod
     def from_snapshot(cls, *, snapshot, init_args, **kwargs):

@@ -29,15 +29,15 @@ const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2
 const isEstimateValue = (value) =>
   isObject(value) &&
   value.kind === "estimate" &&
-  Number.isFinite(Number(value.value)) &&
-  Number.isFinite(Number(value.error));
+  (value.value == null || Number.isFinite(Number(value.value))) &&
+  (value.error == null || (Number.isFinite(Number(value.error)) && Number(value.error) >= 0));
 
 const isTargetComparisonValue = (value) =>
   isObject(value) &&
   value.kind === "target_comparison" &&
   Number.isFinite(Number(value.value)) &&
-  Number.isFinite(Number(value.error)) &&
-  Number.isFinite(Number(value.target));
+  (value.error == null || Number.isFinite(Number(value.error))) &&
+  value.target != null && Number.isFinite(Number(value.target));
 
 export const renderStructuredValue = (value) => {
   if (value == null) return "none";
@@ -95,12 +95,15 @@ const withDynamicTimeUnitEntry = (entry) => {
 
 const domainSummaryText = (value) => {
   if (!isObject(value)) return "Expand";
-  const kind = typeof value.kind === "string" ? value.kind : "domain";
-  if (kind === "continuous" && Number.isFinite(Number(value.dimension))) {
-    return `continuous (${Number(value.dimension)}D)`;
+  if (value.rectangular) {
+    const { strata_dims = 0, discrete_cardinalities = [], continuous_dims } = value.rectangular;
+    return `Strata [${discrete_cardinalities.slice(0, strata_dims).join(", ")}]; integrand discrete [${discrete_cardinalities.slice(strata_dims).join(", ")}], continuous ${continuous_dims}D`;
   }
-  if (kind === "discrete") return `discrete (${asArray(value.branches).length} branches)`;
-  return kind;
+  if (value.discrete) {
+    const { axis_role = "integrand", branches = [] } = value.discrete;
+    return `${axis_role === "stratum" ? "Stratum" : "Integrand"} branch: ${branches.map((b) => b.index).join(", ")}`;
+  }
+  return "Domain";
 };
 
 const formatDebugJson = (value) => {
@@ -156,9 +159,10 @@ export const ProgressPanel = ({ title, state }) => {
 export const KeyValuePanel = ({ title, state }) => (
   <Card variant="outlined">
     <CardContent>
-      <Typography variant="subtitle1" sx={{ mb: 2 }}>
-        {title}
-      </Typography>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
+        <Typography variant="subtitle1">{title}</Typography>
+        {asArray(state?.entries).some((entry) => entry.value?.kind === "estimate") && <FigureExportActions baseName={state?.panel_id || title} payload={{ kind: "key_value", state }} imageFormat={null} />}
+      </Box>
       <Box
         sx={{
           display: "grid",
@@ -238,33 +242,45 @@ export const KeyValuePanel = ({ title, state }) => (
   </Card>
 );
 
-const EstimateValueBlock = ({ value }) => {
-  const central = Number(value?.value);
-  const error = Number(value?.error);
-  const estimate = formatEstimateDisplay(central, error, "n/a");
+export const EstimateValueBlock = ({ value }) => {
+  const central = value?.value == null ? null : Number(value.value);
+  const error = value?.error == null ? null : Number(value.error);
+  const estimator = value?.estimator || "pooled";
+  const estimate = formatEstimateDisplay(central, error, "unavailable");
+  const details = [`estimator = ${estimator}`, `mean = ${formatF64Full(central, "unavailable")}`];
+  if (estimator === "stratified") {
+    details.push(`strat_err = ${formatF64Full(error, "unavailable: insufficient stratum coverage")}`);
+    details.push(`basic_mean = ${formatF64Full(value?.basic?.mean, "unavailable")}`);
+    details.push(`basic_err = ${formatF64Full(value?.basic?.error, "unavailable")}`);
+  } else if (estimator === "pooled") {
+    details.push(`basic_err = ${formatF64Full(error, "unavailable: fewer than two samples")}`);
+    details.push("strat_err = not used");
+  } else {
+    details.push(`error = ${formatF64Full(error, "unavailable")}`);
+    if (value?.basic) details.push(`basic_mean = ${formatF64Full(value.basic.mean)}`, `basic_err = ${formatF64Full(value.basic.error, "unavailable")}`);
+  }
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Box sx={{ fontSize: "1.05rem", fontWeight: 700, lineHeight: 1.35, whiteSpace: "nowrap", overflowX: "auto", pb: 0.25 }}>
-        <LatexFormula latex={estimate.latex_with_relative || estimate.latex} display={false} fallbackPrefix="Estimate" />
+      <Box title="Mean and parenthesized absolute error use the same displayed scale." sx={{ fontSize: "1.05rem", fontWeight: 700, lineHeight: 1.35, whiteSpace: "nowrap", overflowX: "auto", pb: 0.25 }}>
+        {central == null ? "Mean unavailable" : <LatexFormula latex={estimate.latex_with_relative || estimate.latex} display={false} fallbackPrefix="Estimate" />}
       </Box>
+      <Typography variant="caption" color="text.secondary">{`${estimator} estimate${error == null ? "; error unavailable" : ""}`}</Typography>
       <Box component="details" sx={{ mt: 0.5 }}>
-        <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
-          Full precision (f64)
-        </Box>
-        <Typography variant="caption" sx={{ mt: 0.5, display: "block", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace", whiteSpace: "pre-wrap" }}>
-          {`value = ${formatF64Full(central, "n/a")}\nerror = ${formatF64Full(error, "n/a")}`}
-        </Typography>
+        <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>Estimates and full precision (f64)</Box>
+        <Typography variant="caption" sx={{ mt: 0.5, display: "block", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>{details.join("\n")}</Typography>
+        {value?.basic && <Typography variant="caption" color="text.secondary">Basic statistics pool the same masked, weighted samples. Basic error belongs to basic_mean.</Typography>}
       </Box>
     </Box>
   );
 };
 
 const TargetComparisonValueBlock = ({ value }) => {
+  const estimator = value?.estimator || "pooled";
   const central = Number(value?.value);
-  const error = Number(value?.error);
+  const error = value?.error == null ? null : Number(value.error);
   const target = Number(value?.target);
-  const deltaPercent = Number(value?.delta_percent);
-  const deltaSigma = Number(value?.delta_sigma);
+  const deltaPercent = value?.delta_percent == null ? NaN : Number(value.delta_percent);
+  const deltaSigma = value?.delta_sigma == null ? NaN : Number(value.delta_sigma);
   const targetText = formatScientific(target, 4, "n/a");
   const deltaPercentText = Number.isFinite(deltaPercent) ? formatScientific(deltaPercent, 4, "n/a") : "n/a";
   const deltaSigmaText = Number.isFinite(deltaSigma) ? formatScientific(deltaSigma, 4, "n/a") : "n/a";
@@ -281,7 +297,7 @@ const TargetComparisonValueBlock = ({ value }) => {
           Full precision (f64)
         </Box>
         <Typography variant="caption" sx={{ mt: 0.5, display: "block", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace", whiteSpace: "pre-wrap" }}>
-          {`value = ${formatF64Full(central, "n/a")}\nerror = ${formatF64Full(error, "n/a")}\ntarget = ${formatF64Full(target, "n/a")}\ndelta_percent = ${formatF64Full(deltaPercent, "n/a")}\ndelta_sigma = ${formatF64Full(deltaSigma, "n/a")}`}
+          {`estimator = ${estimator}\nvalue = ${formatF64Full(central, "n/a")}\nerror = ${formatF64Full(error, "n/a")}\ntarget = ${formatF64Full(target, "n/a")}\ndelta_percent = ${formatF64Full(deltaPercent, "n/a")}\ndelta_sigma = ${formatF64Full(deltaSigma, "n/a")}`}
         </Typography>
       </Box>
     </Box>

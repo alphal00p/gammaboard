@@ -96,7 +96,7 @@ jobs:
         run: |
           python -m venv /tmp/gammaboard-process-wheel
           /tmp/gammaboard-process-wheel/bin/pip install process_api/python/dist/*.whl
-          /tmp/gammaboard-process-wheel/bin/python -c 'from gammaboard_process import Batch, GenerationStatus, GammaLoopEvaluator; from gammaboard_process.protocol import PROTOCOL; assert PROTOCOL == "gammaboard-jsonrpc-v7"'
+          /tmp/gammaboard-process-wheel/bin/python -c 'from gammaboard_process import Batch, Domain, Feedback, GenerationStatus, GammaLoopEvaluator; from gammaboard_process.protocol import PROTOCOL; assert PROTOCOL == "gammaboard-jsonrpc-v9"'
       - run: python -m pip install process_api/python/dist/*.whl
       - run: python -m pip install --find-links process_api/python/dist integrations/madgraph
       - run: python -m pip check

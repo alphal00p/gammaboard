@@ -87,6 +87,8 @@ pub struct TaskOutputSnapshot {
     pub task_id: String,
     pub persisted_output: serde_json::Value,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Latest preceding sampler report for this task; not interpolated.
+    pub sampler_uptime_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -19,7 +19,7 @@ impl DiscreteProjectionBinState {
         self.state.mean()
     }
 
-    pub fn stderr(&self) -> f64 {
+    pub fn stderr(&self) -> Option<f64> {
         self.state.stderr()
     }
 
@@ -31,14 +31,14 @@ impl DiscreteProjectionBinState {
         }
     }
 
-    pub fn contribution_stderr(&self, total_count: i64) -> f64 {
-        if total_count <= 0 {
-            return 0.0;
+    pub fn contribution_stderr(&self, total_count: i64) -> Option<f64> {
+        if total_count < 2 {
+            return None;
         }
         let total_count_f = total_count as f64;
         let mean = self.state.sum_weighted_value / total_count_f;
         let variance = (self.state.sum_sq / total_count_f - mean * mean).max(0.0);
-        (variance / total_count_f).sqrt()
+        Some((variance / (total_count_f - 1.0)).sqrt())
     }
 }
 
@@ -57,6 +57,7 @@ pub fn upsert_scalar_discrete_bin(
     value: f64,
     point: &Point,
     evaluation: Option<&crate::evaluation::batch::SampleEvaluation>,
+    stratum: Option<crate::evaluation::batch::StratumPair<'_>>,
 ) -> Result<(), crate::core::EngineError> {
     let key = discrete_bin_key(discrete);
     if !bins.contains_key(&key) && bins.len() >= DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS {
@@ -69,5 +70,7 @@ pub fn upsert_scalar_discrete_bin(
             discrete: discrete.to_vec(),
             state: ScalarAccumulatorState::plain(),
         });
-    entry.state.add_plain_sample(value, point, evaluation)
+    entry
+        .state
+        .add_plain_sample(value, point, evaluation, stratum)
 }

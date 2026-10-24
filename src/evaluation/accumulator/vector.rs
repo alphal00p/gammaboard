@@ -14,6 +14,7 @@ pub struct NamedScalarAccumulator {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct VectorAccumulatorState {
     pub components: Vec<NamedScalarAccumulator>,
+    pub partition: Option<super::PartitionDiagnostics>,
     projection: ProjectionState,
 }
 
@@ -31,11 +32,13 @@ impl<'de> Deserialize<'de> for VectorAccumulatorState {
         #[serde(deny_unknown_fields)]
         struct State {
             components: Vec<NamedScalarAccumulator>,
+            partition: Option<super::PartitionDiagnostics>,
             projection: ProjectionState,
         }
         let state = State::deserialize(deserializer)?;
         let state = Self {
             components: state.components,
+            partition: state.partition,
             projection: state.projection,
         };
         state.validate().map_err(serde::de::Error::custom)?;
@@ -59,6 +62,7 @@ impl VectorAccumulatorState {
             .collect();
         Self {
             components,
+            partition: None,
             projection: match projection_spec {
                 TrainingProjection::Component { name } => ProjectionState::Component { name },
                 TrainingProjection::Norm => ProjectionState::Norm {
@@ -72,7 +76,7 @@ impl VectorAccumulatorState {
     }
 
     pub fn ingest_vector(&mut self, values: &[f64], point: &Point) -> Result<f64, EngineError> {
-        self.ingest_vector_with_details(values, point, None)
+        self.ingest_vector_with_details(values, point, None, None)
     }
 
     pub(crate) fn ingest_vector_with_details(
@@ -80,12 +84,13 @@ impl VectorAccumulatorState {
         values: &[f64],
         point: &Point,
         evaluation: Option<&crate::evaluation::batch::SampleEvaluation>,
+        stratum: Option<crate::evaluation::batch::StratumPair<'_>>,
     ) -> Result<f64, EngineError> {
         let projected = self.project(values)?;
         for (component, value) in self.components.iter_mut().zip(values.iter()) {
             component
                 .state
-                .add_sample_with_details(*value, point, evaluation)
+                .add_sample_with_details(*value, point, evaluation, stratum)
                 .map_err(|err| {
                     EngineError::eval(format!("component {:?}: {err}", component.name))
                 })?;
@@ -93,7 +98,7 @@ impl VectorAccumulatorState {
         if let ProjectionState::Norm { state } = &mut self.projection {
             state
                 .state
-                .add_sample_with_details(projected, point, evaluation)
+                .add_sample_with_details(projected, point, evaluation, stratum)
                 .map_err(|err| EngineError::eval(format!("training projection: {err}")))?;
         }
         Ok(projected)
@@ -152,7 +157,6 @@ impl VectorAccumulatorState {
             )))
     }
 
-    #[cfg(all(test, feature = "gammaloop"))]
     pub(crate) fn projection_mut(&mut self) -> &mut NamedScalarAccumulator {
         match &mut self.projection {
             ProjectionState::Component { name } => self
@@ -165,6 +169,9 @@ impl VectorAccumulatorState {
     }
 
     pub(crate) fn validate(&self) -> Result<(), EngineError> {
+        if let Some(p) = &self.partition {
+            p.validate(self.projection().state.count)?;
+        }
         let config = crate::AccumulatorConfig::vector(
             self.components.iter().map(|c| c.name.clone()).collect(),
             self.projection_spec(),
@@ -183,6 +190,15 @@ impl VectorAccumulatorState {
     }
 
     pub(crate) fn validate_merge(&self, other: &Self) -> Result<(), crate::core::EngineError> {
+        if self.sample_count() > 0
+            && other.sample_count() > 0
+            && self.partition.as_ref().map(|p| &p.partition)
+                != other.partition.as_ref().map(|p| &p.partition)
+        {
+            return Err(EngineError::eval(
+                "cannot mix different sampling partitions; start a fresh accumulator",
+            ));
+        }
         self.validate()?;
         other.validate()?;
         if self.components.len() != other.components.len()
@@ -244,6 +260,13 @@ impl Accumulator for VectorAccumulatorState {
 
     fn merge(&mut self, other: Self) -> Result<(), crate::core::EngineError> {
         self.validate_merge(&other)?;
+        if let Some(other) = other.partition {
+            if let Some(left) = &mut self.partition {
+                left.merge(other)?;
+            } else {
+                self.partition = Some(other);
+            }
+        }
         for (left, right) in self.components.iter_mut().zip(other.components) {
             Accumulator::merge(&mut left.state, right.state)?;
         }

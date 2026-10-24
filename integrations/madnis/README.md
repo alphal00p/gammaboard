@@ -84,8 +84,9 @@ python -u -m run_sampler
 
 ## Training feedback
 
-GammaBoard delivers weighted feedback (`f/q`) in chunks that can differ from the
-generation batches. The adapter waits for every sample in a minibatch, removes
+GammaBoard delivers one `Feedback` object per original draw; `feedback.values`
+supplies masked weighted values (`f/q`). A training minibatch may span several
+draws. The adapter waits for every sample in a minibatch, removes
 the proposal weight before passing targets to MADNIS, and keeps the final training
 barrier closed until the optimizer step completes. `training_updates` counts
 completed steps; `total_trained_samples` is the existing generated-training-sample
@@ -98,5 +99,6 @@ PYTHONPATH=integrations/madnis/src:process_api/python/src \
   python -m unittest discover -s integrations/madnis/tests
 ```
 
-The sampler and the installed SDK must both come from this checkout (protocol v3).
+The sampler and the installed SDK must both come from this checkout and use the
+[current process protocol](../../process_api/protocol.md).
 The Nix package also builds the SDK from this repository, so no separate SDK pin can drift.

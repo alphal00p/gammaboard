@@ -1,4 +1,5 @@
 pub(crate) mod batch_transform;
+mod feedback;
 pub(crate) mod havana_grid;
 pub(crate) mod latent_batch;
 pub(crate) mod materializer;
@@ -9,6 +10,7 @@ use crate::core::{RunStageSnapshot, SamplerAggregatorCheckpoint};
 use crate::evaluation::AccumulatorState;
 
 pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
+pub use feedback::{Feedback, StratumAssignments};
 pub use latent_batch::{LatentBatch, LatentBatchPayload};
 pub use materializer::{HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer};
 pub use sampler::{DiscreteSubspace, Generation, PdfPoint, Sampler, SavedSampler};
@@ -56,3 +58,5 @@ impl From<SamplerAggregatorCheckpoint> for StageHandoffOwned {
     }
 }
 pub(crate) mod generation;
+#[cfg(test)]
+mod stratification_tests;

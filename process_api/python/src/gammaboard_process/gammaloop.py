@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+from .domain import Domain
 
 
 class StratificationContext:
@@ -18,22 +19,41 @@ class StratificationContext:
         partition = payload["partition"]
         if partition["kind"] != "voronoi":
             raise ValueError("unsupported stratification partition")
-        self.centers = np.asarray(partition["centers"], dtype=np.float64)
+        prefixes = Domain.from_dict(partition["domain"]).stratum_prefixes()
+        centers = {
+            tuple(int(x) for x in key.split(",")): value
+            for key, value in partition["centers"].items()
+        }
+        if set(centers) != set(prefixes):
+            raise ValueError("Voronoi centers must cover the complete stratum prefixes")
+        self.prefixes = prefixes
+        self.centers = np.asarray([centers[p] for p in prefixes], dtype=np.float64)
         self.scales = np.asarray(partition.get("scales", [1.0, 1.0]), dtype=np.float64)
         self.labels = np.asarray(payload["labels"])
-        if (self.centers.ndim != 2 or self.centers.shape[1] != 2 or len(self.centers) == 0
-                or not np.isfinite(self.centers).all()
-                or self.scales.shape != (2,) or not np.isfinite(self.scales).all()
-                or (self.scales <= 0).any()):
+        if (
+            self.centers.ndim != 2
+            or self.centers.shape[1] != 2
+            or len(self.centers) == 0
+            or not np.isfinite(self.centers).all()
+            or self.scales.shape != (2,)
+            or not np.isfinite(self.scales).all()
+            or (self.scales <= 0).any()
+        ):
             raise ValueError("invalid real/imaginary Voronoi partition")
-        if (self.labels.shape != (nr_samples,) or self.labels.dtype.kind not in "iu"
-                or (self.labels < 0).any() or (self.labels >= len(self.centers)).any()):
+        if (
+            self.labels.shape != (nr_samples,)
+            or self.labels.dtype.kind not in "iu"
+            or (self.labels < 0).any()
+            or (self.labels >= len(self.centers)).any()
+        ):
             raise ValueError("invalid stratum labels")
 
     def mask(self, values: np.ndarray) -> np.ndarray:
         values = np.asarray(values, dtype=np.float64)
         if values.shape != (len(self.labels), 2) or not np.isfinite(values).all():
-            raise ValueError("stratification needs finite unweighted (N,2) real/imag values")
+            raise ValueError(
+                "stratification needs finite unweighted (N,2) real/imag values"
+            )
         with np.errstate(over="ignore", invalid="ignore"):
             delta = (values[:, None, :] - self.centers[None, :, :]) / self.scales
             distances = np.hypot.reduce(delta, axis=2)
@@ -127,7 +147,7 @@ class GammaLoopBatchResult:
     the GammaLoop accumulator state's serialization method and passing its
     output directly as ``state``.
 
-    ``training_values`` contains one weighted scalar per sample when
+    ``training_values`` contains one unmasked weighted scalar per sample when
     ``require_training_values`` is true, and must be None otherwise.
     Apply the supplied weights once to both the state and feedback. Every component
     and the projection must count every sample, including finite zeros. Final values,

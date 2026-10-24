@@ -112,7 +112,7 @@ pub fn measure(config: Config) -> Result<Value> {
         let mut sent = 0;
         let mut retired = 0;
         let mut pending = BTreeMap::new();
-        let mut feedback = Vec::new();
+        let mut feedback = crate::sampling::Feedback::default();
         let mut accepted = 0;
         let mut start = None;
         let mut completed_at_start = 0;
@@ -137,8 +137,8 @@ pub fn measure(config: Config) -> Result<Value> {
             pending.insert(id, result?);
             while let Some((result, seconds)) = pending.remove(&retired) {
                 accumulator.merge(result.accumulator)?;
-                if let Some(values) = result.training_values {
-                    feedback.extend(values);
+                if let Some(values) = result.feedback {
+                    feedback.append(&values)?;
                 }
                 retired += 1;
                 evaluate_seconds += seconds;
@@ -152,7 +152,7 @@ pub fn measure(config: Config) -> Result<Value> {
                         "incomplete generation feedback"
                     );
                     sampler.feedback(&feedback)?;
-                    feedback.clear();
+                    feedback = crate::sampling::Feedback::default();
                 }
                 accepted += config.generation_size;
                 let now = Instant::now();

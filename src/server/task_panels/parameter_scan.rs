@@ -122,6 +122,9 @@ fn scan_points_projector() -> TaskPanelProjector {
                 "value".to_string(),
                 "uncertainty".to_string(),
                 "samples".to_string(),
+                "estimator".to_string(),
+                "basic_mean".to_string(),
+                "basic_err".to_string(),
             ]);
             let payload = child_table_payload(
                 &rows,
@@ -280,7 +283,10 @@ fn scan_result_to_plot_point(x: f64, result: &MeasurementResult) -> PlotPoint {
     PlotPoint {
         x,
         y,
+        estimator: Some(result.estimator),
+        basic: result.basic.clone(),
         x_completed_samples_total: Some(result.sample_count as f64),
+        error: uncertainty,
         y_min: uncertainty.map(|error| y - error),
         y_max: uncertainty.map(|error| y + error),
         ..Default::default()
@@ -308,6 +314,9 @@ fn scan_point_to_table_rows(
                 json!(result.value),
                 json!(result.uncertainty),
                 json!(result.sample_count),
+                json!(result.estimator),
+                json!(result.basic.as_ref().map(|b| b.mean)),
+                json!(result.basic.as_ref().and_then(|b| b.error)),
             ]);
             row
         })
@@ -315,6 +324,9 @@ fn scan_point_to_table_rows(
     if rows.is_empty() {
         let mut row = common.to_vec();
         row.extend([
+            JsonValue::Null,
+            JsonValue::Null,
+            JsonValue::Null,
             JsonValue::Null,
             JsonValue::Null,
             JsonValue::Null,
@@ -329,16 +341,20 @@ fn scan_point_to_table_rows(
 fn measurement_result_series_id(result: &MeasurementResult) -> String {
     let name = format!("{:?}", result.name).to_lowercase();
     match result.component.as_deref() {
-        Some(component) if !component.is_empty() => format!("{name}:{component}"),
-        _ => name,
+        Some(component) if !component.is_empty() => {
+            format!("{name}:{component}:{}", result.estimator.as_str())
+        }
+        _ => format!("{name}:{}", result.estimator.as_str()),
     }
 }
 
 fn measurement_result_label(result: &MeasurementResult) -> String {
     let name = format!("{:?}", result.name).to_lowercase();
     match result.component.as_deref() {
-        Some(component) if !component.is_empty() => format!("{component} {name}"),
-        _ => name.to_string(),
+        Some(component) if !component.is_empty() => {
+            format!("{component} {name}")
+        }
+        _ => name,
     }
 }
 
@@ -488,7 +504,7 @@ mod tests {
                     "measurement": {
                         "status": "completed",
                         "results": [
-                            {"name": "mean", "value": 1.0, "uncertainty": 0.1, "sample_count": 100}
+                            {"name": "mean","estimator":"pooled","basic":null, "value": 1.0, "uncertainty": 0.1, "sample_count": 100}
                         ]
                     }
                 },
@@ -500,7 +516,7 @@ mod tests {
                     "measurement": {
                         "status": "completed",
                         "results": [
-                            {"name": "mean", "value": 1.5, "uncertainty": 0.2, "sample_count": 200}
+                            {"name": "mean","estimator":"pooled","basic":null, "value": 1.5, "uncertainty": 0.2, "sample_count": 200}
                         ]
                     }
                 },
@@ -545,9 +561,9 @@ mod tests {
                     "measurement": {
                         "status": "completed",
                         "results": [
-                            {"name": "mean", "component": "real", "value": 2.0, "uncertainty": 0.2, "sample_count": 100},
-                            {"name": "mean", "component": "imag", "value": -1.0, "uncertainty": 0.1, "sample_count": 100},
-                            {"name": "variance", "component": "real", "value": 0.5, "sample_count": 100}
+                            {"name": "mean","estimator":"pooled","basic":null, "component": "real", "value": 2.0, "uncertainty": 0.2, "sample_count": 100},
+                            {"name": "mean","estimator":"pooled","basic":null, "component": "imag", "value": -1.0, "uncertainty": 0.1, "sample_count": 100},
+                            {"name": "variance","estimator":"pooled","basic":null, "component": "real", "value": 0.5, "sample_count": 100}
                         ]
                     }
                 }
@@ -563,14 +579,14 @@ mod tests {
         assert_eq!(series.len(), 2);
         let real = series
             .iter()
-            .find(|series| series.id == "mean:real")
+            .find(|series| series.id == "mean:real:pooled")
             .unwrap();
         assert_eq!(real.points[0].y, 2.0);
         assert_eq!(real.points[0].y_min, Some(1.8));
         assert_eq!(real.points[0].y_max, Some(2.2));
         let imag = series
             .iter()
-            .find(|series| series.id == "mean:imag")
+            .find(|series| series.id == "mean:imag:pooled")
             .unwrap();
         assert_eq!(imag.points[0].y, -1.0);
         assert_eq!(imag.points[0].y_min, Some(-1.1));
@@ -589,25 +605,25 @@ mod tests {
                     "index": 0,
                     "parameter_values": {"scale": 0.0, "offset": 1.0},
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 1.0, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 1.0, "sample_count": 0}]}
                 },
                 {
                     "index": 1,
                     "parameter_values": {"scale": 1.0, "offset": 1.0},
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 1.5, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 1.5, "sample_count": 0}]}
                 },
                 {
                     "index": 2,
                     "parameter_values": {"scale": 0.0, "offset": 2.0},
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 2.0, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 2.0, "sample_count": 0}]}
                 },
                 {
                     "index": 3,
                     "parameter_values": {"scale": 1.0, "offset": 2.0},
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 2.5, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 2.5, "sample_count": 0}]}
                 }
             ]
         })));
@@ -646,14 +662,14 @@ mod tests {
                     "parameter_values": {"scale": 0.0},
                     "child_run_id": 11,
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 3.0, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 3.0, "sample_count": 0}]}
                 },
                 {
                     "index": 1,
                     "parameter_values": {"scale": 1.0},
                     "child_run_id": 12,
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean", "value": 2.0, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 2.0, "sample_count": 0}]}
                 }
             ]
         })));

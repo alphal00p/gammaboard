@@ -56,14 +56,15 @@ pub(crate) fn prepare_estimator(
         ));
     }
     let probabilities = if stratified {
-        let queries = (0..partition.centers().len())
-            .map(|k| crate::sampling::DiscreteSubspace {
-                fixed_dims: std::collections::BTreeMap::from([(0, k as i64)]),
+        let queries = partition
+            .prefixes()
+            .map(|prefix| crate::sampling::DiscreteSubspace {
+                fixed_dims: prefix.iter().copied().enumerate().collect(),
             })
             .collect::<Vec<_>>();
         Some(
             sampler
-                .discrete_pdf_batch(&queries)?
+                .discrete_mass_batch(&queries)?
                 .into_iter()
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| {
@@ -97,10 +98,11 @@ pub(crate) fn prepare_estimator(
 pub fn finish_gammaloop(
     batch: &Batch,
     values: Option<&[f64]>,
-    state: super::GammaLoopAccumulatorState,
+    mut state: super::GammaLoopAccumulatorState,
     training_values: Option<Vec<f64>>,
     options: EvalBatchOptions<'_>,
 ) -> Result<BatchResult, EngineError> {
+    state.estimate.partition = options.partition_diagnostics(values.unwrap_or(&[]), 2)?;
     state.validate_values()?;
     let components = ["real".into(), "imag".into()];
     options.validate(batch.len(), &components)?;
@@ -112,20 +114,9 @@ pub fn finish_gammaloop(
         if values.len() != batch.len() * 2 || values.iter().any(|v| !v.is_finite()) {
             return Err(EngineError::eval("invalid GammaLoop stratification values"));
         }
-        if let Some(feedback) = &training_values {
-            if feedback.len() != batch.len() {
-                return Err(EngineError::eval(
-                    "GammaLoop training feedback length mismatch",
-                ));
-            }
-            for (i, raw) in values.as_chunks::<2>().0.iter().enumerate() {
-                if !options.matches(i, raw)? && feedback[i] != 0.0 {
-                    return Err(EngineError::eval(
-                        "stratum misses must return zero training feedback",
-                    ));
-                }
-            }
-        }
+        // Observable producers return aggregate state, but the partition context
+        // and raw values let the host retain complete, reproducible extrema too.
+        annotate_observable_extrema(&mut state, batch, values, options)?;
         if plan.probabilities.is_some() {
             let result = accumulate_values(
                 batch,
@@ -149,11 +140,80 @@ pub fn finish_gammaloop(
     } else {
         AccumulatorState::Gammaloop(state)
     };
-    Ok(BatchResult::new(training_values, accumulator))
+    Ok(BatchResult::new(
+        options.feedback(training_values, values.unwrap_or(&[]), 2)?,
+        accumulator,
+    ))
 }
 
-/// Remove only the runtime-owned outer label before physical transformations/evaluation.
-pub fn physical_batch(
+fn annotate_observable_extrema(
+    state: &mut super::GammaLoopAccumulatorState,
+    batch: &Batch,
+    values: &[f64],
+    options: EvalBatchOptions<'_>,
+) -> Result<(), EngineError> {
+    fn update(
+        state: &mut super::ScalarAccumulatorState,
+        batch: &Batch,
+        values: &[f64],
+        options: EvalBatchOptions<'_>,
+        project: impl Fn(&[f64]) -> f64,
+    ) -> Result<(), EngineError> {
+        let previous = [
+            state.max_weighted_positive_sample.take(),
+            state.max_weighted_negative_sample.take(),
+        ];
+        state.max_weighted_positive = 0.0;
+        state.max_weighted_negative = 0.0;
+        for (i, (point, raw)) in batch
+            .points()
+            .iter()
+            .zip(values.as_chunks::<2>().0.iter())
+            .enumerate()
+        {
+            let assignment = options.stratum_assignment(i, raw)?;
+            let matched = assignment.is_none_or(|(a, b)| a == b);
+            let value = if matched {
+                project(raw) * point.total_weight()
+            } else {
+                0.0
+            };
+            if !value.is_finite() {
+                return Err(EngineError::eval(
+                    "non-finite observable diagnostic contribution",
+                ));
+            }
+            let evaluation = previous
+                .iter()
+                .flatten()
+                .find(|saved| saved.point == *point)
+                .and_then(|saved| saved.evaluation.as_ref());
+            state.update_extrema(value, point, evaluation, assignment);
+        }
+        Ok(())
+    }
+    for (j, component) in state.estimate.components.iter_mut().enumerate() {
+        update(&mut component.state, batch, values, options, |raw| raw[j])?;
+    }
+    if state.estimate.projection_spec() == TrainingProjection::Norm {
+        update(
+            &mut state.estimate.projection_mut().state,
+            batch,
+            values,
+            options,
+            |raw| raw[0].hypot(raw[1]),
+        )?;
+    }
+    if let Some(auxiliary) = &mut state.training_norm_sqr {
+        update(auxiliary, batch, values, options, |raw| {
+            raw[0].hypot(raw[1]).powi(2)
+        })?;
+    }
+    Ok(())
+}
+
+/// Remove the complete runtime-owned stratum prefix before integrand evaluation.
+pub fn integrand_batch(
     batch: Batch,
     plan: &StratificationPlan,
 ) -> Result<(Batch, Vec<usize>), EngineError> {
@@ -163,14 +223,14 @@ pub fn physical_batch(
         .into_points()
         .into_iter()
         .map(|mut point| {
-            let label = point
-                .discrete
-                .first()
-                .copied()
-                .and_then(|k| usize::try_from(k).ok())
-                .filter(|k| *k < plan.partition.centers().len())
-                .ok_or_else(|| EngineError::eval("missing or invalid stratum coordinate"))?;
-            point.discrete.remove(0);
+            let (label, prefix) = plan
+                .partition
+                .prefixes()
+                .enumerate()
+                .find(|(_, p)| point.discrete.starts_with(p))
+                .ok_or_else(|| EngineError::eval("missing or invalid stratum prefix"))?;
+            let width = prefix.len();
+            point.discrete.drain(..width);
             labels.push(label);
             Ok(point)
         })
@@ -215,6 +275,20 @@ pub fn accumulate_values(
     } else {
         AccumulatorState::from_config(config)
     };
+    let mut diagnostics = if matches!(state, AccumulatorState::Vector(_)) {
+        stratification.map(|(plan, _)| super::accumulator::PartitionDiagnostics {
+            partition: plan.partition.clone(),
+            attempts: vec![0; plan.partition.centers().len()],
+            matches: vec![0; plan.partition.centers().len()],
+            feedback_samples: if options.require_training_values {
+                batch.len() as u64
+            } else {
+                0
+            },
+        })
+    } else {
+        None
+    };
     let mut feedback = options
         .require_training_values
         .then(|| Vec::with_capacity(batch.len()));
@@ -225,35 +299,36 @@ pub fn accumulate_values(
         .enumerate()
     {
         let mut gated = raw.to_vec();
-        let mut matched = true;
-        if let Some((plan, labels)) = stratification {
-            matched = plan.matches(labels[i], raw)?;
-            if !matched {
-                gated.fill(0.);
+        let assignment = if let Some((plan, labels)) = stratification {
+            let actual = plan.partition.classify(raw)?;
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics.attempts[labels[i]] += 1;
+                diagnostics.matches[labels[i]] += u64::from(labels[i] == actual);
             }
+            Some((
+                plan.partition.prefix(labels[i]),
+                plan.partition.prefix(actual),
+            ))
+        } else {
+            None
+        };
+        let matched = assignment.is_none_or(|(requested, actual)| requested == actual);
+        if !matched {
+            gated.fill(0.0);
         }
-        let projected = match &mut state {
-            AccumulatorState::Vector(vector) => vector.ingest_vector(&gated, point)?,
+        match &mut state {
+            AccumulatorState::Vector(vector) => {
+                vector.ingest_vector_with_details(&gated, point, None, assignment)?;
+            }
             AccumulatorState::Stratified(accumulator) => {
                 let label = stratification.expect("stratified context").1[i];
-                accumulator.push(label, &gated, point.total_weight(), matched)?;
-                match config {
-                    AccumulatorConfig::Vector {
-                        training_projection: TrainingProjection::Norm,
-                        ..
-                    } => gated.iter().fold(0.0_f64, |n, x| n.hypot(*x)),
-                    AccumulatorConfig::Vector {
-                        training_projection: TrainingProjection::Component { name },
-                        ..
-                    } => {
-                        gated[components
-                            .iter()
-                            .position(|n| n == name)
-                            .expect("validated projection")]
-                    }
-                    AccumulatorConfig::Gammaloop => gated.iter().fold(0.0_f64, |n, x| n.hypot(*x)),
-                    _ => unreachable!(),
-                }
+                accumulator.push_with_diagnostics(
+                    label,
+                    &gated,
+                    point.total_weight(),
+                    matched,
+                    assignment.map(|assignment| (point, assignment)),
+                )?;
             }
             AccumulatorState::FullVector(full) => {
                 full.push_vector(
@@ -262,11 +337,9 @@ pub fn accumulate_values(
                         .map(|x| x * point.total_weight())
                         .collect::<Vec<_>>(),
                 )?;
-                gated[0]
             }
             AccumulatorState::Empty(empty) => {
                 empty.ingest_scalar(gated[0], point)?;
-                gated[0]
             }
             _ => {
                 return Err(EngineError::invalid_input(
@@ -275,10 +348,33 @@ pub fn accumulate_values(
             }
         };
         if let Some(feedback) = &mut feedback {
+            let projected = match config {
+                AccumulatorConfig::Vector {
+                    training_projection: TrainingProjection::Component { name },
+                    ..
+                } => {
+                    raw[components
+                        .iter()
+                        .position(|n| n == name)
+                        .expect("validated projection")]
+                }
+                AccumulatorConfig::Vector {
+                    training_projection: TrainingProjection::Norm,
+                    ..
+                }
+                | AccumulatorConfig::Gammaloop => raw.iter().fold(0.0_f64, |n, x| n.hypot(*x)),
+                _ => raw[0],
+            };
             feedback.push(projected * point.total_weight());
         }
     }
-    Ok(BatchResult::new(feedback, state))
+    if let AccumulatorState::Vector(vector) = &mut state {
+        vector.partition = diagnostics;
+    }
+    Ok(BatchResult::new(
+        options.feedback(feedback, values, width)?,
+        state,
+    ))
 }
 
 #[cfg(test)]
@@ -300,19 +396,24 @@ mod tests {
         let plan = StratificationPlan {
             proposal_id: "vector-fixture".into(),
             partition: StratificationConfig::Voronoi {
-                centers: vec![vec![1., 2., -1.], vec![-1., -2., 1.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![1., 2., -1.], vec![-1., -2., 1.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: None,
             components: vec!["x".into(), "y".into(), "z".into()],
         };
-        let (physical, labels) = physical_batch(batch, &plan).unwrap();
-        assert!(physical.points().iter().all(|p| p.discrete.is_empty()));
-        let values = evaluator.eval_values(&physical, &plan.components).unwrap();
+        let (integrand, labels) = integrand_batch(batch, &plan).unwrap();
+        assert!(integrand.points().iter().all(|p| p.discrete.is_empty()));
+        let values = evaluator.eval_values(&integrand, &plan.components).unwrap();
         let accumulator =
             AccumulatorConfig::vector(plan.components.clone(), TrainingProjection::Norm);
         let train = accumulate_values(
-            &physical,
+            &integrand,
             &plan.components,
             &values,
             &accumulator,
@@ -323,7 +424,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(train.accumulator.sample_count(), 3);
-        let feedback = train.training_values.unwrap();
+        let AccumulatorState::Vector(training) = &train.accumulator else {
+            panic!("pooled training")
+        };
+        let diagnostics = training.partition.as_ref().unwrap();
+        assert_eq!(diagnostics.attempts, vec![2, 1]);
+        assert_eq!(diagnostics.matches, vec![1, 1]);
+        assert_eq!(diagnostics.feedback_samples, 3);
+        let source = training.components[0]
+            .state
+            .max_weighted_positive_sample
+            .as_ref()
+            .unwrap();
+        assert_eq!(source.stratum.as_ref().unwrap().requested, vec![0]);
+        assert_eq!(source.stratum.as_ref().unwrap().actual, vec![0]);
+        let restored: AccumulatorState =
+            serde_json::from_value(serde_json::to_value(&train.accumulator).unwrap()).unwrap();
+        let mut merged = train.accumulator.clone();
+        merged.merge(restored).unwrap();
+        let AccumulatorState::Vector(merged) = merged else {
+            unreachable!()
+        };
+        assert_eq!(merged.partition.as_ref().unwrap().attempts, vec![4, 2]);
+        let feedback = train.feedback.unwrap().values().into_owned();
         assert_eq!(feedback[1], 0.);
         assert!((feedback[0] - 4. * 6f64.sqrt()).abs() < 1e-12);
         let plan = StratificationPlan {
@@ -331,7 +454,7 @@ mod tests {
             ..plan
         };
         let result = accumulate_values(
-            &physical,
+            &integrand,
             &plan.components,
             &values,
             &accumulator,
@@ -351,12 +474,17 @@ mod tests {
         assert!(state.covariance().is_none());
     }
     #[test]
-    fn queue_plan_roundtrip_separates_stratum_from_physical_coordinates() {
+    fn queue_plan_roundtrip_separates_stratum_from_integrand_coordinates() {
         let config = AccumulatorConfig::scalar();
         let plan = StratificationPlan {
             proposal_id: "queue".into(),
             partition: crate::core::StratificationConfig::Voronoi {
-                centers: vec![vec![0.], vec![1.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![0.], vec![1.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: Some(vec![0.4, 0.6]),
@@ -370,11 +498,11 @@ mod tests {
         work.stratification = Some(plan.clone());
         let restored = crate::core::EvaluationBatch::from_bytes(&work.to_bytes().unwrap()).unwrap();
         assert_eq!(restored, work);
-        let (physical, labels) =
-            physical_batch(restored.samples.payload.into_batch().unwrap(), &plan).unwrap();
+        let (integrand, labels) =
+            integrand_batch(restored.samples.payload.into_batch().unwrap(), &plan).unwrap();
         assert_eq!(labels, vec![1, 0]);
-        assert_eq!(physical.points()[0].discrete, vec![3]);
-        assert_eq!(physical.points()[1].discrete, vec![2]);
-        assert_eq!(physical.weights(), vec![5., 7.]);
+        assert_eq!(integrand.points()[0].discrete, vec![3]);
+        assert_eq!(integrand.points()[1].discrete, vec![2]);
+        assert_eq!(integrand.weights(), vec![5., 7.]);
     }
 }

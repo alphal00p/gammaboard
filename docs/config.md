@@ -195,11 +195,11 @@ replacements = { samples = 10000, center = 0.5 }
 ## Stratified inference
 
 Use `estimator = "pooled"` (default) while training a pipeline with
-`sampler.config.stratification.kind = "voronoi"`. Set its output-space `centers`
+`sampler.config.stratification.kind = "voronoi"`. Set its stratum-only `domain`, prefix-keyed output-space `centers`
 and optional positive component `scales`. The inference task selects
 `estimator = "stratified"`, `from_stage = "train"`, and an explicit fresh
 `accumulator = { config = ... }`. No user probability table is accepted.
-The frozen sampler supplies it through `discrete_pdf`. See the
+The frozen sampler supplies it through `discrete_mass`. See the
 [execution contract](execution-model.md#scaled-voronoi-stratification) and the
 [tetrahedron run](../resources/templates/runs/tetrahedron-stratified.toml).
 
@@ -208,11 +208,93 @@ Symbolica can evaluate named real vectors using
 The accumulator component order must agree. Existing `kind = "expression"`
 retains scalar or complex real/imag output. Stratification requires a statistical
 scalar/vector accumulator or a GammaLoop-compatible observable producer satisfying
-the masking contract; `full_vector` is unsupported. Raster and PDF-inspection
-tasks retain their existing semantics.
+the masking contract; `full_vector` is unsupported. Ordinary raster tasks do not
+attach a sampling partition. PDF-inspection tasks inherit the source partition
+and inspect all its complete prefixes automatically.
 
 With `accumulator = { config = "gammaloop" }`, Voronoi centres are pairs of
-`[real, imag]`. For example, `centers = [[-1, 0], [1, 0]]` splits by real-part sign.
+`[real, imag]`. For example, `domain = { rectangular = { strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 } },centers = { "0" = [-1, 0], "1" = [1, 0] }` splits by real-part sign.
 The primary integral is stratified; native histograms remain masked, full-weight
 pooled estimates. Histogram totals need not equal the stratified central value.
-Process observable callbacks must implement the protocol-v8 masking contract.
+Process observable callbacks must implement the protocol-v9 masking contract.
+
+### Stratum plots and PDF inspection
+
+Sample tasks with a partition expose a **Strata** panel. Training shows allocation
+and hit-rate histories; conditional inference adds component contributions with
+reported errors and a variance breakdown. The component selector applies to the
+convergence plot and variance shares together. Legend selections and **Show total**
+change visibility only. **Between snapshots** uses differences of retained counts,
+so its intervals can become wider when history is downsampled.
+
+Append a diagnostic task to a trained or frozen sampler:
+
+```toml
+[[task_queue]]
+name = "stratum-pdf"
+kind = "pdf_adaptation_plot_line"
+sampler = { from_name = "inference" }
+geometry = { offset = [0.0], direction = [1.0], linspace = { start = 0.0, stop = 1.0, count = 4097 } }
+```
+
+`geometry.discrete` specifies **integrand** discrete coordinates, excluding the
+stratum prefix. Every complete prefix is inspected, including ragged/sparse labels.
+The saved source determines the partition and training projection. Diagnostic
+statistics start fresh and do not modify the source or publish a new integral.
+
+Ordinary and stratified sources share the same **PDF comparison** panel. Its
+**Scope** selector offers an overview, one stratum or comparisons paged four at a
+time. Large prefix lists are searchable. The **View** selector switches between
+density comparison, sampling mismatch, distributions, coverage and (when a
+partition exists) membership. This keeps expensive plots and controls off screen
+until requested.
+
+The four normalization modes are:
+
+- **Shape on this slice:** normalize the target by trapezoidal integration over
+  the parameter grid. Native Havana line PDFs use their exact bin integrals;
+  other PDFs use the same grid quadrature. A zero or unavailable integral has no
+  normalized curve.
+- **Source integral reference:** compare joint PDFs with the target divided by
+  the source estimate of its absolute-projection integral, when available. A
+  signed integral's magnitude is never used as a substitute.
+- **Conditional density:** divide the joint PDF by the exact complete prefix
+  mass. Unknown or zero masses produce unavailable conditional curves.
+- **Joint density:** retain the sampler's returned PDF, including its prefix mass.
+
+Mismatch and distribution views use shape or source-reference normalization so
+that ratios compare like quantities. Raw density modes give the importance
+target its own scale. **Normalization and leakage details** reports raw slice
+integrals, applied divisors, exact requested masses, target shares, estimated
+actual-cell masses and proposal leakage outside each intended cell. Leakage and
+cell masses are grid estimates on the displayed slice, not full-domain guarantees.
+
+The mismatch metrics are `PDF / target - 1` and `log10(PDF / target)`. Log ratio
+is the default because near-zero targets can dominate a linear mismatch axis. **Coverage**
+distinguishes positive target with zero PDF, zero target with positive PDF, both
+zero, and unavailable data. Infinite/undefined ratios are counted explicitly and
+can be located in Coverage. Histograms describe deterministic grid-point values;
+they have no Monte Carlo error bars, and retain the shared histogram CDF, scale,
+ratio and export controls.
+
+Zoom/pan is linked within the panel and persists across refreshes and view
+changes. **Reset view** restores the full extent. The expandable colour controls
+share both bounds across comparable heatmaps, including logarithmic scales;
+raw target and PDF quantities have separately labelled bounds. Native Havana
+line densities are drawn at exact bin edges. Other sampler curves interpolate
+queried points. Stratum boundaries are inferred from the classification grid.
+The Strata history panel also has paged/searchable scope selection, elapsed-time
+and reported sampler-time axes, follow-latest behaviour, and persistent zoom.
+Sampler time uses the last preceding performance report for the same task;
+missing timestamps are omitted rather than inferred from sample counts.
+
+PDF leakage outside the intended stratum remains visible; only the target is
+masked. Classification uses the complete output vector, independently of the
+training projection being plotted. These views are slices, not marginals over
+omitted coordinates. Custom process materializers are rejected because their
+coordinate mapping cannot be reconstructed from a PDF query alone. Batch
+transforms still apply, with their Jacobians included in the importance target.
+
+Use [stratum-pdf-line.toml](../resources/templates/tasks/stratum-pdf-line.toml) with
+the sine/tetrahedron examples. [strata-pdf-showcase.toml](../resources/templates/runs/strata-pdf-showcase.toml)
+provides a complete signed two-dimensional example.

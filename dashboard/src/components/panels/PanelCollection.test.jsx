@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import PanelCollection from "./PanelCollection";
 
@@ -71,7 +71,7 @@ const HeatmapHarness = ({ normalizationMode, metricMode = "log10_ratio", dataVal
   );
 };
 
-describe("PDF adaptation heatmap controls", () => {
+describe("Image heatmap controls", () => {
   test.each([undefined, "zero_centered", "symmetric"])("uses independent data limits for %s payloads", (normalizationMode) => {
     render(<HeatmapHarness normalizationMode={normalizationMode} />);
     expect(screen.queryByText("Spread")).not.toBeInTheDocument();
@@ -161,26 +161,7 @@ describe("PDF adaptation heatmap controls", () => {
     expect(screen.getAllByRole("spinbutton", { name: "Min color limit" })[1]).toHaveValue(-8);
   });
 
-  test("shares zoom while preserving each plot's color limits", () => {
-    const values = Object.fromEntries(pdfImageSpecs.map((spec, index) => [spec.panel_id, {
-      zoom: { start: 25, end: 75 },
-      colorLimits: { metricMode: "log10_ratio", min: -index - 2, max: index + 2 },
-    }]));
-    const changed = vi.fn();
-    render(<PanelCollection
-      panelSpecs={pdfImageSpecs}
-      panelStates={pdfImageSpecs.map((spec) => pdfImageState(spec))}
-      panelValues={values}
-      onPanelValueChange={changed}
-    />);
-    const card = screen.getByText("log_integrand").closest(".MuiCard-root");
-    fireEvent.click(within(card).getByRole("button", { name: "Reset" }));
-    expect(changed).toHaveBeenCalledTimes(3);
-    for (const [id, value] of changed.mock.calls) {
-      expect(value.zoom).toEqual({ start: 0, end: 100 });
-      expect(value.colorLimits).toEqual(values[id].colorLimits);
-    }
-  });
+
 });
 
 const renderTimeseries = ({ kind = "scalar_timeseries", panelId = "test_history", xAxis, points, value, target, xRange, yRange }) => {
@@ -424,4 +405,81 @@ describe("PanelCollection plot availability", () => {
     expect(screen.getByText(histogramSpec.label)).toBeInTheDocument();
     expect(screen.getAllByTestId("histogram-chart")).toHaveLength(1);
   });
+});
+
+const StratumHarness = ({state}) => {
+  const [values,setValues]=useState({});
+  return <PanelCollection panelSpecs={[{panel_id:state.panel_id,kind:state.kind,label:'Diagnostics',width:'full'}]} panelStates={[state]} panelValues={values} onPanelValueChange={(id,value)=>setValues(previous=>({...previous,[id]:value}))}/>;
+};
+
+test('stratum component and history controls update their own panel state',()=>{
+  const state={kind:'strata',panel_id:'strata',estimator:'stratified',components:['x','y'],frames:[{samples:10,total:[{mean:1,error:0.1},{mean:2,error:0.2}],rows:[{prefix:[1,3],attempts:10,matches:8,probability:1,estimates:[{mean:1,error:0.1},{mean:2,error:0.2}]}]}]};
+  render(<StratumHarness state={state}/>);
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Component/}));
+  fireEvent.click(screen.getByRole('option',{name:'y',exact:true}));
+  expect(screen.getByText('Share of reported variance (y)')).toBeInTheDocument();
+  expect(screen.getByText(/^Total y:/)).toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^History/}));
+  fireEvent.click(screen.getByRole('option',{name:'Hit rate',exact:true}));
+  expect(screen.getByRole('checkbox',{name:'Between snapshots'})).toBeInTheDocument();
+});
+
+test('PDF normalization and stratum controls update without discarding the other view settings',()=>{
+  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[-1,1],pdf_values:[1,1],strata:{prefixes:[[0],[1,3]],probabilities:[0.25,0.75],actual_strata:[0,1],pdf_values:[[0.4,0.1],[0.6,0.9]]}}};
+  render(<StratumHarness state={state}/>);
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Normalization/}));
+  fireEvent.click(screen.getByRole('option',{name:'Conditional density',exact:true}));
+  expect(screen.getByText(/The PDF is raw/)).toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Scope/}));
+  fireEvent.click(screen.getByRole('option',{name:'Stratum (1,3)',exact:true}));
+  expect(screen.getByRole('combobox',{name:/^Normalization/})).toHaveTextContent('Conditional density');
+  expect(screen.queryByText(/^Stratum \(0\) · p/)).not.toBeInTheDocument();
+  const curves=renderChart.mock.calls.at(-1)[0].option.series;
+  expect(curves.find(s=>s.name==='Sampler PDF').data[0][1]).toBeCloseTo(0.8);
+});
+
+test('many strata start with one overview and comparisons are paged four at a time',()=>{
+  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[1,1],pdf_values:[1,1],strata:{prefixes:Array.from({length:11},(_,i)=>[i]),probabilities:Array(11).fill(1/11),actual_strata:[0,10],pdf_values:Array.from({length:11},()=>[1/11,1/11])}}};
+  render(<StratumHarness state={state}/>);
+  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(1);
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Scope/}));
+  fireEvent.click(screen.getByRole('option',{name:'Compare strata',exact:true}));
+  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(4);
+  expect(screen.getByText('1–4 of 11')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'Next',exact:true}));
+  expect(screen.getByText('5–8 of 11')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'Next',exact:true}));
+  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(3);
+  expect(screen.getByRole('button',{name:'Next',exact:true})).toBeDisabled();
+});
+
+test('ordinary PDF heatmaps share logarithmic limits, manual limits and persisted zoom',()=>{
+  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'plane',geometry:{u_linspace:{start:0,stop:1,count:2},v_linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[0.000001,1,2,10],pdf_values:[1,2,3,4],strata:null}};
+  render(<StratumHarness state={state}/>);
+  expect(screen.queryByRole('combobox',{name:/^Scope/})).not.toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Density scale/}));
+  fireEvent.click(screen.getByRole('option',{name:'Logarithmic',exact:true}));
+  const options=renderChart.mock.calls.slice(-2).map(c=>c[0].option);
+  expect(options[0].visualMap.min).toBe(options[1].visualMap.min);
+  expect(options[0].visualMap.max).toBe(options[1].visualMap.max);
+  act(()=>renderChart.mock.calls.at(-1)[0].onEvents.datazoom({dataZoomId:'x-slider',start:25,end:75}));
+  expect(renderChart.mock.calls.slice(-2).every(c=>c[0].option.dataZoom[0].start===25)).toBe(true);
+  fireEvent.click(screen.getByText('Colour limits · linked across comparable plots'));
+  fireEvent.change(screen.getByRole('spinbutton',{name:'Min color limit'}),{target:{value:'-4'}});
+  fireEvent.blur(screen.getByRole('spinbutton',{name:'Min color limit'}));
+  expect(renderChart.mock.calls.slice(-2).every(c=>c[0].option.visualMap.min===-4)).toBe(true);
+  expect(renderChart.mock.calls.at(-1)[0].option.dataZoom[0].start).toBe(25);
+  fireEvent.click(screen.getByRole('button',{name:'Reset view',exact:true}));
+  expect(renderChart.mock.calls.at(-1)[0].option.dataZoom[0].start).toBe(0);
+});
+
+test('large prefix lists can be searched without rendering all stratum plots',()=>{
+  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[1,1],pdf_values:[1,1],strata:{prefixes:Array.from({length:30},(_,i)=>[i]),probabilities:Array(30).fill(1/30),actual_strata:[0,29],pdf_values:Array.from({length:30},()=>[1/30,1/30])}}};
+  render(<StratumHarness state={state}/>);
+  const scope=screen.getByRole('combobox',{name:'Scope'});
+  fireEvent.change(scope,{target:{value:'(29)'}});
+  fireEvent.keyDown(scope,{key:'ArrowDown'});
+  fireEvent.click(screen.getByRole('option',{name:'Stratum (29)',exact:true}));
+  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(1);
+  expect(screen.getByText(/^Stratum \(29\) · p/)).toBeInTheDocument();
 });

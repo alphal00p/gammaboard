@@ -45,21 +45,19 @@ impl GammaLoopAccumulatorState {
         self.estimate.projection().state.mean()
     }
 
-    pub fn real_stderr(&self) -> f64 {
+    pub fn real_stderr(&self) -> Option<f64> {
         self.estimate
             .component("real")
-            .map(|component| component.state.stderr())
-            .unwrap_or_default()
+            .and_then(|component| component.state.stderr())
     }
 
-    pub fn imag_stderr(&self) -> f64 {
+    pub fn imag_stderr(&self) -> Option<f64> {
         self.estimate
             .component("imag")
-            .map(|component| component.state.stderr())
-            .unwrap_or_default()
+            .and_then(|component| component.state.stderr())
     }
 
-    pub fn abs_stderr(&self) -> f64 {
+    pub fn abs_stderr(&self) -> Option<f64> {
         self.estimate.projection().state.stderr()
     }
 
@@ -101,7 +99,9 @@ impl GammaLoopAccumulatorState {
     }
 
     pub fn rsd(&self) -> Option<f64> {
-        self.training_statistics().map(ScalarAccumulatorState::rsd)
+        self.training_statistics()
+            .filter(|state| state.count >= 2)
+            .map(ScalarAccumulatorState::rsd)
     }
 
     pub fn ess(&self) -> Option<f64> {

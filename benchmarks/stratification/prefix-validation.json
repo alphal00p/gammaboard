@@ -1,0 +1,375 @@
+{
+  "contracts": {
+    "database": 5,
+    "sampler_checkpoint": 4,
+    "queue": 4,
+    "process": "gammaboard-jsonrpc-v9"
+  },
+  "live_dashboard": "http://itphlies.tailb3264.ts.net:8097/",
+  "runs": [
+    {
+      "id": 1,
+      "name": "tetrahedron-ordinary",
+      "tasks": [
+        {
+          "name": "train",
+          "state": "completed",
+          "failure": null,
+          "produced": 131072,
+          "completed": 131072,
+          "started_at": "2026-10-22T13:33:53.631211+00:00",
+          "completed_at": "2026-10-22T13:33:58.259333+00:00"
+        },
+        {
+          "name": "inference",
+          "state": "completed",
+          "failure": null,
+          "produced": 131072,
+          "completed": 131072,
+          "started_at": "2026-10-22T13:33:58.696188+00:00",
+          "completed_at": "2026-10-22T13:34:01.454204+00:00"
+        }
+      ],
+      "complete": true,
+      "samples": 131072,
+      "estimate": [
+        0.0027301407951195937,
+        0.0018403956540766694,
+        -0.0014862492740831358
+      ],
+      "stderr": [
+        0.0026412226311984905,
+        0.002643365107089372,
+        0.0024945420152631486
+      ],
+      "z_scores": [
+        1.0336655315878296,
+        0.6962321054858525,
+        -0.5958004575546713
+      ]
+    },
+    {
+      "id": 2,
+      "name": "tetrahedron-stratified",
+      "tasks": [
+        {
+          "name": "train",
+          "state": "completed",
+          "failure": null,
+          "produced": 131072,
+          "completed": 131072,
+          "started_at": "2026-10-22T13:33:53.650194+00:00",
+          "completed_at": "2026-10-22T13:33:58.249371+00:00"
+        },
+        {
+          "name": "inference",
+          "state": "completed",
+          "failure": null,
+          "produced": 131072,
+          "completed": 131072,
+          "started_at": "2026-10-22T13:33:58.700435+00:00",
+          "completed_at": "2026-10-22T13:34:01.451122+00:00"
+        }
+      ],
+      "complete": true,
+      "samples": 131072,
+      "estimate": [
+        0.0002058635977834622,
+        -0.002353144563148224,
+        -0.0002882543819232586
+      ],
+      "stderr": [
+        0.0005962714636780276,
+        0.0006153524365110117,
+        0.0006356731313048063
+      ],
+      "strata": [
+        {
+          "prefix": [
+            0,
+            0
+          ],
+          "probability": 0.253258751658142,
+          "attempts": 33168,
+          "matches": 32656
+        },
+        {
+          "prefix": [
+            0,
+            1
+          ],
+          "probability": 0.2464041991687112,
+          "attempts": 32331,
+          "matches": 30996
+        },
+        {
+          "prefix": [
+            1,
+            0
+          ],
+          "probability": 0.25792559096565437,
+          "attempts": 33944,
+          "matches": 32621
+        },
+        {
+          "prefix": [
+            1,
+            1
+          ],
+          "probability": 0.2424114582074925,
+          "attempts": 31629,
+          "matches": 30999
+        }
+      ],
+      "z_scores": [
+        0.34525146736625256,
+        -3.824059877767486,
+        -0.4534632151772357
+      ],
+      "stderr_reduction": [
+        4.4295640359953365,
+        4.29569292367963,
+        3.924252721115896
+      ]
+    },
+    {
+      "id": 3,
+      "name": "sine-ordinary",
+      "tasks": [
+        {
+          "name": "train",
+          "state": "completed",
+          "failure": null,
+          "produced": 33554432,
+          "completed": 33554432,
+          "started_at": "2026-10-22T13:34:23.356848+00:00",
+          "completed_at": "2026-10-22T13:35:33.706228+00:00"
+        },
+        {
+          "name": "inference",
+          "state": "completed",
+          "failure": null,
+          "produced": 268435456,
+          "completed": 268435456,
+          "started_at": "2026-10-22T13:35:34.070774+00:00",
+          "completed_at": "2026-10-22T13:36:55.265342+00:00"
+        }
+      ],
+      "complete": true,
+      "samples": 268435456,
+      "estimate": [
+        -0.0006154651466803005
+      ],
+      "stderr": [
+        0.0002442090359899762
+      ],
+      "z_scores": [
+        -2.5202390410548237
+      ]
+    },
+    {
+      "id": 4,
+      "name": "sine-stratified",
+      "tasks": [
+        {
+          "name": "train",
+          "state": "completed",
+          "failure": null,
+          "produced": 33554432,
+          "completed": 33554432,
+          "started_at": "2026-10-22T13:34:23.361899+00:00",
+          "completed_at": "2026-10-22T13:36:05.832349+00:00"
+        },
+        {
+          "name": "inference",
+          "state": "completed",
+          "failure": null,
+          "produced": 268435456,
+          "completed": 268435456,
+          "started_at": "2026-10-22T13:36:05.844072+00:00",
+          "completed_at": "2026-10-22T13:38:06.474574+00:00"
+        }
+      ],
+      "complete": true,
+      "samples": 268435456,
+      "estimate": [
+        -6.661177840650012e-06
+      ],
+      "stderr": [
+        9.384166652079295e-06
+      ],
+      "strata": [
+        {
+          "prefix": [
+            0
+          ],
+          "probability": 0.47130551531467707,
+          "attempts": 126520708,
+          "matches": 126430622
+        },
+        {
+          "prefix": [
+            1
+          ],
+          "probability": 0.5286944846853229,
+          "attempts": 141914748,
+          "matches": 141845854
+        }
+      ],
+      "z_scores": [
+        -0.7098315798957027
+      ],
+      "stderr_reduction": [
+        26.02351866117655
+      ]
+    }
+  ],
+  "tetrahedron_repeated_seeds": {
+    "ordinary": [
+      {
+        "component": "x",
+        "mean": 0.0006466907036726381,
+        "empirical_stderr": 0.0027418923509571025,
+        "rms_reported_stderr": 0.0026420843356426403,
+        "empirical_to_reported": 1.0377762412683111,
+        "coverage_2sigma": 29,
+        "max_abs_z": 2.746123249747347
+      },
+      {
+        "component": "y",
+        "mean": 6.299137189834026e-05,
+        "empirical_stderr": 0.00196235469960205,
+        "rms_reported_stderr": 0.002642281298622646,
+        "empirical_to_reported": 0.7426744081430601,
+        "coverage_2sigma": 32,
+        "max_abs_z": 1.409354967747109
+      },
+      {
+        "component": "z",
+        "mean": -0.0005743887058032549,
+        "empirical_stderr": 0.002311049031130474,
+        "rms_reported_stderr": 0.0024949801465045667,
+        "empirical_to_reported": 0.9262795274616603,
+        "coverage_2sigma": 31,
+        "max_abs_z": 2.5502656975437348
+      }
+    ],
+    "stratified": [
+      {
+        "component": "x",
+        "mean": 0.0002217919061363212,
+        "empirical_stderr": 0.000702244687766691,
+        "rms_reported_stderr": 0.000617267283310065,
+        "empirical_to_reported": 1.1376671123746247,
+        "coverage_2sigma": 27,
+        "max_abs_z": 2.838801280656739
+      },
+      {
+        "component": "y",
+        "mean": 0.0001820045523866238,
+        "empirical_stderr": 0.000901517968565277,
+        "rms_reported_stderr": 0.0011199148997224743,
+        "empirical_to_reported": 0.8049879225543671,
+        "coverage_2sigma": 31,
+        "max_abs_z": 3.8240598777686574
+      },
+      {
+        "component": "z",
+        "mean": 0.0001302703798621704,
+        "empirical_stderr": 0.0006833936219140411,
+        "rms_reported_stderr": 0.0006531980577602557,
+        "empirical_to_reported": 1.0462272717976577,
+        "coverage_2sigma": 29,
+        "max_abs_z": 2.5243636025348914
+      }
+    ]
+  },
+  "tetrahedron_frozen_proposal_quadrature": {
+    "true_stderr": [
+      0.0006062514993661116,
+      0.0018542662019498703,
+      0.0006436227474389726
+    ],
+    "reported_stderr": [
+      0.0005962714636780276,
+      0.0006153524365110117,
+      0.0006356731313048063
+    ],
+    "reported_to_true": [
+      0.9835381261761513,
+      0.3318576566104329,
+      0.9876486401921025
+    ],
+    "true_z_scores": [
+      0.33956798127297066,
+      -1.2690435497738963,
+      -0.4478623278469356
+    ],
+    "strata": [
+      {
+        "prefix": [
+          0,
+          0
+        ],
+        "true_mean": [
+          0.23613721197796972,
+          0.23613721197796966,
+          0.22227443091220456
+        ],
+        "variance": [
+          6.643322560362246e-08,
+          3.128075665521825e-06,
+          8.444673116678774e-08
+        ]
+      },
+      {
+        "prefix": [
+          0,
+          1
+        ],
+        "true_mean": [
+          -0.23613721197796966,
+          0.23613721197796972,
+          -0.22227443091220453
+        ],
+        "variance": [
+          1.1627588675082246e-07,
+          1.1659424397314362e-07,
+          1.2220012034462955e-07
+        ]
+      },
+      {
+        "prefix": [
+          1,
+          0
+        ],
+        "true_mean": [
+          -0.23613721197796972,
+          -0.23613721197796966,
+          0.22227443091220453
+        ],
+        "variance": [
+          1.0794242635320114e-07,
+          1.0802575724944392e-07,
+          1.1197085602051881e-07
+        ]
+      },
+      {
+        "prefix": [
+          1,
+          1
+        ],
+        "true_mean": [
+          0.23613721197796966,
+          -0.23613721197796972,
+          -0.22227443091220456
+        ],
+        "variance": [
+          7.68893417760124e-08,
+          8.560748094918463e-08,
+          9.56325334889554e-08
+        ]
+      }
+    ]
+  }
+}

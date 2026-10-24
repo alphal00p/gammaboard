@@ -202,7 +202,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                result.training_values,
+                result.feedback.as_ref().map(|f| f.values().into_owned()),
                 require_training_values.then(|| vec![0.25, 2.25])
             );
             let full = evaluator
@@ -217,7 +217,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-            assert_eq!(full.training_values, result.training_values);
+            assert_eq!(full.feedback, result.feedback);
             let AccumulatorState::FullVector(full) = full.accumulator else {
                 panic!()
             };
@@ -279,7 +279,10 @@ mod tests {
             )
             .expect("result");
 
-        assert_eq!(result.training_values, Some(vec![2.0, 3.0]));
+        assert_eq!(
+            result.feedback.as_ref().map(|f| f.values().into_owned()),
+            Some(vec![2.0, 3.0])
+        );
         let AccumulatorState::Vector(accumulator) = result.accumulator else {
             panic!("expected vector accumulator");
         };

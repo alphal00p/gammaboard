@@ -565,7 +565,11 @@ mod tests {
                 },
             )
             .expect("evaluate batch");
-        let values = result.training_values.expect("training values present");
+        let values = result
+            .feedback
+            .expect("training values present")
+            .values()
+            .into_owned();
         assert_eq!(values.len(), points.len());
 
         let v_peak_1 = values[0];
@@ -607,7 +611,11 @@ mod tests {
                 },
             )
             .expect("evaluate batch");
-        let values = result.training_values.expect("training values present");
+        let values = result
+            .feedback
+            .expect("training values present")
+            .values()
+            .into_owned();
 
         assert!(values[1] > values[0], "quarter peak should exceed origin");
         assert!(
@@ -644,7 +652,7 @@ mod tests {
             panic!("expected full vector accumulator");
         };
         assert_eq!(state.values_row_major, vec![1.0, 2.0, 3.0, 4.0]);
-        assert!(result.training_values.is_none());
+        assert!(result.feedback.is_none());
     }
 
     #[test]
@@ -673,7 +681,14 @@ mod tests {
                 },
             )
             .expect("evaluate batch");
-        assert_eq!(result.training_values.expect("training values"), vec![1.5]);
+        assert_eq!(
+            result
+                .feedback
+                .expect("training values")
+                .values()
+                .into_owned(),
+            vec![1.5]
+        );
     }
 
     #[test]
@@ -707,7 +722,14 @@ mod tests {
                 },
             )
             .expect("evaluate batch");
-        assert_eq!(result.training_values.expect("training values"), vec![0.6]);
+        assert_eq!(
+            result
+                .feedback
+                .expect("training values")
+                .values()
+                .into_owned(),
+            vec![0.6]
+        );
     }
 
     #[test]
@@ -755,7 +777,14 @@ mod tests {
                 },
             )
             .expect("evaluate batch");
-        assert_eq!(result.training_values.expect("training values"), vec![6.5]);
+        assert_eq!(
+            result
+                .feedback
+                .expect("training values")
+                .values()
+                .into_owned(),
+            vec![6.5]
+        );
     }
 
     #[test]

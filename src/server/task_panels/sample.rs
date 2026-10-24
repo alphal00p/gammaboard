@@ -52,10 +52,11 @@ pub(super) fn projectors(
         && matches!(accumulator_config, AccumulatorConfig::Vector { .. })
     {
         projectors.push(discrete_projection_bundle_projector(
-            accumulator_config,
+            accumulator_config.clone(),
             projection_config,
         ));
     }
+    projectors.push(super::strata::projector(accumulator_config));
     projectors
 }
 
@@ -189,7 +190,7 @@ fn imag_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
 fn rsd_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
     persisted_first_history_projector(
         "abs_signal_to_noise_history",
-        "RSD",
+        "Training projection RSD",
         accumulator_config.clone(),
         rsd_history_panel,
     )
@@ -198,7 +199,7 @@ fn rsd_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelPro
 fn ess_history_projector(accumulator_config: &AccumulatorConfig) -> TaskPanelProjector {
     persisted_first_history_projector(
         "ess_history",
-        "ESS",
+        "Training projection ESS",
         accumulator_config.clone(),
         ess_history_panel,
     )
@@ -347,7 +348,7 @@ fn sample_progress_value(ctx: &TaskPanelContext<'_>) -> f64 {
     ctx.task.nr_completed_samples.max(0) as f64
 }
 
-fn sample_accumulator(
+pub(super) fn sample_accumulator(
     ctx: &TaskPanelContext<'_>,
     accumulator_config: &AccumulatorConfig,
 ) -> Result<Option<AccumulatorState>, EngineError> {
@@ -388,7 +389,7 @@ fn accumulator_matches_requested_config(
     }
 }
 
-fn decode_history_observable(
+pub(super) fn decode_history_observable(
     ctx: &TaskPanelHistoryContext<'_>,
     accumulator_config: &AccumulatorConfig,
 ) -> Result<Option<AccumulatorState>, EngineError> {
@@ -427,8 +428,12 @@ fn decode_aggregate_persisted_accumulator(
 fn estimate_label(accumulator_config: &AccumulatorConfig) -> &'static str {
     match accumulator_config {
         AccumulatorConfig::Empty => "Estimate",
+        AccumulatorConfig::Vector {
+            training_projection: crate::core::TrainingProjection::Norm,
+            ..
+        } => "Mean of per-sample norm (training projection)",
         AccumulatorConfig::Vector { .. } if accumulator_config.is_scalar() => "Mean",
-        AccumulatorConfig::Vector { .. } => "Projection Mean",
+        AccumulatorConfig::Vector { .. } => "Training projection mean",
         AccumulatorConfig::Gammaloop => "Real Mean",
         AccumulatorConfig::FullVector { .. } => "Estimate",
     }
@@ -478,11 +483,7 @@ fn estimate_history_panel(
     Some(
         scalar_timeseries_panel_with_smoothing(
             name,
-            vec![PlotPoint::timeseries(
-                estimate.sample_count as f64,
-                estimate.value,
-                Some(estimate.uncertainty?),
-            )],
+            vec![PlotPoint::estimate(&estimate)],
             Some(true),
         )
         .with_x_axis(PlotXAxis::CompletedSamples),
@@ -585,37 +586,71 @@ fn max_weight_points_panel(accumulator: AccumulatorState) -> Option<PanelState> 
         "Impact".to_string(),
         "Point".to_string(),
     ];
-    let estimate = accumulator.pooled_vector()?;
     let mut rows = Vec::new();
-    for component in &estimate.components {
-        let impact = component.state.max_weight_impact();
-        push_max_weight_row(
-            &mut rows,
-            &component.name,
-            "+",
-            component.state.max_weighted_positive,
-            impact,
-            component.state.max_weighted_positive_sample.as_ref(),
-        );
-        push_max_weight_row(
-            &mut rows,
-            &component.name,
-            "-",
-            component.state.max_weighted_negative,
-            impact,
-            component.state.max_weighted_negative_sample.as_ref(),
-        );
+    if let AccumulatorState::Stratified(state) = &accumulator {
+        for (k, stratum) in state.strata.iter().enumerate() {
+            let prefix = state
+                .plan
+                .partition
+                .prefix(k)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            for (j, name) in state.plan.components.iter().enumerate() {
+                for (sign, sample) in [
+                    ("+", &stratum.extrema[j].positive),
+                    ("-", &stratum.extrema[j].negative),
+                ] {
+                    if let Some((value, point)) = sample {
+                        let denom = stratum.mean[j].abs() * stratum.attempts as f64;
+                        push_max_weight_row(
+                            &mut rows,
+                            &format!("{name} ({prefix})"),
+                            sign,
+                            *value,
+                            (denom > 0.).then(|| value.abs() / denom),
+                            Some(point),
+                        );
+                    }
+                }
+            }
+        }
+    } else {
+        let estimate = accumulator.pooled_vector()?;
+        for component in &estimate.components {
+            let impact =
+                (component.state.mean() != 0.0).then(|| component.state.max_weight_impact());
+            push_max_weight_row(
+                &mut rows,
+                &component.name,
+                "+",
+                component.state.max_weighted_positive,
+                impact,
+                component.state.max_weighted_positive_sample.as_ref(),
+            );
+            push_max_weight_row(
+                &mut rows,
+                &component.name,
+                "-",
+                component.state.max_weighted_negative,
+                impact,
+                component.state.max_weighted_negative_sample.as_ref(),
+            );
+        }
     }
     Some(table_panel_with_payload(
         "max_weight_points",
         columns,
         rows,
-        Some(json!({ "column_formats": {
-            "Returned integrand": "scientific",
-            "Top-level Jacobian": "scientific",
-            "Max Weighted Value": "scientific",
-            "Impact": "scientific",
-        }})),
+        Some(
+            json!({ "weight_basis": if matches!(accumulator, AccumulatorState::Stratified(_)) { "Conditional contribution: p_s * W * f; impact is relative to the stratum mean" } else { "Pooled full-weight contribution: W * f" }, "column_formats": {
+                "Returned integrand": "scientific",
+                "Top-level Jacobian": "scientific",
+                "Max Weighted Value": "scientific",
+                "Impact": "scientific",
+            }}),
+        ),
     ))
 }
 
@@ -624,7 +659,7 @@ fn push_max_weight_row(
     component: &str,
     sign: &str,
     max_weighted_value: f64,
-    impact: f64,
+    impact: Option<f64>,
     point: Option<&crate::evaluation::batch::DiagnosticSample>,
 ) {
     if point.is_none() && max_weighted_value == 0.0 {
@@ -637,7 +672,7 @@ fn push_max_weight_row(
         json_number_or_na(integrand),
         json_number_or_na(jacobian),
         JsonValue::from(max_weighted_value),
-        JsonValue::from(impact),
+        json!(impact),
         point_value(point),
     ]);
 }
@@ -674,6 +709,8 @@ fn point_value(point: Option<&crate::evaluation::batch::DiagnosticSample>) -> Js
             "discrete": point.point.discrete,
             "continuous": point.point.continuous,
             "sampling_weight": point.point.factor_value("sampler_weight"),
+            "total_weight": point.point.total_weight(),
+            "stratum": point.stratum,
         }),
         None => json!("n/a"),
     }
@@ -691,6 +728,7 @@ fn diagnostic_ratio(value: f64) -> JsonValue {
 
 fn stratified_summary_entries(
     state: &crate::evaluation::accumulator::StratifiedAccumulatorState,
+    run_target: Option<&VectorTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     let mut entries = vec![
         key_value("count", "Attempted samples", state.sample_count()),
@@ -702,16 +740,26 @@ fn stratified_summary_entries(
     }
     let means = state.mean();
     let covariance = state.covariance();
+    let basic = state.basic_estimates();
     let width = state.strata[0].mean.len();
     for (j, name) in state.plan.components.iter().enumerate() {
-        entries.push(stratified_estimate_entry(
-            &format!("component_{name}_mean"),
-            &format!("{name} Mean"),
-            means.as_ref().map(|m| m[j]),
-            covariance
-                .as_ref()
-                .map(|c| c[j * width + j].max(0.0).sqrt()),
-        ));
+        let mean = means.as_ref().map(|m| m[j]);
+        let error = covariance.as_ref().map(|c| c[j * width + j].max(0.).sqrt());
+        entries.push(key_value(&format!("component_{name}_mean"), &format!("{name} Mean"), json!({
+            "kind": "estimate", "value": mean, "error": error, "estimator": "stratified", "basic": basic.as_ref().map(|v| &v[j]), "sample_count":state.sample_count(),
+        })));
+        if let (Some(mean), Some(target)) =
+            (mean, run_target.and_then(|t| t.integrand_component(name)))
+        {
+            entries.push(target_comparison_entry(
+                &format!("target_comparison_{name}"),
+                &format!("{name} vs Target"),
+                mean,
+                error,
+                target,
+                crate::core::EstimateKind::Stratified,
+            ));
+        }
     }
     if !state.uncertainty_ready() {
         entries.push(key_value(
@@ -721,35 +769,58 @@ fn stratified_summary_entries(
         ));
     }
     for (k, stratum) in state.strata.iter().enumerate() {
+        let prefix = format!(
+            "({})",
+            state
+                .plan
+                .partition
+                .prefix(k)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         entries.extend([
             key_value(
                 &format!("stratum_{k}_attempts"),
-                &format!("Stratum {k} attempts"),
+                &format!("Stratum {prefix} attempts"),
                 stratum.attempts,
             ),
             key_value(
                 &format!("stratum_{k}_matches"),
-                &format!("Stratum {k} matches"),
+                &format!("Stratum {prefix} matches"),
                 stratum.matches,
             ),
             key_value(
                 &format!("stratum_{k}_probability"),
-                &format!("Stratum {k} probability"),
+                &format!("Stratum {prefix} exact proposal probability"),
                 state.plan.probabilities.as_ref().unwrap()[k],
             ),
         ]);
+        entries.push(key_value(
+            &format!("stratum_{k}_allocation"),
+            &format!("Stratum {prefix} observed allocation"),
+            (state.sample_count() > 0)
+                .then(|| stratum.attempts as f64 / state.sample_count() as f64),
+        ));
+        entries.push(key_value(
+            &format!("stratum_{k}_match_fraction"),
+            &format!("Stratum {prefix} match fraction"),
+            (stratum.attempts > 0).then(|| stratum.matches as f64 / stratum.attempts as f64),
+        ));
         for (j, name) in state.plan.components.iter().enumerate() {
             entries.push(stratified_estimate_entry(
                 &format!("stratum_{k}_{name}"),
-                &format!("Stratum {k} {name}"),
+                &format!("Stratum {prefix} {name}"),
                 (stratum.attempts > 0).then_some(stratum.mean[j]),
                 stratum.standard_error(j),
+                stratum.attempts as i64,
             ));
         }
         if !stratum.uncertainty_ready() {
             entries.push(key_value(
                 &format!("stratum_{k}_warning"),
-                &format!("Stratum {k} uncertainty"),
+                &format!("Stratum {prefix} uncertainty"),
                 if stratum.matches == 0 {
                     "Unavailable: no matches observed; this does not establish a zero integral"
                 } else {
@@ -766,45 +837,75 @@ fn stratified_estimate_entry(
     label: &str,
     mean: Option<f64>,
     error: Option<f64>,
+    sample_count: i64,
 ) -> crate::server::panels::KeyValueEntry {
-    match (mean, error) {
-        (Some(mean), Some(error)) => estimate_entry(key, label, mean, error),
-        (Some(mean), None) => key_value(key, label, mean),
-        (None, _) => key_value(key, label, "unavailable: unsampled stratum"),
-    }
+    key_value(
+        key,
+        label,
+        json!({ "kind": "estimate", "value": mean, "error": error, "estimator": "stratified", "basic": null, "sample_count":sample_count }),
+    )
 }
 
 fn base_estimate_summary_entries(
     accumulator: &AccumulatorState,
     run_target: Option<VectorTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
-    match accumulator {
-        AccumulatorState::Stratified(state) => stratified_summary_entries(state),
+    let mut entries = match accumulator {
+        AccumulatorState::Stratified(state) => {
+            stratified_summary_entries(state, run_target.as_ref())
+        }
         AccumulatorState::Empty(_) => vec![key_value("count", "Samples in this accumulator", 0)],
         AccumulatorState::Vector(state) => {
             let mut entries = vec![
                 key_value("count", "Samples in this accumulator", state.sample_count()),
-                key_value("projection_rsd", "Projection RSD", state.rsd()),
+                key_value(
+                    "projection_rsd",
+                    "Training projection RSD",
+                    (state.sample_count() >= 2).then(|| state.rsd()),
+                ),
                 key_value("projection_ess", "Projection ESS", state.ess()),
                 estimate_entry(
                     "projection_mean",
-                    "Projection Mean",
-                    state.projection().state.mean(),
+                    match state.projection_spec() {
+                        crate::core::TrainingProjection::Norm => {
+                            "Mean of per-sample norm (training projection)"
+                        }
+                        _ => "Training projection mean",
+                    },
+                    (state.sample_count() > 0).then(|| state.projection().state.mean()),
                     state.projection().state.stderr(),
                 ),
                 key_value(
                     "projection_signal_to_noise",
                     "Projection Mean(|x|)^2 / abs_err^2",
-                    diagnostic_ratio(state.signal_to_noise()),
+                    if state.sample_count() >= 2 {
+                        diagnostic_ratio(state.signal_to_noise())
+                    } else {
+                        json!("unavailable")
+                    },
                 ),
             ];
             for component in &state.components {
                 entries.push(estimate_entry(
                     &format!("component_{}_mean", component.name),
                     &format!("{} Mean", component.name),
-                    component.state.mean(),
+                    (component.state.count > 0).then(|| component.state.mean()),
                     component.state.stderr(),
                 ));
+                if component.state.count > 0
+                    && let Some(target) = run_target
+                        .as_ref()
+                        .and_then(|t| t.integrand_component(&component.name))
+                {
+                    entries.push(target_comparison_entry(
+                        &format!("target_comparison_{}", component.name),
+                        &format!("{} vs Target", component.name),
+                        component.state.mean(),
+                        component.state.stderr(),
+                        target,
+                        crate::core::EstimateKind::Pooled,
+                    ));
+                }
             }
             entries
         }
@@ -813,14 +914,21 @@ fn base_estimate_summary_entries(
                 .as_ref()
                 .and_then(|target| target.component(names))
             {
-                Some(target) => target_comparison_entry(key, label, value, error, target),
-                None => key_value(key, label, "n/a"),
+                Some(target) if state.sample_count() > 0 => target_comparison_entry(
+                    key,
+                    label,
+                    value,
+                    error,
+                    target,
+                    crate::core::EstimateKind::Pooled,
+                ),
+                _ => key_value(key, label, "n/a"),
             };
             let abs_component = |key, label, name| match state.estimate.component(name) {
                 Some(component) => estimate_entry(
                     key,
                     label,
-                    component.state.mean_abs(),
+                    (component.state.count > 0).then(|| component.state.mean_abs()),
                     component.state.mean_abs_stderr(),
                 ),
                 None => key_value(key, label, "n/a"),
@@ -829,13 +937,13 @@ fn base_estimate_summary_entries(
                 estimate_entry(
                     "real_mean",
                     "Real Mean",
-                    state.real_mean(),
+                    (state.sample_count() > 0).then(|| state.real_mean()),
                     state.real_stderr(),
                 ),
                 estimate_entry(
                     "imag_mean",
                     "Imag Mean",
-                    state.imag_mean(),
+                    (state.sample_count() > 0).then(|| state.imag_mean()),
                     state.imag_stderr(),
                 ),
                 comparison(
@@ -856,8 +964,8 @@ fn base_estimate_summary_entries(
                 abs_component("abs_imag_mean", "Abs Imag Mean", "imag"),
                 estimate_entry(
                     "norm_mean",
-                    "Norm Mean",
-                    state.norm_statistics().mean(),
+                    "Mean of per-sample norm",
+                    (state.sample_count() > 0).then(|| state.norm_statistics().mean()),
                     state.norm_statistics().stderr(),
                 ),
                 key_value(
@@ -896,7 +1004,73 @@ fn base_estimate_summary_entries(
             }
             entries
         }
+    };
+    for entry in &mut entries {
+        if let Some(value) = entry.value.as_object_mut()
+            && value.get("kind").and_then(JsonValue::as_str) == Some("estimate")
+        {
+            value
+                .entry("sample_count")
+                .or_insert_with(|| json!(accumulator.sample_count()));
+        }
     }
+    if !matches!(accumulator, AccumulatorState::Stratified(_)) {
+        entries.push(key_value("estimator", "Estimator", "pooled"));
+    }
+    entries.push(key_value("uncertainty_note", "Uncertainty", "Errors are estimated from observed samples. Rare large contributions can make either error optimistic; coverage thresholds do not certify reliability."));
+    if let Some(diagnostics) = accumulator
+        .pooled_vector()
+        .and_then(|v| v.partition.as_ref())
+    {
+        entries.push(key_value("partition", "Partition", "Scaled Voronoi"));
+        if !matches!(accumulator, AccumulatorState::Stratified(_)) {
+            if diagnostics.feedback_samples > 0 {
+                entries.push(key_value("statistics_context", "Training statistics", "Pooled statistics; stratified statistics are not used during training. These totals include earlier proposals."));
+            }
+            let total = accumulator.sample_count();
+            for (k, prefix) in diagnostics.partition.prefixes().enumerate() {
+                let prefix = format!(
+                    "({})",
+                    prefix
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                let attempts = diagnostics.attempts[k];
+                entries.extend([
+                    key_value(
+                        &format!("stratum_{k}_attempts"),
+                        &format!("Stratum {prefix} attempts"),
+                        attempts,
+                    ),
+                    key_value(
+                        &format!("stratum_{k}_matches"),
+                        &format!("Stratum {prefix} matches"),
+                        diagnostics.matches[k],
+                    ),
+                    key_value(
+                        &format!("stratum_{k}_match_fraction"),
+                        &format!("Stratum {prefix} match fraction"),
+                        (attempts > 0).then(|| diagnostics.matches[k] as f64 / attempts as f64),
+                    ),
+                    key_value(
+                        &format!("stratum_{k}_allocation"),
+                        &format!("Stratum {prefix} observed allocation"),
+                        (total > 0).then(|| attempts as f64 / total as f64),
+                    ),
+                    key_value(
+                        &format!("stratum_{k}_probability"),
+                        &format!("Stratum {prefix} exact proposal probability"),
+                        "Not queried for pooled statistics",
+                    ),
+                ]);
+            }
+        }
+    } else if matches!(accumulator, AccumulatorState::Stratified(_)) {
+        entries.push(key_value("partition", "Partition", "Scaled Voronoi"));
+    }
+    entries
 }
 
 #[derive(Debug, Clone)]
@@ -931,6 +1105,13 @@ pub(super) fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<Vec
 }
 
 impl VectorTarget {
+    fn integrand_component(&self, name: &str) -> Option<f64> {
+        match name {
+            "real" => self.component(&["real", "value"]),
+            "value" => self.component(&["value", "real"]),
+            _ => self.component(&[name]),
+        }
+    }
     fn single(name: &str, value: f64) -> Self {
         Self {
             components: BTreeMap::from([(name.to_string(), value)]),
@@ -966,13 +1147,13 @@ fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
 fn estimate_entry(
     key: &str,
     label: &str,
-    value: f64,
-    error: f64,
+    value: impl Into<Option<f64>>,
+    error: impl Into<Option<f64>>,
 ) -> crate::server::panels::KeyValueEntry {
     key_value(
         key,
         label,
-        json!({ "kind": "estimate", "value": value, "error": error }),
+        json!({ "kind": "estimate", "value": value.into(), "error": error.into(), "estimator": "pooled", "basic": null }),
     )
 }
 
@@ -980,19 +1161,22 @@ pub(super) fn target_comparison_entry(
     key: &str,
     label: &str,
     value: f64,
-    error: f64,
+    error: impl Into<Option<f64>>,
     target: f64,
+    estimator: crate::core::EstimateKind,
 ) -> crate::server::panels::KeyValueEntry {
+    let error = error.into();
     key_value(
         key,
         label,
         json!({
             "kind": "target_comparison",
+            "estimator": estimator,
             "value": value,
             "error": error,
             "target": target,
             "delta_percent": delta_percent(value, target),
-            "delta_sigma": delta_sigma(value, error, target),
+            "delta_sigma": error.map(|e| delta_sigma(value, e, target)),
         }),
     )
 }
@@ -1090,6 +1274,8 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
     let state = accumulator.gammaloop()?;
     let mut payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
     if let JsonValue::Object(payload) = &mut payload {
+        payload.insert("estimator".into(), json!("pooled"));
+        payload.insert("estimator_note".into(), json!("Histogram totals use pooled full-weight samples and can differ from the stratified primary estimate."));
         payload.insert(
             "actions".to_string(),
             json!({
@@ -1101,11 +1287,7 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
 
     super::observable::histogram_bundle_panel(
         "gammaloop_histogram_bundle",
-        if matches!(accumulator, AccumulatorState::Stratified(_)) {
-            "Observables (pooled; full sampling weights)"
-        } else {
-            "Observable"
-        },
+        "Observables (pooled; full sampling weights)",
         payload,
     )
 }
@@ -1115,10 +1297,10 @@ fn discrete_projection_bundle_panel(
     config: &DiscreteProjectionConfig,
     sampler_engine_diagnostics: Option<&JsonValue>,
 ) -> Option<PanelState> {
-    let discrete_pdf = sampler_engine_diagnostics.and_then(discrete_pdf_cache);
+    let discrete_mass = sampler_engine_diagnostics.and_then(discrete_mass_cache);
     let payload = match &accumulator {
         AccumulatorState::Vector(state) => {
-            vector_discrete_projection_payload(state, config, discrete_pdf.as_ref())
+            vector_discrete_projection_payload(state, config, discrete_mass.as_ref())
         }
         _ => return None,
     };
@@ -1172,7 +1354,7 @@ fn discrete_projection_bundle_panel(
 fn vector_discrete_projection_payload(
     state: &crate::evaluation::VectorAccumulatorState,
     config: &DiscreteProjectionConfig,
-    discrete_pdf: Option<&DiscretePdfCache>,
+    discrete_mass: Option<&DiscreteMassCache>,
 ) -> Result<JsonValue, String> {
     let mut projections = serde_json::Map::new();
     for (stream_name, component) in state.streams() {
@@ -1187,7 +1369,7 @@ fn vector_discrete_projection_payload(
                     "title": name,
                     "type_description": discrete_projection_description(item),
                     "metric_descriptors": discrete_projection_metric_descriptors(),
-                    "views": discrete_projection_histogram_views(discrete_pdf.is_some()),
+                    "views": discrete_projection_histogram_views(discrete_mass.is_some()),
                     "controls": discrete_projection_histogram_controls(),
                     "bins": scalar_projected_bins(
                         &component.discrete_bins,
@@ -1196,7 +1378,7 @@ fn vector_discrete_projection_payload(
                         config.normalization,
                         component.count,
                         config.bin_limit(),
-                        discrete_pdf
+                        discrete_mass
                     )?,
                 }),
             );
@@ -1351,7 +1533,7 @@ fn scalar_projected_bins(
     normalization: DiscreteProjectionNormalization,
     total_count: i64,
     bin_limit: usize,
-    discrete_pdf: Option<&DiscretePdfCache>,
+    discrete_mass: Option<&DiscreteMassCache>,
 ) -> Result<Vec<JsonValue>, String> {
     let mut projected = BTreeMap::<Vec<i64>, DiscreteProjectionBinState>::new();
     for bin in bins.values() {
@@ -1383,23 +1565,23 @@ fn scalar_projected_bins(
         .values()
         .enumerate()
         .map(|(index, bin)| {
-            let pdf_cache_available = discrete_pdf.is_some();
-            let pdf = discrete_pdf.and_then(|cache| cache.get(projection_name, &bin.discrete));
+            let pdf_cache_available = discrete_mass.is_some();
+            let pdf = discrete_mass.and_then(|cache| cache.get(projection_name, &bin.discrete));
             let pdf_status = if pdf.is_some() {
                 "available"
             } else if pdf_cache_available {
-                "missing_bin"
+                "unspecified"
             } else {
                 "unavailable"
             };
             let value = scalar_bin_value(bin, normalization, total_count);
             let error = scalar_bin_error(bin, normalization, total_count);
             let relative_error = if value != 0.0 {
-                Some((error / value).abs())
+                error.map(|error| (error / value).abs())
             } else {
                 None
             };
-            let error_contribution = error * error;
+            let error_contribution = error.map(|error| error * error);
             let contribution = bin.contribution_mean(total_count);
             let contribution_error = bin.contribution_stderr(total_count);
             let pdf_scaled_value = pdf.map(|pdf| pdf * total_abs_contribution);
@@ -1480,7 +1662,7 @@ fn scalar_bin_error(
     bin: &DiscreteProjectionBinState,
     normalization: DiscreteProjectionNormalization,
     total_count: i64,
-) -> f64 {
+) -> Option<f64> {
     match normalization {
         DiscreteProjectionNormalization::Contribution => bin.contribution_stderr(total_count),
         DiscreteProjectionNormalization::ConditionalMean => bin.stderr(),
@@ -1551,32 +1733,32 @@ fn projection_key_label(key: &[i64]) -> String {
     }
 }
 
-struct DiscretePdfCache<'a> {
+struct DiscreteMassCache<'a> {
     projections: &'a serde_json::Map<String, JsonValue>,
 }
 
-impl DiscretePdfCache<'_> {
+impl DiscreteMassCache<'_> {
     fn get(&self, projection_name: &str, key: &[i64]) -> Option<f64> {
         self.projections
             .get(projection_name)
             .and_then(JsonValue::as_object)
-            .and_then(|projection| projection.get(&discrete_pdf_key(key)))
+            .and_then(|projection| projection.get(&discrete_mass_key(key)))
             .and_then(JsonValue::as_f64)
             .filter(|value| value.is_finite())
     }
 }
 
-fn discrete_pdf_cache(diagnostics: &JsonValue) -> Option<DiscretePdfCache<'_>> {
-    let cache = diagnostics.get("discrete_pdf")?;
-    if cache.get("schema").and_then(JsonValue::as_str) != Some("gammaboard-discrete-pdf-v1") {
+fn discrete_mass_cache(diagnostics: &JsonValue) -> Option<DiscreteMassCache<'_>> {
+    let cache = diagnostics.get("discrete_mass")?;
+    if cache.get("schema").and_then(JsonValue::as_str) != Some("gammaboard-discrete-mass-v1") {
         return None;
     }
-    Some(DiscretePdfCache {
+    Some(DiscreteMassCache {
         projections: cache.get("projections")?.as_object()?,
     })
 }
 
-fn discrete_pdf_key(key: &[i64]) -> String {
+fn discrete_mass_key(key: &[i64]) -> String {
     serde_json::to_string(key).unwrap_or_else(|_| "[]".to_string())
 }
 
@@ -1836,7 +2018,7 @@ mod tests {
         let mut state = crate::evaluation::GammaLoopAccumulatorState::default();
         state
             .estimate
-            .ingest_vector_with_details(&[15.0, -20.0], &point, Some(&evaluation))
+            .ingest_vector_with_details(&[15.0, -20.0], &point, Some(&evaluation), None)
             .unwrap();
         // Read a persisted accumulator, as the panel does for existing runs.
         let accumulator =
@@ -1872,6 +2054,7 @@ mod tests {
             );
         }
         let mut retained = crate::DiagnosticSample {
+            stratum: None,
             point,
             evaluation: Some(evaluation),
         };
@@ -1917,10 +2100,12 @@ mod tests {
                     "Imag vs Target",
                     "Abs Real Mean",
                     "Abs Imag Mean",
-                    "Norm Mean",
+                    "Mean of per-sample norm",
                     "RSD",
                     "ESS",
                     "Count",
+                    "Estimator",
+                    "Uncertainty",
                 ]
             );
             for (index, mean, error) in [
@@ -1931,9 +2116,14 @@ mod tests {
                 (6, 9.0, 1.0),
             ] {
                 assert_eq!(entries[index].value["value"], mean);
-                assert_eq!(entries[index].value["error"], error);
+                assert!(
+                    (entries[index].value["error"].as_f64().unwrap()
+                        - error * (16.0_f64 / 15.0).sqrt())
+                    .abs()
+                        < 1e-14
+                );
             }
-            assert_eq!(entries[7].value, 1.0);
+            assert!((entries[7].value.as_f64().unwrap() - (16.0_f64 / 15.0).sqrt()).abs() < 1e-14);
             assert!((entries[8].value.as_f64().unwrap() - 56.25 / 76.5).abs() < 1e-14);
             assert_eq!(entries[9].value, 16);
             for (index, name) in [(2, "real"), (3, "imag")] {
@@ -1949,6 +2139,7 @@ mod tests {
     fn historical_efficiency_plots_use_the_tasks_training_phase_and_follow_mean_plots() {
         let accumulator = complex_samples();
         let snapshot = crate::stores::TaskOutputSnapshot {
+            sampler_uptime_ms: None,
             id: "1".into(),
             run_id: 1,
             task_id: "1".into(),
@@ -1998,7 +2189,7 @@ mod tests {
                     "ess_history",
                 ]
             );
-            for (index, expected) in [(4, rsd), (5, ess)] {
+            for (index, expected) in [(4, rsd * (16.0_f64 / 15.0).sqrt()), (5, ess)] {
                 assert_eq!(projectors[index].spec().width, PanelWidth::Half);
                 let panel = projectors[index]
                     .history(&TaskPanelHistoryContext {
@@ -2076,6 +2267,7 @@ mod tests {
 
             // Existing history contains moments, with no stored ESS field.
             let snapshot = crate::stores::TaskOutputSnapshot {
+                sampler_uptime_ms: None,
                 id: "1".into(),
                 run_id: 1,
                 task_id: "1".into(),
@@ -2083,10 +2275,10 @@ mod tests {
                 created_at: None,
             };
             let projectors = projectors(config);
-            for projector in projectors
-                .iter()
-                .filter(|projector| projector.spec().history == PanelHistoryMode::Append)
-            {
+            for projector in projectors.iter().filter(|projector| {
+                projector.spec().history == PanelHistoryMode::Append
+                    && matches!(projector.spec().kind, PanelKind::ScalarTimeseries)
+            }) {
                 let panel = projector
                     .history(&TaskPanelHistoryContext {
                         snapshot: &snapshot,
@@ -2104,7 +2296,7 @@ mod tests {
                 .iter()
                 .find(|p| p.spec().panel_id == "ess_history")
                 .unwrap();
-            assert_eq!(projector.spec().label, "ESS");
+            assert_eq!(projector.spec().label, "Training projection ESS");
             assert_eq!(projector.spec().history, PanelHistoryMode::Append);
             let panel = projector
                 .history(&TaskPanelHistoryContext {
@@ -2253,7 +2445,12 @@ mod stratification_panels {
         let plan = StratificationPlan {
             proposal_id: "hybrid-history".into(),
             partition: StratificationConfig::Voronoi {
-                centers: vec![vec![-1., -2.], vec![1., 2.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![-1., -2.], vec![1., 2.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: Some(vec![0.25, 0.75]),
@@ -2275,8 +2472,17 @@ mod stratification_panels {
             }
         }
         let accumulator = AccumulatorState::Stratified(Box::new(state.clone()));
-        assert!(real_estimate_history_panel(accumulator.clone()).is_none());
-        assert!(imag_estimate_history_panel(accumulator.clone()).is_none());
+        let Some(PanelState::ScalarTimeseries { points, .. }) =
+            real_estimate_history_panel(accumulator.clone())
+        else {
+            panic!("provisional history")
+        };
+        assert!(points[0].y_min.is_none() && points[0].y_max.is_none());
+        assert_eq!(
+            points[0].estimator,
+            Some(crate::core::EstimateKind::Stratified)
+        );
+        assert!(imag_estimate_history_panel(accumulator.clone()).is_some());
         assert!(max_weight_summary_panel(accumulator.clone()).is_some());
         assert!(max_weight_points_panel(accumulator).is_some());
         for _ in 0..2 {
@@ -2323,7 +2529,12 @@ mod stratification_panels {
         let plan = StratificationPlan {
             proposal_id: "history".into(),
             partition: StratificationConfig::Voronoi {
-                centers: vec![vec![-1.], vec![1.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![-1.], vec![1.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: Some(vec![0.5, 0.5]),
@@ -2340,8 +2551,11 @@ mod stratification_panels {
         assert_eq!(restored.kind_str(), "stratified");
         let entries = base_estimate_summary_entries(&restored, None);
         let value = |key: &str| &entries.iter().find(|entry| entry.key == key).unwrap().value;
-        assert_eq!(value("component_value_mean"), &json!(1.0));
-        assert_eq!(value("stratum_0_value"), &json!(0.0));
+        assert_eq!(value("component_value_mean")["value"], json!(1.0));
+        assert!(value("component_value_mean")["error"].is_null());
+        assert_eq!(value("component_value_mean")["basic"]["mean"], json!(1.0));
+        assert_eq!(value("stratum_0_value")["value"], json!(0.0));
+        assert!(value("stratum_0_value")["error"].is_null());
         assert_eq!(value("stratum_1_value")["error"], json!(0.0));
         assert!(
             value("stratum_0_warning")
@@ -2355,7 +2569,7 @@ mod stratification_panels {
                 .unwrap()
                 .contains("Unavailable")
         );
-        assert!(real_estimate_history_panel(restored.clone()).is_none());
+        assert!(real_estimate_history_panel(restored.clone()).is_some());
         assert!(rsd_history_panel(restored.clone()).is_none());
         assert!(ess_history_panel(restored).is_none());
     }

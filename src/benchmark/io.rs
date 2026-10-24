@@ -161,12 +161,12 @@ fn prepare(size: usize, feedback: bool, bundle: usize) -> Result<Prepared> {
         },
     )?;
     ensure!(
-        !feedback || result.training_values.as_ref() == Some(&values),
+        !feedback || result.feedback.as_ref().map(|f| &f.unmasked_values) == Some(&values),
         "prepared feedback differs from f(x)=x[0]"
     );
     let latent = latent.for_evaluation(AccumulatorConfig::scalar());
     let input_bytes = latent.to_bytes()?.len();
-    let feedback_bytes = result.training_values_to_bytes()?.map_or(0, |v| v.len());
+    let feedback_bytes = result.feedback_to_bytes()?.map_or(0, |v| v.len());
     Ok(Prepared {
         batches: vec![latent; bundle],
         result,
@@ -321,7 +321,7 @@ async fn consumer(
     while let Some(batch) = rx.recv().await {
         ensure!(
             batch.latent_batch.nr_samples == prepared.batches[0].samples.nr_samples
-                && batch.requires_training_values == prepared.result.training_values.is_some(),
+                && batch.requires_training_values == prepared.result.feedback.is_some(),
             "unexpected input batch"
         );
         {
@@ -477,7 +477,7 @@ async fn run_case(
                                 .insert_batches(
                                     run,
                                     task,
-                                    data.result.training_values.is_some(),
+                                    data.result.feedback.is_some(),
                                     &ids,
                                     &data.batches,
                                 )
@@ -557,8 +557,7 @@ async fn run_case(
                     ensure!(
                         completed
                             .iter()
-                            .all(|b| b.result.training_values.is_some()
-                                == b.requires_training_values),
+                            .all(|b| b.result.feedback.is_some() == b.requires_training_values),
                         "missing feedback"
                     );
                     {

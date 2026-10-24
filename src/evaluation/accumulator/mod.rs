@@ -9,9 +9,11 @@ mod gammaloop;
 mod gammaloop_diagnostics;
 mod gammaloop_statistics;
 pub(crate) mod metrics;
+mod partition_diagnostics;
 mod scalar;
 mod stratified;
 mod vector;
+pub use partition_diagnostics::PartitionDiagnostics;
 pub use stratified::{StratifiedAccumulatorState, StratumMoments};
 
 use crate::core::{AccumulatorConfig, EngineError, RunSpec};
@@ -96,7 +98,9 @@ impl AccumulatorState {
     pub fn uncertainty_ready(&self) -> bool {
         match self {
             Self::Stratified(state) => state.uncertainty_ready(),
-            _ => true,
+            Self::Vector(state) => state.projection().state.count >= 2,
+            Self::Gammaloop(state) => state.estimate.projection().state.count >= 2,
+            Self::Empty(_) | Self::FullVector(_) => false,
         }
     }
 

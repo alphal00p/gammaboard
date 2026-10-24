@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, Self
 import numpy as np
 from numpy.typing import ArrayLike
 
+from .domain import Domain
+from .feedback import Feedback
 from .batches import Batch, GenerationStatus, SampleBatch
 
 if TYPE_CHECKING:
@@ -26,11 +28,13 @@ class Evaluator(_EvaluatorBase):
 
     Inheritance is not required. ``run_evaluator`` accepts any class with a
     compatible ``eval`` method. Fresh workers construct evaluators as
-    ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
+    ``ClassName(domain=..., **args)``.
     """
 
     @abstractmethod
-    def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> ArrayLike | dict[str, ArrayLike]:
+    def eval(
+        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
+    ) -> ArrayLike | dict[str, ArrayLike]:
         """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
 
 
@@ -43,8 +47,13 @@ class GammaLoopEvaluator(_EvaluatorBase):
 
     @abstractmethod
     def eval_gammaloop(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
-        weights: np.ndarray, *, require_training_values: bool, stratification: StratificationContext | None,
+        self,
+        xs_discrete: np.ndarray,
+        xs_continuous: np.ndarray,
+        weights: np.ndarray,
+        *,
+        require_training_values: bool,
+        stratification: StratificationContext | None,
     ) -> GammaLoopBatchResult:
         """Evaluate a batch and return a GammaLoop accumulator state.
 
@@ -56,7 +65,7 @@ class GammaLoopEvaluator(_EvaluatorBase):
         list of weighted per-sample training values when requested, otherwise None.
         Apply the supplied total weights exactly once to state and feedback.
         ``stratification`` is None or a StratificationContext. Use its ``mask``
-        on raw real/imag values before accumulating observables. Count misses as
+        on raw real/imag values before accumulating observables; leave training values unmasked. Count misses as
         zero samples, and return unmasked (N,2) values in the result when present.
 
         """
@@ -67,7 +76,7 @@ class Sampler(ABC):
 
     Inheritance is not required. ``run_sampler`` accepts any class with the
     required sampler methods. Fresh workers construct samplers as
-    ``ClassName(discrete_cardinalities=..., continuous_dims=..., evaluator_metadata=..., **args)``
+    ``ClassName(domain=..., evaluator_metadata=..., **args)``
     including the ``evaluator_metadata`` keyword.
     """
 
@@ -83,8 +92,8 @@ class Sampler(ABC):
         """
 
     @abstractmethod
-    def feedback(self, values: np.ndarray) -> None:
-        """Consume weighted values for exactly one draw, in generation order."""
+    def feedback(self, feedback: Feedback) -> None:
+        """Consume one complete draw; feedback.values is already masked by GammaBoard."""
 
     @abstractmethod
     def snapshot(self) -> Any:
@@ -96,22 +105,29 @@ class Sampler(ABC):
         cls,
         *,
         snapshot: Any,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
+        domain: Domain,
         init_args: dict[str, Any],
         evaluator_metadata: Any = None,
     ) -> Self:
         """Restore all private state needed for pending feedback from a non-null snapshot."""
-        raise NotImplementedError("override from_snapshot(...) to support sampler restore")
+        raise NotImplementedError(
+            "override from_snapshot(...) to support sampler restore"
+        )
 
     @classmethod
-    def from_stage(cls, *, source_state: Any, source_args: dict[str, Any],
-                   init_args: dict[str, Any], discrete_cardinalities: list[int],
-                   continuous_dims: int, evaluator_metadata: Any = None) -> Self:
+    def from_stage(
+        cls,
+        *,
+        source_state: Any,
+        source_args: dict[str, Any],
+        init_args: dict[str, Any],
+        domain,
+        evaluator_metadata: Any = None,
+    ) -> Self:
         """Transfer a trained proposal into a fresh stage; no pending feedback/counters.
 
         Exact restoration is from_snapshot. Stratified inference assumes independent
-        draws from a frozen proposal and exact normalized discrete_pdf probabilities.
+        draws from a frozen proposal and exact normalized discrete_mass probabilities.
         No capability declaration certifies those statistical assumptions.
         """
         raise NotImplementedError("sampler does not support stage handoff")
@@ -119,15 +135,11 @@ class Sampler(ABC):
     def pdf(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> Any:
         return None
 
-    def discrete_pdf(self, subspaces: list[dict[int, int]]) -> Any:
+    def discrete_mass(self, subspaces: list[dict[int, int]]) -> Any:
         return None
 
     def diagnostics(self) -> dict[str, Any]:
         return {}
-
-    def global_pdf_norm(self) -> float:
-        """Return the finite positive PDF normalization used by PDF diagnostics."""
-        return 1.0
 
     def persisted_output(self) -> Any:
         """Return optional JSON task output; this is separate from recovery state."""
@@ -139,7 +151,7 @@ class Materializer(ABC):
 
     Inheritance is not required. ``run_materializer`` accepts any class with a
     compatible ``materialize_batch`` method. Fresh workers construct
-    materializers as ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
+    materializers as ``ClassName(domain=..., **args)``.
     """
 
     @abstractmethod
@@ -152,7 +164,7 @@ class BatchTransform(ABC):
 
     Inheritance is not required. ``run_batch_transform`` accepts any class with
     a compatible ``transform_batch`` method. Fresh workers construct transforms
-    as ``ClassName(discrete_cardinalities=..., continuous_dims=..., **args)``.
+    as ``ClassName(domain=..., **args)``.
     """
 
     @abstractmethod

@@ -131,6 +131,7 @@ struct TaskOutputSnapshotRow {
     task_id: i64,
     persisted_output: JsonValue,
     created_at: Option<DateTime<Utc>>,
+    sampler_uptime_ms: Option<f64>,
 }
 
 impl From<TaskOutputSnapshotRow> for TaskOutputSnapshot {
@@ -141,6 +142,7 @@ impl From<TaskOutputSnapshotRow> for TaskOutputSnapshot {
             task_id: id_text(value.task_id),
             persisted_output: value.persisted_output,
             created_at: value.created_at,
+            sampler_uptime_ms: value.sampler_uptime_ms,
         }
     }
 }
@@ -681,12 +683,17 @@ pub(crate) async fn get_task_output_snapshots(
     let rows = sqlx::query_as::<_, TaskOutputSnapshotRow>(
         r#"
         SELECT
-            id,
-            run_id,
-            task_id,
-            persisted_observable AS persisted_output,
-            created_at
-        FROM persisted_observable_snapshots
+            s.id,
+            s.run_id,
+            s.task_id,
+            s.persisted_observable AS persisted_output,
+            s.created_at,
+            (SELECT (p.metrics->>'sampler_uptime_ms')::double precision
+             FROM sampler_aggregator_performance_history p
+             WHERE p.run_id=s.run_id AND p.created_at<=s.created_at
+               AND p.metrics->>'task_id'=s.task_id::text
+             ORDER BY p.created_at DESC,p.id DESC LIMIT 1) AS sampler_uptime_ms
+        FROM persisted_observable_snapshots s
         WHERE run_id = $1
           AND task_id = $2
           AND ($3::bigint IS NULL OR id > $3)

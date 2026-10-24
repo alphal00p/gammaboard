@@ -155,20 +155,8 @@ impl PanelProvider<SamplerAggregatorPanelContext<'_>> for SamplingConfig {
     }
 }
 
-fn summarize_domain(domain: &Domain) -> String {
-    match domain {
-        Domain::Rectangular {
-            discrete_cardinalities,
-            continuous_dims,
-        } => format!("rectangular({discrete_cardinalities:?}; continuous={continuous_dims})"),
-        Domain::Discrete {
-            axis_label,
-            branches,
-        } => {
-            let axis = axis_label.as_deref().unwrap_or("discrete");
-            format!("{axis}[{}]", branches.len())
-        }
-    }
+fn summarize_domain(domain: &Domain) -> JsonValue {
+    json!(domain)
 }
 
 fn json_value_panel(panel_id: &str, value: &JsonValue) -> Result<Option<PanelState>, EngineError> {

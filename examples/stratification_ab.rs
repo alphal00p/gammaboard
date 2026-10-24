@@ -1,12 +1,12 @@
 //! Reproducible A/B experiment using the production Symbolica/Havana pipeline.
 use anyhow::{Context, Result, bail};
 use gammaboard::core::{StratificationConfig, StratificationPlan, TrainingProjection};
-use gammaboard::evaluation::stratification::physical_batch;
+use gammaboard::evaluation::stratification::integrand_batch;
 use gammaboard::evaluation::{AccumulatorState, EvalBatchOptions};
 use gammaboard::sampling::{DiscreteSubspace, Generation, StageHandoff};
 use gammaboard::{AccumulatorConfig, Batch, Evaluator, EvaluatorConfig, SamplingConfig};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::PathBuf, time::Instant};
+use std::{path::PathBuf, time::Instant};
 
 fn value<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
     args.windows(2).find(|p| p[0] == key).map(|p| p[1].as_str())
@@ -23,7 +23,7 @@ fn main() -> Result<()> {
         "positive budgets/batch size and at least two trials required"
     );
     let components = vec!["x".into(), "y".into(), "z".into()];
-    let centers = vec![
+    let centers = [
         vec![1., 1., 1.],
         vec![-1., 1., -1.],
         vec![-1., -1., 1.],
@@ -41,7 +41,12 @@ fn main() -> Result<()> {
     let domain = evaluator.domain();
     let accumulator = AccumulatorConfig::vector(components.clone(), TrainingProjection::Norm);
     let partition = StratificationConfig::Voronoi {
-        centers: centers.clone(),
+        domain: gammaboard::Domain::strata(vec![2, 2]),
+        centers: centers
+            .iter()
+            .enumerate()
+            .map(|(k, c)| (vec![(k / 2) as i64, (k % 2) as i64], c.clone()))
+            .collect(),
         scales: Some(vec![1., 1., 1.]),
     };
     let mut records = vec![];
@@ -85,7 +90,7 @@ fn main() -> Result<()> {
                     training_remaining.is_some(),
                     training_plan.as_ref(),
                 )?;
-                if let Some(feedback) = result.training_values {
+                if let Some(feedback) = result.feedback {
                     sampler.feedback(&feedback)?;
                 }
                 generated += size;
@@ -101,13 +106,14 @@ fn main() -> Result<()> {
             let mut sampler = config.from_stage(&domain, handoff)?;
             let mut materializer = config.build_materializer(&domain, Some(handoff))?;
             let plan = if stratified {
-                let queries = (0..centers.len())
-                    .map(|k| DiscreteSubspace {
-                        fixed_dims: BTreeMap::from([(0, k as i64)]),
+                let queries = partition
+                    .prefixes()
+                    .map(|prefix| DiscreteSubspace {
+                        fixed_dims: prefix.iter().copied().enumerate().collect(),
                     })
                     .collect::<Vec<_>>();
                 let probabilities = sampler
-                    .discrete_pdf_batch(&queries)?
+                    .discrete_mass_batch(&queries)?
                     .into_iter()
                     .collect::<Option<Vec<_>>>()
                     .context("missing discrete probabilities")?;
@@ -182,7 +188,7 @@ fn main() -> Result<()> {
             records.push(record);
         }
     }
-    let result = json!({"schema":"gammaboard-stratification-ab-v1","integrand":{"exprs":exprs,"centers":centers,"scales":[1.,1.,1.],"domain":[0.,1.],"exact_integral":[0.,0.,0.]},"configuration":{"trials":trials,"training_samples":training,"inference_samples":inference,"batch_size":batch_size,"havana_bins":64,"training_window":4096},"build":gammaboard::provenance::build_info(),"records":records});
+    let result = json!({"schema":"gammaboard-stratification-ab-v2","integrand":{"exprs":exprs,"stratification":partition,"domain":[0.,1.],"exact_integral":[0.,0.,0.]},"configuration":{"trials":trials,"training_samples":training,"inference_samples":inference,"batch_size":batch_size,"havana_bins":64,"training_window":4096},"build":gammaboard::provenance::build_info(),"records":records});
     if let Some(parent) = output.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -204,9 +210,9 @@ fn evaluate(
         stratification: None,
     };
     Ok(if let Some(plan) = plan {
-        let (physical, labels) = physical_batch(batch, plan)?;
+        let (integrand, labels) = integrand_batch(batch, plan)?;
         evaluator.eval_batch(
-            &physical,
+            &integrand,
             config,
             EvalBatchOptions {
                 stratification: Some((plan, &labels)),

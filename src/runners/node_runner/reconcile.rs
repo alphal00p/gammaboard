@@ -479,6 +479,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             .await?;
 
         let sampler_config = sampler_initialization.config().clone();
+        let diagnostic_accumulator_config = sampler_initialization.diagnostic_accumulator_config();
         let sampler = match sampler_initialization.initialize(
             spec.domain.clone(),
             sample_budget,
@@ -498,7 +499,8 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             }
         };
 
-        let new_accumulator_config = task.task.new_accumulator_config().store_err()?;
+        let new_accumulator_config =
+            diagnostic_accumulator_config.or(task.task.new_accumulator_config().store_err()?);
 
         let observable_state = Self::resolve_observable_state_for_sampler_task(
             worker.run_id,

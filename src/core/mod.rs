@@ -12,14 +12,15 @@ pub mod traits;
 pub use batch_ids::next_batch_ids;
 pub use errors::{EngineError, EngineResultExt, StoreError, StoreResultExt};
 pub use models::{
-    AssignmentTarget, BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchStatus, CompletedBatch,
-    DerivedResultSnapshot, EvaluationBatch, EvaluatorPerformanceMetrics,
-    EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome, MeasurementResult,
-    NodeAssignmentUpdate, NodeCapabilities, NodeLaunchRequest, QueueBlocker, RegisteredNode,
-    ResultSourceRef, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot, RuntimeLogEvent,
-    SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics, SamplerQueueRollingAverages,
-    SamplerQueueRuntimeMetrics, SamplerWorkRollingAverages, WorkerBusyMetrics,
-    WorkerPerformanceSnapshot, WorkerReportContext, WorkerRole,
+    AssignmentTarget, BasicEstimate, BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchStatus,
+    CompletedBatch, DerivedResultSnapshot, EstimateKind, EvaluationBatch,
+    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, InsertBatchesMetrics,
+    InsertBatchesOutcome, MeasurementResult, NodeAssignmentUpdate, NodeCapabilities,
+    NodeLaunchRequest, QueueBlocker, RegisteredNode, ResultSourceRef, RollingMetricSnapshot,
+    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
+    SamplerPerformanceMetrics, SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics,
+    SamplerWorkRollingAverages, WorkerBusyMetrics, WorkerPerformanceSnapshot, WorkerReportContext,
+    WorkerRole,
 };
 pub use run_spec::{
     AccumulatorConfig, AccumulatorMomentConfig, BatchTransformConfig, CapabilityRequirements,

@@ -212,11 +212,7 @@ count = 128
         .latest_task_persisted_observable(run_id, "pdf-2d")
         .await?;
     let output: PdfAdaptationImagePersistedOutput = serde_json::from_value(persisted)?;
-    assert!(
-        output.global_pdf_norm.is_finite() && output.global_pdf_norm > 0.0,
-        "expected positive global pdf norm, got {}",
-        output.global_pdf_norm
-    );
+
     assert!(
         output
             .global_abs_integrand_norm
@@ -1053,6 +1049,7 @@ fixed_batch_size = 64
         ("normalization", state.real_mean(), state.real_stderr()),
         ("moment", state.imag_mean(), state.imag_stderr()),
     ] {
+        let stderr = stderr.expect("sufficient inference samples");
         eprintln!("reference inference {label}: {mean:.6} +/- {stderr:.6}");
         assert!(stderr.is_finite() && stderr < 0.15);
         assert!(

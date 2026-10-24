@@ -18,8 +18,7 @@ class SinIntegrand(Evaluator):
     def __init__(
         self,
         *,
-        discrete_cardinalities: list[int],
-        continuous_dims: int,
+        domain,
         scale: float = 1.0,
         bias: float = 0.0,
         freq_u: float = 2.0,
@@ -27,7 +26,10 @@ class SinIntegrand(Evaluator):
         branch_weights: list[list[float]] | None = None,
         phase_offsets: list[list[float]] | None = None,
     ) -> None:
-        if [int(value) for value in discrete_cardinalities] != [2, 3] or int(continuous_dims) != 2:
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
+        if [int(value) for value in discrete_cardinalities] != [2, 3] or int(
+            continuous_dims
+        ) != 2:
             raise ValueError(
                 "SinIntegrand expects discrete_cardinalities=[2, 3] and continuous_dims=2"
             )
@@ -64,9 +66,13 @@ class SinIntegrand(Evaluator):
 
     def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> np.ndarray:
         if xs_discrete.ndim != 2 or xs_discrete.shape[1] != 2:
-            raise ValueError(f"expected discrete shape (nr_samples, 2), got {xs_discrete.shape}")
+            raise ValueError(
+                f"expected discrete shape (nr_samples, 2), got {xs_discrete.shape}"
+            )
         if xs_continuous.ndim != 2 or xs_continuous.shape[1] != 2:
-            raise ValueError(f"expected continuous shape (nr_samples, 2), got {xs_continuous.shape}")
+            raise ValueError(
+                f"expected continuous shape (nr_samples, 2), got {xs_continuous.shape}"
+            )
         if xs_discrete.shape[0] != xs_continuous.shape[0]:
             raise ValueError("discrete/continuous batch size mismatch")
         if not np.isfinite(xs_continuous).all():
@@ -97,10 +103,15 @@ class SinIntegrand(Evaluator):
         phase = self.phase_offsets[spin, channel]
         branch_weight = self.branch_weights[spin, channel]
         oscillation = np.sin(
-            (spin_f + 1.0) * self.freq_u * u + (channel_f + 1.0) * self.freq_v * v + phase
+            (spin_f + 1.0) * self.freq_u * u
+            + (channel_f + 1.0) * self.freq_v * v
+            + phase
         )
         coupling = 1.0 + 0.15 * np.cos((spin_f - channel_f) * u * v)
-        result = self.bias + self.scale * branch_weight * coupling * oscillation * np.exp(-radial)
+        result = (
+            self.bias
+            + self.scale * branch_weight * coupling * oscillation * np.exp(-radial)
+        )
 
         # Per-batch detail at debug (off by default; raise the log levels to see).
         log(

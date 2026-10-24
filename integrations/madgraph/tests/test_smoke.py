@@ -1,4 +1,5 @@
 from __future__ import annotations
+from gammaboard_process.domain import RectangularDomain
 
 import json
 import os
@@ -45,8 +46,7 @@ def test_pinned_checkout_with_user_writable_lhapdf_data() -> None:
         flavor_index=0,
     )
     evaluator = MadGraphEvaluator(
-        discrete_cardinalities=[],
-        continuous_dims=state.random_dim,
+        domain=RectangularDomain(tuple([]), state.random_dim),
         state_path=state_path,
         madgraph_root=madgraph_root,
         output=["weight"],
@@ -91,7 +91,17 @@ def test_evaluator_rejects_invalid_config(
     with patch("madgraph_gammaboard.evaluator.MadSpaceState") as mock_cls:
         mock_cls.load.return_value = _fake_state(random_dim, np.array([]))
         with pytest.raises(ValueError, match=message):
-            MadGraphEvaluator(state_path="/fake", **kwargs)
+            MadGraphEvaluator(
+                state_path="/fake",
+                domain=RectangularDomain(
+                    tuple(kwargs["discrete_cardinalities"]), kwargs["continuous_dims"]
+                ),
+                **{
+                    k: v
+                    for k, v in kwargs.items()
+                    if k not in ("discrete_cardinalities", "continuous_dims")
+                },
+            )
 
 
 def test_evaluator_eval_returns_weight() -> None:
@@ -99,8 +109,7 @@ def test_evaluator_eval_returns_weight() -> None:
     with patch("madgraph_gammaboard.evaluator.MadSpaceState") as mock_cls:
         mock_cls.load.return_value = _fake_state(2, weights)
         evaluator = MadGraphEvaluator(
-            discrete_cardinalities=[],
-            continuous_dims=2,
+            domain=RectangularDomain(tuple([]), 2),
             state_path="/fake",
             output=["weight"],
         )
@@ -118,8 +127,7 @@ def test_evaluator_default_output_is_weight() -> None:
     with patch("madgraph_gammaboard.evaluator.MadSpaceState") as mock_cls:
         mock_cls.load.return_value = _fake_state(2, weights)
         evaluator = MadGraphEvaluator(
-            discrete_cardinalities=[],
-            continuous_dims=2,
+            domain=RectangularDomain(tuple([]), 2),
             state_path="/fake",
         )
         result = evaluator.eval(
@@ -135,12 +143,14 @@ def test_evaluator_exposes_state_metadata() -> None:
     with patch("madgraph_gammaboard.evaluator.MadSpaceState") as mock_cls:
         mock_cls.load.return_value = _fake_state(2, np.array([1.0]))
         evaluator = MadGraphEvaluator(
-            discrete_cardinalities=[],
-            continuous_dims=2,
+            domain=RectangularDomain(tuple([]), 2),
             state_path="/fake",
         )
 
-    assert evaluator.metadata()["integrand"] == "phase_space_mapping+differential_cross_section"
+    assert (
+        evaluator.metadata()["integrand"]
+        == "phase_space_mapping+differential_cross_section"
+    )
 
 
 def _native_info() -> dict:
@@ -214,7 +224,11 @@ def test_native_event_evaluator_runs_generated_state(tmp_path) -> None:
     (state_path / "bin" / "generate_events").write_text("#!/bin/sh\n")
 
     def fake_run(*args, **kwargs):
-        assert args[0] == ["/usr/bin/python3", str(state_path / "bin/generate_events"), "-f"]
+        assert args[0] == [
+            "/usr/bin/python3",
+            str(state_path / "bin/generate_events"),
+            "-f",
+        ]
         run_path = state_path / "Events" / "run_01"
         run_path.mkdir()
         (run_path / "info.json").write_text(json.dumps(_native_info()))
@@ -224,8 +238,7 @@ def test_native_event_evaluator_runs_generated_state(tmp_path) -> None:
         return result
 
     evaluator = MadGraphEventEvaluator(
-        discrete_cardinalities=[],
-        continuous_dims=0,
+        domain=RectangularDomain(tuple([]), 0),
         state_path=str(state_path),
         python="/usr/bin/python3",
     )
@@ -236,7 +249,8 @@ def test_native_event_evaluator_runs_generated_state(tmp_path) -> None:
         result = evaluator.eval_gammaloop(
             np.zeros((1, 0), dtype=np.int64),
             np.zeros((1, 0), dtype=np.float64),
-            np.ones(1), require_training_values=False,
+            np.ones(1),
+            require_training_values=False,
         )
 
     assert result.state["estimate"]["components"][0]["state"]["count"] == 100
@@ -252,8 +266,7 @@ def test_native_event_evaluator_explains_stale_madspace(tmp_path) -> None:
     result.returncode = 1
     result.stdout = "ValueError: Key already present in NamedVector"
     evaluator = MadGraphEventEvaluator(
-        discrete_cardinalities=[],
-        continuous_dims=0,
+        domain=RectangularDomain(tuple([]), 0),
         state_path=str(state_path),
         python="/usr/bin/python3",
     )
@@ -268,5 +281,6 @@ def test_native_event_evaluator_explains_stale_madspace(tmp_path) -> None:
         evaluator.eval_gammaloop(
             np.zeros((1, 0), dtype=np.int64),
             np.zeros((1, 0), dtype=np.float64),
-            np.ones(1), require_training_values=False,
+            np.ones(1),
+            require_training_values=False,
         )

@@ -147,6 +147,8 @@ where
                 trials.push(HyperparameterTrialOutput {
                     index,
                     parameters: parameters_json,
+                    objective_estimator: None,
+                    objective_basic: None,
                     objective_value: None,
                     objective_uncertainty: None,
                     child: ControllerChildOutput::planned(),
@@ -157,6 +159,8 @@ where
                 load_child_task_result_reference(&self.store, child.run_id, &objective.source_task)
                     .await?;
             let mut observed = result.controller_output();
+            let mut objective_estimator = None;
+            let mut objective_basic = None;
             let mut objective_value = None;
             let mut objective_uncertainty = None;
             if result.task_failure_reason().is_none() {
@@ -164,6 +168,8 @@ where
                     Some(TaskMeasurementOutput::Completed { results }) => {
                         match objective_result(objective, results) {
                             Ok(value) => {
+                                objective_estimator = Some(value.estimator);
+                                objective_basic = value.basic.clone();
                                 objective_value = Some(value.value);
                                 objective_uncertainty = value.uncertainty;
                             }
@@ -208,6 +214,8 @@ where
                 parameters: parameters_json,
                 objective_value,
                 objective_uncertainty,
+                objective_estimator,
+                objective_basic,
                 child: observed,
             });
         }
@@ -1785,6 +1793,8 @@ mod tests {
         };
         let results = vec![
             crate::core::MeasurementResult {
+                estimator: crate::core::EstimateKind::Pooled,
+                basic: None,
                 name: AccumulatorMetricName::Mean,
                 component: Some("real".to_string()),
                 value: 1.0,
@@ -1792,6 +1802,8 @@ mod tests {
                 sample_count: 10,
             },
             crate::core::MeasurementResult {
+                estimator: crate::core::EstimateKind::Pooled,
+                basic: None,
                 name: AccumulatorMetricName::Mean,
                 component: Some("imag".to_string()),
                 value: 2.0,
@@ -1815,6 +1827,8 @@ mod tests {
         };
         let results = vec![
             crate::core::MeasurementResult {
+                estimator: crate::core::EstimateKind::Pooled,
+                basic: None,
                 name: AccumulatorMetricName::Mean,
                 component: Some("real".to_string()),
                 value: 1.0,
@@ -1822,6 +1836,8 @@ mod tests {
                 sample_count: 10,
             },
             crate::core::MeasurementResult {
+                estimator: crate::core::EstimateKind::Pooled,
+                basic: None,
                 name: AccumulatorMetricName::Mean,
                 component: Some("imag".to_string()),
                 value: 2.0,
@@ -1847,6 +1863,8 @@ mod tests {
             },
         };
         let results = vec![crate::core::MeasurementResult {
+            estimator: crate::core::EstimateKind::Pooled,
+            basic: None,
             name: AccumulatorMetricName::Mean,
             component: Some("real".to_string()),
             value: 1.0,

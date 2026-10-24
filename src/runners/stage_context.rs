@@ -56,6 +56,22 @@ pub(crate) enum SamplerInitialization {
 }
 
 impl SamplerInitialization {
+    /// PDF probes use the source's output layout/projection, but start fresh statistics.
+    pub(crate) fn diagnostic_accumulator_config(&self) -> Option<crate::core::AccumulatorConfig> {
+        match self {
+            Self::FromStage { config, source }
+                if matches!(
+                    config.sampler,
+                    crate::core::SamplerConfig::PdfAdaptationRasterPlane { .. }
+                        | crate::core::SamplerConfig::PdfAdaptationRasterLine { .. }
+                ) =>
+            {
+                source.observable_state.as_ref().map(|state| state.config())
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn config(&self) -> &SamplingConfig {
         match self {
             Self::Fresh(config) | Self::FromStage { config, .. } => config,

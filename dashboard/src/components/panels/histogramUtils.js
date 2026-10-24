@@ -1,5 +1,5 @@
 import { asArray } from "../../utils/collections";
-import { formatCompactNumber, formatScientific } from "../../utils/formatters";
+import { formatCompactNumber, formatScientific, numberOrNaN } from "../../utils/formatters";
 import { FULL_ZOOM, isObject, normalizeZoomRange } from "./panelView";
 
 export const HISTOGRAM_SORT_CANONICAL = "canonical";
@@ -161,8 +161,8 @@ const computeGammaLoopBinError = (bin, sampleCount) => {
   const n = Number(sampleCount);
   const sumWeights = Number(bin?.sum_weights);
   const sumWeightsSquared = Number(bin?.sum_weights_squared);
-  if (!Number.isFinite(n) || n <= 1 || !Number.isFinite(sumWeights) || !Number.isFinite(sumWeightsSquared)) {
-    return 0;
+  if (!Number.isFinite(n) || n <= 1 || bin?.sum_weights == null || bin?.sum_weights_squared == null || !Number.isFinite(sumWeights) || !Number.isFinite(sumWeightsSquared)) {
+    return null;
   }
   const varianceNumerator = sumWeightsSquared - (sumWeights * sumWeights) / n;
   if (!Number.isFinite(varianceNumerator) || varianceNumerator <= 0) return 0;
@@ -198,7 +198,7 @@ export const buildHistogramData = (bins) =>
       const start = Number(bin?.start);
       const stop = Number(bin?.stop);
       const value = Number(bin?.value);
-      const error = Number(bin?.error);
+      const error = bin?.error == null ? NaN : numberOrNaN(bin.error);
       const x = Number.isFinite(start) && Number.isFinite(stop) ? (start + stop) / 2 : Number.NaN;
       return {
         ...bin,
@@ -206,7 +206,7 @@ export const buildHistogramData = (bins) =>
         stop,
         x,
         value,
-        error: Number.isFinite(error) ? error : 0,
+        error: Number.isFinite(error) ? error : null,
         rangeLabel:
           Number.isFinite(start) && Number.isFinite(stop)
             ? `${formatScientific(start, 4)} → ${formatScientific(stop, 4)}`
@@ -218,16 +218,18 @@ export const buildHistogramData = (bins) =>
 export const buildCdfBins = (bins) => {
   let cumulativeValue = 0;
   let cumulativeVariance = 0;
+  let hasAllErrors = true;
   return asArray(bins).map((bin) => {
     if (!bin) return null;
     const value = Number(bin?.value);
-    const error = Math.abs(Number(bin?.error));
+    const error = bin?.error == null ? NaN : Math.abs(numberOrNaN(bin.error));
     if (Number.isFinite(value)) cumulativeValue += value;
     if (Number.isFinite(error)) cumulativeVariance += error * error;
+    else hasAllErrors = false;
     return {
       ...bin,
       value: cumulativeValue,
-      error: Math.sqrt(cumulativeVariance),
+      error: hasAllErrors ? Math.sqrt(cumulativeVariance) : null,
     };
   });
 };
@@ -261,7 +263,7 @@ export const buildHistogramRenderData = (bins, scale) => {
     ...point,
     raw_y: Number(point.y),
     y: signedLog10(point.y),
-    error: Number.isFinite(point.error) ? point.error : 0,
+    error: Number.isFinite(point.error) ? point.error : null,
   }));
 };
 
@@ -269,7 +271,7 @@ export const buildRelativeErrorStepData = (bins) =>
   buildHistogramStepData(bins)
     .map((point) => {
       const value = Number(point?.y);
-      const error = Number(point?.error);
+      const error = point?.error == null ? NaN : numberOrNaN(point.error);
       if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) {
         return { ...point, relative_error: null, positive_relative_error: null, negative_relative_error: null };
       }
@@ -286,7 +288,7 @@ export const buildRelativeErrorStepData = (bins) =>
 export const buildDiscreteRelativeErrorData = (bins) =>
   asArray(bins).map((bin, index) => {
     const value = Number(bin?.value);
-    const error = Number(bin?.error);
+    const error = bin?.error == null ? NaN : numberOrNaN(bin.error);
     if (!Number.isFinite(value) || !Number.isFinite(error) || value === 0) {
       return { index, relative_error: null, positive_relative_error: null, negative_relative_error: null };
     }
@@ -345,7 +347,7 @@ const normalizeUploadedHistogram = (name, histogram) => {
         const start = Number(bin.start);
         const stop = Number(bin.stop);
         const value = Number(bin.value);
-        const error = Number(bin.error);
+        const error = bin.error == null ? NaN : numberOrNaN(bin.error);
         if (!Number.isFinite(start) || !Number.isFinite(stop) || !Number.isFinite(value)) {
           throw new Error(`histogram '${name}' contains invalid normalized bin at index ${index}`);
         }
@@ -353,7 +355,7 @@ const normalizeUploadedHistogram = (name, histogram) => {
           start,
           stop,
           value,
-          error: Number.isFinite(error) ? Math.abs(error) : 0,
+          error: Number.isFinite(error) ? Math.abs(error) : null,
           label: bin?.label ?? null,
           bin_id: bin?.bin_id ?? null,
           entry_count: bin?.entry_count ?? null,
@@ -384,7 +386,7 @@ const normalizeUploadedHistogram = (name, histogram) => {
         !Number.isFinite(Number(bin?.start)) ||
         !Number.isFinite(Number(bin?.stop)) ||
         !Number.isFinite(Number(bin?.value)) ||
-        !Number.isFinite(Number(bin?.error)),
+        !Number.isFinite(numberOrNaN(bin?.error)),
     )
   ) {
     throw new Error(`histogram '${name}' contains non-finite bin values`);
@@ -396,7 +398,7 @@ const normalizeUploadedHistogram = (name, histogram) => {
       start: Number(bin.start),
       stop: Number(bin.stop),
       value: Number(bin.value),
-      error: Math.abs(Number(bin.error)),
+      error: bin.error == null ? null : Math.abs(numberOrNaN(bin.error)),
       label: bin?.label ?? null,
       bin_id: bin?.bin_id ?? null,
       entry_count: bin?.entry_count ?? null,
@@ -518,7 +520,7 @@ export const buildRelativeErrorYDomain = (points, visibleXRange = null) => {
   const sourcePoints = selectedPoints.length > 0 ? selectedPoints : asArray(points);
   const maxRelativeError = Math.max(
     0,
-    ...sourcePoints.map((point) => Number(point?.relative_error)).filter((value) => Number.isFinite(value)),
+    ...sourcePoints.map((point) => numberOrNaN(point?.relative_error)).filter((value) => Number.isFinite(value)),
   );
   if (maxRelativeError <= 0) return [-1, 1];
   const padded = maxRelativeError * 1.08;

@@ -7,6 +7,65 @@ use crate::utils::domain::Domain;
 
 const DEFAULT_DISCRETE_MAX_PROB_RATIO: f64 = 30.0;
 
+/// Symbolica grids use dense bin positions; domains expose explicit branch labels.
+pub(crate) fn map_discrete_path(
+    domain: &Domain,
+    path: &mut [i64],
+    to_labels: bool,
+) -> Result<(), EngineError> {
+    match domain {
+        Domain::Discrete { branches, .. } => {
+            let (head, tail) = path
+                .split_first_mut()
+                .ok_or_else(|| EngineError::invalid_input("incomplete discrete path"))?;
+            let index = if to_labels {
+                usize::try_from(*head).ok()
+            } else {
+                branches.iter().position(|b| b.index as i64 == *head)
+            }
+            .filter(|&i| i < branches.len())
+            .ok_or_else(|| EngineError::invalid_input("unknown discrete branch"))?;
+            *head = if to_labels {
+                branches[index].index as i64
+            } else {
+                index as i64
+            };
+            map_discrete_path(&branches[index].domain, tail, to_labels)
+        }
+        Domain::Rectangular {
+            discrete_cardinalities,
+            ..
+        } => {
+            if path.len() != discrete_cardinalities.len()
+                || path
+                    .iter()
+                    .zip(discrete_cardinalities)
+                    .any(|(&v, &n)| v < 0 || v as usize >= n)
+            {
+                return Err(EngineError::invalid_input(
+                    "invalid rectangular discrete path",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn branch_domain(domain: &Domain, index: usize) -> std::borrow::Cow<'_, Domain> {
+    match domain {
+        Domain::Discrete { branches, .. } => std::borrow::Cow::Borrowed(&branches[index].domain),
+        Domain::Rectangular {
+            strata_dims,
+            discrete_cardinalities,
+            continuous_dims,
+        } => std::borrow::Cow::Owned(Domain::Rectangular {
+            strata_dims: strata_dims.saturating_sub(1),
+            discrete_cardinalities: discrete_cardinalities[1..].to_vec(),
+            continuous_dims: *continuous_dims,
+        }),
+    }
+}
+
 pub(crate) fn build_havana_grid(
     domain: &Domain,
     params: &HavanaSamplerParams,
@@ -16,6 +75,7 @@ pub(crate) fn build_havana_grid(
         Domain::Rectangular {
             discrete_cardinalities,
             continuous_dims,
+            ..
         } => build_rectangular_havana_grid(*continuous_dims, discrete_cardinalities, params),
         Domain::Discrete { branches, .. } => {
             if branches.is_empty() {
@@ -80,6 +140,7 @@ pub(crate) fn validate_havana_grid_domain(
             Domain::Rectangular {
                 discrete_cardinalities,
                 continuous_dims,
+                ..
             },
         ) => validate_rectangular_havana_grid(
             grid,

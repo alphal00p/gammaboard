@@ -289,9 +289,10 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
     ] {
         let result = evaluator.eval_batch(&batch, &mode, options).unwrap();
         for (actual, expected) in result
-            .training_values
+            .feedback
             .as_ref()
             .unwrap()
+            .values()
             .iter()
             .zip(&expected)
         {
@@ -370,7 +371,12 @@ fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() 
     let plan = StratificationPlan {
         proposal_id: "hybrid-physics".into(),
         partition: StratificationConfig::Voronoi {
-            centers: vec![values[0].clone(), values[2].clone()],
+            domain: crate::Domain::strata(vec![2]),
+            centers: vec![values[0].clone(), values[2].clone()]
+                .into_iter()
+                .enumerate()
+                .map(|(k, c)| (vec![k as i64], c))
+                .collect(),
             scales: None,
         },
         probabilities: Some(vec![0.25, 0.75]),
@@ -415,7 +421,11 @@ fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() 
         let matched = plan.partition.classify(f).unwrap() == k;
         let w = point.total_weight();
         let weighted = if matched { w * f[0] } else { 0. };
-        close(whole.training_values.as_ref().unwrap()[i], weighted);
+        close(whole.feedback.as_ref().unwrap().values()[i], weighted);
+        close(
+            whole.feedback.as_ref().unwrap().unmasked_values[i],
+            w * f[0],
+        );
         expected[k].push(weighted * plan.probabilities.as_ref().unwrap()[k]);
         if matched {
             for (b, bin) in units[i % 3].bundle.histograms["graphs"]
@@ -537,7 +547,7 @@ fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() 
             },
         )
         .unwrap();
-    assert_eq!(trained.training_values, whole.training_values);
+    assert_eq!(trained.feedback, whole.feedback);
     assert_eq!(
         serde_json::to_value(&trained.accumulator.gammaloop().unwrap().bundle).unwrap(),
         serde_json::to_value(&state.pooled.as_ref().unwrap().bundle).unwrap()

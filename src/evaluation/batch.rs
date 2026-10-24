@@ -38,10 +38,72 @@ pub struct SampleEvaluation {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticStratum {
+    pub requested: Vec<i64>,
+    pub actual: Vec<i64>,
+}
+
+pub type StratumPair<'a> = (&'a [i64], &'a [i64]);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticSample {
     pub point: Point,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<SampleEvaluation>,
+    pub stratum: Option<DiagnosticStratum>,
+}
+
+impl DiagnosticSample {
+    pub fn new(
+        point: &Point,
+        evaluation: Option<&SampleEvaluation>,
+        stratum: Option<StratumPair<'_>>,
+    ) -> Self {
+        Self {
+            point: point.clone(),
+            evaluation: evaluation.copied(),
+            stratum: stratum.map(|(requested, actual)| DiagnosticStratum {
+                requested: requested.to_vec(),
+                actual: actual.to_vec(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ContributionExtrema {
+    pub positive: Option<(f64, DiagnosticSample)>,
+    pub negative: Option<(f64, DiagnosticSample)>,
+}
+
+impl ContributionExtrema {
+    pub fn observe(&mut self, value: f64, point: &Point, stratum: StratumPair<'_>) {
+        let slot = if value >= 0.0 {
+            &mut self.positive
+        } else {
+            &mut self.negative
+        };
+        if slot
+            .as_ref()
+            .is_none_or(|(previous, _)| value.abs() > previous.abs())
+        {
+            *slot = Some((value, DiagnosticSample::new(point, None, Some(stratum))));
+        }
+    }
+    pub fn merge(&mut self, other: &Self) {
+        for (left, right) in [
+            (&mut self.positive, &other.positive),
+            (&mut self.negative, &other.negative),
+        ] {
+            if let Some((value, sample)) = right
+                && left
+                    .as_ref()
+                    .is_none_or(|(previous, _)| value.abs() > previous.abs())
+            {
+                *left = Some((*value, sample.clone()));
+            }
+        }
+    }
 }
 
 impl Point {
@@ -155,7 +217,7 @@ impl FromIterator<Point> for Batch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
     /// Weighted training projection; absent when feedback was not requested.
-    pub training_values: Option<Vec<f64>>,
+    pub feedback: Option<crate::sampling::Feedback>,
     pub accumulator: AccumulatorState,
 }
 
@@ -164,9 +226,9 @@ impl BatchResult {
         standard()
     }
 
-    pub fn new(training_values: Option<Vec<f64>>, accumulator: AccumulatorState) -> Self {
+    pub fn new(feedback: Option<crate::sampling::Feedback>, accumulator: AccumulatorState) -> Self {
         Self {
-            training_values,
+            feedback,
             accumulator,
         }
     }
@@ -177,13 +239,13 @@ impl BatchResult {
         require_training_values: bool,
     ) -> Result<(), crate::core::EngineError> {
         self.validate_values()?;
-        if self.training_values.is_some() != require_training_values {
+        if self.feedback.is_some() != require_training_values {
             return Err(crate::core::EngineError::eval(
                 "feedback presence does not match the batch request",
             ));
         }
         if self
-            .training_values
+            .feedback
             .as_ref()
             .is_some_and(|values| values.len() != nr_samples)
         {
@@ -208,8 +270,8 @@ impl BatchResult {
         Ok(())
     }
 
-    pub(crate) fn training_values_to_bytes(&self) -> Result<Option<Vec<u8>>, BatchError> {
-        self.training_values
+    pub(crate) fn feedback_to_bytes(&self) -> Result<Option<Vec<u8>>, BatchError> {
+        self.feedback
             .as_ref()
             .map(|values| {
                 bincode::serde::encode_to_vec(values, Self::binary_config()).map_err(|err| {
@@ -220,12 +282,8 @@ impl BatchResult {
     }
 
     pub(crate) fn validate_values(&self) -> Result<(), crate::core::EngineError> {
-        if let Some(values) = &self.training_values
-            && let Some(sample) = values.iter().position(|value| !value.is_finite())
-        {
-            return Err(crate::core::EngineError::eval(format!(
-                "sample {sample}: non-finite training feedback"
-            )));
+        if let Some(feedback) = &self.feedback {
+            feedback.validate()?;
         }
         self.accumulator.validate_values()
     }
@@ -244,13 +302,13 @@ impl BatchResult {
         Ok(())
     }
 
-    pub(crate) fn training_values_from_bytes(
+    pub(crate) fn feedback_from_bytes(
         values: Option<&[u8]>,
         accumulator: &JsonValue,
     ) -> Result<Self, BatchError> {
         let parsed_values = match values {
             Some(values) => {
-                let (decoded, consumed): (Vec<f64>, usize) =
+                let (decoded, consumed): (crate::sampling::Feedback, usize) =
                     bincode::serde::decode_from_slice(values, Self::binary_config()).map_err(
                         |err| BatchError::layout(format!("invalid batch values payload: {err}")),
                     )?;
@@ -295,18 +353,21 @@ mod tests {
 
     #[test]
     fn training_values_roundtrip_binary() {
-        let result = BatchResult::new(Some(vec![1.0, 2.0, 3.5]), AccumulatorState::empty_scalar());
-        let bytes = result.training_values_to_bytes().expect("encode values");
-        let restored = BatchResult::training_values_from_bytes(
+        let result = BatchResult::new(
+            Some(crate::sampling::Feedback::new(vec![1.0, 2.0, 3.5])),
+            AccumulatorState::empty_scalar(),
+        );
+        let bytes = result.feedback_to_bytes().expect("encode values");
+        let restored = BatchResult::feedback_from_bytes(
             bytes.as_deref(),
             &result.accumulator.to_json().expect("accumulator json"),
         )
         .expect("decode values");
-        assert_eq!(restored.training_values, result.training_values);
+        assert_eq!(restored.feedback, result.feedback);
         let mut trailing = bytes.unwrap();
         trailing.push(0);
         assert!(
-            BatchResult::training_values_from_bytes(
+            BatchResult::feedback_from_bytes(
                 Some(&trailing),
                 &result.accumulator.to_json().unwrap()
             )
@@ -317,7 +378,11 @@ mod tests {
     #[test]
     fn validation_rejects_non_finite_training_feedback() {
         let result = BatchResult::new(
-            Some(vec![1.0, f64::NAN, f64::INFINITY]),
+            Some(crate::sampling::Feedback::new(vec![
+                1.0,
+                f64::NAN,
+                f64::INFINITY,
+            ])),
             AccumulatorState::empty_scalar(),
         );
 
@@ -335,7 +400,7 @@ mod tests {
         assert!(result.validate_for_batch(3, false).is_err());
         assert!(result.validate_for_batch(2, true).is_err());
         result.validate_for_batch(2, false).unwrap();
-        let result = BatchResult::new(Some(vec![1., 2.]), state);
+        let result = BatchResult::new(Some(crate::sampling::Feedback::new(vec![1., 2.])), state);
         assert!(result.validate_for_batch(2, false).is_err());
         result.validate_for_batch(2, true).unwrap();
     }

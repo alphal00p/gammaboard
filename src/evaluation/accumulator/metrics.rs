@@ -40,6 +40,8 @@ pub fn extract_accumulator_metric_with_runtime(
         return Ok(None);
     };
     Ok(Some(MeasurementResult {
+        estimator: variance.estimator,
+        basic: None,
         name: AccumulatorMetricName::TimeNormalizedVariance,
         component: variance.component,
         value: variance.value / rate,
@@ -53,15 +55,12 @@ fn metric_for_vector(
     selector: &AccumulatorMetricSelector,
 ) -> Option<MeasurementResult> {
     match selector.component.as_deref() {
-        None | Some("training_projection") => Some(metric_for_scalar(
+        None | Some("training_projection") => metric_for_scalar(
             &vector.projection().state,
             selector.name,
             Some("training_projection".into()),
-        )),
-        Some(name) => Some(metric_for_named_scalar(
-            vector.component(name)?,
-            selector.name,
-        )),
+        ),
+        Some(name) => metric_for_named_scalar(vector.component(name)?, selector.name),
     }
 }
 
@@ -70,16 +69,16 @@ fn metric_for_gammaloop(
     selector: &AccumulatorMetricSelector,
 ) -> Option<MeasurementResult> {
     match selector.component.as_deref() {
-        Some("norm") => Some(metric_for_scalar(
+        Some("norm") => metric_for_scalar(
             gammaloop.norm_statistics(),
             selector.name,
             Some("norm".into()),
-        )),
-        None | Some("training_projection") => Some(metric_for_scalar(
+        ),
+        None | Some("training_projection") => metric_for_scalar(
             gammaloop.training_statistics()?,
             selector.name,
             Some("training_projection".to_string()),
-        )),
+        ),
         _ => metric_for_vector(&gammaloop.estimate, selector),
     }
 }
@@ -87,7 +86,7 @@ fn metric_for_gammaloop(
 fn metric_for_named_scalar(
     component: &NamedScalarAccumulator,
     name: AccumulatorMetricName,
-) -> MeasurementResult {
+) -> Option<MeasurementResult> {
     metric_for_scalar(&component.state, name, Some(component.name.clone()))
 }
 
@@ -95,7 +94,20 @@ fn metric_for_scalar(
     state: &ScalarAccumulatorState,
     name: AccumulatorMetricName,
     component: Option<String>,
-) -> MeasurementResult {
+) -> Option<MeasurementResult> {
+    if state.count == 0 {
+        return None;
+    }
+    if state.count < 2
+        && matches!(
+            name,
+            AccumulatorMetricName::Variance
+                | AccumulatorMetricName::RelativeVarianceError
+                | AccumulatorMetricName::Rsd
+        )
+    {
+        return None;
+    }
     let mean = state.mean();
     let mean_error = state.stderr();
     let variance = state.variance();
@@ -103,8 +115,8 @@ fn metric_for_scalar(
     let value = match name {
         AccumulatorMetricName::Mean => mean,
         AccumulatorMetricName::AbsMean => state.mean_abs(),
-        AccumulatorMetricName::Error => mean_error,
-        AccumulatorMetricName::RelativeError => relative_error(mean, mean_error),
+        AccumulatorMetricName::Error => mean_error?,
+        AccumulatorMetricName::RelativeError => relative_error(mean, mean_error?),
         AccumulatorMetricName::Variance => variance,
         AccumulatorMetricName::RelativeVarianceError => variance_error
             .map(|error| relative_error(variance, error))
@@ -115,9 +127,12 @@ fn metric_for_scalar(
             "time-normalized variance requires runtime throughput and is handled before scalar extraction"
         ),
     };
+    if !value.is_finite() {
+        return None;
+    }
     let uncertainty = match name {
-        AccumulatorMetricName::Mean => Some(mean_error),
-        AccumulatorMetricName::AbsMean => Some(state.mean_abs_stderr()),
+        AccumulatorMetricName::Mean => mean_error,
+        AccumulatorMetricName::AbsMean => state.mean_abs_stderr(),
         AccumulatorMetricName::Variance => variance_error,
         AccumulatorMetricName::Rsd => state.rsd_stderr(),
         AccumulatorMetricName::Error
@@ -126,13 +141,15 @@ fn metric_for_scalar(
         | AccumulatorMetricName::Ess
         | AccumulatorMetricName::TimeNormalizedVariance => None,
     };
-    MeasurementResult {
+    Some(MeasurementResult {
+        estimator: crate::core::EstimateKind::Pooled,
+        basic: None,
         name,
         component,
         value,
         uncertainty,
         sample_count: state.count,
-    }
+    })
 }
 
 pub fn relative_error(value: f64, abs_error: f64) -> f64 {

@@ -4,6 +4,8 @@ use serde_json::Value as JsonValue;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PanelKind {
+    Strata,
+    PdfComparison,
     Select,
     ScalarTimeseries,
     MultiTimeseries,
@@ -123,6 +125,13 @@ pub struct PanelActionInvocation {
 pub struct PlotPoint {
     pub x: f64,
     pub y: f64,
+    /// Authoritative error; subtracting rounded band endpoints can lose it.
+    #[serde(default)]
+    pub error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimator: Option<crate::core::EstimateKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basic: Option<crate::core::BasicEstimate>,
     /// Start a new segment without interpolating across missing observations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub break_before: Option<bool>,
@@ -137,12 +146,20 @@ pub struct PlotPoint {
 }
 
 impl PlotPoint {
+    pub(crate) fn estimate(result: &crate::core::MeasurementResult) -> Self {
+        Self {
+            estimator: Some(result.estimator),
+            basic: result.basic.clone(),
+            ..Self::timeseries(result.sample_count as f64, result.value, result.uncertainty)
+        }
+    }
     /// Point at `x` with an optional `y +- error` band and no alternate
     /// x-axis metadata.
     pub(crate) fn timeseries(x: f64, y: f64, error: Option<f64>) -> Self {
         Self {
             x,
             y,
+            error,
             y_min: error.map(|error| y - error),
             y_max: error.map(|error| y + error),
             ..Default::default()
@@ -208,6 +225,17 @@ pub struct TableStateOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PanelState {
+    Strata {
+        panel_id: String,
+        components: Vec<String>,
+        estimator: crate::core::EstimateKind,
+        frames: Vec<StrataFrame>,
+    },
+    PdfComparison {
+        panel_id: String,
+        geometry: JsonValue,
+        data: JsonValue,
+    },
     ScalarTimeseries {
         panel_id: String,
         #[serde(default)]
@@ -299,6 +327,27 @@ pub enum PanelState {
         panel_id: String,
         text: String,
     },
+}
+
+/// One cumulative snapshot; adjacent snapshots also provide reporting-interval diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrataFrame {
+    pub samples: u64,
+    pub wall_time_ms: Option<i64>,
+    pub sampler_uptime_ms: Option<f64>,
+    pub rows: Vec<StratumRow>,
+    pub total: Vec<Option<crate::core::BasicEstimate>>,
+    pub basic: Option<Vec<crate::core::BasicEstimate>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StratumRow {
+    pub prefix: Vec<i64>,
+    pub attempts: u64,
+    pub matches: u64,
+    pub probability: Option<f64>,
+    /// Empty during pooled training: no conditional estimator is advertised.
+    pub estimates: Vec<Option<crate::core::BasicEstimate>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -565,7 +614,9 @@ impl PanelState {
 
     pub fn panel_id(&self) -> &str {
         match self {
-            Self::ScalarTimeseries { panel_id, .. }
+            Self::Strata { panel_id, .. }
+            | Self::PdfComparison { panel_id, .. }
+            | Self::ScalarTimeseries { panel_id, .. }
             | Self::MultiTimeseries { panel_id, .. }
             | Self::TickBreakdown { panel_id, .. }
             | Self::Svg { panel_id, .. }
@@ -581,6 +632,26 @@ impl PanelState {
 
 pub(crate) fn merge_panel_state(target: &mut PanelState, delta: PanelState) {
     match (target, delta) {
+        (
+            PanelState::Strata { frames, .. },
+            PanelState::Strata {
+                frames: incoming, ..
+            },
+        ) => {
+            for frame in incoming {
+                if let Some(existing) = frames.iter_mut().find(|item| item.samples == frame.samples)
+                {
+                    *existing = StrataFrame {
+                        wall_time_ms: frame.wall_time_ms.or(existing.wall_time_ms),
+                        sampler_uptime_ms: frame.sampler_uptime_ms.or(existing.sampler_uptime_ms),
+                        ..frame
+                    };
+                } else {
+                    frames.push(frame);
+                }
+            }
+            frames.sort_by_key(|frame| frame.samples);
+        }
         (
             PanelState::ScalarTimeseries { points, .. },
             PanelState::ScalarTimeseries {

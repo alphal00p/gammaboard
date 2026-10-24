@@ -12,6 +12,7 @@ pub struct StratumMoments {
     pub matches: u64,
     pub mean: Vec<f64>,
     pub m2: Vec<f64>,
+    pub extrema: Vec<crate::evaluation::batch::ContributionExtrema>,
 }
 impl StratumMoments {
     /// One publication rule shared by measurements, controllers and task panels.
@@ -36,6 +37,7 @@ impl StratumMoments {
             matches: 0,
             mean: vec![0.; width],
             m2: vec![0.; width * width],
+            extrema: vec![Default::default(); width],
         }
     }
     fn push(&mut self, values: &[f64], matched: bool) -> Result<(), EngineError> {
@@ -103,6 +105,9 @@ impl StratumMoments {
         }
         self.attempts = n;
         self.matches += other.matches;
+        for (left, right) in self.extrema.iter_mut().zip(&other.extrema) {
+            left.merge(right);
+        }
         Ok(())
     }
 }
@@ -190,6 +195,17 @@ impl StratifiedAccumulatorState {
         weight: f64,
         matched: bool,
     ) -> Result<(), EngineError> {
+        self.push_with_diagnostics(label, values, weight, matched, None)
+    }
+
+    pub(crate) fn push_with_diagnostics(
+        &mut self,
+        label: usize,
+        values: &[f64],
+        weight: f64,
+        matched: bool,
+        diagnostic: Option<(&crate::Point, crate::evaluation::batch::StratumPair<'_>)>,
+    ) -> Result<(), EngineError> {
         if values.len() != self.plan.components.len()
             || label >= self.strata.len()
             || !weight.is_finite()
@@ -221,7 +237,13 @@ impl StratifiedAccumulatorState {
         for x in &mut contribution {
             *x *= weight * p;
         }
-        self.strata[label].push(&contribution, matched)
+        self.strata[label].push(&contribution, matched)?;
+        if let Some((point, assignment)) = diagnostic {
+            for (extrema, &value) in self.strata[label].extrema.iter_mut().zip(&contribution) {
+                extrema.observe(value, point, assignment);
+            }
+        }
+        Ok(())
     }
     pub fn sample_count(&self) -> i64 {
         self.strata.iter().map(|s| s.attempts as i64).sum()
@@ -235,6 +257,7 @@ impl StratifiedAccumulatorState {
         for s in &self.strata {
             if s.mean.len() != width
                 || s.m2.len() != width * width
+                || s.extrema.len() != width
                 || s.matches > s.attempts
                 || s.mean.iter().chain(&s.m2).any(|v| !v.is_finite())
             {
@@ -297,6 +320,44 @@ impl StratifiedAccumulatorState {
         }
         Some(covariance)
     }
+
+    /// Pooled reference from the same masked draws. Scale each conditional
+    /// group back by 1/p, then merge central moments without subtracting raw
+    /// squared sums. This is a different mean, not another error on `mean()`.
+    pub fn basic_estimates(&self) -> Option<Vec<crate::core::BasicEstimate>> {
+        let width = self.strata[0].mean.len();
+        let mut pooled = StratumMoments::new(width);
+        for (stratum, &p) in self.strata.iter().zip(self.plan.probabilities.as_ref()?) {
+            let mut group = StratumMoments::new(width);
+            group.attempts = stratum.attempts;
+            group.mean = stratum.mean.iter().map(|v| v / p).collect();
+            group.m2 = stratum.m2.iter().map(|v| (v / p) / p).collect();
+            if group.mean.iter().chain(&group.m2).any(|v| !v.is_finite()) {
+                return None;
+            }
+            pooled.merge(&group).ok()?;
+            if pooled.mean.iter().chain(&pooled.m2).any(|v| !v.is_finite()) {
+                return None;
+            }
+        }
+        let n = pooled.attempts;
+        if n == 0 {
+            return None;
+        }
+        Some(
+            pooled
+                .mean
+                .iter()
+                .enumerate()
+                .map(|(j, &mean)| crate::core::BasicEstimate {
+                    mean,
+                    error: (n >= 2).then(|| {
+                        (pooled.m2[j * width + j].max(0.0) / (n as f64 * (n - 1) as f64)).sqrt()
+                    }),
+                })
+                .collect(),
+        )
+    }
     pub fn metric(&self, selector: &AccumulatorMetricSelector) -> Option<MeasurementResult> {
         let component = match (selector.component.as_deref(), self.pooled.as_deref()) {
             (None | Some("training_projection"), Some(pooled)) => {
@@ -337,7 +398,14 @@ impl StratifiedAccumulatorState {
             // Pooled sample variance/ESS/absolute moments do not describe this estimator.
             _ => return None,
         };
+        if !value.is_finite() {
+            return None;
+        }
         Some(MeasurementResult {
+            estimator: crate::core::EstimateKind::Stratified,
+            basic: (selector.name == AccumulatorMetricName::Mean)
+                .then(|| self.basic_estimates().map(|v| v[index].clone()))
+                .flatten(),
             name: selector.name,
             component: Some(
                 selector
@@ -363,11 +431,72 @@ impl StratifiedAccumulatorState {
 mod tests {
     use super::*;
     use crate::core::StratificationConfig;
+
+    #[test]
+    fn pooled_reference_matches_direct_samples_through_merge_and_restore() {
+        use crate::evaluation::ScalarAccumulatorState;
+        let mut left = empty();
+        let mut right = empty();
+        let mut direct = [
+            ScalarAccumulatorState::plain(),
+            ScalarAccumulatorState::plain(),
+        ];
+        let probabilities = left.plan.probabilities.clone().unwrap();
+        for i in 0..160 {
+            let k = usize::from(i >= 64);
+            let hit = i % 5 != 0;
+            let value = if hit { (i % 7) as f64 - 2.0 } else { 0.0 };
+            let values = [value, value * 3.0 + if hit { 1.0 } else { 0.0 }];
+            let point = crate::Point::new(vec![i as f64], vec![], 1.0 / probabilities[k]);
+            for (state, value) in direct.iter_mut().zip(values) {
+                state.add_sample(value, &point).unwrap();
+            }
+            let target = if i < 91 { &mut left } else { &mut right };
+            target.push(k, &values, point.total_weight(), hit).unwrap();
+        }
+        let saved = serde_json::to_value(left).unwrap();
+        let mut merged: StratifiedAccumulatorState = serde_json::from_value(saved).unwrap();
+        merged.merge(right).unwrap();
+        let basic = merged.basic_estimates().unwrap();
+        for (basic, direct) in basic.iter().zip(&direct) {
+            assert!((basic.mean - direct.mean()).abs() < 1e-12);
+            assert!((basic.error.unwrap() - direct.stderr().unwrap()).abs() < 1e-12);
+        }
+        let name = merged.plan.components[0].clone();
+        let selected = merged
+            .metric(&AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Mean,
+                component: Some(name),
+            })
+            .unwrap();
+        assert_eq!(selected.estimator, crate::core::EstimateKind::Stratified);
+        assert_eq!(selected.basic.as_ref().unwrap().mean, basic[0].mean);
+        assert!((selected.value - basic[0].mean).abs() > 1e-3);
+        assert_ne!(selected.uncertainty, basic[0].error);
+        let state = super::super::AccumulatorState::Stratified(Box::new(merged));
+        let stop = super::super::metrics::estimate_for_stop(
+            &state,
+            Some(&AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Mean,
+                component: selected.component.clone(),
+            }),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(stop.error, selected.uncertainty.unwrap());
+        assert_eq!(state.sample_count(), 160);
+    }
     fn empty() -> StratifiedAccumulatorState {
         let plan = StratificationPlan {
             proposal_id: "fixture".into(),
             partition: StratificationConfig::Voronoi {
-                centers: vec![vec![1., 2.], vec![-1., -2.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![1., 2.], vec![-1., -2.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: Some(vec![0.25, 0.75]),
@@ -395,6 +524,13 @@ mod tests {
         let mean = state.metric(&selector).unwrap();
         assert_eq!(mean.value, 0.0);
         assert_eq!(mean.uncertainty, None);
+        assert_eq!(mean.basic.as_ref().unwrap().error, Some(0.0));
+        let wrapped = super::super::AccumulatorState::Stratified(Box::new(state.clone()));
+        assert!(
+            super::super::metrics::estimate_for_stop(&wrapped, Some(&selector), None)
+                .unwrap()
+                .is_none()
+        );
         assert!(
             state
                 .metric(&AccumulatorMetricSelector {
@@ -491,7 +627,12 @@ mod calibration_tests {
         let plan = StratificationPlan {
             proposal_id: "calibration".into(),
             partition: StratificationConfig::Voronoi {
-                centers: vec![vec![-1.], vec![1.]],
+                domain: crate::Domain::strata(vec![2]),
+                centers: vec![vec![-1.], vec![1.]]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, c)| (vec![k as i64], c))
+                    .collect(),
                 scales: None,
             },
             probabilities: Some(p.to_vec()),

@@ -80,10 +80,11 @@ fn process_api_roundtrips() -> Result {
                 stratification: None,
             },
         )?;
-        let values = result.training_values.unwrap();
+        let values = result.feedback.unwrap();
         let expected: Vec<_> = (0..size).map(|i| (0.5 + (i % 3) as f64) * 2.).collect();
         assert_eq!(
-            values, expected,
+            values.values().as_ref(),
+            expected,
             "feedback must include the sampling weight exactly once"
         );
         let collected = evaluator.eval_batch(
@@ -102,9 +103,9 @@ fn process_api_roundtrips() -> Result {
         assert_eq!(collected.values_row_major, expected);
         sampler.feedback(&values)?;
         count += size;
-        total += values.iter().sum::<f64>();
+        total += values.values().iter().sum::<f64>();
         assert_eq!(sampler.diagnostics(), json!({"count":count,"total":total}));
-        assert_eq!(sampler.global_pdf_norm()?, 2.5);
+
         assert_eq!(
             sampler.persisted_output()?,
             Some(json!({"count":count,"total":total}))
@@ -120,7 +121,7 @@ fn process_api_roundtrips() -> Result {
                         stratification: None
                     }
                 )?
-                .training_values
+                .feedback
                 .is_none()
         );
     }
@@ -195,12 +196,20 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
             panic!("GammaLoop state")
         };
         assert_eq!(state.estimate.components[0].state.sum_weighted_value, 5.625);
-        assert_eq!(result.training_values, required.then(|| vec![2.25, 3.375]));
+        assert_eq!(
+            result.feedback.as_ref().map(|f| f.values().into_owned()),
+            required.then(|| vec![2.25, 3.375])
+        );
     }
     let plan = gammaboard::core::StratificationPlan {
         proposal_id: "process-hybrid".into(),
         partition: gammaboard::core::StratificationConfig::Voronoi {
-            centers: vec![vec![0., 0.], vec![1.5, 0.]],
+            domain: gammaboard::Domain::strata(vec![2]),
+            centers: vec![vec![0., 0.], vec![1.5, 0.]]
+                .into_iter()
+                .enumerate()
+                .map(|(k, c)| (vec![k as i64], c))
+                .collect(),
             scales: None,
         },
         probabilities: Some(vec![0.25, 0.75]),
@@ -243,7 +252,11 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
         let f = 6. * x * (1. - x);
         let hit = (f > 0.75) == (k == 1);
         let contribution = if hit { point.total_weight() * f } else { 0. };
-        assert_eq!(result.training_values.as_ref().unwrap()[i], contribution);
+        assert_eq!(result.feedback.as_ref().unwrap().values()[i], contribution);
+        assert_eq!(
+            result.feedback.as_ref().unwrap().unmasked_values[i],
+            point.total_weight() * f
+        );
         sum += contribution;
         let b = (x * 20.) as usize;
         sums[b] += contribution;

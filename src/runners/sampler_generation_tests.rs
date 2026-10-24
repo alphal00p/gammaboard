@@ -141,7 +141,7 @@ async fn training_draws_survive_soft_queue_overshoot() {
         let result = runner
             .runtime_state
             .generation
-            .accept_training_values(&vec![1.0; 250])
+            .accept_feedback(&crate::sampling::Feedback::new((vec![1.0; 250]).to_vec()))
             .unwrap();
         if batch == 79 {
             let values = result.unwrap();
@@ -174,7 +174,7 @@ async fn generation_preserves_initial_probe_and_checkpointed_remainder() {
         runner
             .runtime_state
             .generation
-            .accept_training_values(&[1.0; 16])
+            .accept_feedback(&crate::sampling::Feedback::new(([1.0; 16]).to_vec()))
             .unwrap()
             .is_none()
     );
@@ -340,7 +340,7 @@ async fn live_generation_limit_preserves_buffered_draw_and_feedback_boundaries()
         let values = runner
             .runtime_state
             .generation
-            .accept_training_values(&vec![1.0; size])
+            .accept_feedback(&crate::sampling::Feedback::new((vec![1.0; size]).to_vec()))
             .unwrap()
             .unwrap();
         assert_eq!(values.len(), size);

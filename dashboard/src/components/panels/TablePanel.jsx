@@ -24,7 +24,7 @@ import { asArray } from "../../utils/collections";
 import { formatCentralValueWithError, formatScientific } from "../../utils/formatters";
 import { renderStructuredValue } from "./BasicPanels";
 import SamplePointValue from "./SamplePointValue";
-import { downloadTextFile } from "./FigureExportActions";
+import FigureExportActions, { downloadTextFile } from "./FigureExportActions";
 import { readHistogramBundleSelectedValue, writeHistogramBundlePanelValue } from "./histogramUtils";
 
 const requestHistogramBundleExport = async (payload, format) => {
@@ -161,6 +161,8 @@ const TablePanel = ({
     return (
       <Card variant="outlined">
         <CardContent>
+        {payload?.weight_basis && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.weight_basis}</Typography>}
+        {payload?.estimator_note && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.estimator_note}</Typography>}
           <Typography variant="subtitle1" sx={{ mb: 1 }}>
             {title}
           </Typography>
@@ -241,8 +243,11 @@ const TablePanel = ({
   return (
     <Card variant="outlined">
       <CardContent>
+        {payload?.weight_basis && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.weight_basis}</Typography>}
+        {payload?.estimator_note && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.estimator_note}</Typography>}
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">{title}</Typography>
+          {!isHistogramBundle && <FigureExportActions baseName={state?.panel_id || title} payload={{ kind: "table", state: { ...state, columns, rows } }} imageFormat={null} />}
           {absoluteComponents ? (
             <Tooltip describeChild title="Means of |real| and |imag|, with their own errors. Variance contribution still refers to the signed campaign result.">
               <FormControlLabel

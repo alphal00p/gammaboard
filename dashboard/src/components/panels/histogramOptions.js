@@ -1,5 +1,5 @@
 import { asArray } from "../../utils/collections";
-import { formatScientific } from "../../utils/formatters";
+import { formatScientific, numberOrNaN } from "../../utils/formatters";
 import { escapeXml } from "./FigureExportActions";
 import {
   HISTOGRAM_NEGATIVE_COLOR,
@@ -91,13 +91,13 @@ export const buildOverlaySeriesFromBins = (canonicalBins, yScale, xScale) => ({
     .map((point) => [Number(point?.x), Number(point?.y)])
     .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
   relativeStep: buildRelativeErrorStepData(canonicalBins)
-    .map((point) => [Number(point?.x), Number(point?.relative_error)])
+    .map((point) => [Number(point?.x), numberOrNaN(point?.relative_error)])
     .filter(([x]) => Number.isFinite(x) && (xScale !== "log" || x > 0)),
   absError: canonicalBins
     .map((bin) => {
       const x = Number(bin?.x);
       const y = Number(bin?.value);
-      const err = Number(bin?.error);
+      const err = numberOrNaN(bin?.error);
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(err) || err <= 0) return null;
       const yLowRaw = y - Math.abs(err);
       const yHighRaw = y + Math.abs(err);
@@ -131,7 +131,7 @@ export const projectBinsToReferenceBins = (referenceBins, overlayBins) =>
       stop: referenceBin.stop,
       x: referenceBin.x,
       value: Number(matched.value),
-      error: Number.isFinite(Number(matched.error)) ? Math.abs(Number(matched.error)) : 0,
+      error: Number.isFinite(numberOrNaN(matched.error)) ? Math.abs(numberOrNaN(matched.error)) : null,
     };
   });
 
@@ -141,8 +141,8 @@ export const buildOneMinusRatioPoints = (referenceBins, overlayBins, isDiscrete,
       const overlayBin = asArray(overlayBins)[index];
       const numerator = Number(referenceBin?.value);
       const denominator = Number(overlayBin?.value);
-      const numeratorError = Math.abs(Number(referenceBin?.error));
-      const denominatorError = Math.abs(Number(overlayBin?.error));
+      const numeratorError = Math.abs(numberOrNaN(referenceBin?.error));
+      const denominatorError = Math.abs(numberOrNaN(overlayBin?.error));
       if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
         return null;
       }
@@ -153,10 +153,10 @@ export const buildOneMinusRatioPoints = (referenceBins, overlayBins, isDiscrete,
         ? (numerator * denominatorError) / (denominator * denominator)
         : 0;
       const oneMinusRatio = 1 - ratio;
-      const ratioError = Math.hypot(numeratorContribution, denominatorContribution);
+      const ratioError = Number.isFinite(numeratorError) && Number.isFinite(denominatorError) ? Math.hypot(numeratorContribution, denominatorContribution) : null;
       const x = isDiscrete ? index : Number(referenceBin?.x);
       if (!Number.isFinite(x) || (!isDiscrete && xScale === "log" && x <= 0)) return null;
-      return [x, oneMinusRatio, oneMinusRatio - ratioError, oneMinusRatio + ratioError];
+      return [x, oneMinusRatio, ratioError == null ? null : oneMinusRatio - ratioError, ratioError == null ? null : oneMinusRatio + ratioError];
     })
     .filter(Boolean);
 
@@ -350,9 +350,9 @@ export const buildHistogramOption = ({
             const label = categoriesData[idx] ?? String(idx);
             const bin = bins[idx];
             const val = Number(bin?.value);
-            const err = Number(bin?.error);
+            const err = numberOrNaN(bin?.error);
             const absErrorText =
-              Number.isFinite(err) && err > 0 ? `±${formatScientific(err, 6)}` : "n/a";
+              Number.isFinite(err) && err >= 0 ? `±${formatScientific(err, 6)}` : "n/a";
             const relError =
               Number.isFinite(val) && Number.isFinite(err) && val !== 0
                 ? Math.abs(err / val)
@@ -574,9 +574,9 @@ export const buildHistogramOption = ({
             return `${formatScientific(xValue, 6)}: n/a`;
           }
           const valueNumeric = Number(bin?.value);
-          const errorNumeric = Number(bin?.error);
+          const errorNumeric = numberOrNaN(bin?.error);
           const absErrorText =
-            Number.isFinite(errorNumeric) && errorNumeric > 0 ? `±${formatScientific(errorNumeric, 6)}` : "n/a";
+            Number.isFinite(errorNumeric) && errorNumeric >= 0 ? `±${formatScientific(errorNumeric, 6)}` : "n/a";
           const relError =
             Number.isFinite(valueNumeric) && Number.isFinite(errorNumeric) && valueNumeric !== 0
               ? Math.abs(errorNumeric / valueNumeric)
@@ -671,7 +671,7 @@ export const buildRelativeHistogramOption = ({
             name: "relative_error",
             data: discreteRelativeErrorData
               .map((point) => {
-                const rel = Number(point?.relative_error);
+                const rel = numberOrNaN(point?.relative_error);
                 if (!Number.isFinite(rel)) return null;
                 return [Number(point?.index), -Math.abs(rel), Math.abs(rel)];
               })
@@ -730,7 +730,7 @@ export const buildRelativeHistogramOption = ({
           type: "line",
           name: "positive_relative_error",
           data: relativeErrorData
-            .map((point) => [Number(point?.x), Number(point?.positive_relative_error)])
+            .map((point) => [Number(point?.x), numberOrNaN(point?.positive_relative_error)])
             .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0)),
           step: "end",
           showSymbol: false,
@@ -742,7 +742,7 @@ export const buildRelativeHistogramOption = ({
           type: "line",
           name: "negative_relative_error",
           data: relativeErrorData
-            .map((point) => [Number(point?.x), Number(point?.negative_relative_error)])
+            .map((point) => [Number(point?.x), numberOrNaN(point?.negative_relative_error)])
             .filter(([x]) => Number.isFinite(x) && (effectiveXScale !== "log" || x > 0)),
           step: "end",
           showSymbol: false,
@@ -780,12 +780,12 @@ export const buildRatioHistogramOption = ({
     const ratioSeries = overlaySeries
       .map((overlay) => ({
         ...overlay,
-        ratioData: asArray(overlay?.ratioData).filter((point) => point && point.every((value) => Number.isFinite(Number(value)))),
+        ratioData: asArray(overlay?.ratioData).filter((point) => point && Number.isFinite(numberOrNaN(point[0])) && Number.isFinite(numberOrNaN(point[1]))),
       }))
       .filter((overlay) => overlay.ratioData.length > 0);
     if (ratioSeries.length === 0) return null;
     const ratioValues = ratioSeries.flatMap((overlay) =>
-      overlay.ratioData.flatMap((point) => [Number(point?.[1]), Number(point?.[2]), Number(point?.[3])]),
+      overlay.ratioData.flatMap((point) => [numberOrNaN(point?.[1]), numberOrNaN(point?.[2]), numberOrNaN(point?.[3])]),
     );
     const ratioYDomain = fitDomain([...ratioValues, 0]);
     if (isDiscrete) {
@@ -829,7 +829,7 @@ export const buildRatioHistogramOption = ({
         series: ratioSeries.flatMap((overlay, index) => [
           buildDiscreteOffsetErrorBarSeries({
             name: `${overlay.name} ratio error`,
-            data: overlay.ratioData.map((point) => [point[0], point[2], point[3]]),
+            data: overlay.ratioData.filter((point) => point[2] != null && point[3] != null).map((point) => [point[0], point[2], point[3]]),
             color: overlay.color,
             slotIndex: index,
             slotCount: ratioSeries.length,
@@ -888,7 +888,7 @@ export const buildRatioHistogramOption = ({
       series: ratioSeries.flatMap((overlay) => [
         buildErrorBarSeries({
           name: `${overlay.name} ratio error`,
-          data: overlay.ratioData.map((point) => [point[0], point[2], point[3]]),
+          data: overlay.ratioData.filter((point) => point[2] != null && point[3] != null).map((point) => [point[0], point[2], point[3]]),
           color: overlay.color,
         }),
         {

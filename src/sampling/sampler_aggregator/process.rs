@@ -116,33 +116,23 @@ impl Sampler for ProcessSampler {
         self.worker.generate(max_samples)
     }
 
-    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        self.worker.feedback(training_values)
+    fn feedback(&mut self, feedback: &crate::sampling::Feedback) -> Result<(), EngineError> {
+        self.worker.feedback(feedback)
     }
 
     fn pdf_batch(&mut self, points: &[PdfPoint]) -> Result<Vec<Option<f64>>, EngineError> {
         self.worker.pdf_batch(points)
     }
 
-    fn discrete_pdf_batch(
+    fn discrete_mass_batch(
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
-        self.worker.discrete_pdf_batch(subspaces)
+        self.worker.discrete_mass_batch(subspaces)
     }
 
     fn snapshot(&mut self) -> Result<Value, EngineError> {
         self.worker.snapshot()
-    }
-
-    fn global_pdf_norm(&mut self) -> Result<f64, EngineError> {
-        let norm = self
-            .worker
-            .request_field("global_pdf_norm", "norm")?
-            .as_f64()
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .ok_or_else(|| EngineError::engine("global_pdf_norm must be finite and positive"))?;
-        Ok(norm)
     }
 
     fn persisted_output(&mut self) -> Result<Option<Value>, EngineError> {
@@ -216,14 +206,22 @@ impl ProcessSamplerWorker {
         decode_generation(&self.domain, max_samples, &response, &binary)
     }
 
-    fn feedback(&mut self, training_values: &[f64]) -> Result<(), EngineError> {
-        let mut binary = Vec::with_capacity(training_values.len() * 8);
-        extend_le_f64(&mut binary, training_values);
+    fn feedback(&mut self, feedback: &crate::sampling::Feedback) -> Result<(), EngineError> {
+        feedback.validate()?;
+        let prefixes = feedback.strata.as_ref().map(|s| &s.prefixes);
+        let mut binary =
+            Vec::with_capacity(feedback.len() * if prefixes.is_some() { 24 } else { 8 });
+        extend_le_f64(&mut binary, &feedback.unmasked_values);
+        if let Some(strata) = &feedback.strata {
+            for &label in strata.requested.iter().chain(&strata.actual) {
+                binary.extend_from_slice(&(label as u64).to_le_bytes());
+            }
+        }
         let (response, _binary) = self
             .process
             .request_with_binary(
                 "feedback",
-                serde_json::json!({ "nr_values": training_values.len() }),
+                serde_json::json!({ "nr_values": feedback.len(), "stratum_prefixes": prefixes }),
                 &binary,
             )
             .map_err(EngineError::engine)?;
@@ -266,45 +264,17 @@ impl ProcessSamplerWorker {
                 }),
             )
             .map_err(EngineError::engine)?;
-        match response.get("values") {
-            Some(Value::Null) | None => Ok(vec![None; points.len()]),
-            Some(Value::Array(values)) => {
-                if values.len() != points.len() {
-                    return Err(EngineError::engine(format!(
-                        "process sampler pdf output size mismatch: expected {}, got {}",
-                        points.len(),
-                        values.len()
-                    )));
-                }
-                values
-                    .iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        if value.is_null() {
-                            return Ok(None);
-                        }
-                        value.as_f64().map(Some).ok_or_else(|| {
-                            EngineError::engine(format!(
-                                "process sampler response field 'values[{index}]' must be f64 or null"
-                            ))
-                        })
-                    })
-                    .collect()
-            }
-            Some(_) => Err(EngineError::engine(
-                "process sampler response field 'values' must be an array or null",
-            )),
-        }
+        decode_probabilities(&response, points.len(), false)
     }
 
-    fn discrete_pdf_batch(
+    fn discrete_mass_batch(
         &mut self,
         subspaces: &[DiscreteSubspace],
     ) -> Result<Vec<Option<f64>>, EngineError> {
         let response = self
             .process
             .request(
-                "discrete_pdf",
+                "discrete_mass",
                 serde_json::json!({
                     "subspaces": subspaces.iter().map(|subspace| {
                         serde_json::json!({
@@ -316,35 +286,7 @@ impl ProcessSamplerWorker {
                 }),
             )
             .map_err(EngineError::engine)?;
-        match response.get("values") {
-            Some(Value::Null) | None => Ok(vec![None; subspaces.len()]),
-            Some(Value::Array(values)) => {
-                if values.len() != subspaces.len() {
-                    return Err(EngineError::engine(format!(
-                        "process sampler discrete_pdf output size mismatch: expected {}, got {}",
-                        subspaces.len(),
-                        values.len()
-                    )));
-                }
-                values
-                    .iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        if value.is_null() {
-                            return Ok(None);
-                        }
-                        value.as_f64().map(Some).ok_or_else(|| {
-                            EngineError::engine(format!(
-                                "process sampler response field 'values[{index}]' must be f64 or null"
-                            ))
-                        })
-                    })
-                    .collect()
-            }
-            Some(_) => Err(EngineError::engine(
-                "process sampler response field 'values' must be an array or null",
-            )),
-        }
+        decode_probabilities(&response, subspaces.len(), true)
     }
 
     fn diagnostics(&mut self) -> Result<Value, EngineError> {
@@ -372,6 +314,32 @@ impl ProcessSamplerWorker {
 }
 
 /// Decode one generation without changing its sampler-owned flat representation.
+fn decode_probabilities(
+    response: &Value,
+    size: usize,
+    mass: bool,
+) -> Result<Vec<Option<f64>>, EngineError> {
+    match response.get("values") {
+        Some(Value::Null) => Ok(vec![None; size]),
+        Some(Value::Array(values)) if values.len() == size => values
+            .iter()
+            .map(|value| {
+                if value.is_null() {
+                    return Ok(None);
+                }
+                value
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0 && (!mass || *v <= 1.0))
+                    .map(Some)
+                    .ok_or_else(|| EngineError::engine("invalid normalized probability result"))
+            })
+            .collect(),
+        _ => Err(EngineError::engine(
+            "probability response must contain one number-or-null per query, or null",
+        )),
+    }
+}
+
 fn decode_generation(
     domain: &Domain,
     max_samples: usize,

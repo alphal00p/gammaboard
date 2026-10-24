@@ -56,6 +56,18 @@ const mergePlotPoints = (previousPoints, incomingPoints) => {
 
 const mergePanelState = (previous, incoming) => {
   if (!previous) return incoming;
+  if (previous.kind === "strata" && incoming.kind === "strata") {
+    const frames = new Map(asArray(previous.frames).map((frame) => [frame.samples, frame]));
+    for (const frame of asArray(incoming.frames)) {
+      const old = frames.get(frame.samples);
+      frames.set(frame.samples, {
+        ...frame,
+        wall_time_ms: frame.wall_time_ms ?? old?.wall_time_ms ?? null,
+        sampler_uptime_ms: frame.sampler_uptime_ms ?? old?.sampler_uptime_ms ?? null,
+      });
+    }
+    return { ...incoming, frames: [...frames.values()].sort((a, b) => a.samples - b.samples) };
+  }
   if (previous.kind === "scalar_timeseries" && incoming.kind === "scalar_timeseries") {
     return {
       ...previous,

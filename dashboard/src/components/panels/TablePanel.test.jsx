@@ -8,6 +8,8 @@ const point = {
   discrete: [2, 3],
   continuous: [0.9981234567890123, 1.2345678901234567e-8, -12.345678901234567],
   sampling_weight: 7.123456789012345,
+  total_weight: 7.123456789012345,
+  stratum: { requested: [1, 3], actual: [0] },
 };
 const state = {
   panel_id: "max_weight_points", columns,
@@ -22,14 +24,14 @@ describe("Max Weight Points", () => {
     expect(cells.slice(2, 6).map((cell) => cell.textContent)).toEqual([
       "1.234500e+3", "1.234500e-4", "1.050000e+4", "1.000000e-5",
     ]);
-    expect(cells[6]).toHaveTextContent("d=[2, 3], c=[0.998, 1.23e-8, -12.3], w=7.123457e+0");
+    expect(cells[6]).toHaveTextContent("integrand d=[2, 3], c=[0.998, 1.23e-8, -12.3], total weight=7.123457e+0");
     const toggle = within(cells[6]).getByText("Full Precision (f64)");
     const details = toggle.closest("details");
     expect(details).not.toHaveAttribute("open");
     fireEvent.click(toggle);
     expect(details).toHaveAttribute("open");
     point.continuous.forEach((value) => expect(details).toHaveTextContent(value.toExponential(16)));
-    expect(details).toHaveTextContent(`w=${point.sampling_weight.toExponential(16)}`);
+    expect(details).toHaveTextContent(`total weight=${point.total_weight.toExponential(16)}`);
     // Polling updates should retain the disclosure state.
     rerender(<TablePanel title="Max Weight Points" state={{ ...state, rows: state.rows.map((row) => [...row]) }} />);
     expect(details).toHaveAttribute("open");
@@ -39,11 +41,11 @@ describe("Max Weight Points", () => {
 
   test("preserves unavailable metadata and distinguishes it from zero", () => {
     render(<TablePanel title="Max Weight Points" state={{ ...state, rows: [
-      ["real", "+", "n/a", "n/a", 0, 0, { ...point, continuous: [0, 1], sampling_weight: null }],
+      ["real", "+", "n/a", "n/a", 0, 0, { ...point, continuous: [0, 1], sampling_weight: null, total_weight: null }],
     ] }} />);
     const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
     expect(cells.slice(2, 6).map((cell) => cell.textContent)).toEqual(["n/a", "n/a", "0e+0", "0e+0"]);
-    expect(cells[6]).toHaveTextContent("c=[0.00, 1.00], w=n/a");
+    expect(cells[6]).toHaveTextContent("c=[0.00, 1.00], total weight=n/a");
   });
 });
 

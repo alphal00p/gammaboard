@@ -26,7 +26,7 @@ kind="sample"
 publish_result=false
 stop_condition={max_samples=512}
 accumulator={config="scalar"}
-sampler={config={kind="havana_training",seed=7,bins=8,samples_for_update=128,stratification={kind="voronoi",centers=[[0.25],[0.75]],scales=[2.0]}}}
+sampler={config={kind="havana_training",seed=7,bins=8,samples_for_update=128,stratification={"kind"="voronoi","domain"={"discrete"={"axis_role"="stratum","branches"=[{"index"=0,"domain"={"rectangular"={"strata_dims"=0,"discrete_cardinalities"=[],"continuous_dims"=0}}},{"index"=1,"domain"={"discrete"={"axis_role"="stratum","branches"=[{"index"=0,"domain"={"rectangular"={"strata_dims"=0,"discrete_cardinalities"=[],"continuous_dims"=0}}},{"index"=1,"domain"={"rectangular"={"strata_dims"=0,"discrete_cardinalities"=[],"continuous_dims"=0}}},{"index"=3,"domain"={"rectangular"={"strata_dims"=0,"discrete_cardinalities"=[],"continuous_dims"=0}}}]}}}]}},"centers"={"0"=[0.125],"1,0"=[0.375],"1,1"=[0.625],"1,3"=[0.875]},"scales"=[2.0]}}}
 [[task_queue]]
 name="infer"
 kind="sample"
@@ -122,7 +122,7 @@ kind="sample"
 publish_result=false
 stop_condition={{max_samples=512}}
 accumulator={{config="scalar"}}
-sampler={{config={{kind="process_sampler",command={command},args={{inference=false}},stratification={{kind="voronoi",centers=[[0.25],[0.75]]}}}}}}
+sampler={{config={{kind="process_sampler",command={command},args={{inference=false}},stratification={{kind="voronoi",domain = {{ rectangular = {{ strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 }} }},centers = {{ "0" = [0.25], "1" = [0.75] }}}}}}}}
 [[task_queue]]
 name="infer"
 kind="sample"
@@ -277,7 +277,7 @@ kind="sample"
 publish_result=false
 stop_condition={{max_samples=512}}
 accumulator={{config="gammaloop"}}
-sampler={{config={{kind="havana_training",seed=17,bins=8,samples_for_update=128,stratification={{kind="voronoi",centers=[[0.25,0.0],[0.75,0.0]]}}}}}}
+sampler={{config={{kind="havana_training",seed=17,bins=8,samples_for_update=128,stratification={{kind="voronoi",domain = {{ rectangular = {{ strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 }} }},centers = {{ "0" = [0.25, 0.0], "1" = [0.75, 0.0] }}}}}}}}
 [[task_queue]]
 name="infer"
 kind="sample"
@@ -428,7 +428,7 @@ kind="naive_monte_carlo"
 seed=29
 materializer={{kind="process_materializer",command={materializer}}}
 transforms=[{{kind="process_batch_transform",command={transform}}}]
-stratification={{kind="voronoi",centers=[[2.0],[10.0]],scales=[3.0]}}
+stratification={{kind="voronoi",domain = {{ rectangular = {{ strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 }} }},centers = {{ "0" = [2.0], "1" = [10.0] }},scales=[3.0]}}
 "#
     ));
     harness.add_run(&config);
@@ -441,7 +441,7 @@ stratification={{kind="voronoi",centers=[[2.0],[10.0]],scales=[3.0]}}
     assert_eq!(state.sample_count(), 16384);
     assert_eq!(state.plan.probabilities, Some(vec![0.5, 0.5]));
     let config: SamplingConfig = serde_json::from_value(
-        json!({"kind":"naive_monte_carlo","seed":29,"stratification":{"kind":"voronoi","centers":[[2.],[10.]],"scales":[3.]}}),
+        json!({"kind":"naive_monte_carlo","seed":29,"stratification":{"kind":"voronoi","domain": {"rectangular": {"strata_dims": 1, "discrete_cardinalities": [2], "continuous_dims": 0}}, "centers": {"0": [2.0], "1": [10.0]},"scales":[3.]}}),
     )?;
     let mut sampler = config.create(
         gammaboard::Domain::rectangular_with_cardinalities(1, [2]),
@@ -473,5 +473,98 @@ stratification={{kind="voronoi",centers=[[2.0],[10.0]],scales=[3.0]}}
         );
     }
     assert!((state.mean().unwrap()[0] - 72.).abs() < 6. * state.covariance().unwrap()[0].sqrt());
+    harness.cleanup().await
+}
+
+#[tokio::test]
+#[ignore = "requires disposable postgres with CREATE DATABASE privilege"]
+async fn stratified_pdf_diagnostics_preserve_projection_membership_and_density()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let config = temp_config(
+        r#"
+name="stratified-pdf-diagnostics"
+[evaluator]
+kind="symbolica"
+args=["x","y"]
+[evaluator.source]
+kind="expressions"
+components=["x","y"]
+exprs=["x-0.5","y-0.5"]
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms=50
+[sampler_aggregator_runner_params.queue]
+fixed_batch_size=7
+max_generation_size=23
+[[task_queue]]
+name="train"
+kind="sample"
+stop_condition={max_samples=512}
+accumulator={config={kind="vector",components=["x","y"],training_projection={kind="norm"}}}
+sampler={config={kind="naive_monte_carlo",seed=5,stratification={kind="voronoi",domain={rectangular={strata_dims=2,discrete_cardinalities=[2,2],continuous_dims=0}},centers={"0,0"=[-1.0,-1.0],"0,1"=[-1.0,1.0],"1,0"=[1.0,-1.0],"1,1"=[1.0,1.0]}}}}
+[[task_queue]]
+name="line"
+kind="pdf_adaptation_plot_line"
+sampler={from_name="train"}
+geometry={offset=[0.0,0.25],direction=[1.0,0.0],linspace={start=0.0,stop=1.0,count=17}}
+[[task_queue]]
+name="plane"
+kind="pdf_adaptation_image"
+sampler={from_name="train"}
+geometry={offset=[0.0,0.0],u_vector=[1.0,0.0],v_vector=[0.0,1.0],u_linspace={start=0.0,stop=1.0,count=9},v_linspace={start=0.0,stop=1.0,count=7}}
+"#,
+    );
+    harness.add_run(&config);
+    let run = harness.run_id("stratified-pdf-diagnostics").await?;
+    harness.start_nodes(&["pdf-s", "pdf-e1", "pdf-e2"]).await?;
+    harness.assign_node("pdf-s", "sampler_aggregator", "stratified-pdf-diagnostics");
+    harness.assign_node("pdf-e1", "evaluator", "stratified-pdf-diagnostics");
+    harness.assign_node("pdf-e2", "evaluator", "stratified-pdf-diagnostics");
+    wait_stratified_completion(&harness, run).await?;
+    for (name, count) in [("line", 17), ("plane", 63)] {
+        let output:serde_json::Value=sqlx::query_scalar("SELECT o.persisted_observable FROM persisted_observable_snapshots o JOIN run_tasks t ON t.id=o.task_id WHERE t.run_id=$1 AND t.name=$2 ORDER BY o.id DESC LIMIT 1").bind(run).bind(name).fetch_one(&harness.pool).await?;
+        assert_eq!(output["processed"], count);
+        assert_eq!(
+            output["strata"]["prefixes"],
+            json!([[0, 0], [0, 1], [1, 0], [1, 1]])
+        );
+        assert_eq!(
+            output["strata"]["probabilities"],
+            json!([0.25, 0.25, 0.25, 0.25])
+        );
+        let values = output["integrand_values"]
+            .as_array()
+            .context("integrand values")?;
+        let corner = if name == "line" {
+            0.5_f64.hypot(0.25)
+        } else {
+            0.5_f64.hypot(0.5)
+        };
+        assert!((values[0].as_f64().unwrap() - corner).abs() < 1e-12);
+        // All unmasked norms survive, including points that miss requested prefix (0,0).
+        assert!(values.iter().all(|v| v.as_f64().is_some()));
+        assert!(
+            output["strata"]["actual_strata"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_u64().unwrap() != 0)
+        );
+        assert!(
+            output["pdf_values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|v| v.as_f64() == Some(1.))
+        );
+        for row in output["strata"]["pdf_values"].as_array().unwrap() {
+            assert!(
+                row.as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|v| v.as_f64() == Some(0.25))
+            );
+        }
+    }
     harness.cleanup().await
 }

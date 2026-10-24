@@ -28,8 +28,16 @@ def _histogram_snapshot(xs: np.ndarray, weights: np.ndarray, mask: np.ndarray) -
         }
         for i in range(N_BINS)
     ]
-    underflow = {"x_min": None, "x_max": None, "bin_id": None, "label": None,
-                 "entry_count": 0, "sum_weights": 0.0, "sum_weights_squared": 0.0, "mitigated_fill_count": 0}
+    underflow = {
+        "x_min": None,
+        "x_max": None,
+        "bin_id": None,
+        "label": None,
+        "entry_count": 0,
+        "sum_weights": 0.0,
+        "sum_weights_squared": 0.0,
+        "mitigated_fill_count": 0,
+    }
     overflow = {**underflow}
     in_range = 0
     for x, w, matched in zip(xs.tolist(), weights.tolist(), mask.tolist()):
@@ -75,7 +83,12 @@ def _histogram_snapshot(xs: np.ndarray, weights: np.ndarray, mask: np.ndarray) -
 
 
 def _scalar_state(count: int, total: float, sq: float) -> dict:
-    return {"count": count, "sum_weighted_value": total, "sum_abs": abs(total), "sum_sq": sq}
+    return {
+        "count": count,
+        "sum_weighted_value": total,
+        "sum_abs": abs(total),
+        "sum_sq": sq,
+    }
 
 
 class PolynomialEvaluator(GammaLoopEvaluator):
@@ -89,16 +102,26 @@ class PolynomialEvaluator(GammaLoopEvaluator):
     - ``training_values``: |f(x)| per sample, forwarded to the sampler
     """
 
-    def __init__(self, *, discrete_cardinalities: list[int], continuous_dims: int) -> None:
+    def __init__(self, *, domain) -> None:
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         pass
 
     def eval_gammaloop(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray,
-        weights: np.ndarray, *, require_training_values: bool, stratification,
+        self,
+        xs_discrete: np.ndarray,
+        xs_continuous: np.ndarray,
+        weights: np.ndarray,
+        *,
+        require_training_values: bool,
+        stratification,
     ) -> GammaLoopBatchResult:
         x = xs_continuous[:, 0]
         raw_values = np.column_stack((_f(x), np.zeros(len(x))))
-        mask = stratification.mask(raw_values) if stratification is not None else np.ones(len(x), dtype=bool)
+        mask = (
+            stratification.mask(raw_values)
+            if stratification is not None
+            else np.ones(len(x), dtype=bool)
+        )
         values = raw_values[:, 0] * weights * mask
         n = len(x)
         s = float(values.sum())
@@ -123,5 +146,7 @@ class PolynomialEvaluator(GammaLoopEvaluator):
         return GammaLoopBatchResult(
             state=state,
             values=raw_values if stratification is not None else None,
-            training_values=np.abs(values).tolist() if require_training_values else None,
+            training_values=np.abs(raw_values[:, 0] * weights).tolist()
+            if require_training_values
+            else None,
         )

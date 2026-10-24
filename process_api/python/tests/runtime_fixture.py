@@ -1,4 +1,5 @@
 """Shared correctness/overhead fixture, served by the production Python SDK."""
+
 import atexit
 from functools import wraps
 import json
@@ -9,7 +10,7 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from gammaboard_process import SampleBatch, run_evaluator, run_sampler
 
 
@@ -21,12 +22,22 @@ def timed(method):
         elapsed = time.perf_counter() - start
         self.timings.setdefault(method.__name__, []).append(elapsed)
         return result
+
     return call
 
 
 class Fixture:
-    def __init__(self, *, continuous_dims, discrete_cardinalities, work=0,
-                 stats_path=None, evaluator_metadata=None, feedback=True, benchmark=False):
+    def __init__(
+        self,
+        *,
+        domain,
+        work=0,
+        stats_path=None,
+        evaluator_metadata=None,
+        feedback=True,
+        benchmark=False,
+    ):
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         self.dims = continuous_dims
         self.cards = discrete_cardinalities
         self.evaluator_metadata = evaluator_metadata
@@ -36,11 +47,19 @@ class Fixture:
         self.rng = np.random.default_rng(1234)
         self.timings = {}
         self.count = 0
-        self.total = 0.
+        self.total = 0.0
         if stats_path:
-            atexit.register(lambda: Path(stats_path).write_text(json.dumps(dict(
-                timings=self.timings, cpus=sorted(os.sched_getaffinity(0)),
-                numpy_version=np.__version__))))
+            atexit.register(
+                lambda: Path(stats_path).write_text(
+                    json.dumps(
+                        dict(
+                            timings=self.timings,
+                            cpus=sorted(os.sched_getaffinity(0)),
+                            numpy_version=np.__version__,
+                        )
+                    )
+                )
+            )
 
     def transform(self, values):
         values = np.array(values, dtype=np.float64, copy=True)
@@ -58,15 +77,22 @@ class Fixture:
     @timed
     def generate(self, max_samples):
         nr_samples = max_samples
-        values = self.transform(self.rng.random(nr_samples) if self.benchmark else np.full(nr_samples, .5))
+        values = self.transform(
+            self.rng.random(nr_samples) if self.benchmark else np.full(nr_samples, 0.5)
+        )
         discrete = np.empty((nr_samples, len(self.cards)), dtype=np.int64)
         for i, cardinality in enumerate(self.cards):
             discrete[:, i] = np.arange(nr_samples) % cardinality
-        return SampleBatch(discrete, np.repeat(values[:, None], self.dims, axis=1),
-                           np.full(nr_samples, 2.), training_remaining=(10**12 - self.count) if self.feedback_enabled else None)
+        return SampleBatch(
+            discrete,
+            np.repeat(values[:, None], self.dims, axis=1),
+            np.full(nr_samples, 2.0),
+            training_remaining=(10**12 - self.count) if self.feedback_enabled else None,
+        )
 
     @timed
-    def feedback(self, values):
+    def feedback(self, feedback):
+        values = feedback.values
         self.count += len(values)
         self.total += float(self.transform(values).sum())
 
@@ -74,13 +100,19 @@ class Fixture:
         return {"space": "coordinates", "dims": self.dims}
 
     def snapshot(self):
-        return dict(count=self.count, total=self.total, rng=self.rng.bit_generator.state,
-                    evaluator_metadata=self.evaluator_metadata)
+        return dict(
+            count=self.count,
+            total=self.total,
+            rng=self.rng.bit_generator.state,
+            evaluator_metadata=self.evaluator_metadata,
+        )
 
     @classmethod
-    def from_snapshot(cls, *, snapshot, discrete_cardinalities, continuous_dims, init_args, evaluator_metadata=None):
-        instance = cls(discrete_cardinalities=discrete_cardinalities, continuous_dims=continuous_dims,
-                       evaluator_metadata=evaluator_metadata, **init_args)
+    def from_snapshot(cls, *, snapshot, domain, init_args, evaluator_metadata=None):
+        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
+        instance = cls(
+            domain=domain, evaluator_metadata=evaluator_metadata, **init_args
+        )
         instance.count = snapshot["count"]
         instance.total = snapshot["total"]
         instance.rng.bit_generator.state = snapshot["rng"]
@@ -89,12 +121,9 @@ class Fixture:
     def diagnostics(self):
         return dict(count=self.count, total=self.total)
 
-    def global_pdf_norm(self):
-        return 2.5
-
     def persisted_output(self):
         return dict(count=self.count, total=self.total)
 
 
-if __name__ == '__main__':
-    {'evaluator': run_evaluator, 'sampler': run_sampler}[sys.argv[1]](Fixture)
+if __name__ == "__main__":
+    {"evaluator": run_evaluator, "sampler": run_sampler}[sys.argv[1]](Fixture)

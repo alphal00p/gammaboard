@@ -15,9 +15,9 @@ flowchart LR
     Q -->|claim| M[Materializer]
     M --> T[Ordered batch transforms]
     T --> E[Evaluator and batch accumulator]
-    E -->|accumulator and optional training values| Q
+    E -->|accumulator and optional feedback| Q
     Q -->|ordered accepted results| A[Sampler/aggregator: merge and reassemble]
-    A -->|one weighted feedback array per original draw| S
+    A -->|one Feedback object per original draw| S
     A --> C[(Checkpoint and published results)]
 ```
 
@@ -66,14 +66,15 @@ worker. Concurrency comes from independent workers and queued batches.
 
 | Interface | Required methods | Optional methods and defaults |
 | --- | --- | --- |
-| `Sampler` | `validate_domain(&Domain)`, `generate(usize) -> Generation`, `feedback(&[f64])`, `snapshot() -> JSON` | `pdf_batch(points)` and `discrete_pdf_batch(subspaces)` return unavailable entries; `global_pdf_norm()` returns 1; `persisted_output()` returns no output; `diagnostics()` returns `{}` |
+| `Sampler` | `validate_domain(&Domain)`, `generate(usize) -> Generation`, `feedback(&Feedback)`, `snapshot() -> JSON` | `pdf_batch(points)` and `discrete_mass_batch(subspaces)` return unavailable entries; `persisted_output()` returns no output; `diagnostics()` returns `{}` |
 | `Materializer` | `materialize_batch(&LatentBatch) -> Batch` | `validate_domain(&Domain)` succeeds by default |
 | `BatchTransform` | `apply(Batch) -> Batch` | `validate_domain(&Domain)` succeeds by default |
 | `Evaluator` | `domain() -> Domain`, `eval_batch(&Batch, &AccumulatorConfig, EvalBatchOptions) -> BatchResult` | `metadata()` and `diagnostics()` return `{}` |
 
 Fallible methods return `Result<..., EngineError>`; metadata/diagnostics return
 JSON directly. `SamplingConfig` owns construction identity: the `SamplerConfig`
-algorithm, optional materializer, and optional ordered transforms. Tasks refer to
+algorithm, optional materializer, optional ordered transforms, and optional
+stratification partition. Tasks refer to
 it through the `sampler` field. The worker role is called `sampler_aggregator`
 because the worker also accumulates completed results.
 
@@ -90,20 +91,34 @@ is an ordered list of points. Index `i` identifies the same logical sample throu
 materialization, transforms, evaluation, and feedback. Implementations must preserve
 the sample count and order; filtering or reordering requires a different contract.
 
-A [`Domain`](../src/utils/domain.rs) describes coordinate structure, not the
-sampler distribution or physical integration bounds:
+A [`Domain`](../src/utils/domain.rs) describes coordinate structure and axis roles,
+not a proposal distribution, statistical independence, or integration bounds.
 
 ```json
-{"rectangular":{"discrete_cardinalities":[3,2],"continuous_dims":4}}
+{"rectangular":{"strata_dims":2,"discrete_cardinalities":[2,2,3],"continuous_dims":4}}
 ```
 
-Each rectangular discrete coordinate ranges from zero to its cardinality minus
-one. A branching domain is
-`{"discrete":{"axis_label":null,"branches":[{"index":0,"domain":...},...]}}`.
-The selected branch determines the remaining coordinate layout. Native and direct
-wire implementations can support varying row widths. The Python SDK requires a
-homogeneous layout with zero-based contiguous branch choices, and rejects varying
-coordinate widths.
+A rectangular node marks its first `strata_dims` discrete coordinates as strata;
+the remainder are integrand coordinates. A branching node has `axis_role` equal to
+`"stratum"` or `"integrand"`, an optional display `axis_label`, and ordered branches:
+`{"discrete":{"axis_role":"stratum","axis_label":null,"branches":[{"index":0,"domain":...},...]}}`.
+Branch labels are nonnegative, unique, increasing integers; gaps are allowed.
+Roles default to integrand and rectangular `strata_dims` defaults to zero.
+
+Strata are left-bound along each path: no stratum coordinate may follow an
+integrand coordinate. Prefix lengths may differ between branches. For example,
+`(0)`, `(1,0)`, `(1,1)`, `(1,3)` are valid complete stratum prefixes. A complete
+prefix cannot also be a prefix of another stratum. Remaining integrand layouts
+may also vary by branch.
+
+Rust, the process protocol, and every Python callback receive the full domain.
+Python uses typed `Domain`, `DiscreteDomain`, `RectangularDomain`, `DomainBranch`,
+and `DiscreteAxisRole` objects. `domain.require_rectangular_shape()` is an explicit
+convenience for algorithms requiring homogeneous contiguous coordinate arrays.
+The shared SDK codec supports ragged rows: a fixed-width coordinate block is a
+writable `(N,D)` NumPy array; a variable-width block is a tuple of writable 1D arrays.
+Discrete and continuous blocks can independently be fixed or ragged. No padding,
+truncation, or loss of branch labels occurs.
 
 [`LatentBatch`](../src/sampling/latent_batch.rs) is the sampler-to-queue value:
 `{nr_samples, payload}`. It need not contain fully materialized points. Current
@@ -186,8 +201,11 @@ needed. The weight returned by generation must contain the complete sampling
 correction. Native uniform sampling multiplies the cardinalities of every chosen
 discrete branch/axis, including the stratum axis, into its inverse-density weight;
 it integrates the discrete sum rather than the average over labels.
-`global_pdf_norm()` describes PDF diagnostics and does not automatically rescale
-ordinary evaluation results.
+`pdf` returns an already normalized joint density in sampling coordinates.
+`discrete_mass` returns exact normalized marginals. Either may return unavailable
+entries; this never relaxes the requirement for complete generated weights.
+For joint proposal `q(s,d,x) = p_s q(d,x|s)`, the conditional density is `q/p_s`.
+After transforms, the total evaluator weight is `J/q`, not generally `1/q`.
 
 Materializers and transforms have no snapshot/restore callback. Their output must
 be reproducible from the supplied batch, immutable configuration, and immutable
@@ -206,7 +224,7 @@ array clears them. See [task sources](config.md#task-sources-and-training).
 ```text
 BatchResult {
     accumulator: AccumulatorState,
-    training_values: Option<Vec<f64>>
+    feedback: Option<Feedback>
 }
 ```
 
@@ -214,6 +232,21 @@ The accumulator is the result for **this batch**, not the run's previous state.
 Feedback must be present exactly when requested, with one finite scalar per input
 sample in input order. Its length is the claimed sample count, even for an
 observable adapter whose internal integration counts differ.
+
+`Feedback` contains `unmasked_values` and optional `strata`. The latter stores a
+canonical table of complete prefix tuples and one requested/actual table index per
+sample. Rust `requested_prefixes()` / `actual_prefixes()` and Python `.requested` /
+`.actual` expose those tuples. The compact indices avoid repeating variable-length
+prefixes for every sample. `Feedback.values()` in Rust / `.values` in Python is the
+GammaBoard-owned masked view: misses become zero. Generic samplers consume this
+view without understanding strata. An aware sampler can use the unmasked weighted
+projection and actual prefix to improve training; it must account for the proposal
+that generated the point, and any branch-dependent inverse maps/Jacobians. Relabeling
+a point never changes its original sampling density or inference assignment.
+
+Feedback is assembled in original draw order, including its prefix table and both
+assignment arrays. Partial feedback survives checkpoint recovery. No sampler
+awareness or invertibility flag changes runtime behavior.
 
 ### Ordinary values
 
@@ -322,22 +355,23 @@ state/protocol versions.
 ## Python interfaces and process boundaries
 
 The SDK base classes are optional; matching methods are sufficient. Fresh classes
-receive `discrete_cardinalities`, `continuous_dims`, and expanded `args` keywords.
+receive the complete typed `domain` and expanded `args` keywords.
 Samplers additionally receive `evaluator_metadata`.
 Pass a class to `run_*`, not an already constructed instance. `args` cannot define
-the reserved keys `discrete_cardinalities`, `continuous_dims`, or `evaluator_metadata`.
+the reserved keys `domain` or `evaluator_metadata`.
 
 | Role | Python callback | Result |
 | --- | --- | --- |
 | Values evaluator | `eval(xs_discrete, xs_continuous)` | Unweighted `(N,)` for one component, `(N,C)`, or a mapping from every declared component name to an `(N,)` array |
 | Observable evaluator | `eval_gammaloop(xs_discrete, xs_continuous, weights, *, require_training_values, stratification)` | `GammaLoopBatchResult(state, training_values, values)` |
 | Sampler | `generate(max_samples)` | `SampleBatch(xs_discrete, xs_continuous, weights, training_remaining=None)` or `WAITING` / `FINISHED` |
-| Sampler feedback | `feedback(values)` | No return value; `values` is the complete weighted `(N,)` array for one draw |
+| Sampler feedback | `feedback(feedback)` | Complete draw with masked `.values`, `.unmasked_values`, and optional `.strata` |
 | Materializer | `materialize_batch(latent_batch)` | `Batch(xs_discrete, xs_continuous, weights)` |
 | Transform | `transform_batch(xs_discrete, xs_continuous, weights)` | The same `Batch` type, with replacement total weights |
 
-Arrays are NumPy data with discrete shape `(N,D)`, continuous shape `(N,C)`, and
-weights/feedback shape `(N,)`. SDK callback input arrays own writable storage and
+Fixed-width coordinates are NumPy arrays with shapes `(N,D)` and `(N,C)`;
+variable-width coordinates are tuples of one-dimensional arrays. Weights and
+feedback value arrays have shape `(N,)`. SDK callback input arrays own writable storage and
 can be retained without corrupting later requests. All output arrays must have
 the required shape and finite values. Component order comes from initialization.
 
@@ -345,16 +379,18 @@ Every sampler class must implement `snapshot()` and this restoration entry point
 
 ```python
 @classmethod
-def from_snapshot(cls, *, snapshot, discrete_cardinalities, continuous_dims,
+def from_snapshot(cls, *, snapshot, domain,
                   init_args, evaluator_metadata=None):
     ...  # Return a fully restored sampler instance.
 ```
 
 `init_args` is the construction dictionary, not expanded keywords on restoration.
 Optional SDK callbacks match the Rust defaults above. Python spellings are
-`pdf(xs_discrete, xs_continuous)` and `discrete_pdf(subspaces)`; the latter receives
+`pdf(xs_discrete, xs_continuous)` and `discrete_mass(subspaces)`; the latter receives
 a list of dictionaries mapping discrete dimension indices to fixed values.
-Unavailable PDF entries are `None`. `global_pdf_norm()` is finite and positive.
+Unavailable PDF or mass entries are `None`, independently for each query. Known
+zero is `0.0`. Invalid numbers, including negative or non-finite densities and
+masses outside `[0,1]`, are errors. There is no global PDF normalization hook.
 
 Process roles use separate subprocesses and synchronous RPC calls; metadata flows
 through GammaBoard, not a direct sampler-to-evaluator connection. Workers must
@@ -369,33 +405,99 @@ This is a sampling-pipeline option for integration tasks; campaigns, scans and
 tuning use it through their child integration definitions. It is not a run kind.
 See [the configuration example](../resources/templates/runs/tetrahedron-stratified.toml).
 
-`sampler.config.stratification = { kind = "voronoi", centers = [...], scales = [...] }`
-defines one outer categorical coordinate. Centres are distinct finite vectors in
-unweighted evaluator-output units. Scales default to ones and must be positive.
-Classification minimizes `sqrt(sum_j ((f_j-c_kj)/scales_j)^2)`; ties choose the
-lowest centre index. Rescaling affects only classification, not the integral.
+`sampler.config.stratification` contains `kind = "voronoi"`, a stratum-only
+`domain`, a `centers` map, and optional `scales`. The prefix domain is independent
+of the map, contains zero continuous dimensions, and contains no integrand axes.
+GammaBoard appends the evaluator's integrand domain at each terminal prefix.
+Rectangular prefixes remain compact when the integrand domain is rectangular.
 
-The sampler and materializer see the lifted domain. After materialization the
-runtime separates the stratum label, applies physical transforms, and evaluates
-the original coordinates once. Ordinary scalar/vector outputs are validated,
-classified and gated before accumulation. A miss has zero contribution and zero
-training feedback but still counts as an attempted sample and consumes budget.
+Centre keys are canonical comma-separated nonnegative integers, such as `"0"` or
+`"1,3"`. They must exactly match every complete stratum prefix declared by the
+domain. Missing, extra, partial, and overlong keys fail validation. Centre values
+are distinct finite vectors in unweighted evaluator-output units with exactly the
+output width. Scales default to ones and must be positive. Classification minimizes
+`sqrt(sum_j ((f_j-c_sj)/scales_j)^2)`; ties use numeric lexicographic prefix order,
+independent of map insertion order. Scaling changes classification, not weights.
+
+The sampler and materializer receive the augmented domain. After materialization,
+the runtime separates the entire requested prefix, applies integrand transforms,
+and evaluates the remaining coordinates once. Classification selects an actual
+prefix. Accumulation and default feedback are masked on a mismatch, but unmasked
+weighted training values remain available. Every miss counts as an attempted
+sample and consumes budget.
 Native GammaLoop and process observable evaluators support a hybrid: the primary
 real/imaginary integral uses stratified statistics, while histograms retain pooled
 statistics. Their centres have two entries, `[real, imag]`; for a sign split on
-the real part use `[[-1, 0], [1, 0]]`. Native scalar/vector value output continues
+the real part use `centers = { "0" = [-1, 0], "1" = [1, 0] }` with a two-choice prefix domain. Native scalar/vector value output continues
 to use its declared component layout.
+
+### Training statistics and the selected estimator
+
+Partitioning and estimation are independent choices. Training uses the pooled
+estimator: **stratified statistics are not used during training**. All training
+windows contribute, including earlier proposals. For component `f`, the pooled
+sample is `Y_i = W_i f_i 1[requested_i = actual_i]`. Misses are zero observations.
+For `N >= 2`, GammaBoard reports
+`mean = sum(Y_i)/N` and `error² = sum((Y_i-mean)²)/(N*(N-1))`.
+With one sample, the mean is provisional and the error is unavailable. Empty
+accumulators have no estimate. The same sample-variance convention applies to
+GammaBoard's pooled components, absolute means and discrete projections.
+
+Training retains per-prefix attempts, matches, match fractions, and the observed
+allocation `n_s/N` as diagnostics. Exact proposal masses are not queried for
+adaptive pooled training and are not inferred from those frequencies. The result
+panel distinguishes the partition, selected estimator, and training context.
 
 Training uses `estimator = "pooled"` and full-weight projected feedback. Final
 inference uses `estimator = "stratified"`, a supported sampler handoff and an
 explicit fresh accumulator configuration. The partition is inherited from the
 training source and cannot change during handoff. With joint sampler weight
-`W = 1 / (p_k q(x|k))` including subsequent transform factors, inference accumulates
+`W = J / (p_k q(x|k))`, where `k` identifies a complete prefix, inference accumulates
 `Z_k = p_k W F(k,x)`. Per-stratum attempted counts, means and central cross moments
 merge using parallel Welford updates. The final mean is the sum of stratum means;
 its covariance is the sum of `sample_covariance_k / n_k`. Component errors are
 square roots of its diagonal. Norm training projection remains a separate scalar
 observable: its mean is the integral of the norm, not the norm of the vector mean.
+
+### Pooled comparison during stratified inference
+
+The primary estimate remains the stratified mean and its conditional error. The
+expanded display also shows `basic_mean` and `basic_err`: the pooled estimator of
+**the same masked, fully weighted draws**. This is a different mean, and does not
+predict a separately trained unstratified sampler's performance.
+
+No second accumulator is needed. For stratum count `n_s`, conditional mean `m_s`,
+central moment sum `M2_s`, and frozen mass `p_s`, its pooled group has mean `m_s/p_s`
+and central moment sum `M2_s/p_s²`. These groups are merged with the stable parallel
+mean/covariance formula, including between-group mean differences. The resulting
+pooled error uses `N*(N-1)`. A pooled comparison can be available while the primary
+stratified error is still unavailable; it is never used as a fallback for stopping.
+
+Measurements carry `estimator` (`pooled`, `stratified`, or `combined`), primary
+`value`/`uncertainty`, and optional `basic: {mean,error}`. Controllers and tuning
+continue to use only the selected primary estimate. Campaigns combine selected
+child estimates and their uncertainties; any pooled comparison is combined
+separately with the same coefficients. Relative errors and target comparisons
+refer to the corresponding primary mean and error.
+
+The same identity and comparison travel through history, JSON/CSV export, plots
+and full-precision disclosures. Plot points retain the explicit primary error;
+reconstructing it by subtracting rounded band endpoints can destroy small errors.
+Missing errors are null/blank or labelled unavailable, never converted to zero.
+The UI writes explicit same-scale parentheses, e.g. `1.5(0.5)`, and uses the same
+shared exponent for the mean and parenthesized error.
+
+Retained diagnostic points include requested and actual prefix tuples, integrand
+coordinates after materialization/transforms, and total integration weights.
+Training extrema describe pooled `W*f`; stratified extrema describe conditional
+`p_s*W*f`, with their basis labelled. Observable producers' raw real/imag values
+allow the host to retain complete prefix metadata without changing native moments.
+
+For discrete-coordinate projection diagnostics, the host marginalizes over the
+complete prefix set and offsets each integrand query by that prefix's length.
+An unspecified joint query leaves the marginal unspecified. Custom process
+materializers/transforms can remap discrete coordinates, so their integrand-space
+probability diagnostic remains unspecified without a known coordinate mapping.
 
 For native histograms, all correlated events/cuts/counterterms from one original
 sampler draw are grouped before squared bin contributions are accumulated. The
@@ -422,13 +524,18 @@ passes the optional partition through `EvalBatchOptions` to every adapter.
 For Python observable callbacks, `stratification` is either `None` or a
 `StratificationContext`. With a context, compute unweighted `(N,2)` real/imaginary
 values, obtain `mask = stratification.mask(values)`, and apply it before committing
-the native state and full-weight training feedback. Return those **raw** values in
+the native state. Training feedback remains **unmasked** and fully weighted. Return those **raw** values in
 `GammaLoopBatchResult.values`; the host computes the conditional integral moments.
 When no context is supplied, `values` must be `None`. The callback's state always
 contains its existing pooled statistics, and counts all attempts when stratifying.
 Adapters that launch an independent integration from one trigger, such as MadGraph
 event generation, cannot satisfy this per-draw contract and reject stratification.
 
+For each complete prefix, the runtime queries `discrete_mass` with every prefix
+coordinate fixed and all remaining coordinates marginalized. Arbitrary other
+marginals may be unavailable. Training and explicitly pooled estimation do not
+require these queries. Stratified inference fails if any required mass is
+unavailable; it never estimates masses from counts or silently switches estimators.
 Before inference generates work, the runtime validates exact finite positive
 masses summing to one within `1e-12`. It does not renormalize guessed probabilities
 or impose probability floors afterward. The immutable plan includes component
@@ -449,7 +556,83 @@ that a stratum's integral is zero. Error bars assume finite second moments and m
 be unreliable before rare large contributions have been sampled. Quotas, adaptive
 inference and correlated/QMC error estimation are outside this implementation.
 
-Task panels show stratum attempts, matches, probabilities, component estimates,
-errors and zero-hit warnings. Pooled ESS, RSD and variance metrics are unavailable
+Task panels show attempts, matches, exact proposal probabilities, observed
+allocations, component estimates, errors, and zero-hit warnings. Histogram estimates
+retain an explicit pooled label, independently of the primary estimator. The
+training projection is labelled separately, including means of per-sample norms. Pooled ESS, RSD and variance metrics are unavailable
 for this estimator rather than reported with an inappropriate formula. Combined
 means/errors feed the normal measurement and controller paths.
+
+The coverage threshold does not guarantee that rare importance-weight tails have
+been observed. At a finite budget, sampled variances can substantially underestimate
+the proposal's true variance even when the estimator contract is satisfied. See the
+[prefix-model validation](validation/2026-10-22-stratum-prefixes.md) for an observed
+example and an independent frozen-proposal variance calculation.
+
+### Stratum plot data and PDF probes
+
+Stratum plot histories project the existing accumulator snapshots. Each frame
+contains cumulative attempted/matched counts, optional exact masses, per-component
+conditional estimates when selected, and the unchanged primary total. No new
+per-draw collection is required. Variance shares are `error_k² / sum(error_j²)`;
+all shares remain unavailable if any error is unavailable or the total reported
+variance is zero. Reporting-interval allocation and hit rates use differences of
+adjacent retained cumulative snapshots. Hiding a curve never recomputes totals.
+
+A PDF diagnostic is a read-only stage handoff. It restores the saved proposal,
+inherits its output layout/training projection into a fresh accumulator, and
+uses the existing feedback path. For a stratified source it evaluates a common
+sampler-coordinate raster once, carrying the first complete prefix for routing.
+The evaluator strips that prefix and returns the unmasked weighted projection
+and actual classification. The raster has unit sampling weight; transformations
+supply any Jacobian factors. The diagnostic stores these unmasked projections and
+actual labels, rather than consuming the generic masked feedback view.
+
+For every prefix `k`, it queries `pdf_batch` at `(k ++ integrand_discrete, u)` and
+`discrete_mass` for the complete prefix. Stored per-stratum PDFs are joint
+`p(k,d,u)` values; the overview is their sum. Conditional PDFs are
+`p(k,d,u)/p_k`, conditional only on `k`, not additionally on a fixed integrand
+discrete path. Unknown values remain absent. The target is the absolute source
+projection times `1[actual=k]`; the density remains unmasked. PDF values, actual
+assignments and raster progress survive checkpoint/replay in canonical grid order.
+
+All plotted values use the same sampler-coordinate slice and transformed
+integrand measure. Custom process materializers cannot currently be inverted or
+probed by this interface and fail explicitly. There is no sampler capability flag
+or process protocol change. Native uniform sampling now returns its joint PDF on
+rectangular and ragged discrete domains as well as purely continuous domains.
+
+Display-only shape normalization uses trapezoid weights for the target on line
+parameter `t` or plane parameters `(u,v)`. Native Havana line diagnostics also
+retain the union of intersected grid edges and the joint PDF on each resulting
+interval. This provides exact piecewise-constant rendering and bin integration
+without additional integrand evaluations or a new sampler API. Generic samplers
+retain sampled-point rendering and quadrature. Checkpoints retain the optional
+step representation and source projection label with the raster results.
+
+A finite positive integral is required for normalization. A source-reference
+comparison uses an available estimate of the absolute training-projection
+integral; it never substitutes the magnitude of a signed integral. Reference
+normalization does not guarantee unit area on a slice. Leakage and actual-cell
+mass readouts use classified raster quadrature and are explicitly slice estimates.
+
+For ratios, positive target with zero PDF is uncovered, positive PDF with zero
+target is leakage/zero target, both zero is undefined, and missing inputs remain
+unavailable. Numeric curves omit infinite/undefined ratios while the Coverage
+view and counts preserve those cases. Diagnostic histograms are distributions of
+finite raster values, not independent Monte Carlo observations, and carry no
+Poisson or Monte Carlo error bars.
+
+The shared panel serves ordinary and stratified runs, with one overview by
+default and at most four stratum comparisons at a time. Comparable heatmaps share
+both colour bounds in linear or logarithmic space. Scope, view, normalization,
+zoom and colour settings are display-only. JSON/CSV export includes normalization
+metadata, raw queried densities, exact native PDF intervals where available,
+actual prefix assignments and diagnostic statuses.
+
+Stratum histories use snapshot timestamps for elapsed time and the latest
+preceding sampler performance report for the same task for reported sampler time.
+Reports from other tasks or later timestamps cannot be substituted. Missing time
+metadata remains absent, and merging a current frame cannot erase an existing
+historical timestamp. Counts remain the canonical history key, independently of
+the selected horizontal axis.
