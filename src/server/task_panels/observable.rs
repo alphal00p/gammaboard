@@ -12,6 +12,7 @@ pub(super) fn histogram_bundle_panel(
         json!({ "kind": "histogram", "source": "selected_row" }),
     );
     object.insert("expanded_label".to_string(), json!(expanded_label));
+    object.entry("actions").or_insert_with(|| json!({}))["upload_bundle"] = json!(true);
     let histograms = object.get("histograms")?.as_object()?;
     let rows = histograms
         .iter()

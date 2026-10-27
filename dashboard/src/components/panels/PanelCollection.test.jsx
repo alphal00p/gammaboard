@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import PanelCollection from "./PanelCollection";
 
@@ -43,6 +43,87 @@ test("keeps expanded campaign observables before Task Summary", () => {
   const observable = screen.getByText(/^Combined Observable\s+\(energy\)$/);
   expect(screen.getByText("Combined Observables").compareDocumentPosition(observable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(observable.compareDocumentPosition(screen.getByText("Task Summary")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+const ObservableBundleHarness = ({ panelId, label }) => {
+  const [values, setValues] = useState({});
+  return <PanelCollection
+    panelSpecs={[{ panel_id: panelId, label, kind: "table", width: "full" }]}
+    panelStates={[{
+      panel_id: panelId, kind: "table", columns: ["Observable"], rows: [["energy"]], row_keys: ["energy"],
+      payload: {
+        expands_to: { kind: "histogram", source: "selected_row" },
+        actions: { upload_bundle: true },
+        histograms: { energy: { bins: [{ start: 0, stop: 1, value: 2, error: 0.2 }] } },
+      },
+    }]}
+    panelValues={values}
+    onPanelValueChange={(id, value) => setValues((previous) => ({ ...previous, [id]: value }))}
+  />;
+};
+
+describe.each([
+  { panelId: "gammaloop_histogram_bundle", label: "Observables" },
+  { panelId: "campaign_histograms", label: "Combined Observables" },
+])("$label bundle comparisons", ({ panelId, label }) => {
+  test("uploads, selects and removes reference histograms through the shared panel", async () => {
+    const { container, rerender } = render(<ObservableBundleHarness panelId={panelId} label={label} />);
+    const input = container.querySelector('input[type="file"]');
+    const openFile = vi.spyOn(input, "click");
+    fireEvent.click(screen.getByRole("button", { name: "Upload Bundle" }));
+    expect(openFile).toHaveBeenCalledOnce();
+    fireEvent.change(input, { target: { files: [{
+      name: "reference.json",
+      text: async () => JSON.stringify({ histograms: {
+        energy: {
+          sample_count: 2,
+          bins: [{ x_min: 0, x_max: 1, sum_weights: 8, sum_weights_squared: 34 }],
+        },
+        alternative: { bins: [{ start: 0, stop: 1, value: 3, error: 0.1 }] },
+      } }),
+    }] } });
+    expect(await screen.findByRole("button", { name: "Remove reference.json" })).toBeInTheDocument();
+    expect(renderChart.mock.calls.some(([props]) =>
+      props.option.series.some((series) => series.name === "reference.json: energy"),
+    )).toBe(true);
+
+    const selection = screen.getAllByRole("combobox").find((select) => select.textContent === "energy");
+    fireEvent.mouseDown(selection);
+    renderChart.mockClear();
+    fireEvent.click(screen.getByRole("option", { name: "alternative", exact: true }));
+    await waitFor(() => expect(renderChart.mock.calls.some(([props]) =>
+      props.option.series.some((series) => series.name === "reference.json: alternative"),
+    )).toBe(true));
+
+    // Polling a new panel state must retain the uploaded bundle and its selection.
+    rerender(<ObservableBundleHarness panelId={panelId} label={label} />);
+    expect(screen.getAllByRole("combobox").some((select) => select.textContent === "alternative")).toBe(true);
+
+    renderChart.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Remove reference.json" }));
+    expect(screen.queryByRole("button", { name: "Remove reference.json" })).not.toBeInTheDocument();
+    expect(renderChart.mock.calls.length).toBeGreaterThan(0);
+    expect(renderChart.mock.calls.some(([props]) =>
+      props.option.series.some((series) => series.name?.startsWith("reference.json:")),
+    )).toBe(false);
+  });
+
+  test("reports invalid bundles and clears the error after a valid upload", async () => {
+    const { container } = render(<ObservableBundleHarness panelId={panelId} label={label} />);
+    const input = container.querySelector('input[type="file"]');
+    fireEvent.change(input, { target: { files: [{ name: "invalid.json", text: async () => "{}" }] } });
+    expect(await screen.findByText("bundle payload must contain a 'histograms' object")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove invalid.json" })).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { files: [{
+      name: "valid.json",
+      text: async () => JSON.stringify({ histograms: { energy: {
+        bins: [{ start: 0, stop: 1, value: 3, error: 0.1 }],
+      } } }),
+    }] } });
+    expect(await screen.findByRole("button", { name: "Remove valid.json" })).toBeInTheDocument();
+    expect(screen.queryByText("bundle payload must contain a 'histograms' object")).not.toBeInTheDocument();
+  });
 });
 
 const pdfImageSpecs = ["log_integrand", "log_pdf", "oversampling"].map((name) => ({

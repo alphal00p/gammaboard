@@ -810,9 +810,17 @@ pub(crate) async fn expire_node_lease(pool: &PgPool, node_uuid: &str) -> Result<
     Ok(())
 }
 
-pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    sqlx::query(
+pub(crate) async fn remove_run(
+    connection: &mut sqlx::PgConnection,
+    run_id: i32,
+) -> Result<u64, sqlx::Error> {
+    // The dashboard submits and polls this background operation. Large cascades
+    // may exceed the ordinary query deadline; keep lock waits bounded and restore
+    // the normal statement timeout automatically when this transaction ends.
+    sqlx::query("SET LOCAL statement_timeout = 0")
+        .execute(&mut *connection)
+        .await?;
+    let run_ids: Vec<i32> = sqlx::query_scalar(
         r#"
         WITH RECURSIVE deleted_runs AS (
             SELECT id
@@ -823,53 +831,60 @@ pub(crate) async fn remove_run(pool: &PgPool, run_id: i32) -> Result<u64, sqlx::
             FROM runs child
             JOIN deleted_runs parent ON child.parent_run_id = parent.id
         )
+        SELECT id FROM deleted_runs
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(&mut *connection)
+    .await?;
+    if run_ids.is_empty() {
+        return Ok(0);
+    }
+    sqlx::query(
+        r#"
         UPDATE nodes
         SET
-            pool_run_id = CASE WHEN pool_run_id IN (SELECT id FROM deleted_runs) THEN NULL ELSE pool_run_id END,
-            pool_role = CASE WHEN pool_run_id IN (SELECT id FROM deleted_runs) THEN NULL ELSE pool_role END,
+            pool_run_id = CASE WHEN pool_run_id = ANY($1) THEN NULL ELSE pool_run_id END,
+            pool_role = CASE WHEN pool_run_id = ANY($1) THEN NULL ELSE pool_role END,
             desired_run_id = CASE
-                WHEN desired_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                WHEN desired_run_id = ANY($1) THEN NULL
                 ELSE desired_run_id
             END,
             desired_role = CASE
-                WHEN desired_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                WHEN desired_run_id = ANY($1) THEN NULL
                 ELSE desired_role
             END,
             active_run_id = CASE
-                WHEN active_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                WHEN active_run_id = ANY($1) THEN NULL
                 ELSE active_run_id
             END,
             active_role = CASE
-                WHEN active_run_id IN (SELECT id FROM deleted_runs) THEN NULL
+                WHEN active_run_id = ANY($1) THEN NULL
                 ELSE active_role
             END,
-            updated_at = now()
-        WHERE pool_run_id IN (SELECT id FROM deleted_runs)
-           OR desired_run_id IN (SELECT id FROM deleted_runs)
-           OR active_run_id IN (SELECT id FROM deleted_runs)
+            updated_at = clock_timestamp()
+        WHERE pool_run_id = ANY($1)
+           OR desired_run_id = ANY($1)
+           OR active_run_id = ANY($1)
         "#,
     )
-    .bind(run_id)
-    .execute(&mut *tx)
+    .bind(&run_ids)
+    .execute(&mut *connection)
     .await?;
-    let result = sqlx::query(
-        r#"
-        WITH RECURSIVE deleted_runs AS (
-            SELECT id
-            FROM runs
-            WHERE id = $1
-            UNION ALL
-            SELECT child.id
-            FROM runs child
-            JOIN deleted_runs parent ON child.parent_run_id = parent.id
-        )
-        DELETE FROM runs
-        WHERE id IN (SELECT id FROM deleted_runs)
-        "#,
-    )
-    .bind(run_id)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
+    // Remove large payloads in bulk instead of issuing a foreign-key cascade
+    // DELETE for every retained batch. The enclosing transaction also owns the
+    // controller lock, so failures roll back the whole run tree and its data.
+    for table in ["batch_results", "batch_inputs"] {
+        sqlx::query(&format!(
+            "DELETE FROM {table} payload USING batches b WHERE payload.batch_id=b.id AND b.run_id=ANY($1)"
+        ))
+        .bind(&run_ids)
+        .execute(&mut *connection)
+        .await?;
+    }
+    let result = sqlx::query("DELETE FROM runs WHERE id=ANY($1)")
+        .bind(&run_ids)
+        .execute(&mut *connection)
+        .await?;
     Ok(result.rows_affected())
 }

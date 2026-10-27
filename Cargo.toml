@@ -29,9 +29,9 @@ gammaloop = ["dep:gammalooprs", "dep:gammaloop_api"]
 
 [dependencies]
 sha2 = "0.10"
-gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammalooprs", optional = true }
+gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "e805b8a25dc80ecf2f694d4e3bfa7c75db8fd0f0", package = "gammalooprs", optional = true }
 
-gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammaloop-api", default-features = false, features = ["cli"], optional = true }
+gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "e805b8a25dc80ecf2f694d4e3bfa7c75db8fd0f0", package = "gammaloop-api", default-features = false, features = ["cli"], optional = true }
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
 rand = { package = "rand", version = "0.9" }
@@ -47,7 +47,7 @@ clap_complete = "4.5"
 toml = "1.1"
 async-trait = "0.1"
 thiserror = "2.0"
-symbolica = { version = "3.0.0", default-features = false, features = ["integer-gmp", "float-mpfr", "native_code_generation", "serde"] }
+symbolica = { version = "3.0.1", default-features = false, features = ["integer-gmp", "float-mpfr", "native_code_generation", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 num = "0.4.3"
@@ -67,6 +67,15 @@ libc = "0.2"
 assert_cmd = "2"
 predicates = "3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# Dependency workspace patches are not inherited. Match the gammaloop checkout,
+# pinning Symbolica's community packages to its Cargo.lock revision.
+[patch.crates-io]
+symbolica = { git = "https://github.com/symbolica-dev/symbolica", rev = "c78cffc20f318df1fce50539a587cbe8ffc717c0" }
+numerica = { git = "https://github.com/symbolica-dev/symbolica", rev = "c78cffc20f318df1fce50539a587cbe8ffc717c0" }
+graphica = { git = "https://github.com/symbolica-dev/symbolica", rev = "c78cffc20f318df1fce50539a587cbe8ffc717c0" }
+symbolica-typst-plugin = { git = "https://github.com/symbolica-dev/symbolica-typst-plugin", rev = "57b7455b37c30f4f87353c0073e49f5225e937ab" }
+clarabel = { git = "https://github.com/alphal00p/gammaloop.git", rev = "e805b8a25dc80ecf2f694d4e3bfa7c75db8fd0f0" }
 
 [profile.dev-optim]
 inherits = "dev"

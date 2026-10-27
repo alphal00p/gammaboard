@@ -135,7 +135,7 @@ impl GammaLoopEvaluator {
             .build_err()?;
         let selected_names = integrand.get_settings().sampling.selected_graph_names();
         let mut integrand = integrand
-            .clone_with_selected_graph_groups(selected_names)
+            .clone_with_selected_graph_groups(&model, selected_names)
             .build_err()?;
         if params.use_f128 {
             let levels = &mut integrand.get_mut_settings().stability.levels;

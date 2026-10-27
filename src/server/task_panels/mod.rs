@@ -1218,6 +1218,61 @@ mod tests {
     }
 
     #[test]
+    fn campaign_observables_support_uploaded_comparisons() {
+        let persisted = serde_json::json!({"observables": {
+            "histograms": {"energy": {
+                "title": "Energy", "phase": "real", "sample_count": 100,
+                "bins": [{"start": 0.0, "stop": 1.0, "value": 2.0, "error": 0.2}]
+            }},
+            "omitted_incompatible_histograms": ["momentum"]
+        }});
+        let panel_state = serde_json::json!({});
+        for state in [RunTaskState::Active, RunTaskState::Completed] {
+            let task = run_task_with_state(
+                RunTaskSpec::IntegrationCampaign {
+                    children: vec![],
+                    measurement: Default::default(),
+                    stop_condition: Default::default(),
+                    allocation: Default::default(),
+                },
+                state,
+            );
+            let panel = integration_campaign::projectors()
+                .into_iter()
+                .find(|projector| projector.spec().panel_id == "campaign_histograms")
+                .unwrap()
+                .current(&TaskPanelContext {
+                    task: &task,
+                    source: TaskPanelCurrentSource::Persisted(&persisted),
+                    panel_state: &panel_state,
+                    run_target: None,
+                    completed_samples_per_second: None,
+                    eta_seconds: None,
+                    sampler_engine_diagnostics: None,
+                })
+                .unwrap()
+                .unwrap();
+            let PanelState::Table {
+                payload: Some(payload),
+                ..
+            } = panel
+            else {
+                panic!("expected combined observables");
+            };
+            assert_eq!(payload["actions"]["upload_bundle"], true);
+            assert_eq!(payload["expands_to"]["kind"], "histogram");
+            assert_eq!(
+                payload["histograms"],
+                persisted["observables"]["histograms"]
+            );
+            assert_eq!(
+                payload["omitted_incompatible_histograms"],
+                serde_json::json!(["momentum"])
+            );
+        }
+    }
+
+    #[test]
     fn campaign_layout_places_summary_after_sub_runs_and_observables() {
         let task = RunTaskSpec::IntegrationCampaign {
             children: vec![],

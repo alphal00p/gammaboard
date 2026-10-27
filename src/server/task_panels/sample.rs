@@ -1280,7 +1280,6 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
             "actions".to_string(),
             json!({
                 "export": true,
-                "upload_bundle": true,
             }),
         );
     }
