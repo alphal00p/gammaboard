@@ -44,7 +44,12 @@ impl<S: crate::core::SamplerWorkerStore + Clone + Send + Sync + 'static> RoleRun
         match SamplerAggregatorRunner::tick(self).await {
             Ok(done) => {
                 if done {
-                    self.complete_task().await.store_err()?;
+                    // Completion performs database I/O too. Preserve store errors
+                    // so the supervisor applies the same retry policy as sampling.
+                    self.complete_task().await.map_err(|err| match err {
+                        RunnerError::Store(err) => err,
+                        err => StoreError::store(err.to_string()),
+                    })?;
                     return Ok(true);
                 }
                 Ok(false)

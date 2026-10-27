@@ -13,6 +13,65 @@ static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
+async fn run_removal_waits_for_lease_expiry_and_restores_connection_timeouts() {
+    let (_guard, store) = locked_test_store().await;
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('slow-removal','{}','{\"continuous\":{\"dims\":1}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    sqlx::raw_sql(&format!(
+        r#"
+        CREATE FUNCTION slow_run_removal() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF OLD.id = {run} THEN PERFORM pg_sleep(0.25); END IF;
+            RETURN OLD;
+        END;
+        $$;
+        CREATE TRIGGER slow_run_removal BEFORE DELETE ON runs
+        FOR EACH ROW EXECUTE FUNCTION slow_run_removal();
+    "#
+    ))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let pool = PgPoolOptions::new().max_connections(2)
+        .after_connect(|connection, _| Box::pin(async move {
+            sqlx::query("SELECT set_config('statement_timeout','100ms',false), set_config('lock_timeout','100ms',false), set_config('idle_in_transaction_session_timeout','200ms',false)")
+                .execute(connection).await?;
+            Ok(())
+        }))
+        .connect(&std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap()).await.unwrap();
+    let removal_store = PgStore::new(pool.clone());
+    // A crashed worker must drain by real lease expiry even though removal holds
+    // one transaction open longer than the ordinary idle-transaction deadline.
+    sqlx::query("INSERT INTO nodes (name,uuid,active_run_id,active_role,lease_expires_at) VALUES ('removal-worker','removal-worker',$1,'evaluator',now()+interval '1 second')")
+        .bind(run).execute(store.pool()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), removal_store.remove_run(run))
+        .await
+        .expect("removal must observe lease expiry during its transaction")
+        .expect("background removal may exceed the normal statement timeout");
+    let timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(timeout, "100ms");
+    let error = sqlx::query("SELECT pg_sleep(0.25)")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.as_database_error().unwrap().code().as_deref(),
+        Some("57014")
+    );
+    assert!(
+        store.try_lock_task_control().await.unwrap().is_some(),
+        "removal must release the controller lock"
+    );
+    sqlx::raw_sql("DROP TRIGGER slow_run_removal ON runs; DROP FUNCTION slow_run_removal(); DELETE FROM nodes WHERE name='removal-worker';")
+        .execute(store.pool()).await.unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
 async fn campaign_grants_are_atomic_durable_and_include_prior_stages() {
     let (_guard, store) = locked_test_store().await;
     let (parent, parent_task, _, _) = reliability_fixture(&store, 0).await;
@@ -2164,6 +2223,72 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         .execute(store.pool())
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn completed_cleanup_handles_large_checkpoints_within_statement_timeout() {
+    let (_guard, store) = locked_test_store().await;
+    let run: i32 = sqlx::query_scalar("INSERT INTO runs (name,integration_params,point_spec) VALUES ('large-checkpoint-cleanup','{}','{\"continuous\":{\"dims\":1}}') RETURNING id")
+        .fetch_one(store.pool()).await.unwrap();
+    let task = insert_completed_pause_task(&store, run).await;
+    let ids = next_batch_ids(4096);
+    let batch = LatentBatch::from_batch(&Batch::from_iter([Point::new(vec![1.0], vec![], 1.0)]))
+        .for_evaluation(gammaboard::core::AccumulatorConfig::scalar());
+    store
+        .insert_batches(run, task, false, &ids, &vec![batch; ids.len()])
+        .await
+        .unwrap();
+    sqlx::query("UPDATE batches SET status='completed' WHERE run_id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    // A compressed multi-megabyte checkpoint exposes repeated JSON extraction
+    // while the last 1024 completed batches must remain available for replay.
+    sqlx::query(
+        "INSERT INTO run_sampler_checkpoints (run_id,task_id,sampler_checkpoint) VALUES ($1,$2,$3)",
+    )
+    .bind(run)
+    .bind(task)
+    .bind(serde_json::json!({
+        "sampler_snapshot": {"padding": "x".repeat(32 * 1024 * 1024)},
+        "queue": {"last_completed_batch_id": ids[3071], "last_produced_batch_id": ids[4095]}
+    }))
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let db_url = std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET statement_timeout = '5s'")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&db_url)
+        .await
+        .unwrap();
+    let bounded_store = PgStore::new(pool.clone());
+    let deleted = bounded_store
+        .cleanup_consumed_completed_batches(run, ids[4095], 2048)
+        .await;
+    pool.close().await;
+    let remaining: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM batches WHERE run_id=$1 ORDER BY id")
+            .bind(run)
+            .fetch_all(store.pool())
+            .await
+            .unwrap();
+    store.remove_run(run).await.unwrap();
+    assert_eq!(
+        deleted.expect("cleanup must not repeatedly decompress the checkpoint"),
+        2048
+    );
+    assert_eq!(remaining, ids[2048..]);
 }
 
 #[tokio::test]

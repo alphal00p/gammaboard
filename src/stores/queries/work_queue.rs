@@ -680,9 +680,15 @@ pub(crate) async fn cleanup_consumed_completed_batches(
 
     // Protect outstanding work at the checkpoint. Work produced after its upper
     // boundary is discarded on recovery, so consumed results there need no retention.
+    // Extract the small queue once: reading it per batch repeatedly decompresses
+    // the full sampler/accumulator checkpoint and can time out during cleanup.
     let result = sqlx::query(
         r#"
-        WITH cleanup_candidates AS (
+        WITH checkpoint_queue AS MATERIALIZED (
+            SELECT sampler_checkpoint->'queue' AS queue
+            FROM run_sampler_checkpoints
+            WHERE run_id = $1
+        ), cleanup_candidates AS (
             SELECT id
             FROM batches
             WHERE run_id = $1
@@ -690,12 +696,12 @@ pub(crate) async fn cleanup_consumed_completed_batches(
               AND COALESCE(retry_count, 0) = 0
               AND id <= $2
               AND EXISTS (
-                  SELECT 1 FROM run_sampler_checkpoints c WHERE c.run_id = $1
-                  AND (
-                      batches.id <= (c.sampler_checkpoint->'queue'->>'last_completed_batch_id')::bigint
+                  SELECT 1 FROM checkpoint_queue c
+                  WHERE (
+                      batches.id <= (c.queue->>'last_completed_batch_id')::bigint
                       OR (
-                          c.sampler_checkpoint->'queue' ? 'last_produced_batch_id'
-                          AND batches.id > COALESCE((c.sampler_checkpoint->'queue'->>'last_produced_batch_id')::bigint, 0)
+                          c.queue ? 'last_produced_batch_id'
+                          AND batches.id > COALESCE((c.queue->>'last_produced_batch_id')::bigint, 0)
                       )
                   )
               )

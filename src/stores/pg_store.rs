@@ -103,6 +103,18 @@ impl PgStore {
         &self.pool
     }
 
+    async fn try_task_control_transaction(
+        &self,
+    ) -> Result<Option<sqlx::Transaction<'static, sqlx::Postgres>>, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        // Transaction-scoped: pool reuse cannot leak a session advisory lock.
+        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(1196245588, 1)")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(locked.then_some(tx))
+    }
+
     pub async fn get_registered_worker_summaries(
         &self,
         run_id: Option<i32>,
@@ -268,13 +280,10 @@ impl ControlPlaneStore for PgStore {
     }
 
     async fn try_lock_task_control(&self) -> Result<Option<Box<dyn Send>>, StoreError> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        // Transaction-scoped: pool reuse cannot leak a session advisory lock.
-        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(1196245588, 1)")
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(locked.then(|| Box::new(tx) as Box<dyn Send>))
+        Ok(self
+            .try_task_control_transaction()
+            .await?
+            .map(|tx| Box::new(tx) as Box<dyn Send>))
     }
 
     async fn record_worker_activity(
@@ -700,15 +709,16 @@ impl ControlPlaneStore for PgStore {
 
     async fn remove_run(&self, run_id: i32) -> Result<(), StoreError> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
-        let _guard = loop {
-            if let Some(guard) = self.try_lock_task_control().await? {
-                break guard;
+        let mut tx = loop {
+            if let Some(tx) = self.try_task_control_transaction().await? {
+                break tx;
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(store_err("controller is busy; run retained, retry removal"));
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         };
+        // Workers must see the cleared assignments before the deletion commits.
         self.clear_desired_assignments_for_run(run_id).await?;
         loop {
             let active: bool = sqlx::query_scalar(
@@ -717,11 +727,12 @@ impl ControlPlaneStore for PgStore {
                     SELECT id FROM runs WHERE id=$1
                     UNION ALL SELECT r.id FROM runs r JOIN tree t ON r.parent_run_id=t.id
                 ) SELECT EXISTS(SELECT 1 FROM nodes WHERE active_run_id IN (SELECT id FROM tree)
-                    AND lease_expires_at > now())
+                    AND lease_expires_at > clock_timestamp())
             "#,
             )
             .bind(run_id)
-            .fetch_one(&self.pool)
+            // Poll on the lock-owning transaction so it cannot expire while idle.
+            .fetch_one(&mut *tx)
             .await
             .map_err(map_sqlx)?;
             if !active {
@@ -734,12 +745,13 @@ impl ControlPlaneStore for PgStore {
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        let rows = queries::remove_run(&self.pool, run_id)
+        let rows = queries::remove_run(&mut tx, run_id)
             .await
             .map_err(map_sqlx)?;
         if rows == 0 {
             return Err(store_err(format!("run {run_id} not found")));
         }
+        tx.commit().await.map_err(map_sqlx)?;
         Ok(())
     }
 }

@@ -154,6 +154,106 @@ run = '''{child}'''
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn campaign_retries_training_completion_database_errors() -> anyhow::Result<()> {
+    for failure_point in ["checkpoint", "cleanup"] {
+        let mut harness = FullStackHarness::new().await?;
+        let result: anyhow::Result<()> = async {
+            sqlx::raw_sql(r#"
+                CREATE SEQUENCE completion_retry_attempts;
+                CREATE TABLE completion_retry_gate (released boolean NOT NULL);
+                INSERT INTO completion_retry_gate VALUES (false);
+            "#).execute(&harness.pool).await?;
+            let (table, event, guard, return_row) = if failure_point == "checkpoint" {
+                ("run_sampler_checkpoints", "INSERT OR UPDATE",
+                 "IF (NEW.sampler_checkpoint->>'completed_samples')::bigint < 32 THEN RETURN NEW; END IF;", "NEW")
+            } else {
+                ("batches", "DELETE",
+                 // Retain completed rows until the final training checkpoint,
+                 // then inject the failure in the post-checkpoint cleanup.
+                 "IF NOT EXISTS (SELECT 1 FROM run_sampler_checkpoints WHERE run_id=OLD.run_id AND (sampler_checkpoint->>'completed_samples')::bigint >= 32) THEN RETURN NULL; END IF;", "OLD")
+            };
+            sqlx::raw_sql(&format!(r#"
+                CREATE FUNCTION inject_completion_timeout() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                    {guard}
+                    IF NOT (SELECT released FROM completion_retry_gate) THEN
+                        PERFORM nextval('completion_retry_attempts');
+                        RAISE EXCEPTION 'injected completion timeout' USING ERRCODE = '57014';
+                    END IF;
+                    RETURN {return_row};
+                END;
+                $$;
+                CREATE TRIGGER completion_timeout BEFORE {event} ON {table}
+                FOR EACH ROW EXECUTE FUNCTION inject_completion_timeout();
+            "#)).execute(&harness.pool).await?;
+            let child = r#"
+name = "retry-child"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+[[task_queue]]
+name = "training"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = 32 }
+accumulator = { config = "scalar" }
+sampler = { config = { kind = "havana_training", bins = 4, samples_for_update = 16 } }
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = { max_samples = 32 }
+accumulator = { config = "scalar" }
+sampler = { config = { kind = "havana_inference" } }
+"#;
+            harness.add_run(&temp_config(&format!(r#"
+kind = "integration_campaign"
+name = "retry-parent"
+stop_condition = {{ max_total_samples = 64 }}
+allocation = {{ min_samples_per_child = 64, allocation_window_samples = 64 }}
+[[children]]
+name = "only"
+run = '''{child}'''
+"#)));
+            let parent = harness.run_id("retry-parent").await?;
+            harness.start_nodes(&["retry-parent", "retry-sampler", "retry-evaluator"]).await?;
+            harness.cli().args(["node", "auto-assign", &parent.to_string()]).assert().success();
+            harness.wait_for(
+                format!("retry after {failure_point} timeout"),
+                Duration::from_secs(20),
+                || async {
+                    Ok(sqlx::query_scalar::<_, bool>("SELECT is_called AND last_value >= 2 FROM completion_retry_attempts")
+                        .fetch_one(&harness.pool).await?)
+                },
+            ).await?;
+            let child_run: i32 = sqlx::query_scalar("SELECT id FROM runs WHERE parent_run_id=$1")
+                .bind(parent).fetch_one(&harness.pool).await?;
+            let states: Vec<(String, String)> = sqlx::query_as("SELECT name,state FROM run_tasks WHERE run_id=$1 ORDER BY sequence_nr")
+                .bind(child_run).fetch_all(&harness.pool).await?;
+            anyhow::ensure!(states == vec![("training".into(), "active".into()), ("inference".into(), "pending".into())],
+                "{failure_point} error prematurely changed task state: {states:?}");
+            let saved = harness.run_sampler_checkpoint(child_run).await?.unwrap();
+            anyhow::ensure!(saved["completed_samples"] == if failure_point == "checkpoint" { 0 } else { 32 },
+                "unexpected durable checkpoint after {failure_point} error");
+            sqlx::query("UPDATE completion_retry_gate SET released=true").execute(&harness.pool).await?;
+            wait_for_task_state(&harness, parent, "completed", Duration::from_secs(30)).await?;
+            let tasks: Vec<(String, String, i64)> = sqlx::query_as("SELECT name,state,nr_completed_samples FROM run_tasks WHERE run_id=$1 ORDER BY sequence_nr")
+                .bind(child_run).fetch_all(&harness.pool).await?;
+            anyhow::ensure!(tasks == vec![("training".into(), "completed".into(), 32), ("inference".into(), "completed".into(), 32)],
+                "completion retry changed sample accounting: {tasks:?}");
+            let output: JsonValue = sqlx::query_scalar("SELECT controller_output FROM run_tasks WHERE run_id=$1")
+                .bind(parent).fetch_one(&harness.pool).await?;
+            anyhow::ensure!(output["combined_measurement"]["results"][0]["sample_count"] == 32,
+                "unpublished training leaked into the campaign result: {output}");
+            Ok(())
+        }.await;
+        harness.cleanup().await?;
+        result?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_cli_integration_campaign_persists_a_provenanced_result() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
     harness

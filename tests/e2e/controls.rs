@@ -413,6 +413,100 @@ kind = "naive_monte_carlo"
 
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn full_stack_server_run_removal_handles_long_deletes_and_rolls_back_failures()
+-> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let result: anyhow::Result<()> = async {
+        for name in ["large-parent", "large-child", "large-grandchild", "keep-run"] {
+            harness.add_run(&temp_config(&format!("name = \"{name}\"\n")));
+        }
+        let parent = harness.run_id("large-parent").await?;
+        let child = harness.run_id("large-child").await?;
+        let grandchild = harness.run_id("large-grandchild").await?;
+        let keep = harness.run_id("keep-run").await?;
+        sqlx::query("UPDATE runs SET parent_run_id=$1 WHERE id=$2").bind(parent).bind(child).execute(&harness.pool).await?;
+        sqlx::query("UPDATE runs SET parent_run_id=$1 WHERE id=$2").bind(child).bind(grandchild).execute(&harness.pool).await?;
+        for (run, count) in [(child, 2048), (grandchild, 2048), (keep, 1)] {
+            let task: i64 = sqlx::query_scalar("INSERT INTO run_tasks (run_id,name,sequence_nr,task,task_toml,state) VALUES ($1,'training',1,'{\"kind\":\"sample\",\"publish_result\":false,\"stop_condition\":{\"max_samples\":4096}}','', 'failed') RETURNING id")
+                .bind(run).fetch_one(&harness.pool).await?;
+            sqlx::query("INSERT INTO batches (run_id,task_id,batch_size,status) SELECT $1,$2,1,'completed' FROM generate_series(1,$3)")
+                .bind(run).bind(task).bind(count).execute(&harness.pool).await?;
+            sqlx::query("INSERT INTO batch_inputs (batch_id,latent_batch) SELECT id,decode(repeat('ab',1024),'hex') FROM batches WHERE run_id=$1")
+                .bind(run).execute(&harness.pool).await?;
+            sqlx::query("INSERT INTO batch_results (batch_id,batch_observable,completed_at) SELECT id,jsonb_build_object('padding',repeat('x',4096)),now() FROM batches WHERE run_id=$1")
+                .bind(run).execute(&harness.pool).await?;
+            sqlx::query("INSERT INTO run_sampler_checkpoints (run_id,task_id,sampler_checkpoint) VALUES ($1,$2,'{}')")
+                .bind(run).bind(task).execute(&harness.pool).await?;
+        }
+        sqlx::raw_sql(&format!(r#"
+            CREATE TABLE removal_fault (fail boolean NOT NULL);
+            INSERT INTO removal_fault VALUES (true);
+            CREATE FUNCTION exercise_run_removal() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF OLD.id = {parent} THEN
+                    IF (SELECT fail FROM removal_fault) THEN
+                        RAISE EXCEPTION 'injected run removal failure';
+                    END IF;
+                    -- Exceed both normal 30-second deadlines while HTTP polling
+                    -- must stay responsive and the controller lock must survive.
+                    PERFORM pg_sleep(31);
+                END IF;
+                RETURN OLD;
+            END;
+            $$;
+            CREATE TRIGGER exercise_run_removal BEFORE DELETE ON runs
+            FOR EACH ROW EXECUTE FUNCTION exercise_run_removal();
+        "#)).execute(&harness.pool).await?;
+        let server_url = harness.start_server().await?;
+        let cookie = login_cookie(&server_url).await?;
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(3)).build()?;
+        let delete_url = format!("{server_url}/api/runs/{parent}");
+        let response = client.delete(&delete_url).header("Cookie", &cookie).send().await?;
+        anyhow::ensure!(response.status() == reqwest::StatusCode::ACCEPTED);
+        let failed: JsonValue = serde_json::from_str(&response.text().await?)?;
+        let failed_url = format!("{server_url}/api/run-removals/{}", failed["operation_id"].as_str().unwrap());
+        harness.wait_for("failed removal reported to dashboard", Duration::from_secs(10), || async {
+            let status: JsonValue = serde_json::from_str(&client.get(&failed_url).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
+            if status["status"] == "running" { return Ok(false); }
+            anyhow::ensure!(status["status"] == "failed" && status["error"].as_str().unwrap().contains("injected run removal failure"), "unexpected result: {status}");
+            Ok(true)
+        }).await?;
+        let counts: (i64,i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM runs),(SELECT count(*) FROM batches),(SELECT count(*) FROM batch_inputs),(SELECT count(*) FROM batch_results),(SELECT count(*) FROM run_sampler_checkpoints)")
+            .fetch_one(&harness.pool).await?;
+        anyhow::ensure!(counts == (4,4097,4097,4097,3), "failed deletion lost data: {counts:?}");
+        sqlx::query("UPDATE removal_fault SET fail=false").execute(&harness.pool).await?;
+        let response = client.delete(&delete_url).header("Cookie", &cookie).send().await?;
+        anyhow::ensure!(response.status() == reqwest::StatusCode::ACCEPTED);
+        let operation: JsonValue = serde_json::from_str(&response.text().await?)?;
+        anyhow::ensure!(operation["operation_id"] != failed["operation_id"]);
+        let status_url = format!("{server_url}/api/run-removals/{}", operation["operation_id"].as_str().unwrap());
+        harness.wait_for("slow database deletion started", Duration::from_secs(10), || async {
+            Ok(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event='PgSleep')")
+                .fetch_one(&harness.pool).await?)
+        }).await?;
+        let lock_owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.datname=current_database() AND a.wait_event='PgSleep' AND l.locktype='advisory' AND l.classid=1196245588 AND l.objid=1 AND l.granted)")
+            .fetch_one(&harness.pool).await?;
+        anyhow::ensure!(lock_owned, "deletion must use the transaction that owns the controller lock");
+        let duplicate: JsonValue = serde_json::from_str(&client.delete(&delete_url).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
+        anyhow::ensure!(duplicate["operation_id"] == operation["operation_id"]);
+        harness.wait_for("long dashboard deletion completed", Duration::from_secs(45), || async {
+            let status: JsonValue = serde_json::from_str(&client.get(&status_url).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
+            anyhow::ensure!(status["status"] != "failed", "deletion failed: {status}");
+            Ok(status["status"] == "completed")
+        }).await?;
+        let remaining: Vec<i32> = sqlx::query_scalar("SELECT id FROM runs ORDER BY id").fetch_all(&harness.pool).await?;
+        anyhow::ensure!(remaining == vec![keep], "unrelated run was removed: {remaining:?}");
+        let counts: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM batches),(SELECT count(*) FROM batch_inputs),(SELECT count(*) FROM batch_results),(SELECT count(*) FROM run_sampler_checkpoints)")
+            .fetch_one(&harness.pool).await?;
+        anyhow::ensure!(counts == (1,1,1,1), "unexpected remaining payloads: {counts:?}");
+        Ok(())
+    }.await;
+    harness.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
 async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
     for name in ["delete-parent", "delete-child", "keep-run"] {
