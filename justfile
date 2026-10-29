@@ -12,9 +12,6 @@ process-rust-breit-wigner-sif:
 symbolica-variable-theta:
     scripts/build_symbolica_variable_theta.sh
 
-sync-ubelix host="ubelix" remote_folder="gammaboard":
-    ops/ubelix/sync_ops.sh "{{host}}" "{{remote_folder}}"
-
 # One CLI: measure and immediately produce separate plots and local reports.
 benchmark *args:
     python3 -m benchmarks {{args}}

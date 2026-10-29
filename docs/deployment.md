@@ -91,8 +91,10 @@ matching binds. Normal builds include Symbolica licensing; builds made with
 `NO_SYMBOLICA_OEM_LICENSE=1` require a regular runtime license.
 
 For external launch leases, per-worker receipts, and deployment/build fencing, see
-the [cluster launch contract](cluster-launches.md). UBELIX pins immutable images
-and private configuration snapshots per deployment.
+the [cluster launch contract](cluster-launches.md). UBELIX runs from a Git checkout
+with settings in `ops/ubelix/local.toml`. Builds replace fixed service images while
+the workspace is stopped; deployments retain image digests and configuration/script
+snapshots. See its [operator guide](../ops/ubelix/README.md).
 
 ## Upgrading this revision
 

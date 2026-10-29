@@ -40,10 +40,8 @@ from gbops.runtime import (
     control_finished,
     directory,
 )
-from gbops.maintenance import reset_database, prune
-from gbops import builds
-
-WORKSPACE_ROOT = os.environ.get("GAMMABOARD_WORKSPACE_ROOT", str(Path(__file__).resolve().parent))
+from gbops.maintenance import reset_database
+from gbops import builds, settings
 
 
 def opener():
@@ -59,8 +57,8 @@ def shifted_port(base, offset):
 
 def tunnel_command(node, local_port, offset):
     target = (
-        os.environ.get("SSH_TARGET")
-        or f"{os.environ.get('SSH_USER', os.environ.get('USER', ''))}@{os.environ.get('SSH_HOST', 'submit03.unibe.ch')}"
+        settings.local_config().get("ssh_target")
+        or f"{os.environ.get('USER', '')}@submit03.unibe.ch"
     )
     return f"ssh -N -L {local_port}:{node}:{shifted_port(8080, offset)} {target}"
 
@@ -219,7 +217,6 @@ def submit_worker(manifest, node, spec, worker, slurm, config):
     )
     env = dict(
         os.environ,
-        GAMMABOARD_WORKSPACE_ROOT=manifest["workspace"],
         GAMMABOARD_WORKER_SPEC=str(recipe),
         GAMMABOARD_MANIFEST=str(directory / "manifest.json"),
     )
@@ -331,7 +328,7 @@ def control_job(manifest, slurm):
 
 
 def require_deployment(args):
-    deployments = Deployments(WORKSPACE_ROOT, args.port_offset)
+    deployments = Deployments(settings.workspace_root(), args.port_offset)
     manifest = deployments.load()
     if not manifest:
         raise RuntimeError("no deployment recorded for this workspace/offset")
@@ -339,12 +336,11 @@ def require_deployment(args):
 
 
 def up(args, slurm):
-    deployments = Deployments(WORKSPACE_ROOT, args.port_offset)
-    image = deployments.selected_image(args.image)
-    config = deployments.configuration(
-        args.single_node, args.local_port, args.server_config, args.runtime_config, args.time
-    )
+    deployments = Deployments(settings.workspace_root(), args.port_offset)
+    config = deployments.configuration(args.single_node, args.local_port, args.time)
     with deployments.locked():
+        builds.require_no_build(deployments.workspace, slurm)
+        image = deployments.image()
         manifest = deployments.load()
         if args.fresh_db:
             reset_database(deployments, slurm)
@@ -403,7 +399,6 @@ def up(args, slurm):
                 (deployments.workspace / "logs/slurm" / name).mkdir(parents=True, exist_ok=True)
             env = dict(
                 os.environ,
-                GAMMABOARD_WORKSPACE_ROOT=str(deployments.workspace),
                 GAMMABOARD_MANIFEST=str(deployments.root / manifest["id"] / "manifest.json"),
             )
             manifest["control_job_id"] = slurm.submit(
@@ -718,9 +713,12 @@ def main(argv=None):
         if args.command == "run-control":
             return run_control(args, slurm)
         if args.command == "run-build":
-            return builds.execute(args.record)
+            return builds.execute(args.record, slurm)
         if args.command == "run-worker":
             return run_worker(args, slurm)
+        args.admin_password = getattr(args, "admin_password", "") or settings.local_config().get(
+            "admin_password", ""
+        )
         if args.command == "up":
             up(args, slurm)
         elif args.command == "down":
@@ -730,23 +728,17 @@ def main(argv=None):
         elif args.command == "resolve-submission":
             resolve_submission(args, slurm)
         elif args.command == "build":
-            result = builds.submit(WORKSPACE_ROOT, args, slurm)
+            result = builds.submit(settings.workspace_root(), args, slurm)
             print(
                 json.dumps(
                     {key: result[key] for key in ("id", "job_id", "family", "revision", "state")},
                     indent=2,
                 )
             )
-        elif args.command == "select-image":
-            print(json.dumps(builds.select_image(WORKSPACE_ROOT, args.image), indent=2))
-        elif args.command in ("reset-db", "prune"):
-            deployments = Deployments(WORKSPACE_ROOT, args.port_offset)
+        elif args.command == "reset-db":
+            deployments = Deployments(settings.workspace_root(), args.port_offset)
             with deployments.locked():
-                result = (
-                    reset_database(deployments, slurm, args.discard)
-                    if args.command == "reset-db"
-                    else prune(deployments, slurm, args.apply, args.keep_deployments)
-                )
+                result = reset_database(deployments, slurm, args.discard)
             print(json.dumps(result, indent=2))
         else:
             _, manifest = require_deployment(args)
@@ -849,13 +841,10 @@ def parser():
         "resolve-control",
         "resolve-submission",
         "reset-db",
-        "prune",
     ):
         cmd = commands.add_parser(name)
         cmd.add_argument("--port-offset", type=offset, default=0)
-        cmd.add_argument(
-            "--admin-password", default=os.environ.get("GAMMABOARD_ADMIN_PASSWORD", "")
-        )
+        cmd.add_argument("--admin-password", default="")
         if name == "up":
             cmd.add_argument("--time", help="override the control profile walltime")
             cmd.add_argument(
@@ -868,12 +857,6 @@ def parser():
             cmd.add_argument("--local-port", type=port, default=8080)
             cmd.add_argument("--startup-timeout", type=positive, default=180)
             cmd.add_argument("--copy", action="store_true")
-            cmd.add_argument(
-                "--image",
-                help="immutable image metadata JSON; defaults to images/gammaboard/current.json",
-            )
-            cmd.add_argument("--server-config", help="private server override TOML")
-            cmd.add_argument("--runtime-config", help="private runtime override TOML")
         elif name == "down":
             cmd.add_argument("--worker-timeout", type=nonnegative, default=60)
             cmd.add_argument(
@@ -902,13 +885,6 @@ def parser():
                 action="store_true",
                 help="delete the stopped database instead of archiving it",
             )
-        elif name == "prune":
-            cmd.add_argument(
-                "--apply",
-                action="store_true",
-                help="apply the displayed cleanup; default is a dry run",
-            )
-            cmd.add_argument("--keep-deployments", type=nonnegative, default=1)
         elif name in ("resolve-control", "resolve-submission"):
             if name == "resolve-submission":
                 cmd.add_argument("request_id", type=positive)
@@ -926,9 +902,6 @@ def parser():
         if name == "apptainer":
             cmd.add_argument("output")
             cmd.add_argument("def_file")
-        else:
-            cmd.add_argument("--revision", default="HEAD")
-    commands.add_parser("select-image").add_argument("image")
     commands.add_parser("run-build").add_argument("--record", required=True)
     commands.add_parser("run-control").add_argument("--manifest", required=True)
     commands.add_parser("run-worker").add_argument("--spec", required=True)

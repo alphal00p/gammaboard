@@ -1,4 +1,4 @@
-"""Explicit, scoped data reset and reference-aware artifact pruning."""
+"""Stop checks and explicit database reset."""
 
 from datetime import datetime, timezone
 import json
@@ -7,6 +7,7 @@ import shutil
 import tomllib
 import uuid
 
+from . import settings
 from .deployment import database_paths, owns, write_json, digest
 
 
@@ -34,14 +35,13 @@ def reset_database(deployments, slurm, discard=False):
     # Caller holds the workspace lock, excluding startup and new submissions.
     manifest = deployments.load()
     require_idle(manifest, slurm)
-    runtime_path = (
-        Path(manifest["runtime_config"])
-        if manifest
-        else deployments.workspace / "config/runtime.toml"
-    )
-    if manifest and digest(runtime_path) != manifest["runtime_digest"]:
-        raise ValueError("deployment runtime snapshot was modified; refusing database reset")
-    runtime = tomllib.loads(runtime_path.read_text()) if runtime_path.exists() else {}
+    if manifest:
+        runtime_path = Path(manifest["runtime_config"])
+        if digest(runtime_path) != manifest["runtime_digest"]:
+            raise ValueError("deployment runtime snapshot was modified; refusing database reset")
+        runtime = tomllib.loads(runtime_path.read_text())
+    else:
+        runtime = settings.local_config().get("runtime", {})
     paths = database_paths(deployments.workspace, runtime, deployments.offset)
     active = slurm.active()
     for path in deployments.root.glob("*/manifest.json"):
@@ -113,82 +113,13 @@ def reset_database(deployments, slurm, discard=False):
     }
 
 
-def prune(deployments, slurm, apply=False, keep=1):
-    workspace = deployments.workspace
-    active = slurm.active()
-    retained, retired = [], []
-    pointers = {json.loads(p.read_text())["id"] for p in deployments.root.glob("active-*.json")}
-    for path in deployments.root.glob("*/manifest.json"):
-        manifest = json.loads(path.read_text())
-        if Path(manifest["workspace"]) != workspace:
-            raise ValueError("foreign workspace manifest")
-        live = any(owns(j, manifest) for j in active)
-        if manifest["id"] in pointers or live:
-            retained.append(manifest)
-        else:
-            try:
-                require_idle(manifest, slurm)
-            except RuntimeError:
-                retained.append(manifest)
-            else:
-                retired.append(manifest)
-    retired.sort(key=lambda m: m["created_at"], reverse=True)
-    by_offset = {}
-    candidates = []
-    for manifest in retired:
-        offset = manifest["port_offset"]
-        if by_offset.get(offset, 0) < keep:
-            retained.append(manifest)
-            by_offset[offset] = by_offset.get(offset, 0) + 1
-        else:
-            candidates.append(deployments.root / manifest["id"])
-    referenced = {Path(m["image"]["path"]).resolve() for m in retained}
-    for path in (workspace / "artifacts/database-archives").glob("*/archive.json"):
-        archived = json.loads(path.read_text()).get("deployment")
-        if archived:
-            referenced.add(Path(archived["image"]["path"]).resolve())
-    for pointer in (workspace / "images").glob("*/current.json"):
-        referenced.add(Path(json.loads(pointer.read_text())["path"]).resolve())
-    for path in (workspace / "images").glob("*/*/*/image.json"):
-        image = Path(json.loads(path.read_text())["path"]).resolve()
-        if image.parent != path.parent.resolve():
-            raise ValueError("published image path differs from its metadata directory")
-        if image not in referenced:
-            candidates.append(path.parent)
-    for path in (workspace / "artifacts/builds").glob("*/build.json"):
-        record = json.loads(path.read_text())
-        identifier = record.get("job_id")
-        if identifier:
-            job = slurm.lookup(identifier, record["created_at"][:10])
-            if job is None or not job.terminal or job.name != f"gb-build-{record['id']}":
-                continue
-        else:
-            continue
-        candidates.append(path.parent)
-    roots = [deployments.root, workspace / "images", workspace / "artifacts/builds"]
-    if any(root.resolve() != root for root in roots):
-        raise ValueError("artifact roots must not contain symlinks")
-    for path in candidates:
-        if path.is_symlink() or not any(
-            path.resolve().is_relative_to(root.resolve()) and path.resolve() != root.resolve()
-            for root in roots
-        ):
-            raise ValueError(f"unsafe artifact path: {path}")
-    if apply:
-        for path in candidates:
-            shutil.rmtree(path)
-    return {
-        "applied": apply,
-        "paths": [str(p) for p in candidates],
-        "preserved": [
-            "current deployments/images",
-            "referenced images",
-            f"{keep} retired deployments per offset",
-            "unknown or active builds",
-            "private configuration",
-            "physics states",
-            "process runtimes",
-            "database archives",
-            "logs",
-        ],
-    }
+def require_stopped(workspace, slurm):
+    """Replacing any service/runtime image requires stopping the whole workspace."""
+    root = Path(workspace) / "deployments"
+    manifests = [json.loads(path.read_text()) for path in root.glob("*/manifest.json")]
+    if any(owns(job, manifest) for job in slurm.active() for manifest in manifests):
+        raise RuntimeError("workspace still has Slurm jobs; run down for each deployment first")
+    current = {json.loads(path.read_text())["id"] for path in root.glob("active-*.json")}
+    for manifest in manifests:
+        if manifest["id"] in current:
+            require_idle(manifest, slurm)

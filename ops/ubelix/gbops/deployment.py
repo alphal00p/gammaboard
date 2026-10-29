@@ -12,7 +12,8 @@ import tempfile
 import tomllib
 import uuid
 
-from .slurm import options, time_seconds, SIGNAL_MARGIN_SECONDS, SHUTDOWN_SECONDS
+from . import settings
+from .slurm import options, overlay_resources, time_seconds, SIGNAL_MARGIN_SECONDS, SHUTDOWN_SECONDS
 
 
 def digest(path):
@@ -80,12 +81,10 @@ def toml_dump(value):
     return "\n".join(lines) + "\n"
 
 
-def cluster_config(workspace):
-    workspace = Path(workspace)
-    data = tomllib.loads((workspace / "ops/config/cluster.toml").read_text())
-    override = workspace / "config/cluster.toml"
-    if override.exists():
-        data = merge(data, tomllib.loads(override.read_text()))
+def cluster_config():
+    data = tomllib.loads((settings.OPS_ROOT / "config/cluster.toml").read_text())
+    for name, override in settings.local_config().get("cluster", {}).items():
+        data[name] = overlay_resources(data.get(name, {}), override)
     if data.keys() != {"control", "worker", "build"}:
         raise ValueError("cluster config requires control, worker and build profiles")
     if any(key in data["worker"] for key in ("gpus", "gres")):
@@ -176,12 +175,12 @@ class Deployments:
     def save(self, manifest):
         write_json(self.root / manifest["id"] / "manifest.json", manifest)
 
-    def selected_image(self, path=None):
-        pointer = Path(path) if path else self.workspace / "images/gammaboard/current.json"
-        info = json.loads(pointer.read_text())
-        image = Path(info["path"])
-        if not image.is_absolute():
-            image = (pointer.parent / image).resolve()
+    def image(self):
+        metadata = self.workspace / "images/gammaboard.json"
+        if not metadata.exists():
+            raise ValueError("no built image; run build gammaboard and wait for completion")
+        info = json.loads(metadata.read_text())
+        image = self.workspace / "images/gammaboard.sif"
         if digest(image) != info["sha256"]:
             raise ValueError("image digest does not match its manifest")
         if not info.get("validated") or not info.get("build_info", {}).get("build_id"):
@@ -190,40 +189,14 @@ class Deployments:
             raise ValueError("image does not report its database model")
         return {**info, "path": str(image)}
 
-    def configuration(
-        self, single, local_port, server_override=None, runtime_override=None, control_time=None
-    ):
-        base = (
-            self.workspace / "ops/config" / ("server-single-node.toml" if single else "server.toml")
-        )
-        server = tomllib.loads(base.read_text())
-        override = (
-            Path(server_override) if server_override else self.workspace / "config/server.toml"
-        )
-        if server_override and not override.is_file():
-            raise ValueError("private server configuration does not exist")
-        if override.exists():
-            if any(
-                override.resolve().is_relative_to(self.workspace / folder)
-                for folder in ("ops", "docs", "resources/templates", "gbops")
-            ):
-                raise ValueError("private overrides must be outside managed sync directories")
-            extra = tomllib.loads(override.read_text())
-            build_dir = extra.get("frontend", {}).get("build_dir")
-            if build_dir and not Path(build_dir).is_absolute():
-                extra["frontend"]["build_dir"] = str((override.parent / build_dir).resolve())
-            server = merge(server, extra)
-        runtime_path = (
-            Path(runtime_override) if runtime_override else self.workspace / "config/runtime.toml"
-        )
-        if runtime_override and not runtime_path.is_file():
-            raise ValueError("private runtime configuration does not exist")
-        if runtime_path.exists() and any(
-            runtime_path.resolve().is_relative_to(self.workspace / folder)
-            for folder in ("ops", "docs", "resources/templates", "gbops")
-        ):
-            raise ValueError("private overrides must be outside managed sync directories")
-        runtime = tomllib.loads(runtime_path.read_text()) if runtime_path.exists() else {}
+    def configuration(self, single, local_port, control_time=None):
+        local = settings.local_config()
+        base = settings.OPS_ROOT / "config/server.toml"
+        server = merge(tomllib.loads(base.read_text()), local.get("server", {}))
+        build_dir = server.get("frontend", {}).get("build_dir")
+        if build_dir and not Path(build_dir).is_absolute():
+            server["frontend"]["build_dir"] = str(settings.local_path(build_dir))
+        runtime = local.get("runtime", {})
         # Ports and launch mode belong to the deployment, and are supplied explicitly.
         if (
             server.get("api_port", 4000) != 4000
@@ -236,7 +209,7 @@ class Deployments:
             )
         server["allow_local_node_spawn"] = single
         origins = [f"http://localhost:{local_port}", f"http://127.0.0.1:{local_port}"]
-        profiles = cluster_config(self.workspace)
+        profiles = cluster_config()
         if control_time is not None:
             profiles["control"]["time"] = control_time
         if time_seconds(profiles["control"]["time"]) <= SIGNAL_MARGIN_SECONDS:
@@ -256,21 +229,16 @@ class Deployments:
     def create(self, image, config, single, resume, password=""):
         paths = preflight_database(self.workspace, config["runtime"], self.offset, image)
         if config["server"].get("auth") and not password:
-            raise ValueError("set GAMMABOARD_ADMIN_PASSWORD for the managed request launcher")
+            raise ValueError("set admin_password in local.toml for the managed request launcher")
+        settings.seed_templates(self.workspace)
         identifier = uuid.uuid4().hex
         directory = self.root / identifier
         directory.mkdir(parents=True, mode=0o700)
-        # Queued jobs must keep their launcher even after managed ops are synced.
+        # Queued jobs keep their launcher even after git pull changes the checkout.
         launcher = directory / "launcher"
-        launcher.mkdir(mode=0o700)
-        shutil.copy2(self.workspace / "ubelix.py", launcher / "ubelix.py")
-        shutil.copytree(
-            self.workspace / "gbops",
-            launcher / "gbops",
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
+        settings.snapshot_helper(launcher)
         for name in ("control", "worker"):
-            shutil.copy2(self.workspace / f"ops/slurm/{name}.sbatch", launcher / f"{name}.sbatch")
+            shutil.copy2(settings.OPS_ROOT / f"slurm/{name}.sbatch", launcher / f"{name}.sbatch")
         for name in ("server", "runtime"):
             path = directory / f"{name}.toml"
             path.write_text(toml_dump(config[name]))

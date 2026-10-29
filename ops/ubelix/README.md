@@ -1,240 +1,198 @@
 # UBELIX deployment
 
-Sync from your workstation; run `python3 ubelix.py` on a UBELIX login node with
-Python 3.11+, Slurm and Apptainer. The canonical directory containing the installed
-helper is its workspace. A deployment pins one image, configuration, Slurm profiles
-and launcher scripts. Commands default to port offset zero.
+Run directly from a Git checkout on a UBELIX login node with Python 3.11.8+, Slurm
+and Apptainer. One ignored `local.toml` contains your settings; a separate shared
+workspace holds images, databases, jobs and physics data. There is no sync or image
+selection step. A successful service build replaces its fixed image.
 
-## Clean redeployment
-
-Stop any old foreground `up --watch` or `watch-requests` sessions and old build
-jobs before upgrading the helper. These are replaced by a launcher supervised inside the control job.
-
-On your workstation:
+## First deployment
 
 ```bash
-just sync-ubelix
-# Or a separate workspace below /storage/research/itp_localunitaritydata:
-just sync-ubelix ubelix "$USER/gammaboard"
+git clone https://github.com/alphal00p/gammaboard.git
+cd gammaboard/ops/ubelix
+cp local.example.toml local.toml
+chmod 600 local.toml
+# Edit workspace_root and any cluster resource overrides in local.toml.
+python3 ubelix.py build gammaboard
 ```
 
-On UBELIX, in that workspace:
+`build` submits a Slurm job and returns its job ID. Wait for it to finish: check
+`squeue -j JOB_ID`, then the `state` in
+`<workspace>/artifacts/builds/BUILD_ID/build.json` and logs under
+`<workspace>/logs/slurm/build/`. Only `state = "completed"` means the new image is
+ready. Then:
 
 ```bash
-python3 ubelix.py status
-python3 ubelix.py down
-# If the API is unavailable, cancel only jobs verified as this deployment's:
-python3 ubelix.py down --force
-
-# Delete the stopped deployment's database, socket directory and PostgreSQL log:
-python3 ubelix.py reset-db --discard
-# Omit --discard to archive those paths instead.
-
-python3 ubelix.py build gammaboard --revision <FULL_PUSHED_COMMIT_SHA>
-```
-
-The build command prints its build ID and Slurm job ID. Wait for successful build
-completion and inspect `logs/slurm/build/` and the build's smoke evidence. Publication
-creates an immutable image but **does not change the selected image**. Select it
-explicitly, using the build ID printed above:
-
-```bash
-python3 ubelix.py select-image artifacts/builds/<BUILD_ID>/published.json
 python3 ubelix.py up
 python3 ubelix.py submit-workers --count 6 --prefix cpu
 ```
 
-`up` returns after the API and managed launcher are ready and prints the SSH tunnel
-command. Run that tunnel on your workstation. No login-terminal watcher is needed.
-Use `--port-offset N` consistently on `status`, `down`, `reset-db`, `up` and worker
-commands when managing another instance. Skip `down`/`reset-db` for a new workspace.
-If an installation predates deployment manifests, stop it with its original tools
-and start in a new workspace; the current helper will not guess ownership of old jobs.
+`up` waits for the API and managed worker launcher and prints an SSH tunnel command.
+Run that tunnel on your workstation. No login-terminal watcher is needed. If the
+startup wait expires while Slurm is still queueing the job, repeat `up` or use
+`status`; the recorded job is reused.
 
-Latest GammaBoard requires a fresh database at an incompatible model change; see
-[current format versions](docs/compatibility.md). `up` checks the selected image's
-model against the managed database marker before submitting a job. An existing
-unmarked database requires explicit reset. The binary's database compatibility
-check remains authoritative. `up --fresh-db` archives an already stopped database
-and starts fresh; it refuses to reset a running deployment. Reset is limited to
-ordinary paths under `resources/db`; external or symlinked paths require manual
-maintenance. Archives include the deployment/configuration metadata and pin their
-matching image during pruning. Restore requires matching software and PostgreSQL.
+## Configuration
 
-After validating the replacement, inspect and apply artifact cleanup:
-
-```bash
-python3 ubelix.py prune
-python3 ubelix.py prune --apply
-# Optional: keep no additional retired deployment beyond current pointers:
-python3 ubelix.py prune --apply --keep-deployments 0
-```
-
-Pruning removes confirmed retired deployment directories, unreferenced published
-images and terminal build staging. It keeps current pointers, their images, active
-or uncertain jobs, and one additional retired deployment per offset by default.
-Private configuration, physics states, process runtimes, database archives and logs
-are preserved. Untracked legacy build directories are left for manual inspection.
-There is no whole-workspace deletion command.
-
-## Private configuration and resources
-
-Sync mirrors only `ops/`, `gbops/`, `docs/` and `resources/templates/`, and replaces
-`ubelix.py` and this README. Deleted repository files disappear from those trees.
-Keep private files outside them: sync preserves `config/`, `deployments/`, `images/`,
-`artifacts/`, databases, physics states, process runtimes and logs.
-
-Private files merge over managed defaults:
-
-| File | Purpose |
-| --- | --- |
-| `config/server.toml` | Hosting, authentication and application shutdown settings |
-| `config/runtime.toml` | PostgreSQL tuning, tracing and runtime settings |
-| `config/cluster.toml` | Slurm `[control]`, `[worker]` and `[build]` resource profiles |
-
-`up --server-config PATH --runtime-config PATH` selects alternative private files.
-Ports, resource root, database URL and local/external launch mode belong to the
-helper. Use `--port-offset`, not custom base ports/database URLs. Configuration is
-TOML 1.0; run/task cards also support TOML 1.1.
-
-For example, to change the control allocation without editing managed batch scripts:
+Paths in `local.toml` are absolute or relative to that file, independent of your
+shell's directory. The workspace must be on shared storage accessible to all jobs.
+No workspace environment variable is needed or read by the operator commands.
 
 ```toml
-# config/cluster.toml
-[control]
+workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard-state"
+ssh_target = "YOUR_USER@submit03.unibe.ch" # optional; default is your user at submit03
+
+[cluster.control]
+time = "02:00:00"
 cpus_per_task = 4
 mem = "8G"
-time = "02:00:00"
 
-[build]
+[cluster.build]
 cpus_per_task = 8
 mem = "24G"
+
+[server]
+name = "UBELIX"
 ```
 
-Choose account, partition, QoS and time values permitted by your allocation.
-Managed defaults use the existing `gratis`/`epyc2` profile: control is one hour,
-workers thirty minutes and builds two hours. `up --time` overrides control walltime
-for a new deployment. Profiles are frozen with the deployment/build. A running
-allocation cannot be reconfigured by repeating `up`.
+`[cluster.control]`, `[cluster.worker]` and `[cluster.build]` override
+[cluster defaults](config/cluster.toml); `[server]` overrides
+[server defaults](config/server.toml); `[runtime]` supplies application runtime and
+PostgreSQL tuning. Choose account, partition, QoS and time values allowed by your
+allocation. Defaults use `gratis`/`epyc2`: control one hour, workers thirty minutes,
+builds two hours. `up --time` overrides control walltime.
 
-Control and worker submissions request a 180-second termination warning. Process
-shutdown has a 120-second bound; application drain/stop settings must fit inside
-that budget. When Slurm supplies its projected end time, new worker requests are capped to the remaining control lifetime,
-leaving the shutdown margin; requests too near expiry remain pending. This uses
-Slurm's [projected job end time](https://slurm.schedmd.com/sbatch.html#OPT_SLURM_JOB_END_TIME).
-Worker walltime must exceed that shutdown margin. Queued workers can still start
-late and stop when control ends.
+Ports, database URL and local/external worker mode belong to the helper. Use
+`--port-offset N` consistently for another deployment and `up --single-node` for
+workers inside the control allocation. Resource profiles and application settings
+are frozen when a deployment starts. Editing `local.toml` takes effect on the next
+deployment; a running allocation cannot be resized by repeating `up`.
 
-Worker request groups override worker-profile resources. Declare GPU resources in
-request groups so the server supplies canonical capabilities; GPU defaults in the
-worker profile are rejected. CPU capability reflects the effective Slurm CPU count.
-Single-node mode (`up --single-node`) uses the control allocation for local workers;
-size that allocation accordingly. The worker Slurm profile applies to distributed
-jobs. A GPU control profile enables NVIDIA bindings for single-node workloads.
+For authentication, set `[server.auth]` as described in the
+[deployment guide](../../docs/deployment.md#access)
+and the top-level `admin_password` in `local.toml`. The managed launcher retains
+its credential in a private deployment file. Treat both files as secrets.
+`~/.config/gammaboard/slurm.env` is sourced at job start for site/module setup.
 
-If authentication is enabled, set `GAMMABOARD_ADMIN_PASSWORD` when creating the
-deployment. The managed launcher needs it after your terminal exits. It is saved
-in a private `launcher-auth.json` file (0600, inside a 0700 deployment directory),
-not in the printed manifest. Protected helper commands reuse that credential unless
-explicitly overridden. Treat deployment snapshots as secrets when backing them up.
-Changing the launcher credential requires stopping and recreating the deployment.
-
-`~/.config/gammaboard/slurm.env` remains available for site/module/environment setup
-at job start. Resource settings belong in the profiles; changing this environment
-file does not change pinned images, configs or submitted build recipes.
-
-## Builds and image selection
+## Updates and clean redeployment
 
 ```bash
-python3 ubelix.py build gammaboard --revision <FULL_COMMIT_SHA>
-python3 ubelix.py build gammaloop --revision <FULL_COMMIT_SHA>
-python3 ubelix.py build apptainer resources/runtimes/custom-v2.sif path/to/runtime.def
+python3 ubelix.py down
+git pull --ff-only
+python3 ubelix.py build gammaboard
+# Wait for the build record to say "completed".
+python3 ubelix.py up
 ```
 
-Service revisions are resolved before submission. Each build copies its launcher,
-build scripts, base-image pins and smoke test into a private recipe directory;
-subsequent syncs cannot alter queued builds. Sources, Cargo targets, temporary files
-and staging are isolated. Only dependency-download caches are shared. Generic
-runtime builds freeze the definition; any external `%files` inputs remain
-caller-managed and should be immutable. Existing runtime outputs are never replaced.
+Stop **all deployments in the workspace** before rebuilding any service or process
+runtime. The helper refuses builds while deployment jobs are queued/running, and
+refuses startup or another build while a build job is queued/running. Use
+`scancel JOB_ID` to cancel a build. Jobs in other workspaces are independent.
 
-Rust/Node/Debian images are pinned by digest, Rust uses `--locked` and a generic
-x86-64 target, and compiler/package versions are retained in the image. Apt
-repositories can change, so this is not byte-for-byte reproducibility.
+Builds use the checked-out commit, including local commits, and reject dirty source
+trees. Sources and job scripts are captured before submission, so later checkout
+changes do not alter queued jobs. Compilation and smoke-test failures preserve the
+previous image. Successful builds automatically replace `images/gammaboard.sif`
+(or `images/gammaloop.sif`) and its `.json` provenance metadata. There is no image
+history; rollback means checking out an older commit and rebuilding.
 
-Before publication, GammaBoard starts its bundled PostgreSQL, API, frontend and
-two workers and completes a 32-sample run. GammaLoop checks CLI startup. Failed
-builds never change image selection. Successful service images live at
-`images/<family>/<source-sha>/<image-sha256>/<family>.sif` with `image.json` metadata.
-`select-image` changes only the default for new deployments; `up --image IMAGE_JSON`
-can choose a published image without changing that default. Active jobs retain
-their pinned digest. An older build finishing later cannot replace your selection.
-
-## Supervision and recovery
-
-The control allocation supervises both the container and its request launcher.
-`status` includes the launcher's last success/error and the control heartbeat.
-Healthy workers read that heartbeat instead of polling Slurm. Stale-heartbeat
-scheduler checks are cached across workers, while each launcher pass batches its
-scheduler/accounting queries. Missing accounting records and scheduler outages
-remain unknown, not evidence that a job ended.
-
-For manual diagnosis or a single reconciliation pass:
+For an incompatible [database model](../../docs/compatibility.md), reset after
+stopping and before the next `up`:
 
 ```bash
-python3 ubelix.py watch-requests --once
+python3 ubelix.py reset-db --discard
+# Or archive the old database instead of deleting it:
+python3 ubelix.py reset-db
 ```
 
-Launch cards use the grouped schema:
+`up --fresh-db` also archives the stopped database before starting fresh. Reset is
+scoped to the selected workspace/offset and ordinary paths under `resources/db`.
+Archives keep data and configuration, **not the old image**; restoring requires
+rebuilding compatible software. `down --force` supports an unavailable API while
+still checking job ownership and waiting for cancellation.
 
-```toml
-[[groups]]
-count = 1
-name_prefix = "gpu"
-max_start_failures = 6
-config = { gpus = "h100:1", cpus_per_task = 4, mem = "16G" }
+For the old synced installation, stop its watchers, deployments and build jobs
+using its existing tools first. Then clone this repository and use an empty
+workspace. Nothing needs migrating if you are discarding the old deployment.
+There is no automatic whole-workspace wipe.
+
+## Workspace and templates
+
+```text
+images/                   gammaboard.sif, gammaboard.json; optionally gammaloop.*
+deployments/              job records, configuration and launcher snapshots
+resources/db/             PostgreSQL data
+resources/templates/      editable dashboard templates
+resources/states/         generated physics states
+resources/runtimes/       process environments and custom images
+artifacts/builds/          build records, recipes, logs and failed build evidence
+artifacts/download-cache/ shared dependency downloads
+artifacts/database-archives/
+logs/slurm/
 ```
 
-The server normalizes resources and reserves names. CPU aliases become
-`cpus_per_task`; typed GPUs/GRES enable `--nv` and supply GPU capabilities.
-Conflicting aliases/GPU declarations and simultaneous `mem`/`mem_per_cpu` are
-rejected. Additional numeric group fields remain custom worker capabilities.
-Slurm profiles accept `account`, `partition`, `qos`, `wckey`, `reservation`, `gres`,
-`gpus`, `cpus_per_task`, `mem`, `mem_per_cpu`, `time`, `constraint`, `nodelist`, `exclude`.
+On first deployment, dashboard templates are copied from the checkout and enriched
+with the UBELIX node cards. Later starts preserve that directory, including edits
+and deletions made in the dashboard. To refresh bundled templates, copy individual
+cards from the checkout, or remove `resources/templates/` while stopped to reseed
+it entirely at the next start. Generated states and process runtimes are supplied
+separately. They must match the current SDK, protocol and physics code.
 
-Each launch has a renewable database lease and per-worker submission intent and
-receipt. Worker registration is authoritative. Recovery adopts an unambiguous
-matching Slurm job; an uncertain submission is never blindly repeated:
+Successful builds remove their source and temporary staging automatically. Old
+build directories and retired deployment directories can be deleted manually when
+no longer needed. Keep the current deployment record referenced by each
+`deployments/active-*.json` pointer, even while stopped. There is no automatic
+retention/pruning policy.
+
+## GammaLoop and custom runtimes
+
+For the GammaLoop CLI image, clone GammaLoop on shared storage and set top-level
+`gammaloop_source` in `local.toml` to that checkout. Then run
+`python3 ubelix.py build gammaloop`. It uses that checkout's clean `HEAD` and replaces
+`images/gammaloop.sif`. Choose a revision compatible with your physics states.
+
+For a custom process image:
 
 ```bash
-python3 ubelix.py resolve-submission 123 worker-1 --job-id 456789
-python3 ubelix.py resolve-submission 123 worker-1 --not-submitted
-python3 ubelix.py resolve-control --job-id 456790
-python3 ubelix.py resolve-control --not-submitted
+python3 ubelix.py build apptainer resources/runtimes/custom.sif /path/to/runtime.def
 ```
 
-`--not-submitted` is your assertion after inspection, not an inference from missing
-accounting. Worker repair requires a running control allocation. If a reconciliation pass
-currently owns the request lease, retry after that pass releases it; active lease
-ownership prevents competing repairs. See
-[launch leases](docs/cluster-launches.md) for the database/API contract.
+The output is relative to the workspace, the definition to your shell directory.
+The definition is captured before submission; external `%files` inputs remain
+caller-managed. Existing custom runtime files are never replaced implicitly;
+remove the old file while stopped to rebuild it.
 
-`down` fences new submissions, requests application suspension, and waits for
-workers. Remaining owned worker jobs are cancelled and confirmed absent before
-control is cancelled. It then confirms terminal control state. `down --force` skips
-the API step but retains ownership and scheduler checks. Unknown control identity,
-failed scheduler queries and cancellation timeouts remain errors; retry after
-inspection. Reset/prune do not treat an unknown job as safely stopped.
+Service base images are pinned by digest; Rust builds use `--locked` and generic
+x86-64 flags. Before publication, GammaBoard starts PostgreSQL, API, frontend and
+two workers and completes a 32-sample run; GammaLoop checks CLI startup. Apt
+repositories can change, so these are not byte-for-byte reproducible builds.
+
+## Workers and recovery
+
+Use dashboard node cards or `submit-workers`. Group settings override the worker
+profile; CPU capability reflects the effective CPU allocation. Declare GPUs in
+request groups so the server derives matching capabilities and NVIDIA bindings.
+Custom numeric capabilities are retained. See the
+[launch contract](../../docs/cluster-launches.md) for the grouped schema and leases.
+
+Control and workers receive a 180-second termination warning and have a bounded
+120-second process shutdown. New worker walltimes are capped to the remaining
+control lifetime when Slurm supplies it. Healthy workers use a shared control
+heartbeat; stale-heartbeat scheduler checks are cached. `status` includes launcher
+health. Shutdown stops new submissions, drains/cancels workers, then stops control.
+
+Ambiguous submissions remain recorded rather than being submitted twice. Inspect
+Slurm, then use `resolve-control --job-id ID` or `--not-submitted`; worker repair uses
+`resolve-submission REQUEST_ID NODE --job-id ID` or `--not-submitted`. A manual
+`watch-requests --once` performs one reconciliation pass. These are recovery tools;
+normal operation needs only `build`, `up`, `status`, worker requests and `down`.
 
 ## Deployment acceptance check
 
-Use `resources/templates/runs/installation-smoke.toml`, then a small campaign with
-six external workers, `max_active_runs = 4` and `min_evaluators_per_run = 2`. Expect
-two simultaneous children and four evaluators. Exercise pause/resume and a worker
-restart, check the shared sample cap, then run one representative physics example.
-Existing process runtimes must match the current SDK/protocol; preserving runtime
-files does not make older adapters compatible.
+In the dashboard, run `installation-smoke`, then a small campaign with six workers,
+`max_active_runs = 4` and `min_evaluators_per_run = 2`. Expect two simultaneous
+children and four evaluators. Exercise pause/resume and a worker restart, check the
+shared sample cap, then run a representative physics example.
 
-Local tests cover the helper's lifecycle and failure paths with fake Slurm and
-container execution. Real Slurm scheduling, Apptainer startup, cluster resource
-policies and the scientific runtime/state must be checked on UBELIX.
+Local tests simulate Slurm and container execution. Actual Apptainer builds,
+UBELIX policies and scientific runtimes still require this cluster check.

@@ -8,7 +8,7 @@ import sys
 
 workspace, build, family, sha, cpus = sys.argv[1:]
 workspace, build = Path(workspace), Path(build)
-pins = json.loads((workspace / "ops/build/images.lock.json").read_text())
+pins = json.loads((workspace / "build/images.lock.json").read_text())
 for item in pins.values():
     if "@sha256:" not in item["image"]:
         raise ValueError("base image must be pinned by digest")
@@ -24,9 +24,9 @@ values = {
     if family == "gammaboard"
     else "cargo build --release --locked -p gammaloop-api --bin gammaloop --features ufo_support",
 }
-text = (workspace / "ops/build/service.def").read_text()
+text = (workspace / "build/service.def").read_text()
 for key, value in values.items():
     text = text.replace("@" + key + "@", value)
 (build / "service.def").write_text(text)
-shutil.copy2(workspace / "ops/build/images.lock.json", build / "images.lock.json")
-shutil.copy2(workspace / "ops/build/smoke.sh", build / "smoke.sh")
+shutil.copy2(workspace / "build/images.lock.json", build / "images.lock.json")
+shutil.copy2(workspace / "build/smoke.sh", build / "smoke.sh")

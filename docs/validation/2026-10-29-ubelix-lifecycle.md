@@ -1,48 +1,55 @@
-# UBELIX lifecycle consolidation — 2026-10-29
+# UBELIX lifecycle and checkout deployment — 2026-10-29
 
-The control allocation now supervises the request launcher. Control and worker
-commands share their pinned runtime configuration and container arguments. Healthy
-workers use a deployment heartbeat; stale-control queries, including unknown
-scheduler results, are cached across workers. A launcher pass batches scheduler
-and accounting queries. Shutdown fences new submissions, preserves an accepted
-in-flight receipt and stops subsequent submissions.
+The control allocation supervises the request launcher. Control and workers share
+configuration snapshots and container arguments. Healthy workers use a deployment
+heartbeat; stale-control scheduler queries are cached across workers. A launcher
+pass batches scheduler/accounting queries. Shutdown fences submissions, preserves
+an accepted in-flight receipt and stops subsequent launches.
 
-`down --force` supports an unavailable API while retaining Slurm ownership checks.
-Worker allocations must disappear before control is cancelled. Unknown control
-identity and cancellation timeouts leave cleanup incomplete and block database
-reset. `reset-db` archives the stopped database and its deployment/configuration
-metadata; `--discard` deletes the managed database paths. Both are scoped by
-workspace and port offset and refuse symlink/external paths.
+`down --force` supports an unavailable API while retaining job ownership checks.
+Workers disappear before control is cancelled. Unknown control identity or a
+cancellation timeout blocks database reset. `reset-db` archives data/configuration;
+`--discard` deletes them. Both are scoped by workspace/offset and reject external
+or symlinked database paths.
 
-Slurm profiles replace duplicated batch-script resource defaults. Service builds
-resolve their source revision and freeze their recipes before submission. Image
-publication no longer changes selection; `select-image` is explicit. Pruning is a
-dry run by default and preserves active/current deployments, rollback references,
-database-archive image references and unknown/active builds. Private configuration,
-physics states and process runtimes remain outside automatic pruning.
+The deployment interface was then simplified to a Git checkout and one ignored
+`ops/ubelix/local.toml`, containing the shared workspace path and overrides.
+Managed-tree sync, image selection/history, revision flags, separate override
+files, duplicate single-node defaults and artifact-pruning policy were removed.
+Builds snapshot the checked-out commit and job scripts before submission. Each
+successful service build replaces a fixed image; compilation/smoke failures retain
+the previous image. Workspace builds and deployments exclude one another. Rollback
+requires checking out an earlier commit and rebuilding. Database archives retain
+provenance/configuration but no image history.
+
+Templates are seeded into the workspace once and remain editable without dirtying
+the checkout. Later starts preserve edits and deletions. Successful service builds
+remove source/temp staging; logs, records and failed build evidence remain available.
 
 ## Validation
 
-All 41 helper tests passed with Python 3.13. They exercise:
+All 44 helper tests passed with Python 3.13. They exercise:
 
+- real Git checkout snapshots, dirty-source rejection, fixed-image replacement,
+  failed smoke preservation and queued builds surviving checkout removal;
+- build/deployment exclusion across offsets, queued/running build exclusion,
+  scheduler failure, local GammaLoop sources and frozen custom runtime definitions;
+- local settings independent of working directory or workspace environment variables,
+  memory-profile overrides, and preservation of edited/deleted dashboard templates;
 - API-unreachable shutdown, ownership rejection, cancellation ordering and timeout;
-- offset-scoped archive/discard, incompatible model preflight, modified snapshot
+- offset-scoped archive/discard, incompatible-model preflight, modified-snapshot
   rejection, path-escape rejection and overlapping active database protection;
-- unchanged retained/current images, archive image references and pending build retention;
-- concurrent frozen builds, a source branch advancing after submission, recipe tampering,
-  smoke failure, and an older build finishing after a newer image was selected;
-- pinned worker runtime arguments, offset handling, GPU flags, custom capabilities,
+- pinned worker runtime arguments, port-offset handling, GPU flags, capabilities,
   memory overrides and worker deadline validation before submission intent;
-- managed launcher supervision, in-flight receipt preservation, bounded process
-  shutdown, shared heartbeat/accounting queries and scheduler-outage handling;
-- existing launch-lease recovery, explicit submission repair and managed-tree sync.
+- launcher supervision, in-flight receipt preservation, bounded process shutdown,
+  shared heartbeat/accounting queries and scheduler-outage handling;
+- launch-lease recovery and explicit submission repair.
 
 Python static checks, shell syntax checks, CLI help, TOML parsing and whitespace
-checks passed. Slurm and container execution are faked in these tests; actual
-Apptainer image building, UBELIX scheduling policies and the scientific runtime
-still require the deployment acceptance check in the
-[UBELIX guide](../../ops/ubelix/README.md#deployment-acceptance-check).
+checks passed. Slurm and Apptainer execution are simulated; no actual container
+build or live UBELIX deployment was performed. Cluster scheduling, resource policies
+and scientific runtimes still require the
+[deployment acceptance check](../../ops/ubelix/README.md#deployment-acceptance-check).
 
 Evidence is retained on the execution host under
-`/common/dev/cedric/setup-logs/ubelix-lifecycle-20261029/`. No live UBELIX deployment
-was changed during this work.
+`/common/dev/cedric/setup-logs/ubelix-checkout-20261029/`.

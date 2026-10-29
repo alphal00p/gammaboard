@@ -1,0 +1,26 @@
+# Copy to local.toml (ignored by Git). Paths are relative to this file, or absolute.
+workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard-state"
+
+# Optional local GammaLoop checkout, for `build gammaloop`:
+# gammaloop_source = "../../../gammaloop"
+# ssh_target = "YOUR_USER@submit03.unibe.ch"
+# admin_password = "..." # only when server authentication is enabled; chmod 600 local.toml
+
+# Overrides of config/cluster.toml. Use your permitted account/partition/QoS.
+# [cluster.control]
+# time = "02:00:00"
+# cpus_per_task = 4
+# mem = "8G"
+# [cluster.worker]
+# time = "00:30:00"
+# [cluster.build]
+# cpus_per_task = 8
+# mem = "24G"
+
+# Application overrides of config/server.toml:
+# [server]
+# name = "UBELIX"
+
+# Optional runtime/PostgreSQL tuning:
+# [runtime.local_postgres]
+# ...

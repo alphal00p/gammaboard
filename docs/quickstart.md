@@ -64,7 +64,7 @@ use the numeric ID when a name is ambiguous. Templates are editable in the dashb
 
 Physics and large training cards can take substantial time and disk space;
 check their sample counts before launching. Generated states and environments
-are not supplied by template synchronization.
+are not included with the templates.
 
 For another instance use `./gammaboard --port-offset 1 deploy`, and include that
 same offset on subsequent commands. See [deployment](deployment.md) for shared

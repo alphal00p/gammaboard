@@ -158,3 +158,4 @@ vite.config.ts.timestamp-*
 
 # Local direnv/Nix environment
 .direnv/
+/ops/ubelix/local.toml

@@ -6,5 +6,5 @@ allow_local_node_spawn = false
 build_dir = "/usr/local/share/gammaboard/dashboard"
 host = "0.0.0.0"
 
-# Supply [auth] through a private server config when dashboard authentication
+# Supply [server.auth] in local.toml when dashboard authentication
 # is required on the cluster network.

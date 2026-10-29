@@ -54,10 +54,12 @@ watcher. Connected means launched, not that the worker stays alive indefinitely.
 
 The UBELIX helper scopes a deployment to canonical workspace plus port offset and
 stores a unique generation ID, control job, image digest and config snapshots.
-The active pointer and submissions use a filesystem lock; shutdown and submission
-cannot interleave within that slot. Workers use the pinned image, not a mutable
-current pointer. `/health` reports `deployment_id` and `build_id`; helpers verify
-both before authenticated control operations.
+The active pointer and submissions use a workspace filesystem lock; shutdown and
+submission cannot interleave. Service images have fixed paths and can only be
+rebuilt while every deployment in that workspace is stopped. Workers verify the
+recorded image digest. Queued jobs retain their launcher and configuration even
+when the checkout changes. `/health` reports `deployment_id` and `build_id`; helpers
+verify both before authenticated control operations.
 
 `gammaboard build-info` reports the package version, source revision, compiled
 features, build ID and database model. When `GAMMABOARD_DEPLOYMENT_ID` is set, server

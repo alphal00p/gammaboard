@@ -1,6 +1,5 @@
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -12,27 +11,31 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import ubelix as u
-from gbops.deployment import Deployments, tag, job_name, write_json
+from gbops.deployment import Deployments, tag, job_name, write_json, toml_dump, merge
 from gbops.slurm import Job, Slurm, SchedulerError, parse_jobs
-from gbops import runtime
+from gbops import runtime, settings
+
+
+def configure(**values):
+    path = settings.OPS_ROOT / "local.toml"
+    path.write_text(toml_dump(merge(settings.local_config(), values)))
+    return path
 
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
-    monkeypatch.setattr(u, "WORKSPACE_ROOT", str(tmp_path))
-    (tmp_path / "ops/config").mkdir(parents=True)
-    for name in ("server.toml", "server-single-node.toml", "cluster.toml"):
-        shutil.copy2(ROOT / "config" / name, tmp_path / "ops/config" / name)
-    shutil.copy2(ROOT / "ubelix.py", tmp_path / "ubelix.py")
-    shutil.copytree(
-        ROOT / "gbops", tmp_path / "gbops", ignore=shutil.ignore_patterns("__pycache__")
-    )
-    shutil.copytree(ROOT / "slurm", tmp_path / "ops/slurm")
-    image = tmp_path / "images/gammaboard/test.sif"
+    ops = tmp_path / "checkout/ops/ubelix"
+    shutil.copytree(ROOT, ops, ignore=shutil.ignore_patterns("__pycache__", "local.toml"))
+    shutil.copytree(ROOT.parents[1] / "resources/templates", ops.parents[1] / "resources/templates")
+    monkeypatch.setattr(settings, "OPS_ROOT", ops)
+    workspace = tmp_path / "state"
+    workspace.mkdir()
+    (ops / "local.toml").write_text(toml_dump({"workspace_root": str(workspace)}))
+    image = workspace / "images/gammaboard.sif"
     image.parent.mkdir(parents=True)
-    image.write_bytes(b"first immutable image")
+    image.write_bytes(b"first image")
     write_json(
-        image.parent / "current.json",
+        image.with_suffix(".json"),
         {
             "path": str(image),
             "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
@@ -40,7 +43,7 @@ def workspace(tmp_path, monkeypatch):
             "validated": True,
         },
     )
-    return tmp_path
+    return workspace
 
 
 class FakeSlurm(Slurm):
@@ -85,7 +88,20 @@ class FakeSlurm(Slurm):
 
 def create_manifest(workspace, offset=0):
     store = Deployments(workspace, offset)
-    return store.create(store.selected_image(), store.configuration(False, 8080), False, False)
+    return store.create(store.image(), store.configuration(False, 8080), False, False)
+
+
+def test_templates_are_seeded_once_and_dashboard_edits_survive_new_deployments(workspace):
+    create_manifest(workspace)
+    templates = workspace / "resources/templates"
+    assert (templates / "runs/installation-smoke.toml").is_file()
+    assert (templates / "nodes/cpu-workers.toml").is_file()
+    (templates / "nodes/cpu-workers.toml").unlink()
+    edited = templates / "runs/installation-smoke.toml"
+    edited.write_text('name="custom"\n')
+    create_manifest(workspace, 10)
+    assert not (templates / "nodes/cpu-workers.toml").exists()
+    assert edited.read_text() == 'name="custom"\n'
 
 
 def control(manifest, scheduler, state="RUNNING"):
@@ -163,57 +179,47 @@ def test_running_down_only_cancels_its_own_jobs(workspace, monkeypatch):
     assert not scheduler.jobs["30"].terminal
 
 
-def test_active_deployment_pins_image_and_rejects_changed_current_pointer(workspace, monkeypatch):
+def test_deployment_freezes_scripts_and_detects_manual_image_replacement(workspace, monkeypatch):
     manifest = create_manifest(workspace)
     launcher = workspace / "deployments" / manifest["id"] / "launcher/ubelix.py"
     original = launcher.read_text()
-    (workspace / "ubelix.py").write_text("# changed by sync\n")
+    (settings.OPS_ROOT / "ubelix.py").write_text("# changed by git pull\n")
     assert launcher.read_text() == original
     scheduler = FakeSlurm()
     control(manifest, scheduler)
-    image = workspace / "images/gammaboard/second.sif"
-    image.write_bytes(b"second version")
-    write_json(
-        image.parent / "current.json",
-        {
-            "path": str(image),
-            "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
-            "build_info": {"build_id": "other-build", "model_version": 7},
-            "validated": True,
-        },
-    )
-    with pytest.raises(RuntimeError, match="different image"):
+    image = workspace / "images/gammaboard.sif"
+    image.write_bytes(b"manually replaced version")
+    with pytest.raises(ValueError, match="digest"):
         u.up(u.parser().parse_args(["up"]), scheduler)
-    command, env = u.container_command(manifest, ["gammaboard", "build-info"])
-    assert manifest["image"]["path"] in command
-    assert str(image) not in command
-    assert env["APPTAINERENV_GAMMABOARD_DEPLOYMENT_ID"] == manifest["id"]
+    with pytest.raises(RuntimeError, match="image was modified"):
+        u.container_command(manifest, ["gammaboard", "build-info"])
 
 
 def test_custom_tunnel_origin_and_private_configuration_are_snapshotted(workspace):
-    (workspace / "config").mkdir()
-    private = workspace / "config/server.toml"
-    private.write_text(
-        'name="private"\n[auth]\nadmin_password_hash="hash"\nsession_secret="secret"\n'
+    private = configure(
+        server={
+            "name": "private",
+            "auth": {"admin_password_hash": "hash", "session_secret": "secret"},
+        }
     )
     store = Deployments(workspace, 10)
     config = store.configuration(False, 9000)
-    manifest = store.create(
-        store.selected_image(), config, False, False, password="private-password"
-    )
+    manifest = store.create(store.image(), config, False, False, password="private-password")
     assert manifest["origins"] == ["http://localhost:9000", "http://127.0.0.1:9000"]
     assert "private" in Path(manifest["server_config"]).read_text()
     assert "9000:compute-a:8090" in u.tunnel_command("compute-a", 9000, 10)
     credentials = runtime.directory(manifest) / "launcher-auth.json"
     assert credentials.stat().st_mode & 0o777 == 0o600
     assert "private-password" not in json.dumps(manifest)
-    private.write_text('name="changed"')
+    configure(server={"name": "changed"})
+    private.unlink()  # Workers do not need the checkout or its local configuration.
+    command, env = u.container_command(manifest, ["gammaboard", "build-info"])
+    assert manifest["image"]["path"] in command
+    assert env["APPTAINERENV_GAMMABOARD_DEPLOYMENT_ID"] == manifest["id"]
     assert "changed" not in Path(manifest["server_config"]).read_text()
     Path(manifest["server_config"]).write_text('name="tampered"')
     with pytest.raises(RuntimeError, match="snapshot"):
         u.container_command(manifest, [])
-    with pytest.raises(ValueError, match="outside managed"):
-        store.configuration(False, 8080, workspace / "ops/config/server.toml")
 
 
 def test_empty_comments_and_accounting_names_are_supported_without_inferring_absence():
@@ -398,24 +404,6 @@ def argparse_args(**kw):
     return SimpleNamespace(**kw)
 
 
-def test_invalid_sync_targets_are_rejected_before_connecting(tmp_path):
-    commands = tmp_path / "commands"
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    for name in ("ssh", "rsync"):
-        executable = bindir / name
-        executable.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$0" "$@" >> "$SYNC_LOG"\n')
-        executable.chmod(0o755)
-    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", SYNC_LOG=str(commands))
-    script = ROOT / "sync_ops.sh"
-    for invalid in ("../outside", ".", "/absolute", "user/./workspace"):
-        result = subprocess.run(
-            ["bash", str(script), "test-host", invalid], cwd=tmp_path, env=env, capture_output=True
-        )
-        assert result.returncode == 2
-    assert not commands.exists()
-
-
 @pytest.mark.parametrize("state", ["PENDING", "FAILED"])
 def test_down_cancels_stranded_workers_and_records_completed_shutdown(
     workspace, monkeypatch, state
@@ -573,7 +561,7 @@ def test_database_preflight_rejects_old_model_and_reset_rejects_escape(workspace
     data.symlink_to(workspace / "images", target_is_directory=True)
     with pytest.raises(ValueError, match="strictly inside"):
         reset_database(Deployments(workspace, 0), FakeSlurm(), discard=True)
-    assert (workspace / "images/gammaboard/test.sif").exists()
+    assert (workspace / "images/gammaboard.sif").exists()
 
 
 def test_worker_deadline_is_checked_before_submission_intent(workspace):
@@ -669,71 +657,6 @@ def test_stop_process_has_a_bounded_grace_period():
     assert process.wait.call_args_list[0].kwargs == {"timeout": 120}
 
 
-def test_prune_preserves_current_rollback_and_pending_builds(workspace):
-    from gbops.maintenance import prune
-
-    scheduler = FakeSlurm()
-    manifests = []
-    for i in range(3):
-        image = workspace / f"images/gammaboard/revision-{i}/digest-{i}/gammaboard.sif"
-        image.parent.mkdir(parents=True)
-        image.write_bytes(str(i).encode())
-        info = {
-            "family": "gammaboard",
-            "path": str(image),
-            "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
-            "build_info": {"build_id": str(i), "model_version": 7},
-            "validated": True,
-        }
-        write_json(image.parent / "image.json", info)
-        write_json(workspace / "images/gammaboard/current.json", info)
-        manifest = create_manifest(workspace)
-        manifest["state"] = "stopped"
-        Deployments(workspace, 0).save(manifest)
-        manifests.append(manifest)
-    for identifier, state, job_state in [
-        ("finished", "completed", "COMPLETED"),
-        ("pending", "submitted", "PENDING"),
-        ("unknown", "submitting", None),
-    ]:
-        build = workspace / "artifacts/builds" / identifier
-        build.mkdir(parents=True)
-        write_json(
-            build / "build.json",
-            {
-                "id": identifier,
-                "job_id": identifier if job_state else None,
-                "created_at": "2026-10-29",
-                "state": state,
-            },
-        )
-        if job_state:
-            scheduler.jobs[identifier] = Job(
-                identifier, f"gb-build-{identifier}", job_state, "", ""
-            )
-    deployments = Deployments(workspace, 0)
-    preview = prune(deployments, scheduler)
-    first = workspace / "deployments" / manifests[0]["id"]
-    assert str(first) in preview["paths"] and first.exists()
-    assert str(workspace / "artifacts/builds/finished") in preview["paths"]
-    assert not any("pending" in path or "unknown" in path for path in preview["paths"])
-    result = prune(deployments, scheduler, apply=True)
-    assert result["paths"] == preview["paths"]
-    assert not first.exists()
-    assert not Path(manifests[0]["image"]["path"]).exists()
-    assert Path(manifests[1]["image"]["path"]).exists()
-    assert Path(manifests[2]["image"]["path"]).exists()
-    assert (workspace / "artifacts/builds/pending").exists()
-    write_json(
-        workspace / "artifacts/database-archives/saved/archive.json", {"deployment": manifests[1]}
-    )
-    prune(deployments, scheduler, apply=True, keep=0)
-    assert not (workspace / "deployments" / manifests[1]["id"]).exists()
-    assert Path(manifests[1]["image"]["path"]).exists(), (
-        "database archives pin their matching image"
-    )
-
-
 def test_custom_capabilities_and_memory_override_survive_profile_defaults(workspace):
     manifest = create_manifest(workspace)
     spec = {
@@ -819,8 +742,7 @@ def test_reset_refuses_active_other_offset_with_overlapping_data(workspace):
     data = Path(other["database_paths"]["data_dir"])
     data.mkdir(parents=True)
     (data / "PG_VERSION").write_text("15")
-    (workspace / "config").mkdir()
-    (workspace / "config/runtime.toml").write_text('[local_postgres]\ndata_dir="db/postgres-10"\n')
+    configure(runtime={"local_postgres": {"data_dir": "db/postgres-10"}})
     create_manifest(workspace, 0)
     scheduler = FakeSlurm()
     control(other, scheduler)
