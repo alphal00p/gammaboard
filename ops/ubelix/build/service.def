@@ -8,7 +8,7 @@ Stage: builder
 
 %setup
     # Writable fakeroot builds need bind destinations before entering %post.
-    mkdir -p "${APPTAINER_ROOTFS:?}/cache"
+    mkdir -p "${APPTAINER_ROOTFS:?}/cache" "${APPTAINER_ROOTFS}/build-cache"
 
 %files from node
     /usr/local/bin/node /usr/local/bin/node
@@ -25,8 +25,13 @@ Stage: builder
     ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
     cd /src
     export GAMMABOARD_GIT_REVISION=@REVISION@
+    # Include actual compiler/system libraries as apt packages can change.
+    rustc -vV > /tmp/gammaboard-build-environment
+    dpkg-query -W >> /tmp/gammaboard-build-environment
+    environment_key="$(sha256sum /tmp/gammaboard-build-environment | cut -d ' ' -f 1)"
+    build_cache="/build-cache/@FAMILY@/@CACHE_KEY@/${environment_key}"
     export CARGO_HOME=/cache/cargo
-    export CARGO_TARGET_DIR=/build/target
+    export CARGO_TARGET_DIR="${build_cache}/target"
     export CARGO_BUILD_JOBS=@CPUS@
     export RUSTFLAGS='-C target-cpu=x86-64'
     export CFLAGS='-O2 -march=x86-64 -mtune=generic'
@@ -34,12 +39,14 @@ Stage: builder
     unset NO_SYMBOLICA_OEM_LICENSE
     @CARGO_BUILD@
     mkdir -p /out
-    install -m755 /build/target/release/@FAMILY@ /out/@FAMILY@
+    install -m755 "${CARGO_TARGET_DIR}/release/@FAMILY@" /out/@FAMILY@
     rustc --version > /out/toolchain.txt
     cargo --version >> /out/toolchain.txt
     dpkg-query -W > /out/builder-packages.txt
     if [ '@FAMILY@' = gammaboard ]; then
-        cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features rustls,postgres --root /out/sqlx
+        cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features rustls,postgres --root "${build_cache}/sqlx"
+        mkdir -p /out/sqlx/bin
+        install -m755 "${build_cache}/sqlx/bin/sqlx" /out/sqlx/bin/sqlx
         cp -a migrations /out/migrations
         cd dashboard
         npm ci --cache /cache/npm
@@ -52,8 +59,8 @@ From: @DEBIAN_IMAGE@
 Stage: runtime
 
 %setup
-    # The build-wide cache bind also applies to the final stage.
-    mkdir -p "${APPTAINER_ROOTFS:?}/cache"
+    # The build-wide cache binds also apply to the final stage.
+    mkdir -p "${APPTAINER_ROOTFS:?}/cache" "${APPTAINER_ROOTFS}/build-cache"
 
 %files from builder
     /out /usr/local/share/build

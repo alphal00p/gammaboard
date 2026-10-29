@@ -79,7 +79,10 @@ if args[0]=='build':
         image.write_text(text)
         sys.exit(0)
     assert '@REVISION@' not in text and '@RUST_IMAGE@' not in text
-    assert 'CARGO_TARGET_DIR=/build/target' in text
+    assert 'CARGO_TARGET_DIR="${build_cache}/target"' in text
+    binds={value.split(':')[1]:Path(value.split(':')[0]) for i,value in enumerate(args) if i>0 and args[i-1]=='--bind'}
+    assert binds['/cache'].name=='download-cache' and binds['/cache'].is_dir()
+    assert binds['/build-cache'].name=='build-cache' and binds['/build-cache'].is_dir()
     source=Path(json.loads(re.search(r'%files\n    (".*") /src',text).group(1)))
     assert not (source/'ops/ubelix/local.toml').exists()
     revision=re.search(r'GAMMABOARD_GIT_REVISION=([a-f0-9]+)',text).group(1)
@@ -136,6 +139,7 @@ def test_all_post_stages_create_cache_bind_destination_before_container_start(tm
             )
         # Apptainer enters writable %post only after installing the build-wide bind.
         assert (rootfs / "cache").is_dir(), "cache bind target missing before %post"
+        assert (rootfs / "build-cache").is_dir(), "build cache target missing before %post"
     assert post_stages > 0
 
 
@@ -295,3 +299,123 @@ def test_local_config_is_relative_to_helper_not_cwd_or_environment(checkout, mon
     with pytest.raises(ValueError, match="local.example.toml"):
         settings.workspace_root()
     assert u.parser().parse_args(["build", "gammaboard"]).build_kind == "gammaboard"
+
+
+def render_definition(ops, directory, revision="a" * 40, cpus=4, family="gammaboard"):
+    directory.mkdir()
+    command(
+        [
+            sys.executable,
+            str(ops / "build/render.py"),
+            str(ops),
+            str(directory),
+            family,
+            revision,
+            str(cpus),
+        ]
+    )
+    return (directory / "service.def").read_text()
+
+
+def test_compilation_cache_survives_revision_paths_and_cpu_changes(checkout, tmp_path):
+    def namespace(text):
+        return re.search(r'build_cache="([^"]+)"', text)[1]
+
+    ops = settings.OPS_ROOT
+    first = namespace(render_definition(ops, tmp_path / "first"))
+    assert (
+        namespace(render_definition(ops, tmp_path / "second", revision="b" * 40, cpus=8)) == first
+    )
+    assert namespace(render_definition(ops, tmp_path / "loop", family="gammaloop")) != first
+    lock = ops / "build/images.lock.json"
+    pins = json.loads(lock.read_text())
+    pins["rust"]["image"] = "docker.io/library/rust@sha256:" + "1" * 64
+    lock.write_text(json.dumps(pins))
+    changed_image = namespace(render_definition(ops, tmp_path / "image"))
+    assert changed_image != first
+    definition = ops / "build/service.def"
+    definition.write_text(
+        definition.read_text().replace("target-cpu=x86-64", "target-cpu=x86-64-v2")
+    )
+    assert namespace(render_definition(ops, tmp_path / "recipe")) != changed_image
+
+
+def test_real_cargo_reuses_dependencies_and_installed_tool_but_updates_revision(tmp_path):
+    # Run the definition's compilation commands on tiny offline/local sources.
+    source = tmp_path / "source"
+    (source / "src").mkdir(parents=True)
+    (source / "dependency/src").mkdir(parents=True)
+    (source / "Cargo.toml").write_text(
+        '[package]\nname="gammaboard"\nversion="0.1.0"\nedition="2021"\n[dependencies]\ncache_dep={path="dependency"}\n'
+    )
+    (source / "dependency/Cargo.toml").write_text(
+        '[package]\nname="cache_dep"\nversion="0.1.0"\nedition="2021"\n'
+    )
+    (source / "dependency/src/lib.rs").write_text("pub fn value() -> u32 { 42 }\n")
+    (source / "src/main.rs").write_text(
+        'fn main() { println!("{}:{}", env!("REVISION"), cache_dep::value()); }\n'
+    )
+    (source / "build.rs").write_text(
+        'fn main() { println!("cargo:rerun-if-env-changed=GAMMABOARD_GIT_REVISION"); println!("cargo:rustc-env=REVISION={}", std::env::var("GAMMABOARD_GIT_REVISION").unwrap()); }\n'
+    )
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    executable(
+        binaries / "dpkg-query",
+        '#!/bin/sh\nprintf "system-libraries\\t%s\\n" "$TEST_PACKAGE_VERSION"\n',
+    )
+    env = dict(
+        os.environ,
+        PATH=f"{binaries}:{os.environ['PATH']}",
+        CARGO_HOME=str(tmp_path / "downloads/cargo"),
+        TEST_PACKAGE_VERSION="1",
+    )
+    command(["cargo", "generate-lockfile", "--offline"], cwd=source, env=env)
+    tool_source = tmp_path / "tool-source"
+    (tool_source / "src").mkdir(parents=True)
+    (tool_source / "Cargo.toml").write_text(
+        '[package]\nname="sqlx-cli"\nversion="0.8.6"\nedition="2021"\n[[bin]]\nname="sqlx"\npath="src/main.rs"\n[features]\nrustls=[]\npostgres=[]\n'
+    )
+    (tool_source / "src/main.rs").write_text('fn main() { println!("test sqlx"); }\n')
+    command(["cargo", "generate-lockfile", "--offline"], cwd=tool_source, env=env)
+    command(["git", "init", str(tool_source)])
+    tool_revision = commit(tool_source, "tool")
+
+    def build(revision, name, packages="1"):
+        output = tmp_path / name
+        definition = render_definition(ROOT, tmp_path / (name + "-recipe"), revision=revision)
+        body = definition.split("    cd /src\n", 1)[1]
+        compile_commands = body.split("    rustc --version > /out/toolchain.txt", 1)[0]
+        install_commands = body.split("    if [ 'gammaboard' = gammaboard ]; then\n", 1)[1].split(
+            "        cp -a migrations", 1
+        )[0]
+        script = compile_commands + install_commands
+        script = script.replace(
+            "cargo install sqlx-cli --version 0.8.6",
+            f"cargo install sqlx-cli --git {tool_source.as_uri()} --rev {tool_revision}",
+        )
+        for container, local in (
+            ("/build-cache", tmp_path / "compiled"),
+            ("/cache", tmp_path / "downloads"),
+            ("/out", output),
+            ("/tmp/gammaboard-build-environment", tmp_path / "environment"),
+        ):
+            script = script.replace(container, str(local))
+        command(
+            ["sh", "-eu", "-c", script], cwd=source, env=dict(env, TEST_PACKAGE_VERSION=packages)
+        )
+        assert command([str(output / "gammaboard")]).stdout.strip() == revision + ":42"
+        assert command([str(output / "sqlx/bin/sqlx")]).stdout.strip() == "test sqlx"
+
+    build("a" * 40, "first")
+    dependency = next((tmp_path / "compiled").glob("**/target/release/deps/libcache_dep-*.rlib"))
+    tool = next((tmp_path / "compiled").glob("**/sqlx/bin/sqlx"))
+    unchanged = dependency.stat().st_mtime_ns, tool.stat().st_mtime_ns
+    build("b" * 40, "second")
+    assert (dependency.stat().st_mtime_ns, tool.stat().st_mtime_ns) == unchanged
+    # A changed system-library environment must start a separate cache.
+    build("c" * 40, "third", packages="2")
+    assert (
+        len(list((tmp_path / "compiled").glob("**/target/release/deps/libcache_dep-*.rlib"))) == 2
+    )
+    assert len(list((tmp_path / "compiled").glob("**/sqlx/bin/sqlx"))) == 2

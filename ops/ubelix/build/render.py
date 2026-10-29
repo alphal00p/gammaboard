@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render a standalone definition with immutable base images and clean sources."""
 
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -20,6 +21,11 @@ for item in pins.values():
         raise ValueError(
             "base image must use repository@sha256:<64 hex digits>, without a tag (Apptainer requirement)"
         )
+template = (workspace / "build/service.def").read_text()
+# Source revisions, staging paths and CPU allocations must not invalidate reuse.
+cache_key = hashlib.sha256(
+    json.dumps(pins, sort_keys=True).encode() + b"\0" + template.encode()
+).hexdigest()
 values = {
     "NODE_IMAGE": pins["node"]["image"],
     "RUST_IMAGE": pins["rust"]["image"],
@@ -28,11 +34,12 @@ values = {
     "REVISION": sha,
     "CPUS": str(int(cpus)),
     "FAMILY": family,
+    "CACHE_KEY": cache_key,
     "CARGO_BUILD": "cargo build --release --locked --bin gammaboard"
     if family == "gammaboard"
     else "cargo build --release --locked -p gammaloop-api --bin gammaloop --features ufo_support",
 }
-text = (workspace / "build/service.def").read_text()
+text = template
 for key, value in values.items():
     text = text.replace("@" + key + "@", value)
 (build / "service.def").write_text(text)

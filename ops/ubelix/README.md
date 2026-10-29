@@ -142,6 +142,7 @@ resources/states/         generated physics states
 resources/runtimes/       process environments and custom images
 artifacts/builds/          build records, recipes, logs and failed build evidence
 artifacts/download-cache/ shared dependency downloads
+artifacts/build-cache/    reusable Rust targets and installed build tools
 artifacts/database-archives/
 logs/slurm/
 ```
@@ -184,10 +185,27 @@ x86-64 flags. Before publication, GammaBoard starts PostgreSQL, API, frontend an
 two workers and completes a 32-sample run; GammaLoop checks CLI startup. Apt
 repositories can change, so these are not byte-for-byte reproducible builds.
 
-The shared dependency cache is bound at `/cache` during builds. Both stages that
-run `%post` create this directory in `%setup`: writable fakeroot builds require
-bind destinations to exist before the container starts. Creating it inside `%post`
-would be too late. See [Apptainer's bind requirements](https://apptainer.org/docs/user/latest/bind_paths_and_mounts.html#using-bind-or-mount-with-the-writable-flag).
+Downloads persist in `artifacts/download-cache/`, bound at `/cache`. Rust compilation
+output and installed `sqlx-cli` persist in `artifacts/build-cache/`, bound at
+`/build-cache`. Successful-build cleanup preserves both caches. Cargo can reuse
+compiled dependencies across commits, and skips reinstalling an unchanged tool.
+See [Cargo's installation cache](https://doc.rust-lang.org/cargo/commands/cargo-install.html#description).
+
+Compilation caches are separated by service, base-image pins, definition contents,
+actual Rust compiler and installed system-package versions. Source revisions,
+staging directories and allocated CPU counts keep the same cache. Changes to the
+compiler, native libraries or build recipe start a fresh cache automatically.
+The helper permits one build at a time in a workspace. To force recompilation,
+remove `artifacts/build-cache/` while no build is running; downloads can be kept.
+
+The first build using this feature populates the compilation cache. Previously
+submitted jobs retain their old recipes and cannot warm it. Source compilation,
+linking, frontend builds and smoke checks still run as needed, so build time depends
+on what changed.
+
+Both stages that run `%post` create the cache bind destinations in `%setup`:
+writable fakeroot builds require them before the container starts. Creating them
+inside `%post` would be too late. See [Apptainer's bind requirements](https://apptainer.org/docs/user/latest/bind_paths_and_mounts.html#using-bind-or-mount-with-the-writable-flag).
 
 ## Workers and recovery
 

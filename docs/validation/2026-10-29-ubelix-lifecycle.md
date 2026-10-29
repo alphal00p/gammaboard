@@ -25,10 +25,13 @@ provenance/configuration but no image history.
 Templates are seeded into the workspace once and remain editable without dirtying
 the checkout. Later starts preserve edits and deletions. Successful service builds
 remove source/temp staging; logs, records and failed build evidence remain available.
+Rust targets and installed `sqlx-cli` now persist separately from download caches.
+Cache entries survive source revisions and are separated by service, definition,
+base images, compiler and actual system-package versions.
 
 ## Validation
 
-All 47 helper tests passed with Python 3.13. They exercise:
+All 49 helper tests passed with Python 3.13. They exercise:
 
 - real Git checkout snapshots, dirty-source rejection, fixed-image replacement,
   failed smoke preservation and queued builds surviving checkout removal;
@@ -43,11 +46,18 @@ All 47 helper tests passed with Python 3.13. They exercise:
   memory overrides and worker deadline validation before submission intent;
 - launcher supervision, in-flight receipt preservation, bounded process shutdown,
   shared heartbeat/accounting queries and scheduler-outage handling;
-- launch-lease recovery and explicit submission repair.
+- launch-lease recovery and explicit submission repair;
 - actionable startup errors for unsupported Python versions and rejection of
-  tagged digest references before invoking Apptainer.
+  tagged digest references before invoking Apptainer;
 - execution of each `%post` stage's `%setup` hook against an isolated root
-  (including paths with spaces), checking that `/cache` exists before container startup.
+  (including paths with spaces), checking that both cache bind targets exist before
+  container startup;
+- stable compilation-cache selection across revisions, CPU allocations and staging
+  paths, with separate entries for services, changed base images and build flags;
+- real Cargo builds of tiny local fixtures: a second build retains the dependency
+  artifact and installed tool timestamps while updating the application revision;
+  changed system-package versions produce a new cache. No external crate downloads
+  are needed for this check.
 
 Python static checks, shell syntax checks, CLI help, TOML parsing and whitespace
 checks passed. The helper suite simulates Slurm and Apptainer execution. An additional
@@ -67,3 +77,5 @@ The image-reference regression and parser check are recorded under
 `/common/dev/cedric/setup-logs/ubelix-image-refs-20261029/`.
 Cache-bind checks are recorded under
 `/common/dev/cedric/setup-logs/ubelix-cache-bind-20261029/`.
+Compilation-cache checks are recorded under
+`/common/dev/cedric/setup-logs/ubelix-build-cache-20261029/`.
