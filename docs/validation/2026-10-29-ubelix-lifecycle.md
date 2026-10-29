@@ -31,7 +31,7 @@ base images, compiler and actual system-package versions.
 
 ## Validation
 
-All 49 helper tests passed with Python 3.13. They exercise:
+All 52 helper tests passed with Python 3.13. They exercise:
 
 - real Git checkout snapshots, dirty-source rejection, fixed-image replacement,
   failed smoke preservation and queued builds surviving checkout removal;
@@ -58,6 +58,9 @@ All 49 helper tests passed with Python 3.13. They exercise:
   artifact and installed tool timestamps while updating the application revision;
   changed system-package versions produce a new cache. No external crate downloads
   are needed for this check.
+- the actual smoke script with delayed worker registration, rejected empty role
+  assignment, startup failure diagnostics, stale-marker removal and direct
+  supervisor cleanup.
 
 Python static checks, shell syntax checks, CLI help, TOML parsing and whitespace
 checks passed. The helper suite simulates Slurm and Apptainer execution. An additional
@@ -79,3 +82,21 @@ Cache-bind checks are recorded under
 `/common/dev/cedric/setup-logs/ubelix-cache-bind-20261029/`.
 Compilation-cache checks are recorded under
 `/common/dev/cedric/setup-logs/ubelix-build-cache-20261029/`.
+
+## Smoke-test registration race
+
+A live UBELIX build successfully started the API and frontend but immediately
+auto-assigned before either worker registered. Both assigned-role lists were empty,
+so the run never started. The startup connection retries were incidental.
+The smoke script now launches workers through the persistent server, waits for
+both idle registrations, checks that one sampler and one evaluator were assigned,
+and uses the CLI completion wait before verifying exactly 32 samples. It launches
+the deploy executable directly so shutdown signals reach the supervisor rather
+than an intermediate shell. Success is recorded after cleanup.
+
+The revised script also passed against a real native PostgreSQL/API/nginx stack
+and two workers on ITPhlies, using isolated data and temporary ports. All three
+ports were closed afterward, and PostgreSQL's PID file was removed. This tests the
+smoke workflow and shutdown outside Apptainer; SIF mount behavior remains a cluster
+check. No retry/publish command was added. Evidence is under
+`/common/dev/cedric/setup-logs/ubelix-smoke-20261029/`.

@@ -232,6 +232,12 @@ x86-64 flags. Before publication, GammaBoard starts PostgreSQL, API, frontend an
 two workers and completes a 32-sample run; GammaLoop checks CLI startup. Apt
 repositories can change, so these are not byte-for-byte reproducible builds.
 
+The smoke test waits for the frontend and both registered workers before assigning
+one sampler and one evaluator. It checks exactly 32 completed samples and stops
+the deployment before recording success. Failures print the phase and relevant
+deploy/database/worker logs into the Slurm error log; detailed evidence remains in
+the build directory. Initial connection attempts while services start are quiet.
+
 Downloads persist in `artifacts/download-cache/`, bound at `/cache`. Rust compilation
 output and installed `sqlx-cli` persist in `artifacts/build-cache/`, bound at
 `/build-cache`. Successful-build cleanup preserves both caches. Cargo can reuse
