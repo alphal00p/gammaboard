@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-"""Deployment-scoped cluster control. Run on a login node with Python 3.11+."""
+"""Deployment-scoped cluster control. Run on a login node with Python 3.11.8+."""
 
 from __future__ import annotations
+
+import sys
+
+if sys.version_info < (3, 11, 8):
+    raise SystemExit(
+        f"GammaBoard's UBELIX helper requires Python 3.11.8+; running {sys.version.split()[0]}.\n"
+        "Run 'module load Python', then check 'python3 --version'. "
+        "Use 'module spider Python' to find a suitable version if needed.\n"
+        "Load the same module in batch jobs via ~/.config/gammaboard/slurm.env."
+    )
 
 import argparse
 import base64
@@ -10,7 +20,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import threading
 import time
 import urllib.error

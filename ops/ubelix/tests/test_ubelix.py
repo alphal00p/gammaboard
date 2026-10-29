@@ -1,5 +1,6 @@
 import hashlib
 import json
+import runpy
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +15,22 @@ import ubelix as u
 from gbops.deployment import Deployments, tag, job_name, write_json, toml_dump, merge
 from gbops.slurm import Job, Slurm, SchedulerError, parse_jobs
 from gbops import runtime, settings
+
+
+def test_old_python_reports_setup_instructions_before_importing_helpers(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def importing(name, *args, **kwargs):
+        if name == "tomllib" or name.startswith("gbops"):
+            raise AssertionError("unsupported Python must exit before helper imports")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(sys, "version_info", (3, 9, 0))
+    monkeypatch.setattr(builtins, "__import__", importing)
+    with pytest.raises(SystemExit, match="module load Python"):
+        runpy.run_path(str(ROOT / "ubelix.py"), run_name="__main__")
 
 
 def configure(**values):

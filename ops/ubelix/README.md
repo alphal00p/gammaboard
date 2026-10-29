@@ -7,6 +7,21 @@ selection step. A successful service build replaces its fixed image.
 
 ## First deployment
 
+Load a recent Python module in your login shell before running the helper:
+
+```bash
+module load Python
+python3 --version # Must be 3.11.8 or newer; the system python3 may be older.
+```
+
+If the default module is too old or cannot be loaded directly, use
+`module spider Python`, then `module spider Python/VERSION` for a suitable version
+and its loading instructions. See the
+[UBELIX module guide](https://hpc-unibe-ch.github.io/software/Lmod_modules/).
+Use the same `module load` command in `~/.config/gammaboard/slurm.env` so build,
+control and worker jobs also get the required Python. The helper uses only the
+standard library; no pip installation is needed.
+
 ```bash
 git clone https://github.com/alphal00p/gammaboard.git
 cd gammaboard/ops/ubelix
