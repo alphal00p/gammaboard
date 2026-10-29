@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gb-ctl
-#SBATCH --time=00:20:00
-#SBATCH --signal=B:TERM@60
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=4G
-#SBATCH --account=gratis
-#SBATCH --partition=epyc2
-#SBATCH --qos=job_gratis
 #SBATCH --output=logs/slurm/control/%x-%j.out
 #SBATCH --error=logs/slurm/control/%x-%j.err
 

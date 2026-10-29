@@ -32,3 +32,6 @@ diagnostics, exact native bins, bounded comparisons, shared controls and validat
 
 [Concurrent campaigns](validation/2026-10-29-campaign-concurrency.md): resource-aware
 assignment, independent scheduling quanta, shared budgets and recovery validation.
+
+[UBELIX lifecycle](validation/2026-10-29-ubelix-lifecycle.md): managed launch supervision,
+fresh database cleanup, immutable build recipes and artifact retention.

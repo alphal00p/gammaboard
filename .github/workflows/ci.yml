@@ -135,13 +135,6 @@ jobs:
       - name: Validate UBELIX Python and shell entry points
         run: |
           python -m py_compile ops/ubelix/ubelix.py
-          bash -n ops/ubelix/build/common.sh
-          bash -n ops/ubelix/build/service-build.sh
-          bash -n ops/ubelix/build/smoke.sh
-          bash -n ops/ubelix/build/build.sbatch
-          bash -n ops/ubelix/build/gammaboard.sbatch
-          bash -n ops/ubelix/build/gammaloop.sbatch
-          bash -n ops/ubelix/slurm/control.sbatch
-          bash -n ops/ubelix/slurm/smoke.sbatch
-          bash -n ops/ubelix/slurm/worker.sbatch
-          bash -n ops/ubelix/sync_ops.sh
+          for script in ops/ubelix/build/*.sh ops/ubelix/build/*.sbatch ops/ubelix/slurm/*.sbatch ops/ubelix/sync_ops.sh; do
+            bash -n "$script"
+          done

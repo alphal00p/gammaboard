@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gb-wrk
-#SBATCH --time=00:30:00
-#SBATCH --signal=B:TERM@60
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=2G
-#SBATCH --account=gratis
-#SBATCH --partition=epyc2
-#SBATCH --qos=job_gratis
 #SBATCH --output=logs/slurm/workers/%x-%A_%a.out
 #SBATCH --error=logs/slurm/workers/%x-%A_%a.err
 

@@ -1,50 +1,11 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=gb-apptainer-build
-#SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --account=gratis
-#SBATCH --partition=epyc2
 #SBATCH --output=logs/slurm/build/%x-%j.out
 #SBATCH --error=logs/slurm/build/%x-%j.err
-
 set -euo pipefail
-
+umask 077
 PRIVATE_ENV="${HOME}/.config/gammaboard/slurm.env"
-if [[ -f "${PRIVATE_ENV}" ]]; then
-  source "${PRIVATE_ENV}"
-fi
-
-WORKSPACE_ROOT="${GAMMABOARD_WORKSPACE_ROOT:-$(pwd -P)}"
-
-if [[ $# -ne 2 ]]; then
-  echo "usage: build.sbatch OUTPUT.sif DEF.def" >&2
-  exit 2
-fi
-
-case "$1" in
-  /*) output_path="$1" ;;
-  *) output_path="${WORKSPACE_ROOT}/$1" ;;
-esac
-
-case "$2" in
-  /*) def_path="$2" ;;
-  *) def_path="${WORKSPACE_ROOT}/$2" ;;
-esac
-
-mkdir -p "${WORKSPACE_ROOT}/logs/slurm/build" "$(dirname "${output_path}")"
-
-cd "${WORKSPACE_ROOT}"
-if [[ -e "$output_path" || -L "$output_path" ]]; then
-  echo "refusing to overwrite a runtime image; choose a new versioned output path" >&2
-  exit 1
-fi
-temporary="$(mktemp "$(dirname "$output_path")/.runtime-build-XXXXXX.sif")"
-rm "$temporary"
-trap 'rm -f "$temporary"' EXIT
-apptainer build "$temporary" "$def_path"
-apptainer inspect "$temporary" >/dev/null
-ln "$temporary" "$output_path"
-chmod 444 "$output_path"
+if [[ -f "$PRIVATE_ENV" ]]; then source "$PRIVATE_ENV"; fi
+RECORD="${GAMMABOARD_BUILD_RECORD:?immutable build record required}"
+exec python3 "$(dirname "$RECORD")/recipe/ubelix.py" run-build --record "$RECORD"
