@@ -7,15 +7,17 @@ workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard-
 # admin_password = "..." # only when server authentication is enabled; chmod 600 local.toml
 
 # Overrides of config/cluster.toml. Use your permitted account/partition/QoS.
+# Defaults: build 32 CPUs/128G/2h; workers 2 CPUs/8G/1h; control 2 CPUs/4G/1h.
+# Leave these commented to inherit defaults; adjust for measured workload needs.
 # [cluster.control]
 # time = "02:00:00"
 # cpus_per_task = 4
 # mem = "8G"
 # [cluster.worker]
-# time = "00:30:00"
+# mem = "16G" # Example for integrands needing more memory.
 # [cluster.build]
-# cpus_per_task = 8
-# mem = "24G"
+# cpus_per_task = 32
+# mem = "128G"
 
 # Application overrides of config/server.toml:
 # [server]

@@ -62,9 +62,8 @@ time = "02:00:00"
 cpus_per_task = 4
 mem = "8G"
 
-[cluster.build]
-cpus_per_task = 8
-mem = "24G"
+[cluster.worker]
+mem = "16G" # Optional override for larger integrands; omit to keep the 8G default.
 
 [server]
 name = "UBELIX"
@@ -74,8 +73,8 @@ name = "UBELIX"
 [cluster defaults](config/cluster.toml); `[server]` overrides
 [server defaults](config/server.toml); `[runtime]` supplies application runtime and
 PostgreSQL tuning. Choose account, partition, QoS and time values allowed by your
-allocation. Defaults use `gratis`/`epyc2`: control one hour, workers thirty minutes,
-builds two hours. `up --time` overrides control walltime.
+allocation. Defaults use `gratis`/`epyc2`/`job_gratis`: control and workers request
+one hour, builds two hours. `up --time` overrides control walltime.
 
 Ports, database URL and local/external worker mode belong to the helper. Use
 `--port-offset N` consistently for another deployment and `up --single-node` for
@@ -88,6 +87,54 @@ For authentication, set `[server.auth]` as described in the
 and the top-level `admin_password` in `local.toml`. The managed launcher retains
 its credential in a private deployment file. Treat both files as secrets.
 `~/.config/gammaboard/slurm.env` is sourced at job start for site/module setup.
+
+### Resource defaults and free-tier budget
+
+| Job | CPUs | Total RAM | Requested walltime |
+| --- | ---: | ---: | --- |
+| Build | 32 | 128 GB | 2 hours |
+| Control | 2 | 4 GB | 1 hour |
+| CPU worker | 2 | 8 GB | 1 hour, capped to the remaining control lifetime |
+
+The build allocation gives Cargo up to 32 parallel compilation jobs, with 4 GB
+per CPU as an initial memory allowance. Compilation caches remain reusable when
+the CPU allocation changes. Warm builds and linking may use fewer cores; tune
+this allocation from observed CPU use, peak RAM and queue time.
+
+Workers use a smaller allocation because each worker executes one assigned role.
+Two CPUs provide room for sampler computation plus its background I/O, while
+8 GB gives more headroom for sampler state, batches and evaluator data than the old
+2 GB default. More allocated CPUs do not automatically parallelize an integrand.
+Scale ordinary CPU throughput through worker count; override the profile or a
+request group for known multithreaded or memory-heavy evaluators. One-hour workers
+can cover the control session instead of expiring halfway through it. The launcher
+still subtracts the shutdown margin, normally capping a new worker to at most
+57 minutes under the default one-hour control allocation.
+
+As checked on 29 October 2026, UBELIX documents **11,520 TRES run-minutes per user**
+for its F1 free tier, shared across active jobs; capacity becomes available as
+jobs finish. `gratis` with `job_gratis` is the standard free allocation.
+See the [free-tier policy](https://knowit.unibe.ch/en/docs/hpc/costs/freetier/)
+and [account/QoS guide](https://knowit.unibe.ch/en/docs/hpc/runjobs/partitions/).
+Using CPU count × requested minutes:
+
+- One default build requests `32 × 120 = 3,840` CPU-minutes, one third of that allowance.
+- One control plus six default workers requests at most `(2 + 6 × 2) × 60 = 840`
+  CPU-minutes, about 7.3%; sixteen workers bring this to 2,040, about 17.7%.
+
+These are CPU-budget calculations, not guarantees of scheduling or RAM entitlement.
+Other jobs share the allowance, and live Slurm association, QoS, memory and hardware
+limits still apply. The public free-tier page does not specify a separate RAM cap.
+Builds and deployments already exclude one another within a workspace.
+
+The CPU launch cards inherit the worker profile instead of duplicating CPU/RAM/time
+defaults. The mixed GPU card keeps its explicit GPU request and 4-CPU/16-GB host
+allowance; its CPU group and walltimes inherit the profile. GPU limits are separate.
+Existing private overrides, frozen deployments and queued jobs retain their settings.
+After pulling, create a new deployment to use the new worker profile. Existing
+workspaces keep editable templates: copy updated node cards from
+`ops/ubelix/resources/templates/nodes/` into the workspace's `resources/templates/nodes/`
+to replace older cards that explicitly requested 1 CPU/2 GB/30 minutes.
 
 ## Updates and clean redeployment
 

@@ -687,7 +687,7 @@ def test_custom_capabilities_and_memory_override_survive_profile_defaults(worksp
     scheduler = FakeSlurm()
     u.submit_worker(manifest, "compute-a", spec, worker, scheduler, config)
     saved = json.loads((runtime.directory(manifest) / "workers/key.json").read_text())
-    assert saved["capabilities"] == {"custom_feature": 1, "cpus": 1}
+    assert saved["capabilities"] == {"custom_feature": 1, "cpus": 2}
 
 
 def test_scheduler_snapshot_batches_accounting_queries_too():

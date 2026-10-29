@@ -1,6 +1,7 @@
-replacements = { workers = 4, prefix = "cpu", cores = 1, mem = "2G", time = "00:30:00" }
+# CPU, memory and time inherit the deployment's [cluster.worker] profile.
+# Add group config only when this workload needs different resources.
+replacements = { workers = 6, prefix = "cpu" }
 
 [[groups]]
-count = "$(workers:4)"
+count = "$(workers:6)"
 name_prefix = '$(prefix:"cpu")'
-config = { cores = "$(cores:1)", mem = '$(mem:"2G")', time = '$(time:"00:30:00")' }

@@ -1,5 +1,6 @@
-# Private config/cluster.toml overrides these managed Slurm profiles.
+# [cluster.*] in local.toml overrides these Slurm profiles.
 # Choose account/partition/qos/time values permitted by your UBELIX allocation.
+# Allocation rationale and free-tier arithmetic are documented in README.md.
 [control]
 account = "gratis"
 partition = "epyc2"
@@ -12,13 +13,14 @@ mem = "4G"
 account = "gratis"
 partition = "epyc2"
 qos = "job_gratis"
-time = "00:30:00"
-cpus_per_task = 1
-mem = "2G"
+time = "01:00:00"
+cpus_per_task = 2
+mem = "8G"
 
 [build]
 account = "gratis"
 partition = "epyc2"
+qos = "job_gratis"
 time = "02:00:00"
-cpus_per_task = 6
-mem = "16G"
+cpus_per_task = 32
+mem = "128G"
