@@ -11,7 +11,7 @@ selection step. A successful service build replaces its fixed image.
 git clone https://github.com/alphal00p/gammaboard.git
 cd gammaboard/ops/ubelix
 cp local.example.toml local.toml
-chmod 600 local.toml
+chmod 600 local.toml # Restrict access because this file can contain admin_password; optional without secrets.
 # Edit workspace_root and any cluster resource overrides in local.toml.
 python3 ubelix.py build gammaboard
 ```
