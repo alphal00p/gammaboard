@@ -149,13 +149,6 @@ export const pdfComparison = (state, scope = 'overall', mode = 'shape') => {
           maskedIntegral(data.pdf_values, (label) => label === k),
           mixtureTotal
         );
-  const boundaries = axes.y
-    ? []
-    : actual.flatMap((label, i) =>
-        i > 0 && label != null && actual[i - 1] != null && label !== actual[i - 1]
-          ? [(axes.x[i - 1] + axes.x[i]) / 2]
-          : []
-      );
   const stepPoints = stepValues
     ? divide(stepValues, pdfDivisor).flatMap((v, i) => [
         [steps.edges[i], v],
@@ -188,7 +181,6 @@ export const pdfComparison = (state, scope = 'overall', mode = 'shape') => {
     counts,
     relative,
     logRatio,
-    boundaries,
     stepPoints
   };
 };

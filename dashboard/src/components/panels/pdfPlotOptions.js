@@ -6,33 +6,28 @@ import { COVERAGE } from './pdfDiagnostics';
 import { navigationZoom } from './DiagnosticControls';
 export const DENSITY_COLORS = ['#f4f8fb', '#b8d9e9', '#5cabc9', '#146b99', '#062c54'];
 const MISMATCH_COLORS = ['#0072b2', '#a9d1df', '#f5f5f5', '#e6b49c', '#b34016'];
+export const stratumDensityColor = (stratum, value, limits) => {
+  const color = Number.isInteger(stratum) && stratum >= 0 ? stratumColor(stratum) : '#525b68';
+  const fraction = limits.max > limits.min
+    ? (value - limits.min) / (limits.max - limits.min)
+    : Number(value > 0);
+  const strength = Math.max(0, Math.min(1, fraction));
+  // Mixing with white preserves hue while increasing saturation with density.
+  const channels = [1, 3, 5].map((offset) => {
+    const channel = Number.parseInt(color.slice(offset, offset + 2), 16);
+    return Math.round(255 + (channel - 255) * strength);
+  });
+  return `rgb(${channels.join(',')})`;
+};
 export const lineComparisonOption = (
   c,
-  { view, metric, mode, log, boundaries, prefixes, value }
+  { view, metric, mode, log, prefixes, value }
 ) => {
   const density = view === 'density',
     categorical = view === 'coverage' || view === 'membership';
   const targetLog = density && log;
   const data = (values) =>
     values.map((v, i) => [c.axes.x[i], finite(v) && (!targetLog || v > 0) ? v : null]);
-  const boundaryLines =
-    boundaries && c.boundaries.length <= 64
-      ? {
-          symbol: 'none',
-          silent: true,
-          label: {
-            show: false
-          },
-          lineStyle: {
-            color: '#8a8f98',
-            width: 1,
-            type: 'dotted'
-          },
-          data: c.boundaries.map((x) => ({
-            xAxis: x
-          }))
-        }
-      : undefined;
   let series = [];
   if (density) {
     const color = c.k == null ? '#525b68' : stratumColor(c.k);
@@ -79,8 +74,7 @@ export const lineComparisonOption = (
       },
       lineStyle: {
         width: 2
-      },
-      markLine: boundaryLines
+      }
     });
   } else if (categorical) {
     const membership = view === 'membership';
@@ -136,11 +130,9 @@ export const lineComparisonOption = (
           color: c.k == null ? '#0072b2' : stratumColor(c.k)
         },
         markLine: {
-          ...boundaryLines,
           symbol: 'none',
           silent: true,
           data: [
-            ...(boundaryLines?.data || []),
             {
               yAxis: 0,
               label: {
@@ -223,6 +215,24 @@ export const lineComparisonOption = (
     series
   };
 };
+// Native heatmaps in ECharts 6.1 mark cells as incremental even with progressive=0.
+// Render ordinary rectangles so one update paints a complete frame.
+const renderRasterCell = (params, api) => {
+  const [x, y] = api.coord([api.value(0), api.value(1)]);
+  const [width, height] = api.size([1, 1]);
+  const grid = params.coordSys;
+  const left = Math.max(grid.x, Math.round(x - Math.abs(width) / 2));
+  const top = Math.max(grid.y, Math.round(y - Math.abs(height) / 2));
+  const right = Math.min(grid.x + grid.width, Math.round(x + Math.abs(width) / 2));
+  const bottom = Math.min(grid.y + grid.height, Math.round(y + Math.abs(height) / 2));
+  if (right <= left || bottom <= top) return null;
+  return {
+    type: 'rect',
+    emphasisDisabled: true,
+    shape: { x: left, y: top, width: right - left, height: bottom - top },
+    style: { fill: api.visual('color'), opacity: api.visual('opacity') }
+  };
+};
 export const planeComparisonOption = (
   c,
   values,
@@ -232,8 +242,8 @@ export const planeComparisonOption = (
     log = false,
     categories = null,
     value,
-    boundaries = false,
     mismatch = false,
+    stratumColours = false,
     prefixes = []
   }
 ) => {
@@ -246,24 +256,13 @@ export const planeComparisonOption = (
             i % axes.x.length,
             Math.floor(i / axes.x.length),
             !categorical && log ? Math.log10(v) : v,
-            v
+            v,
+            c.actual[i] ?? null
           ]
         ]
       : []
   );
   const colors = mismatch ? MISMATCH_COLORS : DENSITY_COLORS;
-  const border = [];
-  if (boundaries && c.actual.length)
-    c.actual.forEach((v, i) => {
-      if (
-        v != null &&
-        ((i % axes.x.length > 0 && c.actual[i - 1] != null && c.actual[i - 1] !== v) ||
-          (i >= axes.x.length &&
-            c.actual[i - axes.x.length] != null &&
-            c.actual[i - axes.x.length] !== v))
-      )
-        border.push([i % axes.x.length, Math.floor(i / axes.x.length)]);
-    });
   return {
     animation: false,
     grid: {
@@ -305,6 +304,8 @@ export const planeComparisonOption = (
           type: 'piecewise',
           show: categories.length <= 8,
           seriesIndex: 0,
+          dimension: 2,
+          hoverLink: false,
           orient: 'horizontal',
           left: 'center',
           bottom: 34,
@@ -316,14 +317,15 @@ export const planeComparisonOption = (
         }
       : {
           seriesIndex: 0,
+          // The last data dimension is metadata, not the colour-scale value.
+          dimension: 2,
+          hoverLink: false,
           min: limits.min,
           max: limits.max,
           orient: 'horizontal',
           left: 'center',
           bottom: 34,
-          inRange: {
-            color: colors
-          },
+          inRange: { color: stratumColours ? ['#ffffff', '#525b68'] : colors },
           text: [
             formatScientific(log ? 10 ** limits.max : limits.max, 3),
             formatScientific(log ? 10 ** limits.min : limits.min, 3)
@@ -333,27 +335,18 @@ export const planeComparisonOption = (
     series: [
       {
         name: label,
-        type: 'heatmap',
-        data: points,
+        type: 'custom',
+        renderItem: renderRasterCell,
+        encode: { x: 0, y: 1 },
+        data: stratumColours ? points.map((point) => ({
+          value: point,
+          // Keep the continuous legend, but apply the two-variable colour ourselves.
+          visualMap: false,
+          itemStyle: { color: stratumDensityColor(point[4], point[2], limits) }
+        })) : points,
+        emphasis: { disabled: true },
         progressive: 0
-      },
-      ...(border.length
-        ? [
-            {
-              name: 'Stratum boundary',
-              type: 'scatter',
-              data: border,
-              symbolSize: 2,
-              itemStyle: {
-                color: '#525b68'
-              },
-              silent: true,
-              tooltip: {
-                show: false
-              }
-            }
-          ]
-        : [])
+      }
     ]
   };
 };

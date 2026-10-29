@@ -483,3 +483,43 @@ test('large prefix lists can be searched without rendering all stratum plots',()
   expect(screen.getAllByTestId('histogram-chart')).toHaveLength(1);
   expect(screen.getByText(/^Stratum \(29\) · p/)).toBeInTheDocument();
 });
+
+test('stratum hue is optional for 2D densities and survives view changes', () => {
+  const state = {
+    kind: 'pdf_comparison', panel_id: 'pdf_comparison',
+    geometry: {kind: 'plane', geometry: {
+      u_linspace: {start: 0, stop: 1, count: 2}, v_linspace: {start: 0, stop: 1, count: 2},
+    }},
+    data: {integrand_values: [1, -1, -1, 1], pdf_values: [1, 1, 1, 1], strata: {
+      prefixes: [[0], [1]], probabilities: [0.5, 0.5], actual_strata: [1, 0, 0, 1],
+      pdf_values: [[0.5, 0.5, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]],
+    }},
+  };
+  render(<StratumHarness state={state} />);
+  expect(screen.getByRole('combobox', {name: /^Colour encoding/})).toHaveTextContent('Density only');
+  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^Colour encoding/}));
+  fireEvent.click(screen.getByRole('option', {name: 'Stratum hue + density', exact: true}));
+  expect(screen.getByText(/Hue shows the actual integrand stratum/)).toBeInTheDocument();
+  const plots = renderChart.mock.calls.slice(-2).map(([props]) => props.option);
+  expect(plots.every(plot => plot.series[0].data[0].value[4] === 1)).toBe(true);
+  expect(plots.every(plot => plot.series[0].data[0].itemStyle.color.startsWith('rgb('))).toBe(true);
+  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^View/}));
+  fireEvent.click(screen.getByRole('option', {name: 'Coverage', exact: true}));
+  expect(screen.queryByRole('combobox', {name: /^Colour encoding/})).not.toBeInTheDocument();
+  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^View/}));
+  fireEvent.click(screen.getByRole('option', {name: 'Density comparison', exact: true}));
+  expect(screen.getByRole('combobox', {name: /^Colour encoding/})).toHaveTextContent('Stratum hue + density');
+});
+
+test('unchanged PDF data is not redrawn when its parent refreshes', () => {
+  const state = {kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'plane',geometry:{u_linspace:{start:0,stop:1,count:2},v_linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[1,2,3,4],pdf_values:[1,2,3,4],strata:null}};
+  const props = {
+    panelSpecs: [{panel_id:'pdf_comparison',kind:'pdf_comparison',label:'PDF',width:'full'}],
+    panelStates: [state], panelValues: {}, onPanelValueChange: vi.fn(),
+  };
+  const { rerender } = render(<PanelCollection {...props} title="First poll" />);
+  const draws = renderChart.mock.calls.length;
+  rerender(<PanelCollection {...props} title="Second poll" />);
+  expect(renderChart.mock.calls.length).toBe(draws);
+  expect(screen.queryByRole('checkbox', {name:'Show stratum boundaries'})).not.toBeInTheDocument();
+});

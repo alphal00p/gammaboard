@@ -7,8 +7,12 @@ import {
   sliceIntegral
 } from './pdfDiagnostics';
 import { scopeIndices } from './DiagnosticControls';
-import { planeComparisonOption } from './pdfPlotOptions';
+import { DENSITY_COLORS, planeComparisonOption, stratumDensityColor } from './pdfPlotOptions';
+import { stratumColor } from './strataUtils';
+import { echarts } from '../../lib/echarts';
 import { figureCsv } from './FigureExportActions';
+// SVG rendering needs text metrics, but jsdom does not provide a canvas context.
+echarts.setPlatformAPI({ measureText: (text) => ({ width: String(text).length * 7 }) });
 const ordinary = {
   geometry: {
     kind: 'line',
@@ -98,6 +102,48 @@ test('logarithmic heatmaps use exactly the same full limits for comparable data'
     label: 'PDF'
   });
   expect([a.visualMap.min, a.visualMap.max]).toEqual([b.visualMap.min, b.visualMap.max]);
+});
+test('rendered logarithmic heatmaps colour by the transformed value and keep raw tooltip data', () => {
+  const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 640, height: 480 });
+  try {
+    const option = planeComparisonOption({ axes: { x: [0, 1], y: [0, 1] }, actual: [1, 0, 1, 0] },
+      [0.001, 0.1, 10, 100], { label: 'PDF', limits: { min: -3, max: 2 }, log: true });
+    chart.setOption(option);
+    const data = chart.getModel().getSeriesByIndex(0).getData();
+    expect(data.getItemGraphicEl(0).incremental).toBeFalsy();
+    const first = data.getItemGraphicEl(0).shape;
+    const adjacent = data.getItemGraphicEl(1).shape;
+    expect(first.x + first.width).toBe(adjacent.x);
+    const fill = (i) => echarts.color.parse(data.getItemVisual(i, 'style').fill);
+    expect(fill(0)).toEqual(echarts.color.parse(DENSITY_COLORS[0]));
+    expect(fill(3)).toEqual(echarts.color.parse(DENSITY_COLORS.at(-1)));
+    expect(fill(1)).not.toEqual(fill(2));
+    expect(option.tooltip.formatter({ value: data.getRawDataItem(0) })).toContain('1.000000e-3');
+  } finally { chart.dispose(); }
+});
+test('stratum hue encodes actual membership while density controls saturation on both scales', () => {
+  const chart = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 640, height: 480 });
+  try {
+    const c = { axes: { x: [0, 1], y: [0, 1] }, actual: [0, 1, 0, null], k: 0 };
+    const linear = planeComparisonOption(c, [100, 100, 1, 50], {
+      label: 'PDF', limits: { min: 0, max: 100 }, stratumColours: true, prefixes: [[0], [1]]
+    });
+    chart.setOption(linear);
+    const data = chart.getModel().getSeriesByIndex(0).getData();
+    const fill = (i) => echarts.color.parse(data.getItemVisual(i, 'style').fill);
+    expect(fill(0)).toEqual(echarts.color.parse(stratumColor(0)));
+    expect(fill(1)).toEqual(echarts.color.parse(stratumColor(1))); // Leakage retains the actual hue.
+    expect(fill(2)[0]).toBeGreaterThan(fill(0)[0]); // Low density fades toward white.
+    expect(fill(3)).toEqual(echarts.color.parse(stratumDensityColor(null, 50, { min: 0, max: 100 })));
+    const logarithmic = planeComparisonOption(c, [100, 100, 1, 50], {
+      label: 'PDF', limits: { min: -2, max: 2 }, log: true, stratumColours: true
+    });
+    chart.setOption(logarithmic, true);
+    const logData = chart.getModel().getSeriesByIndex(0).getData();
+    expect(echarts.color.parse(logData.getItemVisual(2, 'style').fill)).toEqual(
+      echarts.color.parse(stratumDensityColor(0, 0, { min: -2, max: 2 }))
+    );
+  } finally { chart.dispose(); }
 });
 test('histograms use shared bin edges and deterministic frequencies without MC errors', () => {
   const [a, b] = diagnosticHistograms(

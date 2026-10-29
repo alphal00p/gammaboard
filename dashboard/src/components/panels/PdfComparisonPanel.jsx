@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { memo, useRef } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -8,8 +8,6 @@ import {
   Button,
   Card,
   CardContent,
-  Checkbox,
-  FormControlLabel,
   MenuItem,
   Stack,
   Table,
@@ -25,7 +23,7 @@ import FigureExportActions from './FigureExportActions';
 import HistogramPanel from './HistogramPanel';
 import HeatmapColorLimitControl from './HeatmapColorLimitControl';
 import { formatScientific } from '../../utils/formatters';
-import { finite, prefixLabel, stratumColor } from './strataUtils';
+import { finite, prefixLabel, stratumColor, STRATUM_COLORS } from './strataUtils';
 import { COVERAGE, diagnosticHistograms, pdfComparison, sharedColorLimits } from './pdfDiagnostics';
 import { lineComparisonOption, planeComparisonOption } from './pdfPlotOptions';
 import {
@@ -74,7 +72,7 @@ const Figure = ({ name, option, payload, onEvents }) => {
     </Box>
   );
 };
-export default function PdfComparisonPanel({ title, state, value = {}, onValueChange }) {
+const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, value = {}, onValueChange }) {
   const prefixes = state.data.strata?.prefixes || [];
   const scope = prefixes.length ? (value?.scope ?? 'overall') : 'overall';
   const indices = scopeIndices(scope, prefixes.length, value?.page);
@@ -101,7 +99,7 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
       : requested;
   const metric = value?.metric === 'relative' ? 'relative' : 'log_ratio';
   const log = view === 'density' && Boolean(value?.log);
-  const boundaries = value?.boundaries !== false;
+  const stratumColours = !line && view === 'density' && prefixes.length > 0 && value?.colourEncoding === 'strata';
   const update = (patch) =>
     onValueChange?.(
       state.panel_id,
@@ -172,6 +170,8 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
   };
   const exportFor = (c) => ({
     normalization: mode,
+    colour_encoding: stratumColours ? 'stratum_hue_density' : 'density',
+    density_scale: log ? 'logarithmic' : 'linear',
     scope: c.scope,
     prefix: c.k == null ? null : prefixes[c.k],
     geometry: state.geometry,
@@ -300,6 +300,19 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
                 <MenuItem value="log_ratio">Log ratio</MenuItem>
               </TextField>
             )}
+            {!line && view === 'density' && prefixes.length > 0 && (
+              <TextField
+                select
+                label="Colour encoding"
+                size="small"
+                sx={{ minWidth: 225 }}
+                value={stratumColours ? 'strata' : 'density'}
+                onChange={(e) => update({ colourEncoding: e.target.value })}
+              >
+                <MenuItem value="density">Density only</MenuItem>
+                <MenuItem value="strata">Stratum hue + density</MenuItem>
+              </TextField>
+            )}
             <Button
               onClick={() =>
                 update({
@@ -312,6 +325,28 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
               Reset view
             </Button>
           </Stack>
+          {stratumColours && (
+            <Stack spacing={1}>
+              <Typography variant="caption">
+                Hue shows the actual integrand stratum in both plots. Saturation increases with
+                density on the selected scale; white is the low end. Sampler density in another
+                stratum's colour shows leakage. Unknown membership is grey.
+              </Typography>
+              <Stack direction="row" gap={2} flexWrap="wrap">
+                {prefixes.slice(0, STRATUM_COLORS.length).map((prefix, k) => (
+                  <Stack key={prefix.join(',')} direction="row" gap={0.5} alignItems="center">
+                    <Box sx={{ width: 12, height: 12, bgcolor: stratumColor(k) }} />
+                    <Typography variant="caption">{prefixLabel(prefix)}</Typography>
+                  </Stack>
+                ))}
+              </Stack>
+              {prefixes.length > STRATUM_COLORS.length && (
+                <Typography variant="caption">
+                  Colours repeat after {STRATUM_COLORS.length} strata. Hover for the exact prefix or use Scope.
+                </Typography>
+              )}
+            </Stack>
+          )}
           <Typography variant="body2">
             Target: {projection}.{' '}
             {['coverage', 'membership'].includes(view)
@@ -340,21 +375,6 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
               Near-zero targets can produce very large relative mismatches. Use log ratio or the
               vertical zoom to inspect smaller differences.
             </Typography>
-          )}
-          {prefixes.length > 0 && ['density', 'mismatch'].includes(view) && (
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={boundaries}
-                  onChange={(e) =>
-                    update({
-                      boundaries: e.target.checked
-                    })
-                  }
-                />
-              }
-              label="Show stratum boundaries"
-            />
           )}
           {!line && ['density', 'mismatch'].includes(view) && (
             <Accordion disableGutters>
@@ -552,7 +572,6 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
                         metric,
                         mode,
                         log,
-                        boundaries,
                         prefixes,
                         value
                       })}
@@ -581,8 +600,8 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
                           label: metric === 'relative' ? 'PDF / target − 1' : 'log₁₀(PDF / target)',
                           limits,
                           value,
-                          boundaries,
-                          mismatch: true
+                          mismatch: true,
+                          prefixes
                         }
                       )}
                       payload={payload}
@@ -606,7 +625,8 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
                           limits: targetLimits,
                           log,
                           value,
-                          boundaries
+                          prefixes,
+                          stratumColours
                         })}
                         payload={payload}
                         onEvents={events}
@@ -618,7 +638,8 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
                           limits,
                           log,
                           value,
-                          boundaries
+                          prefixes,
+                          stratumColours
                         })}
                         payload={payload}
                         onEvents={events}
@@ -730,4 +751,6 @@ export default function PdfComparisonPanel({ title, state, value = {}, onValueCh
       </CardContent>
     </Card>
   );
-}
+});
+
+export default PdfComparisonPanel;

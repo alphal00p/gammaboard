@@ -54,3 +54,30 @@ retained under `/common/dev/cedric/setup-logs/tetrahedron-demo-20261029/` on ITP
 The [ordinary](../../resources/templates/runs/checkerboard-sine-ordinary.toml) and
 [stratified](../../resources/templates/runs/checkerboard-sine-stratified.toml)
 checkerboard cards are also checked in for reuse.
+
+## 2D colour and repaint follow-up
+
+The logarithmic heatmaps were incorrectly mapping the raw tooltip value onto the
+logarithmic colour scale. The mapping now explicitly uses the transformed density
+dimension, keeping raw values for tooltips. Hover no longer recolours quantitative
+cells.
+
+`Colour encoding → Stratum hue + density` optionally shows actual integrand
+membership through hue and the displayed density through saturation. It works in
+both overall and per-stratum comparisons, on linear and logarithmic scales, with
+manual colour limits and SVG/JSON export. Zero/low density fades toward white;
+unknown membership is grey. The boundary controls and overlays were removed.
+
+A separate bottom-to-top repaint loop was reproduced in the completed demo:
+parent refreshes repeatedly reset chart options, and native ECharts 6.1 heatmap
+cells remained incremental despite `progressive: 0`. PDF panels now avoid rerenders
+when their inputs are unchanged, and use nonincremental custom raster rectangles.
+The same 14-second idle browser probe changed from repeated `setOption` calls to
+zero redraw events; cell incremental flags changed from 2 to 0. The raster draws
+complete frames and snaps shared cell edges to avoid seams.
+
+All 174 frontend tests passed, including actual ECharts colour mapping, raster
+rendering, unchanged-parent refreshes and hue-control interactions. Browser checks
+cover density scales, actual-stratum colours, view switching, manual limits,
+hover stability, exports, reload persistence and narrow layouts. Evidence is under
+`/common/dev/cedric/setup-logs/pdf-colours-20261029/`.

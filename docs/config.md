@@ -315,7 +315,19 @@ changes. **Reset view** restores the full extent. The expandable colour controls
 share both bounds across comparable heatmaps, including logarithmic scales;
 raw target and PDF quantities have separately labelled bounds. Native Havana
 line densities are drawn at exact bin edges. Other sampler curves interpolate
-queried points. Stratum boundaries are inferred from the classification grid.
+queried points.
+
+For stratified 2D density comparisons, **Colour encoding → Stratum hue + density**
+optionally uses the established stratum hues and increases saturation with the
+displayed density. Both target and sampler use the **actual integrand stratum** at
+each grid point: sampler density in another stratum's colour exposes leakage.
+The mapping follows the chosen linear/logarithmic scale and colour limits; white
+is the low end and unknown membership is grey. The compact hue key shows up to
+eight prefixes, after which colours repeat; hover identifies the exact prefix.
+**Density only** remains the default. The selection persists across view changes
+and reloads. Boundary-line overlays have been removed; use hue encoding or the
+membership view to inspect the partition.
+
 The Strata history panel also has paged/searchable scope selection, elapsed-time
 and reported sampler-time axes, follow-latest behaviour, and persistent zoom.
 Sampler time uses the last preceding performance report for the same task;
