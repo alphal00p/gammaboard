@@ -1,12 +1,15 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { forwardRef } from "react";
+import { forwardRef, useImperativeHandle } from "react";
 import { describe, expect, test, vi } from "vitest";
 import HistogramPanel from "./HistogramPanel";
 
 vi.mock("echarts-for-react", () => ({
   default: forwardRef(function MockECharts(props, ref) {
+    useImperativeHandle(ref, () => ({
+      getEchartsInstance: () => ({ isDisposed: () => false, clear: () => {} }),
+    }), []);
     return (
-      <div ref={ref} data-testid="echarts-mock">
+      <div data-testid="echarts-mock">
         {(props.option?.series ?? []).map((series) => series.name).join("|")}
       </div>
     );

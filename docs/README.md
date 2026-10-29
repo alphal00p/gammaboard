@@ -35,3 +35,6 @@ assignment, independent scheduling quanta, shared budgets and recovery validatio
 
 [UBELIX lifecycle](validation/2026-10-29-ubelix-lifecycle.md): managed launch supervision,
 fresh database cleanup, checkout-based builds and fixed-image deployment.
+
+[Tetrahedron and checkerboard showcase](validation/2026-10-29-stratification-showcase.md):
+live ordinary/stratified comparisons, PDF diagnostics and chart cleanup validation.

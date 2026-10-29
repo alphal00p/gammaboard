@@ -1,0 +1,45 @@
+# Four-by-four checkerboard on [0,1]^2; integral is exactly zero.
+# Positive/negative contributions are +2/pi^2 and -2/pi^2.
+name = "checkerboard-sine-ordinary"
+target = { kind = "scalar", value = 0.0 }
+[evaluator]
+kind = "symbolica"
+args = ["x", "y"]
+[evaluator.source]
+kind = "expression"
+expr = "sin(4*pi*x)*sin(4*pi*y)"
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 500
+performance_snapshot_interval_ms = 1000
+[[task_queue]]
+name = "train"
+kind = "sample"
+estimator = "pooled"
+publish_result = false
+stop_condition = { max_samples = 524_288 }
+accumulator = { config = "scalar" }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = 20261029
+bins = 64
+samples_for_update = 4096
+initial_training_rate = 0.5
+final_training_rate = 0.1
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "pooled"
+stop_condition = { max_samples = 4_194_304 }
+accumulator = { config = "scalar" }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = 20261030 } }
+[[task_queue]]
+name = "pdf-diagnostics"
+kind = "pdf_adaptation_image"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0, 0.0]
+u_vector = [1.0, 0.0]
+v_vector = [0.0, 1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = 129 }
+v_linspace = { start = 0.0, stop = 1.0, count = 129 }
