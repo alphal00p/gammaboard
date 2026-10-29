@@ -1,5 +1,5 @@
 # Copy to local.toml (ignored by Git). Paths are relative to this file, or absolute.
-workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard-state"
+workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard-workspace"
 
 # Optional local GammaLoop checkout, for `build gammaloop`:
 # gammaloop_source = "../../../gammaloop"

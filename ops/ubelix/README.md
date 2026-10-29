@@ -54,7 +54,7 @@ shell's directory. The workspace must be on shared storage accessible to all job
 No workspace environment variable is needed or read by the operator commands.
 
 ```toml
-workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard-state"
+workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard-workspace"
 ssh_target = "YOUR_USER@submit03.unibe.ch" # optional; default is your user at submit03
 
 [cluster.control]
