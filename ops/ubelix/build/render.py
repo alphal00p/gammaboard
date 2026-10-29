@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
 
@@ -10,8 +11,15 @@ workspace, build, family, sha, cpus = sys.argv[1:]
 workspace, build = Path(workspace), Path(build)
 pins = json.loads((workspace / "build/images.lock.json").read_text())
 for item in pins.values():
-    if "@sha256:" not in item["image"]:
-        raise ValueError("base image must be pinned by digest")
+    repository, separator, checksum = item["image"].partition("@sha256:")
+    if (
+        not separator
+        or ":" in repository.rsplit("/", 1)[-1]
+        or not re.fullmatch(r"[0-9a-f]{64}", checksum)
+    ):
+        raise ValueError(
+            "base image must use repository@sha256:<64 hex digits>, without a tag (Apptainer requirement)"
+        )
 values = {
     "NODE_IMAGE": pins["node"]["image"],
     "RUST_IMAGE": pins["rust"]["image"],

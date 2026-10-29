@@ -28,7 +28,7 @@ remove source/temp staging; logs, records and failed build evidence remain avail
 
 ## Validation
 
-All 44 helper tests passed with Python 3.13. They exercise:
+All 46 helper tests passed with Python 3.13. They exercise:
 
 - real Git checkout snapshots, dirty-source rejection, fixed-image replacement,
   failed smoke preservation and queued builds surviving checkout removal;
@@ -44,12 +44,19 @@ All 44 helper tests passed with Python 3.13. They exercise:
 - launcher supervision, in-flight receipt preservation, bounded process shutdown,
   shared heartbeat/accounting queries and scheduler-outage handling;
 - launch-lease recovery and explicit submission repair.
+- actionable startup errors for unsupported Python versions and rejection of
+  tagged digest references before invoking Apptainer.
 
 Python static checks, shell syntax checks, CLI help, TOML parsing and whitespace
-checks passed. Slurm and Apptainer execution are simulated; no actual container
-build or live UBELIX deployment was performed. Cluster scheduling, resource policies
+checks passed. The helper suite simulates Slurm and Apptainer execution. An additional
+check used real Apptainer 1.4.5 against a loopback mock registry: it reproduced the
+reported tag-plus-digest rejection, then verified that all three corrected
+digest-only references requested their exact pinned manifests. No image was
+downloaded or built, and no live UBELIX deployment was changed. Cluster resource policies
 and scientific runtimes still require the
 [deployment acceptance check](../../ops/ubelix/README.md#deployment-acceptance-check).
 
 Evidence is retained on the execution host under
 `/common/dev/cedric/setup-logs/ubelix-checkout-20261029/`.
+The image-reference regression and parser check are recorded under
+`/common/dev/cedric/setup-logs/ubelix-image-refs-20261029/`.

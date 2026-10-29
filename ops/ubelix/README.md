@@ -177,7 +177,9 @@ The definition is captured before submission; external `%files` inputs remain
 caller-managed. Existing custom runtime files are never replaced implicitly;
 remove the old file while stopped to rebuild it.
 
-Service base images are pinned by digest; Rust builds use `--locked` and generic
+Service base images use `repository@sha256:digest` references in
+`build/images.lock.json`; Apptainer rejects references with both a tag and a digest.
+Rust builds use `--locked` and generic
 x86-64 flags. Before publication, GammaBoard starts PostgreSQL, API, frontend and
 two workers and completes a 32-sample run; GammaLoop checks CLI startup. Apt
 repositories can change, so these are not byte-for-byte reproducible builds.

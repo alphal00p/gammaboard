@@ -119,6 +119,32 @@ def execute(workspace, record, env, scheduler, **extra):
     return result, json.loads(path.read_text())
 
 
+def test_renderer_rejects_tag_and_digest_before_apptainer(checkout, tmp_path):
+    _, _, env = checkout
+    lock = settings.OPS_ROOT / "build/images.lock.json"
+    pins = json.loads(lock.read_text())
+    pins["node"]["image"] = pins["node"]["image"].replace("@", ":20-bookworm-slim@")
+    lock.write_text(json.dumps(pins))
+    rendered = tmp_path / "rendered"
+    rendered.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(settings.OPS_ROOT / "build/render.py"),
+            str(settings.OPS_ROOT),
+            str(rendered),
+            "gammaboard",
+            "a" * 40,
+            "4",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0 and "without a tag" in result.stderr
+    assert not (rendered / "service.def").exists()
+
+
 def test_build_replaces_fixed_image_and_failed_smoke_preserves_it(checkout):
     repo, workspace, env = checkout
     scheduler = FakeSlurm()
