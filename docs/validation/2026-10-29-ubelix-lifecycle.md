@@ -28,7 +28,7 @@ remove source/temp staging; logs, records and failed build evidence remain avail
 
 ## Validation
 
-All 46 helper tests passed with Python 3.13. They exercise:
+All 47 helper tests passed with Python 3.13. They exercise:
 
 - real Git checkout snapshots, dirty-source rejection, fixed-image replacement,
   failed smoke preservation and queued builds surviving checkout removal;
@@ -46,13 +46,18 @@ All 46 helper tests passed with Python 3.13. They exercise:
 - launch-lease recovery and explicit submission repair.
 - actionable startup errors for unsupported Python versions and rejection of
   tagged digest references before invoking Apptainer.
+- execution of each `%post` stage's `%setup` hook against an isolated root
+  (including paths with spaces), checking that `/cache` exists before container startup.
 
 Python static checks, shell syntax checks, CLI help, TOML parsing and whitespace
 checks passed. The helper suite simulates Slurm and Apptainer execution. An additional
 check used real Apptainer 1.4.5 against a loopback mock registry: it reproduced the
 reported tag-plus-digest rejection, then verified that all three corrected
 digest-only references requested their exact pinned manifests. No image was
-downloaded or built, and no live UBELIX deployment was changed. Cluster resource policies
+downloaded or built. A minimal real writable build was also attempted to validate
+the cache bind fix, but this host lacks usable user namespaces and Apptainer
+stopped before entering the build. The setup hooks were tested directly instead.
+No live UBELIX deployment was changed. Cluster resource policies
 and scientific runtimes still require the
 [deployment acceptance check](../../ops/ubelix/README.md#deployment-acceptance-check).
 
@@ -60,3 +65,5 @@ Evidence is retained on the execution host under
 `/common/dev/cedric/setup-logs/ubelix-checkout-20261029/`.
 The image-reference regression and parser check are recorded under
 `/common/dev/cedric/setup-logs/ubelix-image-refs-20261029/`.
+Cache-bind checks are recorded under
+`/common/dev/cedric/setup-logs/ubelix-cache-bind-20261029/`.

@@ -6,6 +6,10 @@ Bootstrap: docker
 From: @RUST_IMAGE@
 Stage: builder
 
+%setup
+    # Writable fakeroot builds need bind destinations before entering %post.
+    mkdir -p "${APPTAINER_ROOTFS:?}/cache"
+
 %files from node
     /usr/local/bin/node /usr/local/bin/node
     /usr/local/lib/node_modules /usr/local/lib/node_modules
@@ -46,6 +50,10 @@ Stage: builder
 Bootstrap: docker
 From: @DEBIAN_IMAGE@
 Stage: runtime
+
+%setup
+    # The build-wide cache bind also applies to the final stage.
+    mkdir -p "${APPTAINER_ROOTFS:?}/cache"
 
 %files from builder
     /out /usr/local/share/build

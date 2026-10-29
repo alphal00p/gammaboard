@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -117,6 +118,25 @@ def execute(workspace, record, env, scheduler, **extra):
         old.id, old.name, "COMPLETED" if result.returncode == 0 else "FAILED", "", old.comment
     )
     return result, json.loads(path.read_text())
+
+
+def test_all_post_stages_create_cache_bind_destination_before_container_start(tmp_path):
+    definition = (ROOT / "build/service.def").read_text()
+    post_stages = 0
+    for index, stage in enumerate(re.split(r"(?m)^Bootstrap:", definition)[1:]):
+        if not re.search(r"(?m)^%post\b", stage):
+            continue
+        post_stages += 1
+        rootfs = tmp_path / f"stage {index} rootfs"
+        rootfs.mkdir()
+        setup = re.search(r"^%setup\n(.*?)(?=^%|\Z)", stage, re.M | re.S)
+        if setup:
+            command(
+                ["sh", "-eu", "-c", setup[1]], env=dict(os.environ, APPTAINER_ROOTFS=str(rootfs))
+            )
+        # Apptainer enters writable %post only after installing the build-wide bind.
+        assert (rootfs / "cache").is_dir(), "cache bind target missing before %post"
+    assert post_stages > 0
 
 
 def test_renderer_rejects_tag_and_digest_before_apptainer(checkout, tmp_path):

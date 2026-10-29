@@ -184,6 +184,11 @@ x86-64 flags. Before publication, GammaBoard starts PostgreSQL, API, frontend an
 two workers and completes a 32-sample run; GammaLoop checks CLI startup. Apt
 repositories can change, so these are not byte-for-byte reproducible builds.
 
+The shared dependency cache is bound at `/cache` during builds. Both stages that
+run `%post` create this directory in `%setup`: writable fakeroot builds require
+bind destinations to exist before the container starts. Creating it inside `%post`
+would be too late. See [Apptainer's bind requirements](https://apptainer.org/docs/user/latest/bind_paths_and_mounts.html#using-bind-or-mount-with-the-writable-flag).
+
 ## Workers and recovery
 
 Use dashboard node cards or `submit-workers`. Group settings override the worker
