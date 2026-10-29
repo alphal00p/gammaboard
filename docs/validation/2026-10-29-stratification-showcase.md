@@ -81,3 +81,34 @@ rendering, unchanged-parent refreshes and hue-control interactions. Browser chec
 cover density scales, actual-stratum colours, view switching, manual limits,
 hover stability, exports, reload persistence and narrow layouts. Evidence is under
 `/common/dev/cedric/setup-logs/pdf-colours-20261029/`.
+
+## Rotated checkerboard
+
+Two additional runs rotate the checkerboard by 45 degrees about `(0.5,0.5)` while
+retaining the unit-square integration domain. Their integrand is
+
+```text
+f(x,y) = [cos(4*pi*sqrt(2)*(y-0.5)) - cos(4*pi*sqrt(2)*(x-0.5))] / 2
+```
+
+This is antisymmetric under exchanging x and y, so its exact integral is still
+zero. It rotates the pattern inside the square; it does not preserve the original
+positive/negative integral magnitudes. Training settings, seeds and sample budgets
+match the unrotated pair. The original runs are retained for comparison.
+
+| Run | Estimate | Reported standard error | Stratum hit rates |
+| --- | ---: | ---: | --- |
+| checkerboard-sine-rotated-ordinary | -0.000076197 | 0.000228332 | — |
+| checkerboard-sine-rotated-stratified | -0.000006283 | 0.000083691 | 90.5128%, 90.4982% |
+
+The rotated stratified run reports 2.73 times smaller uncertainty than its ordinary
+counterpart at equal inference cost. The rotation makes the sign-conditioned
+coordinate marginals informative, allowing the factorized Havana grids to separate
+the signs much more effectively than the axis-aligned pattern's approximately 50%
+hit rates. This is one matched-seed demonstration, not a general speedup guarantee.
+
+Both runs completed their 129×129 PDF tasks. Browser checks verified the strata,
+hue/density comparison, membership maps and exports without page-script errors.
+The reusable [ordinary](../../resources/templates/runs/checkerboard-sine-rotated-ordinary.toml)
+and [stratified](../../resources/templates/runs/checkerboard-sine-rotated-stratified.toml)
+cards are available in the dashboard's templates too.

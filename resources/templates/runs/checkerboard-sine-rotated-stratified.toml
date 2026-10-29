@@ -1,0 +1,51 @@
+# Checkerboard rotated 45 degrees about (0.5, 0.5), sampled on [0,1]^2.
+# f(x,y)=-f(y,x), so the integral remains exactly zero.
+# This rotates the pattern within the square; the old contribution magnitudes do not apply.
+name = "checkerboard-sine-rotated-stratified"
+target = { kind = "scalar", value = 0.0 }
+[evaluator]
+kind = "symbolica"
+args = ["x", "y"]
+[evaluator.source]
+kind = "expression"
+expr = "0.5*(cos(4*pi*2^(1/2)*(y-0.5))-cos(4*pi*2^(1/2)*(x-0.5)))"
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 500
+performance_snapshot_interval_ms = 1000
+[[task_queue]]
+name = "train"
+kind = "sample"
+estimator = "pooled"
+publish_result = false
+stop_condition = { max_samples = 524_288 }
+accumulator = { config = "scalar" }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = 20261029
+bins = 64
+samples_for_update = 4096
+initial_training_rate = 0.5
+final_training_rate = 0.1
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 } }
+centers = { "0" = [-1.0], "1" = [1.0] }
+scales = [1.0]
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+stop_condition = { max_samples = 4_194_304 }
+accumulator = { config = "scalar" }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = 20261030 } }
+[[task_queue]]
+name = "pdf-diagnostics"
+kind = "pdf_adaptation_image"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0, 0.0]
+u_vector = [1.0, 0.0]
+v_vector = [0.0, 1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = 129 }
+v_linspace = { start = 0.0, stop = 1.0, count = 129 }
