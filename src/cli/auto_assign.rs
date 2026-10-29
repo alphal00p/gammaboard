@@ -32,12 +32,12 @@ pub async fn run_auto_assign_command(
             print_json(&assigned);
         } else {
             println!(
-                "auto-assign completed: run_id={} run_name={} sampler_already_assigned={} resumed_nodes={} assigned_sampler={} assigned_evaluators={} requested_evaluator_limit={}",
+                "auto-assign completed: run_id={} run_name={} sampler_already_assigned={} resumed_nodes={} assigned_samplers={} assigned_evaluators={} requested_evaluator_limit={}",
                 assigned.run_id,
                 assigned.run_name,
                 assigned.sampler_already_assigned,
                 assigned.resumed_nodes,
-                assigned.assigned_sampler.as_deref().unwrap_or("none"),
+                assigned.assigned_samplers.join(","),
                 assigned.assigned_evaluators.len(),
                 args.max_evaluators
                     .map(|value| value.to_string())

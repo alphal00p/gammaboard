@@ -1,7 +1,7 @@
 use crate::api::ApiError;
 use crate::core::{
     CapabilityRequirements, ControlPlaneStore, NodeCapabilities, NodeLaunchRequest, RegisteredNode,
-    RunReadStore, RunSpecStore, WorkerRole,
+    RunReadStore, RunSpecStore, RunTaskSpec, RunTaskState, RunTaskStore, WorkerRole,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -22,7 +22,7 @@ pub struct AutoAssignResult {
     pub run_name: String,
     pub sampler_already_assigned: bool,
     pub resumed_nodes: u64,
-    pub assigned_sampler: Option<String>,
+    pub assigned_samplers: Vec<String>,
     pub assigned_evaluators: Vec<String>,
 }
 
@@ -334,7 +334,7 @@ async fn wait_for_graceful_node_shutdown(
 
 /// Auto-assigns currently free nodes to sampler/evaluator roles for a run.
 pub async fn auto_assign_run(
-    store: &(impl ControlPlaneStore + RunReadStore + RunSpecStore),
+    store: &(impl ControlPlaneStore + RunReadStore + RunSpecStore + RunTaskStore),
     run_id: i32,
     max_evaluators: Option<usize>,
 ) -> Result<AutoAssignResult, ApiError> {
@@ -346,51 +346,111 @@ pub async fn auto_assign_run(
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} spec not found")))?;
     let resumed_nodes = store.resume_worker_pool(run_id).await?;
     let nodes = store.list_nodes(None).await?;
-    let sampler_already_assigned = nodes.iter().any(|node| {
-        node.pool_assignment.as_ref().is_some_and(|assignment| {
-            assignment.run_id == run_id && assignment.role == WorkerRole::SamplerAggregator
+    let existing = nodes
+        .iter()
+        .filter_map(|node| node.pool_assignment)
+        .filter(|a| a.run_id == run_id)
+        .fold((0usize, 0usize), |(s, e), a| match a.role {
+            WorkerRole::SamplerAggregator => (s + 1, e),
+            WorkerRole::Evaluator => (s, e + 1),
+        });
+    let (max_samplers, min_evaluators) = store
+        .list_run_tasks(run_id)
+        .await?
+        .into_iter()
+        .find(|task| task.state != RunTaskState::Completed)
+        .and_then(|task| match task.task {
+            RunTaskSpec::IntegrationCampaign {
+                allocation,
+                children,
+                ..
+            } => Some((
+                allocation.max_active_runs.min(children.len()),
+                allocation.min_evaluators_per_run,
+            )),
+            _ => None,
         })
-    });
-    let mut free_nodes = nodes
+        .unwrap_or((1, 0));
+    let free = nodes
         .into_iter()
         .filter(|node| node.pool_assignment.is_none() && node.desired_assignment.is_none())
         .collect::<Vec<_>>();
-
-    let evaluator_limit = max_evaluators.unwrap_or(usize::MAX);
-    let mut assigned_sampler = None;
-    let mut assigned_evaluators = Vec::new();
-
-    if !sampler_already_assigned
-        && let Some(node) = take_best_node(
-            &mut free_nodes,
-            &run_spec.integration_params.sampler_requirements,
-        )
-    {
-        store
-            .assign_worker_pool(&node.name, WorkerRole::SamplerAggregator, run_id)
-            .await?;
-        assigned_sampler = Some(node.name);
-    }
-
-    for node in take_best_nodes(
-        &mut free_nodes,
+    let (samplers, evaluators) = plan_auto_roles(
+        &free,
+        &run_spec.integration_params.sampler_requirements,
         &run_spec.integration_params.evaluator_requirements,
-        evaluator_limit,
-    ) {
-        store
-            .assign_worker_pool(&node.name, WorkerRole::Evaluator, run_id)
-            .await?;
-        assigned_evaluators.push(node.name);
+        existing,
+        (max_samplers, min_evaluators),
+        max_evaluators.unwrap_or(usize::MAX),
+    );
+    let mut assigned_samplers = Vec::new();
+    let mut assigned_evaluators = Vec::new();
+    for (selected, role, assigned) in [
+        (
+            samplers,
+            WorkerRole::SamplerAggregator,
+            &mut assigned_samplers,
+        ),
+        (evaluators, WorkerRole::Evaluator, &mut assigned_evaluators),
+    ] {
+        for node in selected {
+            store.assign_worker_pool(&node.name, role, run_id).await?;
+            assigned.push(node.name);
+        }
     }
 
     Ok(AutoAssignResult {
         run_id,
         run_name: run.run_name,
-        sampler_already_assigned,
+        sampler_already_assigned: existing.0 > 0,
         resumed_nodes,
-        assigned_sampler,
+        assigned_samplers,
         assigned_evaluators,
     })
+}
+
+/// Reserve complete sampler/evaluator bundles before consuming flexible workers.
+/// Existing operator-assigned roles are preserved; only free nodes get new roles.
+fn plan_auto_roles(
+    free: &[RegisteredNode],
+    sampler_requirements: &CapabilityRequirements,
+    evaluator_requirements: &CapabilityRequirements,
+    existing: (usize, usize),
+    policy: (usize, usize),
+    evaluator_limit: usize,
+) -> (Vec<RegisteredNode>, Vec<RegisteredNode>) {
+    let (max_samplers, minimum_evaluators) = policy;
+    for active in (0..=max_samplers.min(existing.0 + free.len())).rev() {
+        let mut available = free.to_vec();
+        let mut samplers = Vec::new();
+        for _ in 0..active.saturating_sub(existing.0) {
+            let index = available
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| capabilities_satisfy(&n.capabilities, sampler_requirements))
+                .min_by_key(|(_, n)| {
+                    (
+                        capabilities_satisfy(&n.capabilities, evaluator_requirements),
+                        capability_score(&n.capabilities, sampler_requirements),
+                        n.name.clone(),
+                    )
+                })
+                .map(|(i, _)| i);
+            let Some(index) = index else {
+                break;
+            };
+            samplers.push(available.remove(index));
+        }
+        if existing.0 + samplers.len() < active {
+            continue;
+        }
+        let evaluators = take_best_nodes(&mut available, evaluator_requirements, evaluator_limit);
+        if existing.1.saturating_add(evaluators.len()) >= active.saturating_mul(minimum_evaluators)
+        {
+            return (samplers, evaluators);
+        }
+    }
+    unreachable!("zero active runs always fit")
 }
 
 pub fn capabilities_satisfy(
@@ -525,4 +585,78 @@ pub fn node_run_cli_args(
         args.push(format!("{key}={value}"));
     }
     args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn worker(name: &str, capabilities: NodeCapabilities) -> RegisteredNode {
+        RegisteredNode {
+            name: name.into(),
+            uuid: name.into(),
+            capabilities,
+            pool_assignment: None,
+            desired_assignment: None,
+            current_assignment: None,
+            last_seen: None,
+        }
+    }
+    #[test]
+    fn campaign_auto_assignment_reserves_complete_bundles() {
+        let requirements = CapabilityRequirements::new();
+        for (count, expected) in [
+            (2, (0, 2)),
+            (3, (1, 2)),
+            (5, (1, 4)),
+            (6, (2, 4)),
+            (8, (2, 6)),
+            (12, (4, 8)),
+        ] {
+            let free = (0..count)
+                .map(|i| worker(&format!("w-{i}"), Default::default()))
+                .collect::<Vec<_>>();
+            let (s, e) = plan_auto_roles(
+                &free,
+                &requirements,
+                &requirements,
+                (0, 0),
+                (4, 2),
+                usize::MAX,
+            );
+            assert_eq!((s.len(), e.len()), expected, "{count} workers");
+        }
+        let free = (0..6)
+            .map(|i| worker(&format!("w-{i}"), Default::default()))
+            .collect::<Vec<_>>();
+        let (s, e) = plan_auto_roles(&free, &requirements, &requirements, (1, 2), (4, 2), 2);
+        assert_eq!(
+            (s.len(), e.len()),
+            (1, 2),
+            "respect existing roles and evaluator limit"
+        );
+        let (s, e) = plan_auto_roles(&free, &requirements, &requirements, (0, 0), (1, 0), 0);
+        assert_eq!(
+            (s.len(), e.len()),
+            (1, 0),
+            "ordinary run assignment remains independent of evaluator count"
+        );
+    }
+    #[test]
+    fn campaign_auto_assignment_keeps_scarce_evaluator_capabilities() {
+        let free = vec![
+            worker("a-flexible", [("gpu".into(), 1)].into()),
+            worker("z-sampler-only", Default::default()),
+        ];
+        let (s, e) = plan_auto_roles(
+            &free,
+            &Default::default(),
+            &[("gpu".into(), 1)].into(),
+            (0, 0),
+            (2, 1),
+            usize::MAX,
+        );
+        assert_eq!(s[0].name, "z-sampler-only");
+        assert_eq!(e[0].name, "a-flexible");
+        assert_eq!((s.len(), e.len()), (1, 1));
+    }
 }

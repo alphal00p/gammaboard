@@ -1176,7 +1176,7 @@ mod tests {
         task.controller_output = Some(serde_json::from_value(serde_json::json!({
             "completed_children": 2, "running_children": 0, "total_children": 2,
             "total_samples": 100, "selected_child_run_ids": [],
-            "allocation_started_total_samples": 100, "children": [],
+            "max_active_runs": 2, "sampler_workers": 2, "evaluator_workers": 4, "worker_capacity": 2, "draining": false, "children": [],
             "combined_measurement": {"status": "completed", "results": [
                 {"name": "mean","estimator":"pooled","basic":null, "component": "real", "value": 1.5, "uncertainty": 0.1, "sample_count": 100},
                 {"name": "mean","estimator":"pooled","basic":null, "component": "imag", "value": -0.5, "uncertainty": 0.2, "sample_count": 100}
@@ -1207,9 +1207,18 @@ mod tests {
         assert_eq!(
             entries
                 .iter()
+                .take(4)
                 .map(|entry| entry.label.as_str())
                 .collect::<Vec<_>>(),
             ["Real", "Imag", "Real vs Target", "Imag vs Target"]
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.key == "worker_capacity")
+                .unwrap()
+                .value,
+            2
         );
         assert_eq!(entries[2].value["target"], 1.4);
         assert_eq!(entries[3].value["target"], -0.7);

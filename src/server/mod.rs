@@ -1429,7 +1429,7 @@ async fn auto_assign_run(
         run_id = result.run_id,
         run_name = %result.run_name,
         sampler_already_assigned = result.sampler_already_assigned,
-        assigned_sampler = result.assigned_sampler.as_deref().unwrap_or("none"),
+        assigned_samplers = %result.assigned_samplers.join(","),
         assigned_evaluators = result.assigned_evaluators.len(),
         requested_evaluator_limit = payload.max_evaluators,
         "dashboard action completed"

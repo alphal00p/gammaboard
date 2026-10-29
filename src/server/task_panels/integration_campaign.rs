@@ -201,6 +201,52 @@ fn summary_projector() -> TaskPanelProjector {
                     }
                 }
             }
+            if let Some(output) = output {
+                entries.extend([
+                    key_value(
+                        "requested_concurrency",
+                        "Maximum concurrent children",
+                        json!(output.max_active_runs),
+                    ),
+                    key_value(
+                        "worker_capacity",
+                        "Capacity with assigned workers",
+                        json!(output.worker_capacity),
+                    ),
+                    key_value(
+                        "selected_children",
+                        "Scheduled children",
+                        json!(output.selected_child_run_ids.len()),
+                    ),
+                    key_value(
+                        "sampler_workers",
+                        "Sampler workers",
+                        json!(output.sampler_workers),
+                    ),
+                    key_value(
+                        "evaluator_workers",
+                        "Evaluator workers",
+                        json!(output.evaluator_workers),
+                    ),
+                    key_value(
+                        "scheduling",
+                        "Scheduling",
+                        json!(if matches!(
+                            ctx.task.state,
+                            crate::core::RunTaskState::Completed
+                                | crate::core::RunTaskState::Failed
+                        ) {
+                            "Stopped"
+                        } else if output.draining {
+                            "Finishing granted work before checking the stop target"
+                        } else if output.worker_capacity < output.max_active_runs {
+                            "Concurrency limited by assigned sampler/evaluator workers"
+                        } else {
+                            "Running"
+                        }),
+                    ),
+                ]);
+            }
             Ok(Some(key_value_panel(SUMMARY_ID, entries)))
         },
         |_ctx| Ok(None),

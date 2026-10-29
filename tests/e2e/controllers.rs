@@ -390,6 +390,7 @@ max_total_samples = 1024
 [allocation]
 algorithm = "largest_variance"
 max_active_runs = 1
+min_evaluators_per_run = 1
 allocation_window_samples = 64
 min_samples_per_child = 64
 
@@ -662,6 +663,7 @@ absolute_error = 1e-10
 max_total_samples = 10000
 
 [allocation]
+min_evaluators_per_run = 1
 min_samples_per_child = 4
 allocation_window_samples = 8
 
@@ -786,7 +788,7 @@ sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }
             };
             let settings = match kind {
                 "integration_campaign" => {
-                    "stop_condition = { max_total_samples = 12 }\nallocation = { min_samples_per_child = 1 }\n[[children]]\nname = 'a'"
+                    "stop_condition = { max_total_samples = 12 }\nallocation = { min_evaluators_per_run = 1, min_samples_per_child = 1 }\n[[children]]\nname = 'a'"
                 }
                 "parameter_scan" => "parameters = [{ name = 'scale', values = [3] }]\n[child]",
                 "hyperparameter_tuning" => {
@@ -882,7 +884,7 @@ sampler = { config = { kind = "naive_monte_carlo" } }
 max_batch_size = 100
 "#;
     let mut card = String::from(
-        "kind = 'integration_campaign'\nname = 'lifecycle-parent'\nstop_condition = { max_total_samples = 1000000000 }\nallocation = { min_samples_per_child = 50000000, allocation_window_samples = 1000000 }\n",
+        "kind = 'integration_campaign'\nname = 'lifecycle-parent'\nstop_condition = { max_total_samples = 1000000000 }\nallocation = { min_evaluators_per_run = 1, min_samples_per_child = 50000000, allocation_window_samples = 1000000 }\n",
     );
     for i in 0..11 {
         card.push_str(&format!(
@@ -1060,5 +1062,147 @@ max_batch_size = 100
         "active deletion must drain writers before removing rows"
     );
     harness.cleanup().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn campaign_parallel_quanta_keep_other_workers_and_recover_within_shared_cap()
+-> anyhow::Result<()> {
+    for capped in [true, false] {
+        let mut harness = FullStackHarness::new().await?;
+        let stop = if capped {
+            "max_total_samples = 768"
+        } else {
+            "absolute_error = 1e-12"
+        };
+        let mut card = format!(
+            r#"
+kind = "integration_campaign"
+name = "parallel-quanta"
+stop_condition = {{ {stop} }}
+allocation = {{ max_active_runs = 4, min_samples_per_child = 128, allocation_window_samples = 128 }}
+"#
+        );
+        for (name, delay, seed) in [
+            ("fast-a", 0.001, 11),
+            ("slow-b", 0.08, 22),
+            ("fast-c", 0.001, 33),
+        ] {
+            card.push_str(&format!(
+                r#"
+[[children]]
+name = "{name}"
+run = '''
+name = "{name}"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+timing = {{ per_sample_seconds = {delay} }}
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 20
+performance_snapshot_interval_ms = 20
+[sampler_aggregator_runner_params.queue]
+max_batch_size = 16
+max_generation_size = 4096
+target_batch_eval_ms = 100
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = {{ max_samples = 512 }}
+accumulator = {{ config = "scalar" }}
+sampler = {{ config = {{ kind = "naive_monte_carlo", seed = {seed} }} }}
+'''
+"#
+            ));
+        }
+        harness.add_run(&temp_config(&card));
+        let parent = harness.run_id("parallel-quanta").await?;
+        harness
+            .start_nodes(&[
+                "parallel-0",
+                "parallel-1",
+                "parallel-2",
+                "parallel-3",
+                "parallel-4",
+                "parallel-5",
+            ])
+            .await?;
+        let store = gammaboard::PgStore::new(harness.pool.clone());
+        let assigned = gammaboard::api::nodes::auto_assign_run(&store, parent, None).await?;
+        assert_eq!(
+            (
+                assigned.assigned_samplers.len(),
+                assigned.assigned_evaluators.len()
+            ),
+            (2, 4)
+        );
+        harness.wait_for("slow child has a complete worker bundle", Duration::from_secs(30), || async {
+        Ok(sqlx::query_scalar::<_, bool>("SELECT count(*)=3 FROM nodes n JOIN runs r ON r.id=n.active_run_id WHERE r.parent_run_id=$1 AND r.spawn_label='slow-b'")
+            .bind(parent).fetch_one(&harness.pool).await?)
+    }).await?;
+        let before: Vec<(String, String)> = sqlx::query_as("SELECT n.name,n.active_role FROM nodes n JOIN runs r ON r.id=n.active_run_id WHERE r.parent_run_id=$1 AND r.spawn_label='slow-b' ORDER BY n.name")
+        .bind(parent).fetch_all(&harness.pool).await?;
+        harness.wait_for("C starts while B is still inside its first quantum", Duration::from_secs(30), || async {
+        Ok(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM runs r JOIN run_tasks t ON t.run_id=r.id WHERE r.parent_run_id=$1 AND r.spawn_label='fast-c' AND t.nr_produced_samples>0) AND EXISTS(SELECT 1 FROM runs r JOIN run_tasks t ON t.run_id=r.id WHERE r.parent_run_id=$1 AND r.spawn_label='slow-b' AND t.nr_completed_samples<128)")
+            .bind(parent).fetch_one(&harness.pool).await?)
+    }).await?;
+        let after: Vec<(String,String)> = sqlx::query_as("SELECT n.name,n.active_role FROM nodes n JOIN runs r ON r.id=n.active_run_id WHERE r.parent_run_id=$1 AND r.spawn_label='slow-b' ORDER BY n.name")
+        .bind(parent).fetch_all(&harness.pool).await?;
+        assert_eq!(
+            before, after,
+            "switching A to C must leave B's sampler and evaluators in place"
+        );
+        let sampler = before
+            .iter()
+            .find(|(_, role)| role == "sampler_aggregator")
+            .unwrap()
+            .0
+            .clone();
+        harness.kill_child(&sampler).await?;
+        sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 second' WHERE name=$1")
+            .bind(&sampler)
+            .execute(&harness.pool)
+            .await?;
+        harness.start_node(&sampler).await?;
+        wait_for_task_state(&harness, parent, "completed", Duration::from_secs(90)).await?;
+        let samples: (i64,i64) = sqlx::query_as("SELECT sum(t.nr_produced_samples)::bigint,sum(t.nr_completed_samples)::bigint FROM runs r JOIN run_tasks t ON t.run_id=r.id WHERE r.parent_run_id=$1")
+        .bind(parent).fetch_one(&harness.pool).await?;
+        assert_eq!(samples.0, samples.1);
+        assert!(samples.0 >= 384 && samples.0 <= 1536);
+        if capped {
+            assert_eq!(samples.0, 768);
+        }
+        let grants: i64 = sqlx::query_scalar("SELECT sum(granted_samples)::bigint FROM campaign_sample_budgets b JOIN run_tasks t ON t.id=b.campaign_task_id WHERE t.run_id=$1")
+        .bind(parent).fetch_one(&harness.pool).await?;
+        assert_eq!(grants, samples.0);
+        let result: JsonValue =
+            sqlx::query_scalar("SELECT measurement_output FROM run_tasks WHERE run_id=$1")
+                .bind(parent)
+                .fetch_one(&harness.pool)
+                .await?;
+        assert_eq!(result["results"][0]["value"], 3.0);
+        assert_eq!(result["results"][0]["sample_count"], samples.0);
+        let saved: Vec<(JsonValue, i64)> = sqlx::query_as("SELECT c.sampler_checkpoint,t.nr_completed_samples FROM run_sampler_checkpoints c JOIN runs r ON r.id=c.run_id JOIN run_tasks t ON t.id=c.task_id WHERE r.parent_run_id=$1")
+            .bind(parent).fetch_all(&harness.pool).await?;
+        assert_eq!(saved.len(), 3);
+        for (checkpoint, count) in saved {
+            let saved: gammaboard::SavedSampler =
+                serde_json::from_value(checkpoint["sampler_snapshot"].clone())?;
+            let mut direct = saved.config.create(
+                gammaboard::Domain::continuous(1),
+                Some(count as usize),
+                json!({}),
+            )?;
+            direct.generate(count as usize)?;
+            let expected = direct.snapshot()?;
+            assert_eq!(saved.state["produced_samples"], count);
+            assert_eq!(
+                saved.state["rng"], expected["rng"],
+                "switching/recovery must preserve the uninterrupted RNG stream"
+            );
+        }
+        harness.cleanup().await?;
+    }
     Ok(())
 }

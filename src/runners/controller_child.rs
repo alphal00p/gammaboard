@@ -239,12 +239,38 @@ fn controller_assignment_updates(
         // Stable evaluator distribution depends on membership, not priority.
         let activated = activated.into_iter().collect::<Vec<_>>();
         if !activated.is_empty() {
-            for (index, node_name) in evaluator_nodes.into_iter().enumerate() {
+            let count = evaluator_nodes.len();
+            let mut needed = activated
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    (
+                        *id,
+                        count / activated.len() + usize::from(i < count % activated.len()),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            let mut remaining = Vec::new();
+            for node_name in evaluator_nodes {
+                let target = reusable_assignments[node_name];
+                if let Some(n) = needed.get_mut(&target.run_id)
+                    && *n > 0
+                {
+                    desired.insert(node_name, target);
+                    *n -= 1;
+                } else {
+                    remaining.push(node_name);
+                }
+            }
+            let targets = activated
+                .iter()
+                .flat_map(|id| std::iter::repeat_n(*id, needed[id]));
+            for (node_name, run_id) in remaining.into_iter().zip(targets) {
                 desired.insert(
                     node_name,
                     AssignmentTarget {
                         role: WorkerRole::Evaluator,
-                        run_id: activated[index % activated.len()],
+                        run_id,
                     },
                 );
             }
@@ -557,6 +583,25 @@ mod tests {
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].node_uuid, "s1");
         assert_eq!(updates[0].desired.as_ref().unwrap().run_id, 1);
+    }
+
+    #[test]
+    fn switching_one_slot_keeps_the_other_childs_evaluators() {
+        let nodes = vec![
+            node("s1", WorkerRole::SamplerAggregator, 2),
+            node("s2", WorkerRole::SamplerAggregator, 3),
+            node("e1", WorkerRole::Evaluator, 2),
+            node("e2", WorkerRole::Evaluator, 3),
+            node("e3", WorkerRole::Evaluator, 2),
+            node("e4", WorkerRole::Evaluator, 3),
+        ];
+        let updates = controller_assignment_updates(&nodes, plan(1, vec![2, 3, 4], vec![3, 4]));
+        assert_eq!(updates.len(), 3);
+        assert!(
+            updates
+                .iter()
+                .all(|u| u.expected.unwrap().run_id == 2 && u.desired.unwrap().run_id == 4)
+        );
     }
 
     #[test]

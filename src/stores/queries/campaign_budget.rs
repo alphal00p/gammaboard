@@ -17,9 +17,8 @@ pub(crate) async fn allocate_campaign_samples(
     .bind(task_id)
     .fetch_one(&mut *tx)
     .await?;
-    let Some(limit) = limit else {
-        return Ok(BTreeMap::new());
-    };
+    // Even error-only campaigns reserve bounded scheduling quanta.
+    let limit = limit.unwrap_or(i64::MAX);
     // Seed existing children conservatively; never hide already produced work.
     sqlx::query(
         "INSERT INTO campaign_sample_budgets (child_run_id,campaign_task_id,granted_samples)
@@ -91,7 +90,7 @@ pub(crate) async fn campaign_sample_allowance(
          FROM runs r JOIN run_tasks parent ON parent.id=r.parent_task_id
          LEFT JOIN campaign_sample_budgets b ON b.child_run_id=r.id
          WHERE r.id=$1 AND parent.task->>'kind'='integration_campaign'
-             AND parent.task->'stop_condition'->>'max_total_samples' IS NOT NULL",
+        ",
     )
     .bind(run_id)
     .bind(task_id)

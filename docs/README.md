@@ -29,3 +29,6 @@ allocation plots, conditional PDF comparisons, membership maps, and live example
 
 [Unified PDF diagnostics](validation/2026-10-23-unified-pdf-diagnostics.md): restored
 diagnostics, exact native bins, bounded comparisons, shared controls and validation.
+
+[Concurrent campaigns](validation/2026-10-29-campaign-concurrency.md): resource-aware
+assignment, independent scheduling quanta, shared budgets and recovery validation.

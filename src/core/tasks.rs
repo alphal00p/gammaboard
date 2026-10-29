@@ -612,6 +612,7 @@ pub enum IntegrationCampaignAllocationAlgorithm {
 pub struct IntegrationCampaignAllocationSpec {
     pub algorithm: IntegrationCampaignAllocationAlgorithm,
     pub max_active_runs: usize,
+    pub min_evaluators_per_run: usize,
     pub allocation_window_samples: i64,
     pub min_samples_per_child: i64,
 }
@@ -621,6 +622,7 @@ impl Default for IntegrationCampaignAllocationSpec {
         Self {
             algorithm: IntegrationCampaignAllocationAlgorithm::VarianceReductionRate,
             max_active_runs: 1,
+            min_evaluators_per_run: 2,
             allocation_window_samples: 10_000,
             min_samples_per_child: 1_000,
         }
@@ -631,6 +633,11 @@ impl IntegrationCampaignAllocationSpec {
     pub fn validate(&self) -> Result<(), String> {
         if self.max_active_runs == 0 {
             return Err("integration_campaign.allocation.max_active_runs must be > 0".to_string());
+        }
+        if self.min_evaluators_per_run == 0 {
+            return Err(
+                "integration_campaign.allocation.min_evaluators_per_run must be > 0".into(),
+            );
         }
         if self.allocation_window_samples <= 0 {
             return Err(
@@ -1752,7 +1759,11 @@ pub struct IntegrationCampaignOutput {
     pub total_children: usize,
     pub total_samples: i64,
     pub selected_child_run_ids: Vec<i32>,
-    pub allocation_started_total_samples: i64,
+    pub max_active_runs: usize,
+    pub sampler_workers: usize,
+    pub evaluator_workers: usize,
+    pub worker_capacity: usize,
+    pub draining: bool,
     pub combined_measurement: Option<TaskMeasurementOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_snapshot_id: Option<String>,

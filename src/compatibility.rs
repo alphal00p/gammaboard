@@ -2,7 +2,7 @@
 use serde::{Deserialize, Deserializer};
 
 /// Fresh database schema; checkpoint and queue formats have independent versions.
-pub const DATABASE_MODEL_VERSION: u32 = 6;
+pub const DATABASE_MODEL_VERSION: u32 = 7;
 
 pub const MODEL_VERSION: u32 = 5;
 pub const PERFORMANCE_SCHEMA_VERSION: u32 = 2;

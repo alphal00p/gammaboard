@@ -13,7 +13,7 @@ gammaboard run validate run.toml --probe
 | --- | --- |
 | GammaBoard and Python SDK package | 0.3 |
 | Process protocol | `gammaboard-jsonrpc-v9` |
-| Database model | 6 |
+| Database model | 7 |
 | Sampler checkpoint / saved sampler envelope | 5 |
 | Queue envelope | `GBQ` followed by byte `0x04` |
 | Performance responses | 2 |
@@ -67,6 +67,11 @@ and a fresh database; no old state or protocol adapters are provided.
 The statistics-display revision adds partition diagnostics, retained stratum-labelled
 extrema, estimator identity and optional pooled comparisons to persisted outputs.
 Pooled standard errors use the sample-variance convention and are unavailable for
-fewer than two samples. These state changes require a fresh model-6 database and
-model-5 checkpoints. The sampler feedback wire contract remains protocol v9 and
+fewer than two samples. These state changes require the current database model and model-5 checkpoints. The sampler feedback wire contract remains protocol v9 and
 queue inputs retain envelope version 4.
+
+Campaign scheduling uses database model 7: controller outputs expose resource
+capacity and drain status, and error-only campaigns also use durable sample
+grants. The single baseline remains for fresh databases. Sampler checkpoints,
+queue payloads and the process protocol are unchanged. Auto-assignment responses
+return `assigned_samplers` as a list, alongside `assigned_evaluators`.

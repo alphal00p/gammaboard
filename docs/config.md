@@ -150,8 +150,41 @@ defines reservations, queued/buffered work, pilot grants, and retry accounting.
 The default allocation favors expected variance reduction per second
 (`weighted variance × throughput / samples`) after pilot coverage.
 `largest_variance` ignores cost. Increase `min_samples_per_child` or
-`allocation_window_samples` for steadier decisions; `max_active_runs` limits
-concurrent children. Displayed variance contribution is not the allocation score.
+`allocation_window_samples` for steadier decisions. Displayed variance contribution
+is not the allocation score.
+
+```toml
+[allocation]
+max_active_runs = 4
+min_evaluators_per_run = 2
+allocation_window_samples = 100000
+min_samples_per_child = 10000
+algorithm = "variance_reduction_rate"
+```
+
+`max_active_runs` defaults to 1 and is a ceiling. `min_evaluators_per_run` defaults
+to 2 and must be positive. An active child reserves one sampler and at least that
+many evaluators. Automatic assignment chooses complete compatible worker bundles,
+then distributes remaining evaluators. Six interchangeable free workers therefore
+support two samplers and four evaluators, even with `max_active_runs = 4`. Existing
+operator-assigned pool roles are preserved. Insufficient resources leave children
+waiting; changing the ceiling does not launch workers or convert assigned roles.
+The campaign summary shows the ceiling, assigned roles and available concurrency.
+
+`allocation_window_samples` is a **per-child scheduling quantum**, counted across
+all child stages, including training. Each child keeps its workers until its own
+quantum drains. Only that slot is reconsidered; other children keep progressing.
+Pilot coverage has priority, then the allocation score decides between the
+incumbent and waiting children. Equal scores keep the incumbent. Continuing a
+child renews its quantum without restarting its sampler. Switching checkpoints
+its sampler/statistics and preserves the workers of other retained children.
+
+Every campaign uses durable cumulative quantum grants, including campaigns with
+only an error target. Grants also enforce `max_total_samples` when specified.
+Error convergence stops granting new quanta, finishes outstanding grants, and
+rechecks the target before publishing completion. Final publication waits for
+worker checkpoints. Interrupted grants survive pause, worker loss and controller
+recovery; they are not issued a second time.
 
 ## Batch and resource tuning
 

@@ -45,7 +45,7 @@ function WorkerPoolControls({ run, disabled, notify }) {
       else window.localStorage.removeItem("runs.evaluator_count");
       if (action === "assign") {
         const result = await autoAssignRun(run.run_id, { maxEvaluators: target });
-        notify(`Assigned ${(result.assigned_evaluators?.length || 0) + (result.assigned_sampler ? 1 : 0)} node(s); resumed ${result.resumed_nodes || 0} pool member(s).`);
+        notify(`Assigned ${(result.assigned_evaluators?.length || 0) + (result.assigned_samplers?.length || 0)} node(s); resumed ${result.resumed_nodes || 0} pool member(s).`);
       } else if (action === "remove") {
         const nodes = await fetchNodes(run.run_id);
         const evaluators = asArray(nodes).filter((node) => node.pool_run_id === run.run_id && node.pool_role === "evaluator");

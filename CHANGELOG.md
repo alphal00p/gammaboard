@@ -5,6 +5,10 @@
 See the [validation and risk report](docs/validation/2026-10-15-consolidation.md)
 for tested workflows, fixes found in the dashboard, and remaining limitations.
 
+- Concurrent campaigns reserve one sampler and a configurable minimum evaluator
+  pool per active child, schedule independent durable sample quanta, and preserve
+  other children's workers during switching. Error-only campaigns use the same
+  recovery-safe grants; convergence drains accepted work before final publication.
 - Scaled Voronoi stratification with frozen exact discrete probabilities, zero
   accounting, per-stratum covariance, durable recovery, and task diagnostics.
   [Tetrahedron A/B results](benchmarks/stratification/README.md) include uncertainty
@@ -49,7 +53,7 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
 - Whole-batch validation rejects invalid samples/overflow without publishing
   partial results. Database disconnects and suspended submissions recover safely.
 
-**Upgrade:** protocol v9, database model 6, checkpoint model 5 and queue envelope 4
+**Upgrade:** protocol v9, database model 7, checkpoint model 5 and queue envelope 4
 require a fresh database and matching workers. Old checkpoints and queue formats
 cannot be resumed. Export run definitions before resetting; see
 [compatibility](docs/compatibility.md) and

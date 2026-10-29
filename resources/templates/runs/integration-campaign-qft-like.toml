@@ -8,6 +8,9 @@ state_folder = "states/epem_a_ttxh/LO/state"
 max_total_samples = 10000000
 
 [allocation]
+max_active_runs = 2
+min_evaluators_per_run = 2
+# Per child per scheduling turn, across training and inference stages.
 min_samples_per_child = 10000
 allocation_window_samples = 10000
 

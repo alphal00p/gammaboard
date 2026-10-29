@@ -208,11 +208,11 @@ async fn resume_run(store: &PgStore, run_ref: &str, max_evaluators: Option<usize
         print_json(&result);
     } else {
         println!(
-            "resumed run_id={} run_name={} resumed_nodes={} assigned_sampler={} assigned_evaluators={}",
+            "resumed run_id={} run_name={} resumed_nodes={} assigned_samplers={} assigned_evaluators={}",
             result.run_id,
             result.run_name,
             result.resumed_nodes,
-            result.assigned_sampler.as_deref().unwrap_or("none"),
+            result.assigned_samplers.join(","),
             result.assigned_evaluators.join(",")
         );
     }

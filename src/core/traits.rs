@@ -349,7 +349,8 @@ pub trait RunTaskStore: Send + Sync {
     ) -> Result<std::collections::BTreeMap<i32, i64>, StoreError>;
 
     /// This task's share of its child's reservation, excluding other stages.
-    /// None means that the run is not subject to a campaign cap.
+    /// None means that the run is not a campaign child. Uncapped campaigns also
+    /// use reservations to bound each child's scheduling quantum.
     async fn campaign_sample_allowance(
         &self,
         run_id: i32,

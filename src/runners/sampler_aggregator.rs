@@ -161,7 +161,7 @@ pub struct SamplerAggregatorRunner<S> {
     base_queue_config: SamplerQueueConfig,
     last_task_config_refresh_at: Instant,
     waiting_for_campaign_budget: bool,
-    campaign_is_bounded: Option<bool>,
+    campaign_managed: Option<bool>,
     busy: BusyTime,
     node_uuid: String,
     sampler_uptime_started_at: Instant,
@@ -449,7 +449,7 @@ where
 
         Ok(Self {
             waiting_for_campaign_budget: false,
-            campaign_is_bounded: None,
+            campaign_managed: None,
             run_id,
             epoch: uuid::Uuid::new_v4().to_string(),
             node_name: node_name.into(),
@@ -1245,14 +1245,14 @@ where
             }
             // Parentage and the controller definition are immutable. Ordinary
             // runs pay this lookup once, rather than on every sampler draw.
-            let allowance = if self.campaign_is_bounded == Some(false) {
+            let allowance = if self.campaign_managed == Some(false) {
                 None
             } else {
                 let value = self
                     .store
                     .campaign_sample_allowance(self.run_id, self.task.id)
                     .await?;
-                self.campaign_is_bounded = Some(value.is_some());
+                self.campaign_managed = Some(value.is_some());
                 value
             };
             let campaign_remaining = allowance.map(|allowance| {

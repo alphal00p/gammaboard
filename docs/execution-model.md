@@ -297,9 +297,24 @@ can also end its task after outstanding work drains.
 
 A campaign's `max_total_samples` caps logical samples across **all child stages**,
 including training and plotting. Before workers generate samples, the controller
-grants disjoint, durable child allowances whose sum cannot exceed the cap. The
-sampler subtracts previous-stage production and its current produced/buffered
-work. Waiting for another grant is not sampler exhaustion.
+grants disjoint, durable child allowances whose sum cannot exceed the cap. Error-only
+campaigns use the same grants without a global cap. Each grant is one child's
+scheduling quantum, bounded by `allocation_window_samples`; pilot grants can be
+smaller. The sampler subtracts previous-stage production and its current
+produced/buffered work. Waiting for another grant is not sampler exhaustion.
+
+A child retains its slot until that grant drains, independently of the other
+children. Renewing a grant preserves the running sampler; replacing a child
+checkpoints it through the existing worker handoff. Unfinished grants and live
+placements identify incumbents after controller recovery, including a crash
+between grant, placement and output publication. Retained children keep their
+workers up to their balanced evaluator share. Resource shortages reduce active
+concurrency according to the sampler count and the minimum evaluator allocation.
+See [campaign allocation](config.md#controllers) for configuration.
+
+An error target first prevents new grants while existing quanta drain. The target
+is checked again on the resulting estimates, and completion is published only
+after retiring workers release their placements and save their checkpoints.
 
 Pilot grants and scheduling windows cannot bypass the cap. Completed child queues
 return unused allowance; paused/active children retain reservations for buffered
