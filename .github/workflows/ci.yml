@@ -105,7 +105,7 @@ jobs:
         run: python -m unittest discover -s benchmarks/tests
       - name: Reject retired CLI and protocol spellings
         run: |
-          ! rg -n '(run add|run task add|node auto-run|deploy run|gammaboard-jsonrpc-v1)' \
+          ! rg -n '(run add|run task add|node auto-run|deploy run|gammaboard-jsonrpc-v1\b)' \
             README.md docs integrations ops resources process_api justfile
       - name: Validate tracked TOML
         run: |
