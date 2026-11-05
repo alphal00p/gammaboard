@@ -89,8 +89,11 @@ export const pdfComparison = (state, scope = 'overall', mode = 'shape') => {
   const k = scope === 'overall' || !strata ? null : Number(scope);
   const actual = strata?.actual_strata || [];
   const rawTarget = data.integrand_values.map((v, i) =>
-    !finite(v) ? null : k == null || actual[i] === k ? Math.abs(v) : 0
+    !finite(v) || (k != null && actual[i] == null)
+      ? null
+      : k == null || actual[i] === k ? Math.abs(v) : 0
   );
+  const zeroTarget = rawTarget.length > 0 && rawTarget.every((v) => finite(v) && v === 0);
   const joint = k == null ? data.pdf_values : strata.pdf_values[k];
   const probability = k == null ? 1 : strata.probabilities[k];
   const steps = data.pdf_steps;
@@ -164,6 +167,7 @@ export const pdfComparison = (state, scope = 'overall', mode = 'shape') => {
     axes,
     actual,
     rawTarget,
+    zeroTarget,
     joint,
     pdf,
     target,

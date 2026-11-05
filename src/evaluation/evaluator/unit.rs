@@ -176,6 +176,7 @@ pub(crate) fn cpu_work(iterations: u64, samples: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evaluation::EvaluatorBatch;
     use crate::evaluation::{Batch, Point};
 
     #[test]

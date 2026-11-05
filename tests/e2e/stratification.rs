@@ -147,23 +147,15 @@ sampler={{config={{kind="process_sampler",command={command},args={{inference=tru
 
 #[test]
 fn scaled_voronoi_run_cards_validate_and_reject_invalid_estimators() {
-    for card in [
-        include_str!("../../resources/templates/runs/tetrahedron-stratified.toml"),
-        include_str!("../../resources/templates/runs/tetrahedron-ordinary.toml"),
-    ] {
-        let definition = gammaboard::api::runs::parse_run_add_config_toml(card).unwrap();
-        assert_eq!(
-            gammaboard::api::runs::validate_run(definition, true)
-                .unwrap()
-                .tasks_validated,
-            2
-        );
-    }
-    let card = include_str!("../../resources/templates/runs/tetrahedron-stratified.toml");
-    let invalid = card.replace("scales = [1.0, 1.0, 1.0]", "scales = [0.0, 1.0, 1.0]");
-    let definition = gammaboard::api::runs::parse_run_add_config_toml(&invalid).unwrap();
-    assert!(gammaboard::api::runs::validate_run(definition, false).is_err());
-    let invalid=card.replace("kind = \"vector\", components = [\"x\", \"y\", \"z\"], training_projection = { kind = \"norm\" }","kind = \"gammaloop\"");
+    let card = include_str!("../../resources/templates/runs/tetrahedron-surface.toml");
+    let definition = gammaboard::api::runs::parse_run_add_config_toml(card).unwrap();
+    assert_eq!(
+        gammaboard::api::runs::validate_run(definition, true)
+            .unwrap()
+            .tasks_validated,
+        7
+    );
+    let invalid = card.replace("scales = [1.0,1.0,1.0]", "scales = [0.0,1.0,1.0]");
     let definition = gammaboard::api::runs::parse_run_add_config_toml(&invalid).unwrap();
     assert!(gammaboard::api::runs::validate_run(definition, false).is_err());
 }
@@ -343,6 +335,8 @@ sampler={{config={{kind="havana_inference",seed=18}},from_stage="train"}}
     let mut reference = vec![vec![], vec![]];
     let mut histogram_sums = [0.; 20];
     let mut histogram_squares = [0.; 20];
+    let mut conditional_bins = [[0.; 20]; 2];
+    let mut conditional_squares = [[0.; 20]; 2];
     let mut remaining = 8192;
     while remaining > 0 {
         let Generation::Batch { batch, .. } = sampler.generate(remaining.min(79))? else {
@@ -357,6 +351,9 @@ sampler={{config={{kind="havana_inference",seed=18}},from_stage="train"}}
             let weighted = if hit { x * point.total_weight() } else { 0. };
             histogram_sums[bin] += weighted;
             histogram_squares[bin] += weighted * weighted;
+            let conditional = weighted * state.plan.probabilities.as_ref().unwrap()[k];
+            conditional_bins[k][bin] += conditional;
+            conditional_squares[k][bin] += conditional * conditional;
             reference[k].push((
                 if hit {
                     x * point.total_weight() * state.plan.probabilities.as_ref().unwrap()[k]
@@ -371,7 +368,7 @@ sampler={{config={{kind="havana_inference",seed=18}},from_stage="train"}}
     let pooled = state
         .pooled
         .as_ref()
-        .context("recovered hybrid histograms")?;
+        .context("recovered pooled histogram reference")?;
     assert_eq!(pooled.bundle.histograms["x"].sample_count, 8192);
     for (i, bin) in pooled.bundle.histograms["x"].bins.iter().enumerate() {
         assert!(
@@ -381,6 +378,20 @@ sampler={{config={{kind="havana_inference",seed=18}},from_stage="train"}}
             (bin.sum_weights_squared - histogram_squares[i]).abs()
                 < 1e-9 * histogram_squares[i].abs().max(1.)
         );
+    }
+    for k in 0..2 {
+        let h = &state.histograms[k].histograms["x"];
+        assert_eq!(h.sample_count as u64, state.strata[k].attempts);
+        for (i, bin) in h.bins.iter().enumerate() {
+            assert!(
+                (bin.sum_weights - conditional_bins[k][i]).abs()
+                    < 1e-9 * conditional_bins[k][i].abs().max(1.)
+            );
+            assert!(
+                (bin.sum_weights_squared - conditional_squares[k][i]).abs()
+                    < 1e-9 * conditional_squares[k][i].abs().max(1.)
+            );
+        }
     }
     assert!((pooled.real_mean() - histogram_sums.iter().sum::<f64>() / 8192.).abs() < 1e-12);
     harness.cleanup().await

@@ -1,11 +1,7 @@
-# Real-valued Monte Carlo sampling.
-# Requires: an existing scalar-compatible run.
-# Scale: 1000 samples; normally a few seconds.
-# Run: ./gammaboard run task append <RUN> resources/templates/tasks/sample_monte_carlo_real.toml
-
-replacements = { samples = 1_000 }
-
+# Append ordinary scalar sampling to a scalar-compatible integration.
 [[task_queue]]
+name = "sample"
 kind = "sample"
-stop_condition = { max_samples = "$(samples:1_000)" }
-sampler = { config = { kind = "naive_monte_carlo" } }
+stop_condition = { max_samples = 16384 }
+accumulator = { config = "scalar" }
+sampler = { config = { kind = "naive_monte_carlo", seed = 51 } }

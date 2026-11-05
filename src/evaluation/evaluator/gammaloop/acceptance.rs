@@ -1,5 +1,6 @@
 //! Saved-state acceptance exercises the real GammaLoop maps and observable runtime.
 use super::*;
+use crate::evaluation::EvaluatorBatch;
 use crate::evaluation::{Accumulator, Point};
 use gammaloop_api::state::GraphImportOptions;
 use gammalooprs::{
@@ -316,7 +317,6 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
                 &Batch::new(vec![Point::new(vec![], vec![0, 0], 1.0)]),
                 &["real".into(), "imag".into()],
                 EvalBatchOptions::default(),
-                false
             )
             .is_err()
     );
@@ -333,7 +333,7 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
 }
 
 #[test]
-fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() {
+fn observable_bins_use_conditional_statistics_and_keep_pooled_reference() {
     use crate::core::{StratificationConfig, StratificationPlan};
     use crate::evaluation::accumulator::StratifiedAccumulatorState;
     fn close(a: f64, b: f64) {
@@ -369,7 +369,7 @@ fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() 
         .collect();
     assert_ne!(values[0], values[2]);
     let plan = StratificationPlan {
-        proposal_id: "hybrid-physics".into(),
+        proposal_id: "stratified-physics".into(),
         partition: StratificationConfig::Voronoi {
             domain: crate::Domain::strata(vec![2]),
             centers: vec![values[0].clone(), values[2].clone()]
@@ -408,7 +408,7 @@ fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() 
         )
         .unwrap();
     let AccumulatorState::Stratified(state) = &whole.accumulator else {
-        panic!("expected hybrid")
+        panic!("expected stratified")
     };
     assert_eq!(state.sample_count(), 128);
     let mut expected = [vec![], vec![]];
@@ -454,6 +454,51 @@ fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() 
         close(bin.sum_weights, sums[i]);
         close(bin.sum_weights_squared, squares[i]);
     }
+    let estimates = gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+        &state.histograms,
+    )
+    .unwrap();
+    for b in 0..histogram.bins.len() {
+        let mut total_mean = 0.;
+        let mut total_variance = 0.;
+        for k in 0..2 {
+            let samples: Vec<_> = labels
+                .iter()
+                .enumerate()
+                .filter(|(_, label)| **label == k)
+                .map(|(i, _)| {
+                    if plan.partition.classify(&values[i % 3]).unwrap() == k {
+                        units[i % 3].bundle.histograms["graphs"].bins[b].sum_weights
+                            * batch.points()[i].total_weight()
+                            * plan.probabilities.as_ref().unwrap()[k]
+                    } else {
+                        0.
+                    }
+                })
+                .collect();
+            let n = samples.len() as f64;
+            let mean = samples.iter().sum::<f64>() / n;
+            total_mean += mean;
+            total_variance +=
+                samples.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n * (n - 1.));
+            assert_eq!(
+                state.histograms[k].histograms["graphs"].sample_count,
+                samples.len()
+            );
+            close(
+                state.histograms[k].histograms["graphs"].bins[b].average(samples.len()),
+                mean,
+            );
+        }
+        close(
+            estimates.histograms["graphs"].bins[b].mean.unwrap(),
+            total_mean,
+        );
+        close(
+            estimates.histograms["graphs"].bins[b].error.unwrap(),
+            total_variance.sqrt(),
+        );
+    }
     assert!((state.mean().unwrap()[0] - state.pooled.as_ref().unwrap().real_mean()).abs() > 1e-12);
     let mut merged =
         StratifiedAccumulatorState::new(plan.clone(), AccumulatorConfig::Gammaloop).unwrap();
@@ -487,6 +532,19 @@ fn hybrid_observables_keep_pooled_histograms_and_conditional_integral_moments() 
     {
         close(a.sum_weights, b.sum_weights);
         close(a.sum_weights_squared, b.sum_weights_squared);
+    }
+    let restored_estimates =
+        gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+            &restored.histograms,
+        )
+        .unwrap();
+    for (a, b) in restored_estimates.histograms["graphs"]
+        .bins
+        .iter()
+        .zip(&estimates.histograms["graphs"].bins)
+    {
+        close(a.mean.unwrap(), b.mean.unwrap());
+        close(a.error.unwrap(), b.error.unwrap());
     }
     let misses: Vec<_> = (0..batch.len())
         .map(|i| 1 - plan.partition.classify(&values[i % 3]).unwrap())
@@ -616,7 +674,6 @@ fn quad_override_uses_native_stability_levels_and_preserves_the_reference_value(
             &batch,
             &["real".into(), "imag".into()],
             EvalBatchOptions::default(),
-            false,
         )
         .unwrap();
     let actual = quad
@@ -624,7 +681,6 @@ fn quad_override_uses_native_stability_levels_and_preserves_the_reference_value(
             &batch,
             &["real".into(), "imag".into()],
             EvalBatchOptions::default(),
-            false,
         )
         .unwrap();
     let expected = GammaLoopEvaluator::project_result_value(&expected[0]);

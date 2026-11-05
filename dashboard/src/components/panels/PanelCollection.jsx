@@ -23,7 +23,7 @@ import {
 } from "./BasicPanels";
 import FigureExportActions, { escapeXml } from "./FigureExportActions";
 import TablePanel from "./TablePanel";
-import HistogramPanel from "./HistogramPanel";
+import ObservableHistogramPanel from "./ObservableHistogramPanel";
 import StrataPanel from "./StrataPanel";
 import PdfComparisonPanel from "./PdfComparisonPanel";
 import {
@@ -138,6 +138,7 @@ const buildRenderablePanels = (panelSpecs, panelStates, panelValues) => {
           views: selectedHistogram.views,
           controls: selectedHistogram.controls,
           bins: normalizedBins,
+          strata: payload.strata?.map((stratum, k) => ({ ...stratum, ...selectedHistogram.strata?.[k] })).filter((stratum) => Array.isArray(stratum.bins)),
         },
         value: bundlePanel.value ?? null,
       });
@@ -1562,7 +1563,7 @@ const PanelRenderer = ({
     case "histogram":
       if (!state) return <EmptyPlotPanel title={descriptor.label} />;
       return (
-        <HistogramPanel
+        <ObservableHistogramPanel
           title={descriptor.label}
           state={{ ...state, panel_id: descriptor.panel_id }}
           value={value}

@@ -1,0 +1,96 @@
+# F(u,v) = (a,b,a*b), a=tanh(k*cos(2*pi*u)), b=tanh(k*cos(2*pi*(v+s*u))).
+# A smooth 2D surface lingering near four tetrahedron corners; integral [0,0,0].
+# Image component/colour controls, vector lines, stratum histories and all PDF views.
+replacements = { sharpness = 6, skew = 0, train_samples = 65536, sample_samples = 131072, havana_bins = 32, training_rate = 0.5, seed = 10, image_bins = 65, line_points = 1025 }
+name = "tetrahedron-surface"
+target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
+[evaluator]
+kind = "symbolica"
+args = ["u","v"]
+[evaluator.source]
+kind = "expressions"
+components = ["x","y","z"]
+exprs = ["((exp(2*$(sharpness:6)*(cos(2*pi*u)))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*u)))+1))", "((exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))+1))", "((exp(2*$(sharpness:6)*(cos(2*pi*u)))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*u)))+1))*((exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))+1))"]
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 500
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = "$(train_samples:65536)" }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = "$(seed:10)"
+bins = "$(havana_bins:32)"
+samples_for_update = 2048
+initial_training_rate = "$(training_rate:0.5)"
+final_training_rate = 0.1
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 2, discrete_cardinalities = [2, 2], continuous_dims = 0 } }
+centers = { "0,0" = [1.0,1.0,1.0], "0,1" = [-1.0,1.0,-1.0], "1,0" = [-1.0,-1.0,1.0], "1,1" = [1.0,-1.0,-1.0] }
+scales = [1.0,1.0,1.0]
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+stop_condition = { max_samples = "$(sample_samples:131072)" }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = 20 } }
+[[task_queue]]
+name = "surface"
+kind = "image"
+accumulator = { components = ["x","y","z"] }
+display = "vector_magnitude"
+[task_queue.geometry]
+offset = [0.0,0.0]
+u_vector = [1.0,0.0]
+v_vector = [0.0,1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+[[task_queue]]
+name = "components-on-line"
+kind = "plot_line"
+accumulator = { components = ["x","y","z"] }
+display = "components"
+[task_queue.geometry]
+offset = [0.0,0.125]
+direction = [1.0,0.75]
+linspace = { start = 0.0, stop = 1.0, count = "$(line_points:1025)" }
+[[task_queue]]
+name = "pdf-line"
+kind = "pdf_adaptation_plot_line"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0,0.125]
+direction = [1.0,0.75]
+linspace = { start = 0.0, stop = 1.0, count = "$(line_points:1025)" }
+[[task_queue]]
+name = "pdf-plane"
+kind = "pdf_adaptation_image"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0,0.0]
+u_vector = [1.0,0.0]
+v_vector = [0.0,1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+[[task_queue]]
+name = "xy-phase"
+kind = "image"
+accumulator = "vector"
+display = "complex_phase"
+# A task-local projection of the same surface, for the complex phase colour wheel.
+# Keep this last: later tasks otherwise inherit this two-component evaluator.
+[task_queue.evaluator.config]
+kind = "symbolica"
+args = ["u","v"]
+source = { kind = "expression", expr = "((exp(2*$(sharpness:6)*(cos(2*pi*u)))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*u)))+1))+i*((exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))+1))" }
+[task_queue.geometry]
+offset = [0.0,0.0]
+u_vector = [1.0,0.0]
+v_vector = [0.0,1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }

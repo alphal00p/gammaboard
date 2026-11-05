@@ -111,12 +111,14 @@ export const writeHistogramBundlePanelValue = (
     showRelativeError = undefined,
     showRatio = undefined,
     selectedViewByHistogram = undefined,
+    observableView = undefined,
     histogramMode = undefined,
     sortModeByHistogram = undefined,
   } = {},
 ) => {
   const next = isObject(current) ? { ...current } : {};
   const nextView = isObject(next.histogram_view) ? { ...next.histogram_view } : {};
+  if (observableView !== undefined) nextView.observable = observableView;
   if (selectedHistogram !== undefined) next.selected_histogram = selectedHistogram;
   if (zoom !== undefined) nextView.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
   if (yZoom !== undefined) nextView.y_zoom = normalizeZoomRange(yZoom) || FULL_ZOOM;
@@ -151,6 +153,7 @@ export const writeHistogramBundlePanelValue = (
 };
 
 const computeGammaLoopBinAverage = (bin, sampleCount) => {
+  if (bin?.estimate) return bin.estimate.mean == null ? NaN : numberOrNaN(bin.estimate.mean);
   const n = Number(sampleCount);
   const sumWeights = Number(bin?.sum_weights);
   if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(sumWeights)) return 0;
@@ -158,6 +161,7 @@ const computeGammaLoopBinAverage = (bin, sampleCount) => {
 };
 
 const computeGammaLoopBinError = (bin, sampleCount) => {
+  if (bin?.estimate) return bin.estimate.error == null ? null : numberOrNaN(bin.estimate.error);
   const n = Number(sampleCount);
   const sumWeights = Number(bin?.sum_weights);
   const sumWeightsSquared = Number(bin?.sum_weights_squared);
@@ -182,6 +186,7 @@ export const normalizeGammaLoopHistogramBins = (histogram) => {
       stop,
       value: computeGammaLoopBinAverage(bin, sampleCount),
       error: computeGammaLoopBinError(bin, sampleCount),
+      basic: bin?.basic ?? null,
       label: bin?.label ?? null,
       bin_id: bin?.bin_id ?? null,
       entry_count: bin?.entry_count ?? null,
@@ -197,7 +202,7 @@ export const buildHistogramData = (bins) =>
     .map((bin) => {
       const start = Number(bin?.start);
       const stop = Number(bin?.stop);
-      const value = Number(bin?.value);
+      const value = bin?.value == null ? NaN : numberOrNaN(bin.value);
       const error = bin?.error == null ? NaN : numberOrNaN(bin.error);
       const x = Number.isFinite(start) && Number.isFinite(stop) ? (start + stop) / 2 : Number.NaN;
       return {
@@ -213,24 +218,16 @@ export const buildHistogramData = (bins) =>
             : "n/a",
       };
     })
-    .filter((bin) => Number.isFinite(bin.value) && Number.isFinite(bin.x));
+    .filter((bin) => Number.isFinite(bin.x));
 
 export const buildCdfBins = (bins) => {
   let cumulativeValue = 0;
-  let cumulativeVariance = 0;
-  let hasAllErrors = true;
   return asArray(bins).map((bin) => {
     if (!bin) return null;
-    const value = Number(bin?.value);
-    const error = bin?.error == null ? NaN : Math.abs(numberOrNaN(bin.error));
-    if (Number.isFinite(value)) cumulativeValue += value;
-    if (Number.isFinite(error)) cumulativeVariance += error * error;
-    else hasAllErrors = false;
-    return {
-      ...bin,
-      value: cumulativeValue,
-      error: hasAllErrors ? Math.sqrt(cumulativeVariance) : null,
-    };
+    // Unknown components make the cumulative estimate unknown too. Individual
+    // bin errors cannot determine a sum's error without cross-bin covariance.
+    cumulativeValue += bin.value == null ? NaN : numberOrNaN(bin.value);
+    return { ...bin, value: cumulativeValue, error: null, basic: null, comparison: null };
   });
 };
 
@@ -253,7 +250,7 @@ export const buildHistogramStepData = (bins) => {
       });
     }
   }
-  return points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  return points.filter((point) => Number.isFinite(point.x));
 };
 
 export const buildHistogramRenderData = (bins, scale) => {
@@ -399,6 +396,7 @@ const normalizeUploadedHistogram = (name, histogram) => {
       stop: Number(bin.stop),
       value: Number(bin.value),
       error: bin.error == null ? null : Math.abs(numberOrNaN(bin.error)),
+      basic: bin?.basic ?? null,
       label: bin?.label ?? null,
       bin_id: bin?.bin_id ?? null,
       entry_count: bin?.entry_count ?? null,

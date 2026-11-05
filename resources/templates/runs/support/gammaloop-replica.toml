@@ -1,0 +1,42 @@
+# Native gg -> HHH one-loop GL15 amplitude at the upstream physical benchmark point.
+# Prepare with: cargo run --example prepare_showcase -- resources/states/showcase/gg_hhh
+# Stratum labels: (0,0)=+, (0,1)=-, (1,0)=+i, (1,1)=-i.
+replacements = { state_folder = "states/showcase/gg_hhh", train_samples = 8192, sample_samples = 32768, seed = 41, inference_seed = 42 }
+name = "gammaloop-replica"
+target = { kind = "vector", components = { real = -1.89203604685291554e-6, imag = 5.46603099163412881e-6 } }
+[evaluator]
+kind = "gammaloop"
+state_folder = "$(state_folder:states/showcase/gg_hhh)"
+integrand_name = "1L"
+training_projection = "abs"
+[evaluator.preprocessing]
+read_only = true
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 500
+[sampler_aggregator_runner_params.queue]
+fixed_batch_size = 512
+max_generation_size = 4096
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = "$(train_samples:8192)" }
+accumulator = { config = "gammaloop" }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = "$(seed:41)"
+bins = 32
+samples_for_update = 2048
+initial_training_rate = 0.5
+final_training_rate = 0.1
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 2, discrete_cardinalities = [2,2], continuous_dims = 0 } }
+centers = { "0,0" = [1.0,0.0], "0,1" = [-1.0,0.0], "1,0" = [0.0,1.0], "1,1" = [0.0,-1.0] }
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+stop_condition = { max_samples = "$(sample_samples:32768)" }
+accumulator = { config = "gammaloop" }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = "$(inference_seed:42)" } }

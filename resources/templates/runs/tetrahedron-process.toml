@@ -1,0 +1,64 @@
+# The same 2D -> 3D surface through the process SDK, using a uniform proposal.
+# Install the matching SDK: python3 -m pip install ./process_api/python
+replacements = { python = "python3", sample_samples = 65536, image_bins = 65, line_points = 1025 }
+name = "tetrahedron-process"
+target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
+[evaluator]
+kind = "process_evaluator"
+command = ['$(python:"python3")', "-u", "$resources/templates/runs/support/tetrahedron.py"]
+domain = { rectangular = { continuous_dims = 2, discrete_cardinalities = [] } }
+output = { kind = "values", components = ["x","y","z"] }
+args = { sharpness = 6.0, skew = 0.0 }
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+stop_condition = { max_samples = "$(sample_samples:65536)" }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+[task_queue.sampler.config]
+kind = "naive_monte_carlo"
+seed = 30
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 2, discrete_cardinalities = [2, 2], continuous_dims = 0 } }
+centers = { "0,0" = [1.0,1.0,1.0], "0,1" = [-1.0,1.0,-1.0], "1,0" = [-1.0,-1.0,1.0], "1,1" = [1.0,-1.0,-1.0] }
+scales = [1.0,1.0,1.0]
+
+[[task_queue]]
+name = "surface"
+kind = "image"
+accumulator = { components = ["x","y","z"] }
+display = "vector_magnitude"
+[task_queue.geometry]
+offset = [0.0,0.0]
+u_vector = [1.0,0.0]
+v_vector = [0.0,1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+[[task_queue]]
+name = "components-on-line"
+kind = "plot_line"
+accumulator = { components = ["x","y","z"] }
+display = "components"
+[task_queue.geometry]
+offset = [0.0,0.125]
+direction = [1.0,0.75]
+linspace = { start = 0.0, stop = 1.0, count = "$(line_points:1025)" }
+[[task_queue]]
+name = "pdf-line"
+kind = "pdf_adaptation_plot_line"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0,0.125]
+direction = [1.0,0.75]
+linspace = { start = 0.0, stop = 1.0, count = "$(line_points:1025)" }
+[[task_queue]]
+name = "pdf-plane"
+kind = "pdf_adaptation_image"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0,0.0]
+u_vector = [1.0,0.0]
+v_vector = [0.0,1.0]
+u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }
+v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:65)" }

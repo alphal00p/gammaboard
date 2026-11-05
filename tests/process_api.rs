@@ -1,5 +1,6 @@
 //! Real Rust adapters and the Python SDK, without PostgreSQL or a worker fleet.
 use gammaboard::core::{AccumulatorConfig, EvaluatorConfig, SamplingConfig, TrainingProjection};
+use gammaboard::evaluation::EvaluatorBatch;
 use gammaboard::{Batch, Domain, EvalBatchOptions, Point};
 use serde_json::{Value, json};
 use std::{env, error::Error, fs, path::Path};
@@ -202,7 +203,7 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
         );
     }
     let plan = gammaboard::core::StratificationPlan {
-        proposal_id: "process-hybrid".into(),
+        proposal_id: "process-stratified".into(),
         partition: gammaboard::core::StratificationConfig::Voronoi {
             domain: gammaboard::Domain::strata(vec![2]),
             centers: vec![vec![0., 0.], vec![1.5, 0.]]
@@ -238,7 +239,7 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
         },
     )?;
     let gammaboard::AccumulatorState::Stratified(state) = result.accumulator else {
-        panic!("hybrid state")
+        panic!("stratified state")
     };
     let pooled = state.pooled.as_ref().unwrap();
     let histogram = &pooled.bundle.histograms["x"];
@@ -277,6 +278,41 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
             .abs()
             < 1e-12
     );
+    let estimates = gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+        &state.histograms,
+    )?;
+    for bin in 0..20 {
+        let mut mean = 0.;
+        let mut variance = 0.;
+        for k in 0..2 {
+            let values: Vec<_> = labels
+                .iter()
+                .zip(batch.points())
+                .filter(|(label, _)| **label == k)
+                .map(|(_, point)| {
+                    let x = point.continuous[0];
+                    let f = 6. * x * (1. - x);
+                    if (x * 20.) as usize == bin && (f > 0.75) == (k == 1) {
+                        f
+                    } else {
+                        0.
+                    }
+                })
+                .collect();
+            let n = values.len() as f64;
+            let m = values.iter().sum::<f64>() / n;
+            mean += m;
+            variance += values.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (n * (n - 1.));
+            assert_eq!(
+                state.histograms[k].histograms["x"].sample_count,
+                values.len()
+            );
+        }
+        assert!((estimates.histograms["x"].bins[bin].mean.unwrap() - mean).abs() < 1e-12);
+        assert!(
+            (estimates.histograms["x"].bins[bin].error.unwrap() - variance.sqrt()).abs() < 1e-10
+        );
+    }
     assert!(state.covariance().is_some());
     Ok(())
 }

@@ -438,6 +438,27 @@ test('PDF normalization and stratum controls update without discarding the other
   expect(curves.find(s=>s.name==='Sampler PDF').data[0][1]).toBeCloseTo(0.8);
 });
 
+test('a zero slice target is explained and omitted only when unit-area normalization is undefined', () => {
+  const state = {
+    kind: 'pdf_comparison', panel_id: 'pdf_comparison',
+    geometry: {kind: 'line', geometry: {linspace: {start: 0, stop: 1, count: 2}}},
+    data: {integrand_values: [1, 2], pdf_values: [1, 1], strata: {
+      prefixes: [[0,0], [0,1]], probabilities: [0.5, 0.5],
+      actual_strata: [0, 0], pdf_values: [[0.5, 0.5], [0.5, 0.5]],
+    }},
+  };
+  render(<StratumHarness state={state} />);
+  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^Scope/}));
+  fireEvent.click(screen.getByRole('option', {name: 'Stratum (0,1)', exact: true}));
+  expect(screen.getByRole('alert')).toHaveTextContent('This stratum has no target support at the evaluated slice points');
+  expect(renderChart.mock.calls.at(-1)[0].option.series.map(s => s.name)).toEqual(['Sampler PDF']);
+  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^Normalization/}));
+  fireEvent.click(screen.getByRole('option', {name: 'Joint density', exact: true}));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  const target = renderChart.mock.calls.at(-1)[0].option.series.find(s => s.name === 'Target');
+  expect(target.data).toEqual([[0, 0], [1, 0]]);
+});
+
 test('many strata start with one overview and comparisons are paged four at a time',()=>{
   const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[1,1],pdf_values:[1,1],strata:{prefixes:Array.from({length:11},(_,i)=>[i]),probabilities:Array(11).fill(1/11),actual_strata:[0,10],pdf_values:Array.from({length:11},()=>[1/11,1/11])}}};
   render(<StratumHarness state={state}/>);

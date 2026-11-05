@@ -112,8 +112,8 @@ inflation, or change to the estimator was introduced to conceal this limitation.
 
 ## Reproduction and evidence
 
-Use the current [tetrahedron](../../resources/templates/runs/tetrahedron-stratified.toml)
-and [sine](../../resources/templates/runs/sine-stratified.toml) cards, paired with
+Use the original [tetrahedron](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/tetrahedron-stratified.toml)
+and [sine](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/sine-stratified.toml) cards, paired with
 `tetrahedron-ordinary.toml` and `sine-ordinary.toml` in the same directory.
 The in-process repeat experiment is:
 

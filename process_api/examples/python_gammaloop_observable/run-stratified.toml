@@ -1,7 +1,7 @@
-# Same polynomial/histogram producer, with a stratified integral and pooled bins.
+# Same polynomial/histogram producer, with a stratified integral and histogram bins.
 # Requires the example virtualenv described in process_api/README.md.
 # The exact integral of 6*x*(1-x) over [0,1] is 1.
-name = "python-gammaloop-hybrid-stratification"
+name = "python-gammaloop-observable-stratification"
 target = { kind = "scalar", value = 1.0 }
 
 [evaluator]

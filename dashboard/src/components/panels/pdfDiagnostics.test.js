@@ -191,6 +191,7 @@ test('slice quadrature supports reversed axes and leaves incomplete or zero targ
   ]) {
     state.data.integrand_values = values;
     expect(pdfComparison(state).target).toEqual([null, null, null]);
+    expect(pdfComparison(state).zeroTarget).toBe(values.every(v => v === 0));
   }
 });
 
@@ -224,4 +225,9 @@ test('conditional PDFs divide only by exact prefix mass, keep leakage and gate o
   expect(pdfComparison(unknown, '0', 'joint').pdf).toEqual([0.5, 0.2, 0.05]);
   expect(figureCsv(unknown)).toContain('"[1,3]"');
   expect(figureCsv(unknown)).not.toContain('Infinity');
+  unknown.data.strata.actual_strata = [null, null, null];
+  const missing = pdfComparison(unknown, '0');
+  expect(missing.rawTarget).toEqual([null, null, null]);
+  expect(missing.zeroTarget).toBe(false);
+  expect(missing.counts.missing).toBe(3);
 });

@@ -8,54 +8,49 @@ setup. Configuration syntax is in [configuration](config.md).
 
 ## Ownership and flow
 
+**Evaluator model:** a numerical function of one integrand point. It emits one
+unweighted component vector and, optionally, one observable bundle per input.
+A batch is a throughput optimization: count, order and grouping by original
+sample are preserved. Evaluators do not apply outer sampling weights, classify
+strata, accumulate across calls or change results according to worker placement.
+Caches are allowed when they do not change numerical results.
+
+**Sampler model:** a stateful proposal generator and optional adaptation algorithm.
+It owns RNG state, proposal parameters, training windows and private pending draws.
+It generates points (or replayable latent samples) with complete integration
+weights, consumes one ordered `Feedback` per feedback-bearing draw, and snapshots
+all private state. It does not aggregate the reported integral or observables.
+`pdf` and `discrete_mass` are optional queries; exact complete-prefix masses become
+mandatory when a task requests stratified inference.
+
+**Runtime model:** GammaBoard owns materialization, transforms, prefix removal,
+classification, zero accounting, weighting, statistical reduction and feedback
+assembly. Ordinary and stratum-aware samplers use the same interfaces.
+
 ```mermaid
 flowchart LR
-    S[Sampler: private RNG and adaptation state] -->|draw: latent samples and feedback window| R[Sampler/aggregator: split and reserve]
-    R -->|evaluation batches| Q[(PostgreSQL work queue)]
-    Q -->|claim| M[Materializer]
-    M --> T[Ordered batch transforms]
-    T --> E[Evaluator and batch accumulator]
-    E -->|accumulator and optional feedback| Q
-    Q -->|ordered accepted results| A[Sampler/aggregator: merge and reassemble]
-    A -->|one Feedback object per original draw| S
+    S[Sampler] -->|bounded draw| Q[(Work queue)]
+    Q --> M[Materializer]
+    M --> T[Remove stratum prefix; apply integrand transforms]
+    T --> E[Per-sample evaluator]
+    E --> R[Runtime: classify, weight and reduce]
+    R -->|batch statistics and requested feedback| A[Sampler/aggregator worker]
+    A -->|one ordered Feedback per draw| S
     A --> C[(Checkpoint and published results)]
 ```
 
-The **sampler/aggregator worker** owns one active task's sampler, draw buffer,
-feedback assembly, and cumulative accumulator. The sampler itself owns its RNG,
-adaptation algorithm, training-window policy, and any private pending samples.
+The sampler/aggregator worker owns the task accumulator and merges accepted batch
+results; the sampler object owns only sampling/training state. Evaluator workers
+execute independent fragments of draws. The runtime restores original order for
+feedback even if fragments finish out of order.
 
-Each **evaluator worker** builds the effective task's materializer, transforms,
-and evaluator. It claims independently executable batches and returns a fresh
-batch accumulator plus feedback when requested. Several evaluator workers may
-process fragments of the same draw concurrently.
-
-The **control plane** activates tasks and places workers. A controller manages
-ordinary child runs through its root worker pool. Campaign budget reservations
-are durable control-plane state, not sampler-private counters.
-
-The **database** holds definitions, claims, results, published snapshots, and
-recovery checkpoints. Dashboard snapshots are observations; a saved checkpoint
-is the boundary used to recover sampler execution.
-
-For a sampling task, the execution sequence is:
-
-1. Resolve the evaluator, sampler, accumulator, and transform sources. The first
-   evaluator establishes the run domain; subsequent stages preserve that domain.
-2. Obtain evaluator metadata and construct or restore the sampler. Metadata is
-   JSON supplied by `Evaluator::metadata()`; it is not a sample or a result.
-3. Save the initial checkpoint before producing work. A new sampling/plotting
-   stage invalidates the previous live accumulator when it activates.
-4. Request a bounded draw from `generate(max_samples)`. Retain its latent payload
-   and feedback-window declaration, then split it into evaluator batches.
-5. Queue each fragment with its task identity, resolved accumulator configuration,
-   and `requires_training_values` flag. Evaluators claim work with ownership tokens.
-6. Materialize each fragment, apply transforms in order, evaluate it, and validate
-   the entire result before publishing the batch result.
-7. Read accepted results in generation order, assemble feedback by original draw,
-   call the sampler's feedback method, and merge batch accumulators.
-8. Publish progress/results and check stopping conditions. Task completion and
-   pause save the sampler, accumulator, queued-work boundary, and pending feedback.
+At task activation, GammaBoard resolves sources, builds or restores the sampler,
+and saves the initial checkpoint. It then generates bounded work, queues fragments,
+validates whole batch results, merges statistics and publishes progress. Pause and
+completion checkpoint the sampler, accumulator and pending-work boundary. The
+control plane places workers and manages durable campaign allowances. The database
+holds definitions, claims, accepted results and recovery state; dashboard snapshots
+are observations, not recovery checkpoints.
 
 ## Runtime interfaces
 
@@ -69,13 +64,14 @@ worker. Concurrency comes from independent workers and queued batches.
 | `Sampler` | `validate_domain(&Domain)`, `generate(usize) -> Generation`, `feedback(&Feedback)`, `snapshot() -> JSON` | `pdf_batch(points)` and `discrete_mass_batch(subspaces)` return unavailable entries; `persisted_output()` returns no output; `diagnostics()` returns `{}` |
 | `Materializer` | `materialize_batch(&LatentBatch) -> Batch` | `validate_domain(&Domain)` succeeds by default |
 | `BatchTransform` | `apply(Batch) -> Batch` | `validate_domain(&Domain)` succeeds by default |
-| `Evaluator` | `domain() -> Domain`, `eval_batch(&Batch, &AccumulatorConfig, EvalBatchOptions) -> BatchResult` | `metadata()` and `diagnostics()` return `{}` |
+| `Evaluator` | `domain() -> Domain`; implement `eval_values(&Batch, components) -> Vec<f64>` or `eval_samples(&Batch, components, emit)` | `eval_samples` adapts `eval_values` by default; metadata/diagnostics return `{}`; the observable training projection defaults to `abs` |
 
 Fallible methods return `Result<..., EngineError>`; metadata/diagnostics return
-JSON directly. `SamplingConfig` owns construction identity: the `SamplerConfig`
-algorithm, optional materializer, optional ordered transforms, and optional
-stratification partition. Tasks refer to
-it through the `sampler` field. The worker role is called `sampler_aggregator`
+JSON directly. `EvaluatorBatch::eval_batch` is a runtime-owned blanket implementation,
+not an evaluator extension point. `SamplingConfig` owns construction identity:
+the `SamplerConfig` algorithm, optional materializer, optional ordered transforms,
+and optional stratification partition. Tasks refer to it through the `sampler`
+field. The worker role is called `sampler_aggregator`
 because the worker also accumulates completed results.
 
 ## Samples, domains, and queue payloads
@@ -111,8 +107,9 @@ integrand coordinate. Prefix lengths may differ between branches. For example,
 prefix cannot also be a prefix of another stratum. Remaining integrand layouts
 may also vary by branch.
 
-Rust, the process protocol, and every Python callback receive the full domain.
-Python uses typed `Domain`, `DiscreteDomain`, `RectangularDomain`, `DomainBranch`,
+Each role receives the complete domain for its coordinate space: samplers and
+materializers see the augmented sampling domain; evaluators and integrand transforms
+see the integrand domain after prefix removal. Python uses typed `Domain`, `DiscreteDomain`, `RectangularDomain`, `DomainBranch`,
 and `DiscreteAxisRole` objects. `domain.require_rectangular_shape()` is an explicit
 convenience for algorithms requiring homogeneous contiguous coordinate arrays.
 The shared SDK codec supports ragged rows: a fixed-width coordinate block is a
@@ -219,7 +216,8 @@ array clears them. See [task sources](config.md#task-sources-and-training).
 
 ## Evaluation, weights, and the return path
 
-`EvalBatchOptions` contains `require_training_values`. A Rust evaluator returns:
+`EvalBatchOptions` contains the runtime partition context and `require_training_values`.
+Evaluators emit unweighted `SampleOutput` records; the runtime reducer returns:
 
 ```text
 BatchResult {
@@ -230,8 +228,9 @@ BatchResult {
 
 The accumulator is the result for **this batch**, not the run's previous state.
 Feedback must be present exactly when requested, with one finite scalar per input
-sample in input order. Its length is the claimed sample count, even for an
-observable adapter whose internal integration counts differ.
+sample in input order. Its length and every statistical accumulator count equal
+the claimed sample count. Empty storage discards data after validating the number
+of emitted sample outputs.
 
 `Feedback` contains `unmasked_values` and optional `strata`. The latter stores a
 canonical table of complete prefix tuples and one requested/actual table index per
@@ -239,19 +238,22 @@ sample. Rust `requested_prefixes()` / `actual_prefixes()` and Python `.requested
 `.actual` expose those tuples. The compact indices avoid repeating variable-length
 prefixes for every sample. `Feedback.values()` in Rust / `.values` in Python is the
 GammaBoard-owned masked view: misses become zero. Generic samplers consume this
-view without understanding strata. An aware sampler can use the unmasked weighted
-projection and actual prefix to improve training; it must account for the proposal
+view without understanding strata. Both views are **already weighted**,
+`W * projection(f)`; the sampler must not multiply by W again. An aware sampler can
+use the unmasked projection and actual prefix to improve training; it must account for the proposal
 that generated the point, and any branch-dependent inverse maps/Jacobians. Relabeling
 a point never changes its original sampling density or inference assignment.
 
 Feedback is assembled in original draw order, including its prefix table and both
 assignment arrays. Partial feedback survives checkpoint recovery. No sampler
-awareness or invertibility flag changes runtime behavior.
+awareness or invertibility flag changes runtime behavior. Feedback does not resend
+coordinates or weights; a training algorithm retains those in private pending
+state when it needs them.
 
 ### Ordinary values
 
 An ordinary process callback returns unweighted values: one named component vector
-per sample. For total weight `W_i` and unweighted component `f_ij`, the Rust adapter
+per sample. For total weight `W_i` and unweighted component `f_ij`, the runtime
 accumulates `W_i * f_ij`. Feedback is `W_i * projection(f_i)`; a component projection
 preserves the sign, and a norm projection computes the vector norm. The callback
 must not multiply by the sampling weight itself.
@@ -267,17 +269,26 @@ partial accumulator updates, or feed the sampler an accepted partial result.
 
 ### GammaLoop/observable output
 
-A GammaLoop process callback receives total weights and returns a
-`GammaLoopBatchResult` containing native accumulator JSON and optional training
-values. It applies the supplied weights **exactly once** to both state and
-feedback. GammaBoard validates and merges the state; it does not reweight it.
-When feedback is not requested, `training_values` must be absent/`None`.
+Native GammaLoop and process observable evaluators emit one unweighted result
+per input draw. Ordinary values and observables use the same evaluation boundary:
+no evaluator returns a statistical accumulator. Batching changes throughput, not
+the statistical unit. GammaBoard rejects missing/extra results, non-finite values,
+histograms with sample counts other than one, and per-sample squared bin sums
+that do not equal the square of the complete sample contribution.
 
-Observable adapters can represent an independent native integration, such as a
-one-trigger MadGraph calculation. Their internal accumulator counts can differ
-from the number of queued input samples. Queue/task work accounting still counts
-those input samples. This is why accumulator sample counts, task counts, and
-whole-run counts need not be identical.
+Python `eval(xs_discrete, xs_continuous)` returns either component arrays or
+`ObservableBatch(values, observables)`. Observable values are `(N,2)` real/imaginary
+values, and `observables` contains N GammaLoop-compatible histogram bundles.
+Each histogram counts the original draw once, including empty fills; correlated
+events from that draw are summed per bin before squaring. Callbacks receive neither
+sampling weights nor partition metadata. Configure `output = { kind = "gammaloop",
+training_projection = "real" }` (real is the default; also imag, abs, abs_sq).
+The runtime applies the outer weight once to values, observables and feedback.
+
+Rust `Evaluator::eval_samples` emits `SampleOutput` through a runtime-owned sink.
+The default implementation adapts `eval_values` arrays. Native GammaLoop consumes events one sample at a time; the process protocol buffers
+a batch of per-sample bundles.
+Only reduced batch statistics and requested feedback cross the worker queue.
 
 ### Aggregation and feedback
 
@@ -323,8 +334,8 @@ stage fails explicitly. Error convergence waits for the final publishing stages
 and their progress publication.
 
 The cap counts logical sample slots, not physical evaluator calls or CPU time.
-Retries and recovery can execute a slot again. Observable adapters' internal
-integration effort is also outside this input-sample count.
+Retries and recovery can execute a slot again. The cost of evaluating one point
+may vary; every emitted result must still describe that original point.
 
 ## Tasks, checkpoints, and failures
 
@@ -370,7 +381,7 @@ state/protocol versions.
 ## Python interfaces and process boundaries
 
 The SDK base classes are optional; matching methods are sufficient. Fresh classes
-receive the complete typed `domain` and expanded `args` keywords.
+receive their role-specific typed `domain` and expanded `args` keywords.
 Samplers additionally receive `evaluator_metadata`.
 Pass a class to `run_*`, not an already constructed instance. `args` cannot define
 the reserved keys `domain` or `evaluator_metadata`.
@@ -378,7 +389,7 @@ the reserved keys `domain` or `evaluator_metadata`.
 | Role | Python callback | Result |
 | --- | --- | --- |
 | Values evaluator | `eval(xs_discrete, xs_continuous)` | Unweighted `(N,)` for one component, `(N,C)`, or a mapping from every declared component name to an `(N,)` array |
-| Observable evaluator | `eval_gammaloop(xs_discrete, xs_continuous, weights, *, require_training_values, stratification)` | `GammaLoopBatchResult(state, training_values, values)` |
+| Observable evaluator | `eval(xs_discrete, xs_continuous)` | `ObservableBatch(values, observables)`, one unweighted result per input |
 | Sampler | `generate(max_samples)` | `SampleBatch(xs_discrete, xs_continuous, weights, training_remaining=None)` or `WAITING` / `FINISHED` |
 | Sampler feedback | `feedback(feedback)` | Complete draw with masked `.values`, `.unmasked_values`, and optional `.strata` |
 | Materializer | `materialize_batch(latent_batch)` | `Batch(xs_discrete, xs_continuous, weights)` |
@@ -418,7 +429,7 @@ role-specific methods, logging, and binary layouts are fully specified in the
 
 This is a sampling-pipeline option for integration tasks; campaigns, scans and
 tuning use it through their child integration definitions. It is not a run kind.
-See [the configuration example](../resources/templates/runs/tetrahedron-stratified.toml).
+See [the configuration example](../resources/templates/runs/tetrahedron-surface.toml).
 
 `sampler.config.stratification` contains `kind = "voronoi"`, a stratum-only
 `domain`, a `centers` map, and optional `scales`. The prefix domain is independent
@@ -440,11 +451,11 @@ and evaluates the remaining coordinates once. Classification selects an actual
 prefix. Accumulation and default feedback are masked on a mismatch, but unmasked
 weighted training values remain available. Every miss counts as an attempted
 sample and consumes budget.
-Native GammaLoop and process observable evaluators support a hybrid: the primary
-real/imaginary integral uses stratified statistics, while histograms retain pooled
-statistics. Their centres have two entries, `[real, imag]`; for a sign split on
-the real part use `centers = { "0" = [-1, 0], "1" = [1, 0] }` with a two-choice prefix domain. Native scalar/vector value output continues
-to use its declared component layout.
+Native GammaLoop and process observable evaluators use the same stratified
+estimator for the real/imaginary integral and all histogram bins. Their centres
+have two entries, `[real, imag]`; a real-part sign split uses
+`centers = { "0" = [-1, 0], "1" = [1, 0] }` and a two-choice prefix domain.
+Ordinary scalar/vector output uses its declared component layout.
 
 ### Training statistics and the selected estimator
 
@@ -481,7 +492,8 @@ expanded display also shows `basic_mean` and `basic_err`: the pooled estimator o
 **the same masked, fully weighted draws**. This is a different mean, and does not
 predict a separately trained unstratified sampler's performance.
 
-No second accumulator is needed. For stratum count `n_s`, conditional mean `m_s`,
+For component moments, the pooled comparison is reconstructed from the same
+per-stratum statistics. For stratum count `n_s`, conditional mean `m_s`,
 central moment sum `M2_s`, and frozen mass `p_s`, its pooled group has mean `m_s/p_s`
 and central moment sum `M2_s/p_s²`. These groups are merged with the stable parallel
 mean/covariance formula, including between-group mean differences. The resulting
@@ -514,37 +526,53 @@ An unspecified joint query leaves the marginal unspecified. Custom process
 materializers/transforms can remap discrete coordinates, so their integrand-space
 probability diagnostic remains unspecified without a known coordinate mapping.
 
-For native histograms, all correlated events/cuts/counterterms from one original
-sampler draw are grouped before squared bin contributions are accumulated. The
-same classifier mask gates every histogram contribution, but the complete weight
-`W` is retained: `H_b = sum_i W_i * mask_i * g_ib / N`. There is no `p_k` factor in
-that pooled histogram estimator. A miss contributes no fills but still counts as
-one attempted sample in every histogram, including underflow/overflow accounting.
-Diagnostics count actual evaluations/events independently of this mask. Invalid
-values still reject a batch even if its classifier would miss.
+### Observable statistics
 
-Histogram totals and the stratified primary estimate are different Monte Carlo
-estimators and need not agree exactly. Histograms retain allocation noise. They
-are labelled as pooled in the dashboard and are not rescaled or normalized to the
-stratified result. Ratios involving both estimators require joint covariance that
-this hybrid does not provide. The integral's per-stratum moments and pooled native
-bundle are checkpointed and merged together; their attempted counts must agree.
+Let `g_ib` be the sum of all correlated events/cuts/counterterms from original
+draw i in bin b (including underflow or overflow). For requested stratum k,
+accumulate `Z_ikb = p_k W_i g_ib 1[requested_i = actual_i]`. Every attempt counts
+in n_k, including misses and draws with no entries in that bin. Then
 
-The native adapter uses GammaLoop's single-sample evaluation entry points, gates
-events before the one observable commit, and discards event records afterward.
-This neither reevaluates the physics nor transports per-event data to the sampler.
-Scalar/vector adapters share one accumulation path, and the evaluator runner
-passes the optional partition through `EvalBatchOptions` to every adapter.
+```
+I_b = sum_k mean_kb
+Var(I_b) = sum_k sum_{i in k}(Z_ikb - mean_kb)^2 / (n_k (n_k - 1))
+```
 
-For Python observable callbacks, `stratification` is either `None` or a
-`StratificationContext`. With a context, compute unweighted `(N,2)` real/imaginary
-values, obtain `mask = stratification.mask(values)`, and apply it before committing
-the native state. Training feedback remains **unmasked** and fully weighted. Return those **raw** values in
-`GammaLoopBatchResult.values`; the host computes the conditional integral moments.
-When no context is supplied, `values` must be `None`. The callback's state always
-contains its existing pooled statistics, and counts all attempts when stratifying.
-Adapters that launch an independent integration from one trigger, such as MadGraph
-event generation, cannot satisfy this per-draw contract and reject stratification.
+Merge raw bundles from batches/workers within each stratum before combining these
+independent estimates. Never pool raw moments across strata to estimate I_b.
+The checkpoint retains each stratum's raw bundle and the masked full-weight pooled
+reference; all histogram sample counts must match their respective attempted counts.
+Training uses only the pooled estimator and resets for frozen inference.
+Empty strata make the final mean unavailable. Errors use the same coverage guard
+as the primary integral (32 attempts and two matches per stratum).
+
+Presentation payloads retain raw reference statistics and add per-bin `estimate`
+(mean/error), `basic` (pooled mean/error), and per-stratum sample counts. Dashboard,
+campaign combinations and exports use the selected estimator. JSON preserves
+unavailable estimates; HwU requires available means/errors. No fictitious pooled
+sample count or raw moments are manufactured for a sum of stratum estimates.
+Bin errors do not specify covariance between different bins: uncertainty on a sum
+of bins, ratio or normalization needs the corresponding joint statistics.
+CDF views show cumulative means without error bars until that covariance is available.
+
+Observable histograms with frozen stratum statistics expose two compact selectors.
+**Stratum** defaults to **Combined** and can search any complete prefix, including
+ragged prefixes. **Display** selects Estimate, Compare estimates, Compare errors,
+or Error reduction. Only the selected population is drawn; comparisons add at most
+one basic curve. Error views use absolute standard errors, which remain useful
+for integrals near zero, and hide value-only controls and uploaded value references.
+The error reduction is `basic_error / stratified_error`; values above one indicate
+an improvement. Zero or unavailable denominators leave gaps. Selections persist
+with the histogram's view preferences and are included in figure JSON/CSV exports.
+
+For a single stratum, the basic comparison is its contribution to the pooled
+estimator over all N draws: `S_kb/(p_k N)`, with error squared
+`(Q_kb - S_kb^2/N)/(p_k^2 N(N-1))`. Other strata's draws are zeros in this comparison.
+It uses the same samples, rather than a separately trained unstratified run.
+Conditional errors use that stratum's own coverage readiness; combined errors
+require all strata to be ready. Adaptive training retains the ordinary pooled view.
+
+### Statistical requirements
 
 For each complete prefix, the runtime queries `discrete_mass` with every prefix
 coordinate fixed and all remaining coordinates marginalized. Arbitrary other

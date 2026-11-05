@@ -2,7 +2,7 @@ use super::{GammaLoopAccumulatorState, ScalarAccumulatorState};
 use crate::evaluation::evaluator::gammaloop::TrainingProjection;
 
 impl GammaLoopAccumulatorState {
-    /// Hybrid statistics use one independent queued draw, including misses,
+    /// Statistics use one independent queued draw, including misses,
     /// as the unit of every estimate and histogram.
     pub(crate) fn validate_stratified_samples(
         &self,

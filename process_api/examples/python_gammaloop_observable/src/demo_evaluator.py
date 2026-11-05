@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from gammaboard_process import GammaLoopEvaluator, GammaLoopBatchResult
+from gammaboard_process import Evaluator, ObservableBatch
 
 N_BINS = 20
 X_MIN, X_MAX = 0.0, 1.0
@@ -82,71 +82,27 @@ def _histogram_snapshot(xs: np.ndarray, weights: np.ndarray, mask: np.ndarray) -
     }
 
 
-def _scalar_state(count: int, total: float, sq: float) -> dict:
-    return {
-        "count": count,
-        "sum_weighted_value": total,
-        "sum_abs": abs(total),
-        "sum_sq": sq,
-    }
+class PolynomialEvaluator(Evaluator):
+    """f(x)=6x(1-x) with one unweighted histogram contribution per draw."""
 
+    def __init__(self, *, domain):
+        domain.require_rectangular_shape()
 
-class PolynomialEvaluator(GammaLoopEvaluator):
-    """GammaLoopEvaluator for f(x) = 6x(1-x) with a GammaLoop-style histogram observable.
-
-    In gammaloop accumulator mode, ``eval_gammaloop`` is called and returns a
-    ``GammaLoopBatchResult`` containing:
-
-    - ``bundle``: histogram of x weighted by f(x)
-    - ``estimate``: per-batch integral estimate (real component only)
-    - ``training_values``: |f(x)| per sample, forwarded to the sampler
-    """
-
-    def __init__(self, *, domain) -> None:
-        discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
-        pass
-
-    def eval_gammaloop(
-        self,
-        xs_discrete: np.ndarray,
-        xs_continuous: np.ndarray,
-        weights: np.ndarray,
-        *,
-        require_training_values: bool,
-        stratification,
-    ) -> GammaLoopBatchResult:
+    def eval(self, xs_discrete, xs_continuous):
         x = xs_continuous[:, 0]
-        raw_values = np.column_stack((_f(x), np.zeros(len(x))))
-        mask = (
-            stratification.mask(raw_values)
-            if stratification is not None
-            else np.ones(len(x), dtype=bool)
-        )
-        values = raw_values[:, 0] * weights * mask
-        n = len(x)
-        s = float(values.sum())
-        s2 = float((values**2).sum())
-        zero = _scalar_state(n, 0.0, 0.0)
-        state = {
-            "bundle": {"histograms": {"x": _histogram_snapshot(x, values, mask)}},
-            "estimate": {
-                "components": [
-                    {"name": "real", "state": _scalar_state(n, s, s2)},
-                    {"name": "imag", "state": zero},
-                ],
-                "projection": {
-                    "kind": "norm",
-                    "state": {
-                        "name": "training_projection",
-                        "state": _scalar_state(n, s, s2),
-                    },
-                },
-            },
-        }
-        return GammaLoopBatchResult(
-            state=state,
-            values=raw_values if stratification is not None else None,
-            training_values=np.abs(raw_values[:, 0] * weights).tolist()
-            if require_training_values
-            else None,
+        values = _f(x)
+        return ObservableBatch(
+            values=np.column_stack((values, np.zeros(len(x)))),
+            observables=[
+                {
+                    "histograms": {
+                        "x": _histogram_snapshot(
+                            np.asarray([position]),
+                            np.asarray([value]),
+                            np.asarray([True]),
+                        )
+                    }
+                }
+                for position, value in zip(x, values)
+            ],
         )

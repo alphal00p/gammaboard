@@ -1,5 +1,6 @@
 //! Direct in-memory reference for the same engines used by the runner benchmark.
 //! Bounded work, ordered generation feedback, and steady-state completion timing.
+use crate::evaluation::EvaluatorBatch;
 use crate::{
     Domain, EvalBatchOptions,
     core::{AccumulatorConfig, EvaluatorConfig, SamplingConfig},

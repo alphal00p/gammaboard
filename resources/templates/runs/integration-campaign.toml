@@ -1,0 +1,22 @@
+# Average two independent replicas of the same native complex amplitude.
+# Coefficients sum to one; their error variances add with squared coefficients.
+kind = "integration_campaign"
+name = "gammaloop-campaign"
+replacements = { state_folder = "states/showcase/gg_hhh" }
+[stop_condition]
+max_total_samples = 81920
+[allocation]
+max_active_runs = 2
+min_evaluators_per_run = 2
+min_samples_per_child = 4096
+allocation_window_samples = 8192
+[[children]]
+name = "replica-a"
+coefficient = 0.5
+replacements = { state_folder = "$(state_folder:states/showcase/gg_hhh)", seed = 101, inference_seed = 201 }
+run = { file = "support/gammaloop-replica.toml" }
+[[children]]
+name = "replica-b"
+coefficient = 0.5
+replacements = { state_folder = "$(state_folder:states/showcase/gg_hhh)", seed = 102, inference_seed = 202 }
+run = { file = "support/gammaloop-replica.toml" }

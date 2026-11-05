@@ -2,6 +2,7 @@
 //! Publication, fenced claims, result submission and decoding use WorkQueueStore.
 //! These measure storage capacity, independently of runner ticks and checkpointing.
 use super::IoRuntime;
+use crate::evaluation::EvaluatorBatch;
 use crate::{
     api::runs,
     core::{

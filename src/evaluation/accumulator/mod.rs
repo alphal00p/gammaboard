@@ -105,7 +105,7 @@ impl AccumulatorState {
     }
 
     /// Access native histogram/diagnostic payloads independently of the estimator.
-    /// Its estimate is pooled in a hybrid; primary results use metric extraction.
+    /// Its estimate is the pooled reference; use metric extraction and observable_payload for primary results.
     pub fn gammaloop(&self) -> Option<&GammaLoopAccumulatorState> {
         match self {
             Self::Gammaloop(state) => Some(state),
@@ -114,7 +114,7 @@ impl AccumulatorState {
         }
     }
 
-    /// Per-draw diagnostics retain full sampling weights even in a hybrid.
+    /// Per-draw diagnostics retain full sampling weights during stratified inference.
     pub fn pooled_vector(&self) -> Option<&VectorAccumulatorState> {
         match self {
             Self::Vector(state) => Some(state),

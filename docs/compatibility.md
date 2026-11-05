@@ -12,9 +12,9 @@ gammaboard run validate run.toml --probe
 | Contract | Current version |
 | --- | --- |
 | GammaBoard and Python SDK package | 0.3 |
-| Process protocol | `gammaboard-jsonrpc-v9` |
-| Database model | 7 |
-| Sampler checkpoint / saved sampler envelope | 5 |
+| Process protocol | `gammaboard-jsonrpc-v10` |
+| Database model | 8 |
+| Sampler checkpoint / saved sampler envelope | 6 |
 | Queue envelope | `GBQ` followed by byte `0x04` |
 | Performance responses | 2 |
 
@@ -58,20 +58,12 @@ namespace. Retired unversioned preferences are ignored, so zoom/selection/color
 preferences reset once after this cleanup. Numerical results and run definitions
 are unaffected.
 
-Protocol v9 passes full typed domains to Python callbacks, returns rich sampler
-feedback with ragged requested/actual prefixes, renames `discrete_pdf` to
-`discrete_mass`, and removes `global_pdf_norm`. Prefix-keyed Voronoi centres,
-axis roles, and partial feedback change persisted formats. Use matching workers
-and a fresh database; no old state or protocol adapters are provided.
+Protocol v10 enforces one unweighted result per evaluator input. Python observable
+callbacks use `eval` and `ObservableBatch`; aggregated state, callback weighting
+and masking are removed. Native integration trigger adapters cannot implement
+this contract. The MadSpace per-sample evaluator remains supported.
 
-The statistics-display revision adds partition diagnostics, retained stratum-labelled
-extrema, estimator identity and optional pooled comparisons to persisted outputs.
-Pooled standard errors use the sample-variance convention and are unavailable for
-fewer than two samples. These state changes require the current database model and model-5 checkpoints. The sampler feedback wire contract remains protocol v9 and
-queue inputs retain envelope version 4.
-
-Campaign scheduling uses database model 7: controller outputs expose resource
-capacity and drain status, and error-only campaigns also use durable sample
-grants. The single baseline remains for fresh databases. Sampler checkpoints,
-queue payloads and the process protocol are unchanged. Auto-assignment responses
-return `assigned_samplers` as a list, alongside `assigned_evaluators`.
+Database model 8 and checkpoint model 6 retain conditional histogram bundles for
+each stratum. Older pooled-only histogram checkpoints cannot be upgraded: begin
+with a fresh database and matching workers/SDK. Queue input envelope 4 is unchanged.
+The GammaLoop pin includes its explicit sample-observable accumulation API.

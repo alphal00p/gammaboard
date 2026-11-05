@@ -47,7 +47,7 @@ channel definitions/order requires a new run and trained grid. `graph_groups`
 selects graph groups from the loaded integration view. Optional `preprocessing`
 runs ordered commands; `read_only = true` protects the loaded state by default.
 `use_f128 = true` skips double-precision stability levels. See the
-[GammaLoop card](../resources/templates/runs/gammaloop.toml) for field names.
+[GammaLoop card](../resources/templates/runs/gammaloop-stratified.toml) for field names.
 
 ## Task sources and training
 
@@ -88,6 +88,13 @@ on raster tasks that use direct geometry coordinates. Raster `discrete` selects
 the branch; its dimensionality must match the geometry. Task append files accept
 `[task]`, `[[task_queue]]`, or both (single task first).
 
+Raw `image` and `plot_line` tasks accept `accumulator = { components = ["x", "y", "z"] }`
+for named vector outputs. The compact `"scalar"` form means `["value"]`; `"vector"`
+means the complex pair `["real", "imag"]`. Images provide one selector for components
+and the full vector magnitude; complex phase is offered only for real/imag output.
+Use a task-local evaluator projection, as in the tetrahedron's `xy-phase` task,
+when a complex view is wanted for part of a higher-dimensional output.
+
 ## Accumulators and measurements
 
 - `"scalar"` is shorthand for statistical vector component `value`.
@@ -126,9 +133,9 @@ They do not accept an integration task queue or a parent evaluator.
 
 | Kind | Settings and example |
 | --- | --- |
-| `integration_campaign` | `children`, `allocation`, `stop_condition`, optional `target`; [card](../resources/templates/runs/integration-campaign-qft-like.toml) |
-| `parameter_scan` | `parameters`, `child`, `measurement`, `max_concurrent_runs`; [card](../resources/templates/runs/parameter-scan-symbolica.toml) |
-| `hyperparameter_tuning` | `parameters`, `child`, `objective`, `optimizer`, `max_concurrent_trials`; [card](../resources/templates/runs/hyperparameter-tuning-symbolica.toml) |
+| `integration_campaign` | `children`, `allocation`, `stop_condition`, optional `target`; [card](../resources/templates/runs/integration-campaign.toml) |
+| `parameter_scan` | `parameters`, `child`, `measurement`, `max_concurrent_runs`; [card](../resources/templates/runs/parameter-scan.toml) |
+| `hyperparameter_tuning` | `parameters`, `child`, `objective`, `optimizer`, `max_concurrent_trials`; [card](../resources/templates/runs/hyperparameter-tuning.toml) |
 
 Child `run` is an inline TOML string or `{ file = "path.toml" }`. Relative references
 are resolved and contents frozen at submission. Generated parameter values override
@@ -234,7 +241,7 @@ and optional positive component `scales`. The inference task selects
 `accumulator = { config = ... }`. No user probability table is accepted.
 The frozen sampler supplies it through `discrete_mass`. See the
 [execution contract](execution-model.md#scaled-voronoi-stratification) and the
-[tetrahedron run](../resources/templates/runs/tetrahedron-stratified.toml).
+[tetrahedron run](../resources/templates/runs/tetrahedron-surface.toml).
 
 Symbolica can evaluate named real vectors using
 `source = { kind = "expressions", components = ["x", "y", "z"], exprs = ["t", "2*t", "-t"] }`.
@@ -247,9 +254,9 @@ and inspect all its complete prefixes automatically.
 
 With `accumulator = { config = "gammaloop" }`, Voronoi centres are pairs of
 `[real, imag]`. For example, `domain = { rectangular = { strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 } },centers = { "0" = [-1, 0], "1" = [1, 0] }` splits by real-part sign.
-The primary integral is stratified; native histograms remain masked, full-weight
-pooled estimates. Histogram totals need not equal the stratified central value.
-Process observable callbacks must implement the protocol-v9 masking contract.
+The primary integral and every observable bin use conditional per-stratum statistics.
+Process observable callbacks return unweighted per-sample contributions under protocol v10;
+GammaBoard applies masking and weights centrally.
 
 ### Stratum plots and PDF inspection
 
@@ -287,7 +294,11 @@ The four normalization modes are:
 - **Shape on this slice:** normalize the target by trapezoidal integration over
   the parameter grid. Native Havana line PDFs use their exact bin integrals;
   other PDFs use the same grid quadrature. A zero or unavailable integral has no
-  normalized curve.
+  normalized curve. When a stratum's target is zero at every evaluated slice
+  point, the panel says so and omits the undefined target curve and legend entry.
+  Joint/conditional density modes can still show the raw zero target. The sampler
+  PDF remains visible outside its intended stratum; it describes proposed points,
+  including those that would miss and contribute zero.
 - **Source integral reference:** compare joint PDFs with the target divided by
   the source estimate of its absolute-projection integral, when available. A
   signed integral's magnitude is never used as a substitute.
@@ -341,5 +352,4 @@ coordinate mapping cannot be reconstructed from a PDF query alone. Batch
 transforms still apply, with their Jacobians included in the importance target.
 
 Use [stratum-pdf-line.toml](../resources/templates/tasks/stratum-pdf-line.toml) with
-the sine/tetrahedron examples. [strata-pdf-showcase.toml](../resources/templates/runs/strata-pdf-showcase.toml)
-provides a complete signed two-dimensional example.
+the two-dimensional tetrahedron examples. The [surface card](../resources/templates/runs/tetrahedron-surface.toml) includes the complete line/image/PDF tour.

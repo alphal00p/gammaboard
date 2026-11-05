@@ -8,7 +8,7 @@ from .batch_codec import BatchCodec
 from .domain import Domain
 from .feedback import Feedback, StratumAssignments
 from .batches import Batch, GenerationStatus, SampleBatch
-from .gammaloop import GammaLoopBatchResult, StratificationContext
+from .gammaloop import ObservableBatch
 from .protocol import (
     PROTOCOL,
     ProtocolIo,
@@ -93,11 +93,8 @@ class _EvaluatorWorker:
                 domain=domain,
                 init_args=params.get("args") or {},
             )
-            callback = "eval_gammaloop" if self._output_kind == "gammaloop" else "eval"
-            if not callable(getattr(self.evaluator, callback, None)):
-                raise TypeError(
-                    f"{self._output_kind} evaluator must implement {callback}"
-                )
+            if not callable(getattr(self.evaluator, "eval", None)):
+                raise TypeError("evaluator must implement eval")
             metadata = _call_optional(self.evaluator, "metadata", {})
             return {"ok": True, "metadata": metadata}
         if self.evaluator is None:
@@ -106,76 +103,36 @@ class _EvaluatorWorker:
             return {"diagnostics": _call_optional(self.evaluator, "diagnostics", {})}
         if method == "eval_batch":
             nr_samples = params["nr_samples"]
-            batch = self.codec.decode(
-                params, req_binary, weighted=self._output_kind == "gammaloop"
-            )
-            xs_discrete, xs_continuous, weights = (
-                batch.xs_discrete,
-                batch.xs_continuous,
-                batch.weights,
-            )
+            batch = self.codec.decode(params, req_binary, weighted=False)
+            result = self.evaluator.eval(batch.xs_discrete, batch.xs_continuous)
             if self._output_kind == "gammaloop":
-                required = params["require_training_values"]
-                if not isinstance(required, bool):
-                    raise TypeError("require_training_values must be a boolean")
-                partition = params["stratification"]
-                context = (
-                    StratificationContext(partition, nr_samples)
-                    if partition is not None
-                    else None
-                )
-                return self._eval_batch_gammaloop(
-                    xs_discrete, xs_continuous, weights, required, context
-                )
-            raw_values = self.evaluator.eval(xs_discrete, xs_continuous)
+                if not isinstance(result, ObservableBatch):
+                    raise TypeError("observable evaluator must return ObservableBatch")
+                raw = np.asarray(result.values, dtype="<f8")
+                if raw.shape != (nr_samples, 2) or not np.isfinite(raw).all():
+                    raise ValueError(
+                        "observable values must be finite (N,2) real/imag values"
+                    )
+                if len(result.observables) != nr_samples:
+                    raise ValueError("observables must contain one bundle per input")
+                for bundle in result.observables:
+                    for histogram in bundle["histograms"].values():
+                        if histogram["sample_count"] != 1:
+                            raise ValueError(
+                                "observable output must describe exactly one sample"
+                            )
+                return {
+                    "observables": result.observables,
+                    "__binary__": np.ascontiguousarray(raw).tobytes(),
+                }
             values = _normalize_evaluator_values(
-                raw_values, nr_samples, self.components
+                result, nr_samples, self.components
             )
             values_row_major = np.ascontiguousarray(
                 values.reshape((nr_samples * len(self.components),)), dtype="<f8"
             )
             return {"__binary__": values_row_major.tobytes()}
         raise ValueError(f"unknown method: {method}")
-
-    def _eval_batch_gammaloop(
-        self,
-        xs_discrete: np.ndarray,
-        xs_continuous: np.ndarray,
-        weights: np.ndarray,
-        require_training_values: bool,
-        stratification: StratificationContext | None,
-    ) -> dict[str, Any]:
-        result = self.evaluator.eval_gammaloop(
-            xs_discrete,
-            xs_continuous,
-            weights,
-            require_training_values=require_training_values,
-            stratification=stratification,
-        )
-        if not isinstance(result, GammaLoopBatchResult):
-            raise TypeError("eval_gammaloop must return GammaLoopBatchResult")
-        response: dict[str, Any] = {"gammaloop_state": result.state}
-        if require_training_values:
-            values = np.asarray(result.training_values, dtype="<f8")
-            if values.shape != (len(weights),):
-                raise ValueError(
-                    "GammaLoop training values must contain one weighted value per sample"
-                )
-            if not np.isfinite(values).all():
-                raise ValueError("GammaLoop returned non-finite training feedback")
-            response["__binary__"] = values.tobytes()
-        elif result.training_values is not None:
-            raise ValueError("GammaLoop inference must not return training values")
-        if stratification is not None:
-            raw = np.asarray(result.values, dtype="<f8")
-            # Validate the same classification inputs as the Rust host.
-            stratification.mask(raw)
-            response["__binary__"] = (
-                response.get("__binary__", b"") + np.ascontiguousarray(raw).tobytes()
-            )
-        elif result.values is not None:
-            raise ValueError("GammaLoop values are only requested for stratification")
-        return response
 
 
 class _SamplerWorker:

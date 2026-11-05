@@ -117,8 +117,11 @@ pub struct StratifiedAccumulatorState {
     pub plan: StratificationPlan,
     pub config: AccumulatorConfig,
     pub strata: Vec<StratumMoments>,
-    /// Native histograms retain masked full-weight, pooled statistics.
+    /// Pooled reference estimate and diagnostics.
     pub pooled: Option<Box<super::GammaLoopAccumulatorState>>,
+    /// Conditional-weight raw statistics, indexed by the plan’s stratum order.
+    #[cfg(feature = "gammaloop")]
+    pub histograms: Vec<gammalooprs::observables::ObservableSnapshotBundle>,
 }
 impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -129,6 +132,8 @@ impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
             config: AccumulatorConfig,
             strata: Vec<StratumMoments>,
             pooled: Option<Box<super::GammaLoopAccumulatorState>>,
+            #[cfg(feature = "gammaloop")]
+            histograms: Vec<gammalooprs::observables::ObservableSnapshotBundle>,
         }
         let saved = Saved::deserialize(deserializer)?;
         let state = Self {
@@ -136,6 +141,8 @@ impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
             config: saved.config,
             strata: saved.strata,
             pooled: saved.pooled,
+            #[cfg(feature = "gammaloop")]
+            histograms: saved.histograms,
         };
         state.validate().map_err(serde::de::Error::custom)?;
         Ok(state)
@@ -186,6 +193,8 @@ impl StratifiedAccumulatorState {
             pooled: matches!(config, AccumulatorConfig::Gammaloop).then(Default::default),
             config,
             strata,
+            #[cfg(feature = "gammaloop")]
+            histograms: Vec::new(),
         })
     }
     pub fn push(
@@ -268,6 +277,40 @@ impl StratifiedAccumulatorState {
                 .filter(|n| *n <= i64::MAX as u64)
                 .ok_or_else(|| EngineError::eval("stratum count overflow"))?;
         }
+        #[cfg(feature = "gammaloop")]
+        if !self.histograms.is_empty() {
+            if !matches!(self.config, AccumulatorConfig::Gammaloop)
+                || self.histograms.len() != self.strata.len()
+            {
+                return Err(EngineError::eval("incomplete stratified histogram state"));
+            }
+            gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+                &self.histograms,
+            )
+            .map_err(|e| EngineError::eval(e.to_string()))?;
+            for (bundle, stratum) in self.histograms.iter().zip(&self.strata) {
+                super::gammaloop::validate_histogram_bundle(bundle)?;
+                if bundle
+                    .histograms
+                    .values()
+                    .any(|h| h.sample_count as u64 != stratum.attempts)
+                {
+                    return Err(EngineError::eval(
+                        "histograms must count every intended-stratum attempt",
+                    ));
+                }
+            }
+        } else if matches!(self.config, AccumulatorConfig::Gammaloop)
+            && count > 0
+            && self
+                .pooled
+                .as_ref()
+                .is_some_and(|p| !p.bundle.histograms.is_empty())
+        {
+            return Err(EngineError::eval(
+                "missing conditional histogram statistics",
+            ));
+        }
         match &self.pooled {
             Some(pooled) if matches!(self.config, AccumulatorConfig::Gammaloop) => {
                 pooled.validate_values()?;
@@ -287,6 +330,15 @@ impl StratifiedAccumulatorState {
         let mut merged = self.clone();
         for (a, b) in merged.strata.iter_mut().zip(&other.strata) {
             a.merge(b)?;
+        }
+        #[cfg(feature = "gammaloop")]
+        if merged.histograms.is_empty() {
+            merged.histograms = other.histograms;
+        } else if !other.histograms.is_empty() {
+            for (left, right) in merged.histograms.iter_mut().zip(&other.histograms) {
+                left.merge_in_place(right)
+                    .map_err(|e| EngineError::eval(e.to_string()))?;
+            }
         }
         if let (Some(left), Some(right)) = (&mut merged.pooled, other.pooled) {
             left.merge_in_place(*right)?;

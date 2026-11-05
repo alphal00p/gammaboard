@@ -11,19 +11,10 @@ from .feedback import Feedback
 from .batches import Batch, GenerationStatus, SampleBatch
 
 if TYPE_CHECKING:
-    from .gammaloop import GammaLoopBatchResult, StratificationContext
+    from .gammaloop import ObservableBatch
 
 
-class _EvaluatorBase(ABC):
-    def metadata(self) -> Any:
-        """Return JSON-safe evaluator metadata passed to sampler initialization."""
-        return {}
-
-    def diagnostics(self) -> dict[str, Any]:
-        return {}
-
-
-class Evaluator(_EvaluatorBase):
+class Evaluator(ABC):
     """Optional base class for process evaluators.
 
     Inheritance is not required. ``run_evaluator`` accepts any class with a
@@ -31,44 +22,18 @@ class Evaluator(_EvaluatorBase):
     ``ClassName(domain=..., **args)``.
     """
 
+    def metadata(self) -> Any:
+        """Return JSON-safe evaluator metadata passed to sampler initialization."""
+        return {}
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {}
+
     @abstractmethod
     def eval(
         self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
-    ) -> ArrayLike | dict[str, ArrayLike]:
-        """Return values with shape ``(nr_samples,)`` or ``(nr_samples, nr_components)``."""
-
-
-class GammaLoopEvaluator(_EvaluatorBase):
-    """Optional base for callbacks that produce GammaLoop accumulator state.
-
-    Implement only ``eval_gammaloop``; ordinary ``eval`` is not required.
-    Both evaluator interfaces use ``run_evaluator`` and the same constructor.
-    """
-
-    @abstractmethod
-    def eval_gammaloop(
-        self,
-        xs_discrete: np.ndarray,
-        xs_continuous: np.ndarray,
-        weights: np.ndarray,
-        *,
-        require_training_values: bool,
-        stratification: StratificationContext | None,
-    ) -> GammaLoopBatchResult:
-        """Evaluate a batch and return a GammaLoop accumulator state.
-
-        Override this method when the run's accumulator is configured as
-        ``gammaloop``.  The returned :class:`~gammaboard_process.GammaLoopBatchResult`
-        carries a JSON-serializable ``GammaLoopAccumulatorState`` dict (with at
-        minimum a ``bundle`` key containing an
-        :class:`~gammaboard_process.gammaloop.ObservableSnapshotBundle`) and a
-        list of weighted per-sample training values when requested, otherwise None.
-        Apply the supplied total weights exactly once to state and feedback.
-        ``stratification`` is None or a StratificationContext. Use its ``mask``
-        on raw real/imag values before accumulating observables; leave training values unmasked. Count misses as
-        zero samples, and return unmasked (N,2) values in the result when present.
-
-        """
+    ) -> ArrayLike | dict[str, ArrayLike] | ObservableBatch:
+        """Return unweighted values or ObservableBatch, one result per input."""
 
 
 class Sampler(ABC):

@@ -1,9 +1,9 @@
 #[cfg(test)]
 use super::gammaloop_config::GammaLoopPreprocessing;
 pub use super::gammaloop_config::{GammaLoopParams, TrainingProjection};
-#[cfg(test)]
-use crate::AccumulatorState;
 use crate::core::EngineResultExt;
+#[cfg(test)]
+use crate::{AccumulatorConfig, AccumulatorState, BatchResult};
 use gammalooprs::integrands::process::EvaluationTarget;
 use std::{any::Any, ops::ControlFlow, panic::AssertUnwindSafe};
 
@@ -31,18 +31,13 @@ use serde_json::{Value as JsonValue, json};
 use symbolica::numerical_integration::Sample;
 
 use crate::{
-    Batch, BatchResult, Domain, DomainBranch, EngineError,
-    core::{
-        AccumulatorConfig, AccumulatorMomentConfig,
-        TrainingProjection as AccumulatorTrainingProjection,
-    },
-    evaluation::{EvalBatchOptions, Evaluator, GammaLoopAccumulatorState, VectorAccumulatorState},
+    Batch, Domain, DomainBranch, EngineError,
+    evaluation::{EvalBatchOptions, Evaluator, GammaLoopAccumulatorState},
     resources::resolve_resource_path,
 };
 
 pub struct GammaLoopEvaluator {
     integrand: ProcessIntegrand,
-    pristine_integrand: ProcessIntegrand,
     model: Model,
     metadata: GammaLoopMetadata,
     momentum_space: bool,
@@ -66,17 +61,6 @@ struct GammaLoopMetadata {
     sampling: SamplingSettingsParser,
     #[serde(skip_serializing_if = "Option::is_none")]
     reference_gaussian: Option<GaussianReferenceFunction>,
-}
-
-impl TrainingProjection {
-    fn project(self, value: num::Complex<f64>) -> f64 {
-        match self {
-            Self::Real => value.re,
-            Self::Imag => value.im,
-            Self::Abs => value.norm(),
-            Self::AbsSq => value.norm_sqr(),
-        }
-    }
 }
 
 impl GammaLoopEvaluator {
@@ -502,7 +486,6 @@ impl GammaLoopEvaluator {
                     })
             })?;
             Ok(Self {
-                pristine_integrand: integrand.clone(),
                 integrand,
                 model,
                 momentum_space: metadata.momentum_space,
@@ -550,106 +533,6 @@ impl GammaLoopEvaluator {
             ))
         })?;
         Ok(discrete)
-    }
-
-    fn batch_gammaloop_observable(
-        &self,
-        evaluation_results: &[EvaluationResult],
-        points: &[crate::evaluation::Point],
-        options: EvalBatchOptions<'_>,
-    ) -> Result<GammaLoopAccumulatorState, EngineError> {
-        let mut state = Self::gammaloop_estimate(
-            evaluation_results,
-            points,
-            self.training_projection,
-            options,
-        )?;
-        state.bundle = self
-            .integrand
-            .observable_snapshot_bundle()
-            .unwrap_or_default();
-        Ok(state)
-    }
-
-    fn gammaloop_estimate(
-        evaluation_results: &[EvaluationResult],
-        points: &[crate::evaluation::Point],
-        training_projection: TrainingProjection,
-        options: EvalBatchOptions<'_>,
-    ) -> Result<GammaLoopAccumulatorState, EngineError> {
-        let mut estimate = VectorAccumulatorState::from_config(
-            vec!["real".to_string(), "imag".to_string()],
-            AccumulatorTrainingProjection::Norm,
-            None,
-            // Track 4th-order moments so each batch contributes the running sums
-            // needed for the RSD metric's uncertainty (see GammaLoopAccumulatorState).
-            AccumulatorMomentConfig::MaxOrder4,
-        );
-        let mut training_norm_sqr = (training_projection == TrainingProjection::AbsSq).then(|| {
-            Box::new(crate::evaluation::ScalarAccumulatorState::from_config(
-                None,
-                AccumulatorMomentConfig::MaxOrder4,
-            ))
-        });
-        for (sample, (result, point)) in evaluation_results.iter().zip(points.iter()).enumerate() {
-            let raw = Self::project_result_value(result);
-            let matched = options.matches(sample, &[raw.re, raw.im])?;
-            if let Some(statistics) = &mut training_norm_sqr {
-                // Project after parameterization, then apply the sampling weight
-                // once (squaring that weight would describe a different estimator).
-                statistics
-                    .add_sample_without_discrete_projection(
-                        if matched {
-                            training_projection.project(raw)
-                        } else {
-                            0.
-                        },
-                        point,
-                    )
-                    .map_err(|err| {
-                        EngineError::eval(format!("sample {sample}, training projection: {err}"))
-                    })?;
-            }
-            let evaluation = crate::evaluation::batch::SampleEvaluation {
-                integrand_value_re: result.integrand_result.re.0,
-                integrand_value_im: result.integrand_result.im.0,
-                parameterization_jacobian: result.parameterization_jacobian.map(|jac| jac.0),
-            };
-            // Statistics use the magnitude of sampling/parameterization weights.
-            // Apply the parameterization factor here once; the diagnostic record
-            // is only descriptive and cannot change accumulation.
-            let value = Self::returned_result_value(result)
-                * evaluation.parameterization_jacobian.unwrap_or(1.0).abs();
-            if !(value.re * point.total_weight()).is_finite()
-                || !(value.im * point.total_weight()).is_finite()
-            {
-                return Err(EngineError::eval(
-                    "non-finite weighted GammaLoop contribution",
-                ));
-            }
-            let value = if matched {
-                value
-            } else {
-                num::Complex::new(0., 0.)
-            };
-            estimate
-                .ingest_vector_with_details(
-                    &[value.re, value.im],
-                    point,
-                    Some(&evaluation),
-                    options.stratum_assignment(sample, &[raw.re, raw.im])?,
-                )
-                .map_err(|err| EngineError::eval(format!("sample {sample}: {err}")))?;
-        }
-        Ok(GammaLoopAccumulatorState {
-            bundle: Default::default(),
-            estimate,
-            training_projection: Some(training_projection),
-            training_norm_sqr,
-            diagnostics: GammaLoopAccumulatorState::diagnostics_from_evaluation_results(
-                evaluation_results,
-            ),
-        })
     }
 
     fn momentum_input(
@@ -748,7 +631,6 @@ impl GammaLoopEvaluator {
         batch: &Batch,
         components: &[String],
         options: EvalBatchOptions<'_>,
-        record_observables: bool,
     ) -> Result<Vec<EvaluationResult>, EngineError> {
         if components != ["real", "imag"] && components != ["value"] {
             return Err(EngineError::invalid_input(
@@ -756,12 +638,9 @@ impl GammaLoopEvaluator {
             ));
         }
         options.validate(batch.len(), components)?;
-        if record_observables {
-            self.integrand = self.pristine_integrand.clone();
-        }
         let mut results = Vec::with_capacity(batch.len());
-        for (index, point) in batch.points().iter().enumerate() {
-            let mut result = if self.momentum_space {
+        for point in batch.points() {
+            let result = if self.momentum_space {
                 let input = self.momentum_input(point)?;
                 Self::call_external("evaluate_momentum_configuration", || {
                     self.integrand
@@ -807,26 +686,6 @@ impl GammaLoopEvaluator {
             if !value.re.is_finite() || !value.im.is_finite() {
                 return Err(EngineError::eval("non-finite GammaLoop integrand value"));
             }
-            let projected = [self.training_projection.project(value)];
-            let complex = [value.re, value.im];
-            let values = if components.len() == 1 {
-                projected.as_slice()
-            } else {
-                complex.as_slice()
-            };
-            let matched = options.matches(index, values)?;
-            if !matched {
-                result.event_groups.clear();
-            }
-            if record_observables {
-                // One commit per original draw, even on a miss. Native processing
-                // groups correlated events before accumulating squared bin sums.
-                Self::call_external("process_evaluation_result", || {
-                    self.integrand.process_evaluation_result(&result);
-                    Ok::<_, EngineError>(())
-                })?;
-            }
-            result.event_groups.clear();
             results.push(result);
         }
         Ok(results)
@@ -890,65 +749,51 @@ impl Evaluator for GammaLoopEvaluator {
         batch: &Batch,
         components: &[String],
     ) -> Result<Vec<f64>, EngineError> {
-        let results = self.evaluate(batch, components, EvalBatchOptions::default(), false)?;
+        let results = self.evaluate(batch, components, EvalBatchOptions::default())?;
         Ok(self.values(&results, components))
     }
 
-    fn eval_batch(
+    fn training_projection(&self) -> TrainingProjection {
+        self.training_projection
+    }
+
+    fn eval_samples(
         &mut self,
         batch: &Batch,
-        accumulator: &AccumulatorConfig,
-        options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError> {
-        let native = matches!(accumulator, AccumulatorConfig::Gammaloop);
-        let components = if native {
-            vec!["real".into(), "imag".into()]
-        } else {
-            accumulator
-                .components()
-                .unwrap_or(&["value".into()])
-                .to_vec()
-        };
-        let results = self.evaluate(batch, &components, options, native)?;
-        let values = self.values(&results, &components);
-        if !native {
-            return crate::evaluation::stratification::accumulate_values(
-                batch,
-                &components,
-                &values,
-                accumulator,
-                options,
-            );
+        components: &[String],
+        emit: &mut dyn FnMut(crate::evaluation::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        let mut observables = Self::call_external("new_observable_accumulator", || {
+            self.integrand.new_observable_accumulator()
+        })?;
+        let empty = observables.snapshot_bundle();
+        for point in batch.points() {
+            // Consume events immediately: memory is bounded by one native sample.
+            let results = self.evaluate(
+                &Batch::new(vec![point.clone()]),
+                components,
+                EvalBatchOptions::default(),
+            )?;
+            let result = &results[0];
+            let mut sample =
+                crate::evaluation::SampleOutput::values(self.values(&results, components));
+            sample.evaluation = Some(crate::evaluation::SampleEvaluation {
+                integrand_value_re: result.integrand_result.re.0,
+                integrand_value_im: result.integrand_result.im.0,
+                parameterization_jacobian: result.parameterization_jacobian.map(|j| j.0),
+            });
+            sample.diagnostics =
+                GammaLoopAccumulatorState::diagnostics_from_evaluation_results(&results);
+            Self::call_external("reset_observable_sample", || {
+                observables.restore_snapshot_bundle(&empty)
+            })?;
+            Self::call_external("accumulate_observable_sample", || {
+                observables.accumulate_sample(&result.event_groups, &F(1.0))
+            })?;
+            sample.observables = Some(observables.snapshot_bundle());
+            emit(sample)?;
         }
-        let state = self.batch_gammaloop_observable(&results, batch.points(), options)?;
-        let training_values = if options.require_training_values {
-            Some(
-                results
-                    .iter()
-                    .zip(batch.points())
-                    .map(|(result, point)| {
-                        let value = Self::project_result_value(result);
-                        let projected =
-                            self.training_projection.project(value) * point.total_weight();
-                        if !projected.is_finite() {
-                            return Err(EngineError::eval(
-                                "non-finite GammaLoop training feedback",
-                            ));
-                        }
-                        Ok(projected)
-                    })
-                    .collect::<Result<Vec<_>, EngineError>>()?,
-            )
-        } else {
-            None
-        };
-        crate::evaluation::stratification::finish_gammaloop(
-            batch,
-            Some(&values),
-            state,
-            training_values,
-            options,
-        )
+        Ok(())
     }
 }
 

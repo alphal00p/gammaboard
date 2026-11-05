@@ -1922,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-api"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "ahash",
  "bincode",
@@ -1976,7 +1976,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-tracing-filter"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "chrono",
  "clap",
@@ -1997,7 +1997,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-tracing-filter-macros"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2006,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "gammaloop-workspace-hack"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "ahash",
  "arrayvec",
@@ -2054,7 +2054,7 @@ dependencies = [
 [[package]]
 name = "gammalooprs"
 version = "0.3.4"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "ahash",
  "base62",
@@ -2521,7 +2521,7 @@ dependencies = [
 [[package]]
 name = "idenso"
 version = "0.3.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "bincode",
  "bincode-trait-derive",
@@ -2956,7 +2956,7 @@ dependencies = [
 [[package]]
 name = "linnet"
 version = "0.17.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "ahash",
  "bincode",
@@ -5057,7 +5057,7 @@ checksum = "02ef091d4e8b981dbaa4cc17789d00b53d5d2c001ae689f14e6093f30c529036"
 [[package]]
 name = "spenso"
 version = "0.6.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "ahash",
  "append-only-vec",
@@ -5093,7 +5093,7 @@ dependencies = [
 [[package]]
 name = "spenso-hep-lib"
 version = "0.1.7"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "gammaloop-workspace-hack",
  "idenso",
@@ -5104,7 +5104,7 @@ dependencies = [
 [[package]]
 name = "spenso-macros"
 version = "0.3.2"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5499,7 +5499,7 @@ dependencies = [
 [[package]]
 name = "symbolica-utils"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "bincode",
  "bincode-trait-derive",
@@ -5805,13 +5805,15 @@ dependencies = [
 [[package]]
 name = "three-dimensional-reps"
 version = "0.1.0"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "bincode",
  "bincode-trait-derive",
+ "clap",
  "itertools 0.14.0",
  "linnet",
  "nu-ansi-term",
+ "schemars",
  "serde",
  "symbolica",
  "tabled",
@@ -6391,7 +6393,7 @@ dependencies = [
 [[package]]
 name = "vakint"
 version = "0.1.2"
-source = "git+https://github.com/alphal00p/gammaloop.git?rev=2e22d46aae9aa987aada970474cec266976cde5b#2e22d46aae9aa987aada970474cec266976cde5b"
+source = "git+https://github.com/alphal00p/gammaloop?rev=227e3534a5fb39f64710b6754cc63f34ed4c95a7#227e3534a5fb39f64710b6754cc63f34ed4c95a7"
 dependencies = [
  "ahash",
  "colored",

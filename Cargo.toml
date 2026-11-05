@@ -11,6 +11,8 @@ keywords = ["integration", "monte-carlo", "distributed", "scientific"]
 categories = ["science", "command-line-utilities"]
 include = [
     "/src/**",
+    "/examples/prepare_showcase.rs",
+    "/examples/gammaloop/showcase.toml",
     "/tests/fixtures/json_worker.py",
     "/migrations/**",
     "/resources/templates/**",
@@ -29,9 +31,9 @@ gammaloop = ["dep:gammalooprs", "dep:gammaloop_api"]
 
 [dependencies]
 sha2 = "0.10"
-gammalooprs = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammalooprs", optional = true }
+gammalooprs = { git = "https://github.com/alphal00p/gammaloop", rev = "227e3534a5fb39f64710b6754cc63f34ed4c95a7", package = "gammalooprs", optional = true }
 
-gammaloop_api = { git = "https://github.com/alphal00p/gammaloop.git", rev = "2e22d46aae9aa987aada970474cec266976cde5b", package = "gammaloop-api", default-features = false, features = ["cli"], optional = true }
+gammaloop_api = { git = "https://github.com/alphal00p/gammaloop", rev = "227e3534a5fb39f64710b6754cc63f34ed4c95a7", package = "gammaloop-api", default-features = false, features = ["cli"], optional = true }
 tokio = { version = "1.46", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "chrono", "macros"] }
 rand = { package = "rand", version = "0.9" }

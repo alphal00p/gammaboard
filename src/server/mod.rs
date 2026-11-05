@@ -54,13 +54,9 @@ use axum::{
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post},
 };
-#[cfg(feature = "gammaloop")]
-use gammalooprs::observables::ObservableSnapshotBundle;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-#[cfg(feature = "gammaloop")]
-use std::fs;
 use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -1728,38 +1724,12 @@ async fn export_histogram_bundle(
                 contents: format!("{contents}\n"),
             }
         }
-        "hwu" => {
-            #[cfg(not(feature = "gammaloop"))]
-            {
-                return Err(ApiError::BadRequest(
-                    "HwU histogram bundle export requires a gammaboard build with the default \"gammaloop\" feature enabled"
-                        .to_string(),
-                ));
-            }
-            #[cfg(feature = "gammaloop")]
-            {
-                let bundle: ObservableSnapshotBundle =
-                    serde_json::from_value(wrapper).map_err(|err| {
-                        ApiError::BadRequest(format!(
-                            "invalid histogram bundle payload for export: {err}"
-                        ))
-                    })?;
-                let file = tempfile::NamedTempFile::new().map_err(|err| {
-                    ApiError::Internal(format!("failed to create temporary hwu file: {err}"))
-                })?;
-                bundle.write_hwu_file(file.path()).map_err(|err| {
-                    ApiError::Internal(format!("failed to export HwU bundle: {err}"))
-                })?;
-                let contents = fs::read_to_string(file.path()).map_err(|err| {
-                    ApiError::Internal(format!("failed to read exported HwU bundle: {err}"))
-                })?;
-                HistogramBundleExportResponse {
-                    filename: "histogram_bundle.HwU".to_string(),
-                    mime_type: "text/plain;charset=utf-8".to_string(),
-                    contents,
-                }
-            }
-        }
+        "hwu" => HistogramBundleExportResponse {
+            filename: "histogram_bundle.HwU".to_string(),
+            mime_type: "text/plain;charset=utf-8".to_string(),
+            contents: crate::services::results::histogram_hwu(&wrapper)
+                .map_err(ApiError::BadRequest)?,
+        },
         _ => {
             return Err(ApiError::BadRequest(
                 "unsupported histogram export format (expected 'json' or 'hwu')".to_string(),

@@ -66,7 +66,7 @@ impl EvaluatorConfig {
     ) -> Result<(), EngineError> {
         match self {
             Self::ProcessEvaluator { params } => match &params.output {
-                process::ProcessOutput::Gammaloop => {
+                process::ProcessOutput::Gammaloop { .. } => {
                     if matches!(config, AccumulatorConfig::Gammaloop) {
                         Ok(())
                     } else {

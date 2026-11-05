@@ -1,0 +1,13 @@
+# A 2D grid of surface sharpness and shear; all three exact integral means stay zero.
+kind = "parameter_scan"
+name = "tetrahedron-scan"
+max_concurrent_runs = 2
+measurement = { source_task = "inference", selection = { kind = "metric", name = "error", component = "x" } }
+[[parameters]]
+name = "sharpness"
+values = [3,6,9]
+[[parameters]]
+name = "skew"
+values = [0.0,0.25,0.5]
+[child]
+run = { file = "support/tetrahedron-trial.toml" }

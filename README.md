@@ -26,6 +26,19 @@ The run should finish with an integral of **1.0**. Stop workers with
 Anyone with dashboard access can launch configured process commands; keep the
 default passwordless deployment on a trusted network.
 
+The [default examples](docs/quickstart.md#default-examples) cover native GammaLoop
+phase stratification, a 2D-to-3D tetrahedron surface, the process API, centre tuning,
+scans and campaigns.
+
+## Evaluator and sampler models
+
+Evaluators return one **unweighted result per input point**, optionally including
+that point's observable fills. Samplers generate weighted draws, adapt from ordered
+feedback, and snapshot their private state. GammaBoard owns weighting, stratum
+masking and statistical aggregation. Materializers and transforms connect generated
+samples to integrand coordinates. The [execution model](docs/execution-model.md#ownership-and-flow)
+defines these contracts for native and process implementations.
+
 ## Guides
 
 - [Setup and examples](docs/quickstart.md)

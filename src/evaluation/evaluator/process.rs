@@ -2,9 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::{AccumulatorConfig, EngineError};
-use crate::evaluation::{
-    Batch, BatchResult, EvalBatchOptions, Evaluator, GammaLoopAccumulatorState,
-};
+use crate::evaluation::{Batch, Evaluator};
 use crate::process_runtime::{build_process_worker_command, default_process_args};
 use crate::process_worker::{PROCESS_PROTOCOL, ProcessWorker};
 use crate::utils::domain::Domain;
@@ -17,7 +15,10 @@ pub enum ProcessOutput {
         #[serde(default = "default_components")]
         components: Vec<String>,
     },
-    Gammaloop,
+    Gammaloop {
+        #[serde(default)]
+        training_projection: super::gammaloop::TrainingProjection,
+    },
 }
 impl Default for ProcessOutput {
     fn default() -> Self {
@@ -30,7 +31,7 @@ impl ProcessOutput {
     fn components(&self) -> &[String] {
         match self {
             Self::Values { components } => components,
-            Self::Gammaloop => &[],
+            Self::Gammaloop { .. } => &[],
         }
     }
 }
@@ -94,52 +95,77 @@ impl Evaluator for ProcessEvaluator {
             || self.worker.output.components() != components
         {
             return Err(EngineError::invalid_input(
-                "stratification requires matching per-sample evaluator values",
+                "requested components must match the process evaluator output",
             ));
         }
         self.worker
             .eval_batch(&pack_eval_inputs(batch, &self.worker.domain), batch.len())
     }
 
-    fn eval_batch(
+    fn training_projection(&self) -> super::gammaloop::TrainingProjection {
+        match self.worker.output {
+            ProcessOutput::Gammaloop {
+                training_projection,
+            } => training_projection,
+            _ => super::gammaloop::TrainingProjection::Abs,
+        }
+    }
+
+    fn eval_samples(
         &mut self,
         batch: &Batch,
-        accumulator: &AccumulatorConfig,
-        options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError> {
-        let mut inputs = pack_eval_inputs(batch, &self.worker.domain);
-        if matches!(accumulator, AccumulatorConfig::Gammaloop) {
-            for point in batch.points() {
-                inputs
-                    .binary
-                    .extend_from_slice(&point.total_weight().to_le_bytes());
+        components: &[String],
+        emit: &mut dyn FnMut(crate::evaluation::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        if matches!(self.worker.output, ProcessOutput::Gammaloop { .. }) {
+            if components != ["real", "imag"] {
+                return Err(EngineError::invalid_input(
+                    "observable output requires real/imag components",
+                ));
             }
-            let response = self
-                .worker
-                .eval_batch_gammaloop(&inputs, batch.len(), options)?;
-            return crate::evaluation::stratification::finish_gammaloop(
-                batch,
-                response.values.as_deref(),
-                response.state,
-                response.training_values,
-                options,
-            );
+            #[cfg(feature = "gammaloop")]
+            {
+                let inputs = pack_eval_inputs(batch, &self.worker.domain);
+                let mut params =
+                    serde_json::json!({"nr_samples":batch.len(), "components":components});
+                add_required_offsets(&mut params, &inputs);
+                let (response, binary) = self
+                    .worker
+                    .process
+                    .request_with_binary("eval_batch", params, &inputs.binary)
+                    .map_err(EngineError::eval)?;
+                let values = unpack_f64_le(&binary, "observable values")?;
+                let bundles: Vec<gammalooprs::observables::ObservableSnapshotBundle> =
+                    serde_json::from_value(
+                        response
+                            .get("observables")
+                            .cloned()
+                            .ok_or_else(|| EngineError::eval("missing per-sample observables"))?,
+                    )
+                    .map_err(|e| EngineError::eval(e.to_string()))?;
+                if bundles.len() != batch.len() || values.len() != 2 * batch.len() {
+                    return Err(EngineError::eval(
+                        "observable result count must match input samples",
+                    ));
+                }
+                for (bundle, row) in bundles.into_iter().zip(values.as_chunks::<2>().0.iter()) {
+                    let mut output = crate::evaluation::SampleOutput::values(row.to_vec());
+                    output.observables = Some(bundle);
+                    emit(output)?;
+                }
+                return Ok(());
+            }
+            #[cfg(not(feature = "gammaloop"))]
+            return Err(EngineError::eval(
+                "observable output requires the gammaloop feature",
+            ));
         }
-        let values = self.worker.eval_batch(&inputs, batch.len())?;
-        crate::evaluation::stratification::accumulate_values(
-            batch,
-            self.worker.output.components(),
-            &values,
-            accumulator,
-            options,
-        )
+        let values = self.eval_values(batch, components)?;
+        for row in values.chunks_exact(components.len()) {
+            emit(crate::evaluation::SampleOutput::values(row.to_vec()))?;
+        }
+        Ok(())
     }
-}
-
-struct GammaLoopResponse {
-    state: GammaLoopAccumulatorState,
-    training_values: Option<Vec<f64>>,
-    values: Option<Vec<f64>>,
 }
 
 struct PackedEvalInputs {
@@ -286,61 +312,6 @@ impl ProcessRuntimeWorker {
             )));
         }
         Ok(values)
-    }
-
-    fn eval_batch_gammaloop(
-        &mut self,
-        inputs: &PackedEvalInputs,
-        nr_samples: usize,
-        options: EvalBatchOptions<'_>,
-    ) -> Result<GammaLoopResponse, EngineError> {
-        let require_training_values = options.require_training_values;
-        options.validate(nr_samples, &["real".into(), "imag".into()])?;
-        let mut params = serde_json::json!({
-            "nr_samples": nr_samples,
-            "require_training_values": require_training_values,
-            "stratification": options.stratification.map(|(plan,labels)| serde_json::json!({"partition":plan.partition,"labels":labels})),
-        });
-        add_required_offsets(&mut params, inputs);
-        let (response, response_binary) = self
-            .process
-            .request_with_binary("eval_batch", params, &inputs.binary)
-            .map_err(EngineError::eval)?;
-        let state: GammaLoopAccumulatorState = serde_json::from_value(
-            response
-                .get("gammaloop_state")
-                .ok_or_else(|| {
-                    EngineError::eval("process worker response missing 'gammaloop_state'")
-                })?
-                .clone(),
-        )
-        .map_err(|err| EngineError::eval(format!("failed to parse gammaloop_state: {err}")))?;
-        let decoded = unpack_f64_le(&response_binary, "GammaLoop values")?;
-        let feedback_len = usize::from(require_training_values) * nr_samples;
-        let values_len = usize::from(options.stratification.is_some()) * nr_samples * 2;
-        if decoded.len() != feedback_len + values_len {
-            return Err(EngineError::eval(
-                "GammaLoop response length does not match requested feedback and real/imag values",
-            ));
-        }
-        let training_values = require_training_values.then(|| decoded[..feedback_len].to_vec());
-        let values = options
-            .stratification
-            .is_some()
-            .then(|| decoded[feedback_len..].to_vec());
-        state.validate_values()?;
-        if let Some(values) = &training_values
-            && let Some(sample) = values.iter().position(|value| !value.is_finite())
-        {
-            return Err(EngineError::eval(format!(
-                "sample {sample}: non-finite training feedback"
-            )));
-        }
-        Ok(GammaLoopResponse {
-            state,
-            training_values,
-            values,
-        })
     }
 
     fn expect_ack(response: Value) -> Result<Value, String> {

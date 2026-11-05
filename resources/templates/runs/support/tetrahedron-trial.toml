@@ -1,0 +1,41 @@
+# Integration-only controller child; publish the metric consumed by tuning and scanning.
+# Give each of the four conditional grids several updates before inference.
+replacements = { sharpness = 6, skew = 0, train_samples = 32768, sample_samples = 16384, center_00_x = 1.0, center_10_x = -1.0, seed = 10 }
+name = "tetrahedron-trial"
+target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
+[evaluator]
+kind = "symbolica"
+args = ["u","v"]
+[evaluator.source]
+kind = "expressions"
+components = ["x","y","z"]
+exprs = ["((exp(2*$(sharpness:6)*(cos(2*pi*u)))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*u)))+1))", "((exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))+1))", "((exp(2*$(sharpness:6)*(cos(2*pi*u)))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*u)))+1))*((exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))-1)/(exp(2*$(sharpness:6)*(cos(2*pi*(v+$(skew:0)*u))))+1))"]
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 500
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = "$(train_samples:32768)" }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = "$(seed:10)"
+bins = 32
+samples_for_update = 2048
+initial_training_rate = 0.5
+final_training_rate = 0.1
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 2, discrete_cardinalities = [2, 2], continuous_dims = 0 } }
+centers = { "0,0" = ["$(center_00_x:1.0)",1.0,1.0], "0,1" = [-1.0,1.0,-1.0], "1,0" = ["$(center_10_x:-1.0)",-1.0,1.0], "1,1" = [1.0,-1.0,-1.0] }
+scales = [1.0,1.0,1.0]
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+measurement = { selection = { kind = "metric", name = "error", component = "x" } }
+estimator = "stratified"
+stop_condition = { max_samples = "$(sample_samples:16384)" }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = 20 } }

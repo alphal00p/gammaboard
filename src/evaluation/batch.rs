@@ -253,14 +253,9 @@ impl BatchResult {
                 "training feedback length does not match batch sample count",
             ));
         }
-        // Ordinary outputs are one row per input. Observable adapters can report
-        // an independent native integration (e.g. a one-trigger MadGraph run).
-        if matches!(
-            self.accumulator,
-            AccumulatorState::Vector(_)
-                | AccumulatorState::FullVector(_)
-                | AccumulatorState::Stratified(_)
-        ) && self.accumulator.sample_count() != nr_samples as i64
+        // Empty storage discards results; the evaluator sink still counts every emitted sample.
+        if !matches!(self.accumulator, AccumulatorState::Empty(_))
+            && self.accumulator.sample_count() != nr_samples as i64
         {
             return Err(crate::core::EngineError::eval(format!(
                 "accumulator counted {} samples, expected {nr_samples}",
@@ -405,7 +400,7 @@ mod tests {
         result.validate_for_batch(2, true).unwrap();
     }
     #[test]
-    fn native_observable_counts_are_independent_of_trigger_count() {
+    fn native_observable_counts_must_match_input_samples() {
         let mut state = crate::evaluation::GammaLoopAccumulatorState::default();
         for _ in 0..3 {
             state
@@ -415,6 +410,6 @@ mod tests {
         }
         BatchResult::new(None, AccumulatorState::Gammaloop(state))
             .validate_for_batch(1, false)
-            .unwrap();
+            .unwrap_err();
     }
 }

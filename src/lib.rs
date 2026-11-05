@@ -65,10 +65,11 @@ pub use core::{
 pub use core::{EngineError, StoreError};
 pub use evaluation::{
     Accumulator, AccumulatorState, Batch, BatchError, BatchResult, BatchTransform,
-    DiagnosticSample, EmptyAccumulatorState, EvalBatchOptions, Evaluator, FullAccumulatorProgress,
-    FullVectorAccumulatorState, GammaLoopAccumulatorDigest, GammaLoopAccumulatorState,
-    IngestScalar, IngestVector, Materializer, NamedScalarAccumulator, Point, SampleEvaluation,
-    ScalarAccumulatorState, VectorAccumulatorState, WeightFactor, extract_accumulator_metric,
+    DiagnosticSample, EmptyAccumulatorState, EvalBatchOptions, Evaluator, EvaluatorBatch,
+    FullAccumulatorProgress, FullVectorAccumulatorState, GammaLoopAccumulatorDigest,
+    GammaLoopAccumulatorState, IngestScalar, IngestVector, Materializer, NamedScalarAccumulator,
+    ObservableTrainingProjection, Point, SampleEvaluation, SampleOutput, ScalarAccumulatorState,
+    VectorAccumulatorState, WeightFactor, extract_accumulator_metric,
     extract_accumulator_metric_with_runtime,
 };
 pub use sampling::{

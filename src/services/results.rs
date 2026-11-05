@@ -10,9 +10,8 @@ pub(crate) fn combine_independent_observables(
     let child_histograms = inputs
         .iter()
         .map(|(_, accumulator)| {
-            let value = accumulator.to_json().ok()?;
-            value
-                .pointer("/bundle/histograms")
+            observable_payload(accumulator)?
+                .get("histograms")
                 .and_then(JsonValue::as_object)
                 .cloned()
         })
@@ -119,32 +118,254 @@ fn combine_histogram(inputs: &[(f64, &JsonValue)]) -> Option<JsonValue> {
         ),
     );
     combined.remove("statistics");
+    combined.remove("strata");
+    combined.remove("stratum_sample_counts");
     Some(JsonValue::Object(combined))
 }
 
 fn combine_bin<'a>(
     inputs: impl Iterator<Item = Option<(f64, &'a JsonValue, &'a JsonValue)>>,
-) -> Option<(f64, f64)> {
+) -> Option<(f64, Option<f64>)> {
     let mut value = 0.0;
-    let mut variance = 0.0;
+    let mut error = Some(0.0_f64);
     for input in inputs {
         let (coefficient, sample_count, bin) = input?;
-        let sample_count = sample_count.as_f64()?;
-        let sum = bin.get("sum_weights")?.as_f64()?;
-        let sum_sq = bin.get("sum_weights_squared")?.as_f64()?;
-        if sample_count <= 0.0 {
-            return None;
-        }
-        let mean = sum / sample_count;
-        let error_sq = if sample_count > 1.0 {
-            ((sum_sq - sum * sum / sample_count) / (sample_count * (sample_count - 1.0))).max(0.0)
-        } else {
-            0.0
-        };
+        let (mean, uncertainty) = bin_estimate(bin, sample_count.as_f64()?)?;
         value += coefficient * mean;
-        variance += coefficient.powi(2) * error_sq;
+        error = error
+            .zip(uncertainty)
+            .map(|(sum, e)| sum.hypot(coefficient * e));
     }
-    Some((value, variance.sqrt()))
+    Some((value, error))
+}
+
+fn bin_estimate(bin: &JsonValue, count: f64) -> Option<(f64, Option<f64>)> {
+    if let Some(estimate) = bin.get("estimate") {
+        return Some((
+            estimate.get("mean")?.as_f64()?,
+            estimate.get("error").and_then(JsonValue::as_f64),
+        ));
+    }
+    if count <= 0. {
+        return None;
+    }
+    let sum = bin.get("sum_weights")?.as_f64()?;
+    let sum_sq = bin.get("sum_weights_squared")?.as_f64()?;
+    Some((
+        sum / count,
+        (count > 1.).then(|| {
+            ((sum_sq - sum * sum / count) / (count * (count - 1.)))
+                .max(0.)
+                .sqrt()
+        }),
+    ))
+}
+
+/// Presentation estimates are separate from raw, mergeable checkpoint statistics.
+#[cfg(feature = "gammaloop")]
+pub(crate) fn observable_payload(accumulator: &AccumulatorState) -> Option<JsonValue> {
+    let pooled = accumulator.gammaloop()?;
+    let mut payload = serde_json::to_value(&pooled.bundle).ok()?;
+    payload["estimator"] = json!("pooled");
+    payload["estimator_note"] = json!(
+        "Pooled means and sample-variance errors; every input draw counts, including empty fills."
+    );
+    if let AccumulatorState::Stratified(state) = accumulator {
+        let estimates =
+            gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+                &state.histograms,
+            )
+            .ok()?;
+        payload["estimator"] = json!("stratified");
+        payload["estimator_note"] = json!(
+            "Stratified bin means and errors; raw sums and basic estimates retain the pooled reference. Bin errors do not include covariance between bins."
+        );
+        payload["stratum_prefixes"] = json!(state.plan.partition.prefixes().collect::<Vec<_>>());
+        let probabilities = state.plan.probabilities.as_ref()?;
+        payload["strata"] = json!(
+            state
+                .plan
+                .partition
+                .prefixes()
+                .zip(&state.strata)
+                .zip(probabilities)
+                .map(|((prefix, moments), probability)| json!({
+                    "prefix": prefix,
+                    "probability": probability,
+                    "sample_count": moments.attempts,
+                    "matches": moments.matches,
+                }))
+                .collect::<Vec<_>>()
+        );
+        for (name, estimate) in estimates.histograms {
+            let reference = pooled.bundle.histograms.get(&name)?;
+            let estimate_layout = state.histograms.first()?.histograms.get(&name)?;
+            let indices = histogram_bin_indices(reference, estimate_layout)?;
+            let histogram = &mut payload["histograms"][&name];
+            histogram["stratum_sample_counts"] = json!(estimate.sample_counts);
+            let count = histogram["sample_count"].as_f64()?;
+            let attach =
+                |bin: &mut JsonValue,
+                 mut estimate: gammalooprs::observables::IndependentEstimate| {
+                    if !state.uncertainty_ready() {
+                        estimate.error = None;
+                    }
+                    bin["basic"] = bin_estimate(bin, count)
+                        .map(|(mean, error)| json!({"mean":mean,"error":error}))
+                        .unwrap_or(JsonValue::Null);
+                    bin["estimate"] = json!(estimate);
+                };
+            for (bin, index) in histogram["bins"].as_array_mut()?.iter_mut().zip(indices) {
+                attach(bin, *estimate.bins.get(index)?);
+            }
+            attach(&mut histogram["underflow_bin"], estimate.underflow);
+            attach(&mut histogram["overflow_bin"], estimate.overflow);
+            // Only estimates vary by stratum; coordinates and labels are shared.
+            // The basic contribution uses the total count, including zeros from
+            // draws assigned to other strata, and removes the conditional p_k.
+            histogram["strata"] = json!(
+                state
+                    .histograms
+                    .iter()
+                    .zip(&state.strata)
+                    .zip(probabilities)
+                    .map(|((bundle, moments), &probability)| {
+                        stratum_histogram_payload(
+                            reference,
+                            bundle.histograms.get(&name)?,
+                            probability,
+                            moments.uncertainty_ready(),
+                        )
+                    })
+                    .collect::<Option<Vec<_>>>()?
+            );
+        }
+    }
+    Some(payload)
+}
+
+/// Align conditional estimates to the shared bin layout. A missing bin is an
+/// incompatible payload, never an unrelated positional substitute.
+#[cfg(feature = "gammaloop")]
+fn stratum_histogram_payload(
+    reference: &gammalooprs::observables::HistogramSnapshot,
+    histogram: &gammalooprs::observables::HistogramSnapshot,
+    probability: f64,
+    uncertainty_ready: bool,
+) -> Option<JsonValue> {
+    let paired = |bin: &gammalooprs::observables::HistogramBinSnapshot| {
+        json!({
+            "estimate": {
+                "mean": (histogram.sample_count > 0).then(|| bin.average(histogram.sample_count)),
+                "error": uncertainty_ready.then(|| bin.error(histogram.sample_count)),
+            },
+            "basic": {
+                "mean": (reference.sample_count > 0).then(|| bin.average(reference.sample_count) / probability),
+                "error": (reference.sample_count > 1).then(|| bin.error(reference.sample_count) / probability),
+            },
+        })
+    };
+    let bins = histogram_bin_indices(reference, histogram)?
+        .into_iter()
+        .map(|index| paired(&histogram.bins[index]))
+        .collect::<Vec<_>>();
+    Some(json!({
+        "bins": bins,
+        "underflow_bin": paired(&histogram.underflow_bin),
+        "overflow_bin": paired(&histogram.overflow_bin),
+    }))
+}
+
+#[cfg(feature = "gammaloop")]
+fn histogram_bin_indices(
+    reference: &gammalooprs::observables::HistogramSnapshot,
+    source: &gammalooprs::observables::HistogramSnapshot,
+) -> Option<Vec<usize>> {
+    let by_id = source
+        .bins
+        .iter()
+        .enumerate()
+        .filter_map(|(index, bin)| bin.bin_id.map(|id| (id, index)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    reference
+        .bins
+        .iter()
+        .enumerate()
+        .map(|(index, bin)| match bin.bin_id {
+            Some(id) => by_id.get(&id).copied(),
+            None => source.bins.get(index).map(|_| index),
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "gammaloop"))]
+pub(crate) fn observable_payload(_accumulator: &AccumulatorState) -> Option<JsonValue> {
+    None
+}
+
+/// HwU contains final values and errors, never fictitious raw moments. Unknown
+/// errors cannot be represented in this format; JSON retains partial estimates.
+pub(crate) fn histogram_hwu(payload: &JsonValue) -> Result<String, String> {
+    use std::fmt::Write;
+    let mut output = String::new();
+    for histogram in payload
+        .get("histograms")
+        .and_then(JsonValue::as_object)
+        .ok_or("missing histograms")?
+        .values()
+    {
+        let bins = histogram
+            .get("bins")
+            .and_then(JsonValue::as_array)
+            .ok_or("missing bins")?;
+        let count = histogram
+            .get("sample_count")
+            .and_then(JsonValue::as_f64)
+            .unwrap_or(0.);
+        let axis = |key| {
+            if histogram
+                .get(key)
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+            {
+                "LOG"
+            } else {
+                "LIN"
+            }
+        };
+        writeln!(output, "##& xmin & xmax & central value & dy &\n").unwrap();
+        writeln!(
+            output,
+            "<histogram> {} \"{} |X_AXIS@{} |Y_AXIS@{} |TYPE@{}\"",
+            bins.len(),
+            histogram["title"].as_str().unwrap_or(""),
+            axis("log_x_axis"),
+            axis("log_y_axis"),
+            histogram["type_description"].as_str().unwrap_or("HwU")
+        )
+        .unwrap();
+        for (i, bin) in bins.iter().enumerate() {
+            let (mean, error) = if bin.get("value").is_some() {
+                (
+                    bin["value"].as_f64().ok_or("unavailable bin mean")?,
+                    bin["error"].as_f64(),
+                )
+            } else {
+                bin_estimate(bin, count).ok_or("unavailable bin mean")?
+            };
+            let error = error.ok_or(
+                "HwU export requires available bin errors; use JSON for partial estimates",
+            )?;
+            let (start, stop) = histogram_bin_range(histogram, bin, i);
+            writeln!(
+                output,
+                "  {start:.8e}   {stop:.8e}   {mean:.8e}   {error:.8e}"
+            )
+            .unwrap();
+        }
+        writeln!(output, "<\\histogram>").unwrap();
+    }
+    Ok(output)
 }
 
 fn histogram_layout(histogram: &JsonValue) -> Option<JsonValue> {
@@ -207,6 +428,99 @@ fn histogram_bin_range(histogram: &JsonValue, bin: &JsonValue, index: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gammaloop")]
+    #[test]
+    fn stratified_histogram_views_follow_bin_ids_and_reject_missing_bins() {
+        use crate::core::{AccumulatorConfig, StratificationConfig, StratificationPlan};
+        use crate::evaluation::accumulator::StratifiedAccumulatorState;
+        use crate::{Domain, Point};
+        use gammalooprs::observables::{
+            DiscreteBinOrdering, HistogramAccumulatorState, ObservablePhase,
+            ObservableSnapshotBundle,
+        };
+        let plan = StratificationPlan {
+            proposal_id: "bin-order".into(),
+            partition: StratificationConfig::Voronoi {
+                domain: Domain::strata(vec![2]),
+                centers: [(vec![0], vec![-1., 0.]), (vec![1], vec![1., 0.])].into(),
+                scales: None,
+            },
+            probabilities: Some(vec![0.5, 0.5]),
+            components: vec!["real".into(), "imag".into()],
+        };
+        let mut state =
+            StratifiedAccumulatorState::new(plan, AccumulatorConfig::Gammaloop).unwrap();
+        for (label, bins) in [[2., 10.], [7., 3.]].into_iter().enumerate() {
+            let mut histogram = HistogramAccumulatorState::discrete(
+                "bins".into(),
+                "HwU".into(),
+                ObservablePhase::Real,
+                10,
+                11,
+                DiscreteBinOrdering::AscendingBinId,
+                false,
+                vec![],
+            )
+            .unwrap();
+            for _ in 0..32 {
+                histogram
+                    .fill_discrete_sample(&[(10, bins[0]), (11, bins[1])])
+                    .unwrap();
+                let values = [if label == 0 { -1. } else { 1. }, 0.];
+                state.push(label, &values, 2., true).unwrap();
+                state
+                    .pooled
+                    .as_mut()
+                    .unwrap()
+                    .estimate
+                    .ingest_vector(&values, &Point::new(vec![0.5], vec![], 2.))
+                    .unwrap();
+            }
+            let mut bundle = ObservableSnapshotBundle {
+                histograms: [("h".into(), histogram.snapshot())].into(),
+            };
+            let pooled = &mut state.pooled.as_mut().unwrap().bundle;
+            if label == 0 {
+                *pooled = bundle.clone();
+            } else {
+                pooled.merge_in_place(&bundle).unwrap();
+            }
+            if label == 0 {
+                bundle.histograms.get_mut("h").unwrap().bins.reverse();
+            }
+            state.histograms.push(bundle);
+        }
+        state
+            .pooled
+            .as_mut()
+            .unwrap()
+            .bundle
+            .histograms
+            .get_mut("h")
+            .unwrap()
+            .rescale(2.);
+        state.validate().unwrap();
+        let reference = &state.pooled.as_ref().unwrap().bundle.histograms["h"];
+        let mut missing = state.histograms[0].histograms["h"].clone();
+        missing.bins.pop();
+        assert!(stratum_histogram_payload(reference, &missing, 0.5, true).is_none());
+        let payload = observable_payload(&AccumulatorState::Stratified(Box::new(state))).unwrap();
+        let histogram = &payload["histograms"]["h"];
+        for (index, mean) in [9., 13.].into_iter().enumerate() {
+            assert_eq!(histogram["bins"][index]["bin_id"], json!(10 + index));
+            assert_eq!(histogram["bins"][index]["estimate"]["mean"], json!(mean));
+            assert_eq!(histogram["bins"][index]["basic"]["mean"], json!(mean));
+        }
+        assert_eq!(
+            histogram["strata"][0]["bins"][0]["estimate"]["mean"],
+            json!(2.)
+        );
+        assert_eq!(
+            histogram["strata"][1]["bins"][1]["estimate"]["mean"],
+            json!(3.)
+        );
+    }
 
     #[test]
     fn combines_histogram_values_and_independent_errors() {

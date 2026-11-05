@@ -185,12 +185,6 @@ impl StratificationPlan {
         }
         Ok(())
     }
-    pub fn matches(&self, label: usize, values: &[f64]) -> Result<bool, EngineError> {
-        if label >= self.partition.centers().len() {
-            return Err(EngineError::eval("invalid stratum label"));
-        }
-        Ok(self.partition.classify(values)? == label)
-    }
     pub fn id(&self) -> String {
         // Canonical immutable definition; equality also guards every accumulator merge.
         use sha2::{Digest, Sha256};

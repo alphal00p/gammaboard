@@ -61,6 +61,7 @@ export const lineComparisonOption = (
         }
       }));
     } else series = [target];
+    series = series.filter((s) => s.data.some(([, v]) => finite(v)));
     series.push({
       name: c.k == null && prefixes.length ? 'Sampler mixture' : 'Sampler PDF',
       type: 'line',

@@ -61,18 +61,6 @@ impl EvalBatchOptions<'_> {
             .transpose()
     }
 
-    pub fn matches(&self, index: usize, values: &[f64]) -> Result<bool, EngineError> {
-        match self.stratification {
-            Some((plan, labels)) => plan.matches(
-                *labels
-                    .get(index)
-                    .ok_or_else(|| EngineError::eval("missing stratum label"))?,
-                values,
-            ),
-            None => Ok(true),
-        }
-    }
-
     pub fn feedback(
         &self,
         unmasked_values: Option<Vec<f64>>,
@@ -137,22 +125,53 @@ pub trait Evaluator: Send {
         _components: &[String],
     ) -> Result<Vec<f64>, EngineError> {
         Err(EngineError::invalid_input(
-            "this evaluator does not expose per-sample values for stratification",
+            "this evaluator must implement eval_values or eval_samples",
         ))
     }
 
+    /// Emit exactly one unweighted output per input, in input order. Batching is
+    /// an implementation detail: evaluators never return statistical accumulators.
+    fn eval_samples(
+        &mut self,
+        batch: &Batch,
+        components: &[String],
+        emit: &mut dyn FnMut(super::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        let values = self.eval_values(batch, components)?;
+        if components.is_empty() || values.len() != batch.len() * components.len() {
+            return Err(EngineError::eval(
+                "invalid per-sample evaluator output length",
+            ));
+        }
+        for row in values.chunks_exact(components.len()) {
+            emit(super::SampleOutput::values(row.to_vec()))?;
+        }
+        Ok(())
+    }
+
+    fn training_projection(&self) -> super::evaluator::gammaloop::TrainingProjection {
+        super::evaluator::gammaloop::TrainingProjection::Abs
+    }
+}
+
+/// Runtime-owned reduction. The blanket implementation prevents evaluators
+/// from overriding weighting, sample accounting, or stratification.
+pub trait EvaluatorBatch: Evaluator {
+    fn eval_batch(
+        &mut self,
+        batch: &Batch,
+        accumulator: &AccumulatorConfig,
+        options: EvalBatchOptions,
+    ) -> Result<BatchResult, EngineError>;
+}
+impl<T: Evaluator + ?Sized> EvaluatorBatch for T {
     fn eval_batch(
         &mut self,
         batch: &Batch,
         accumulator: &AccumulatorConfig,
         options: EvalBatchOptions,
     ) -> Result<BatchResult, EngineError> {
-        let components = accumulator
-            .components()
-            .unwrap_or(&["value".into()])
-            .to_vec();
-        let values = self.eval_values(batch, &components)?;
-        super::stratification::accumulate_values(batch, &components, &values, accumulator, options)
+        super::reduction::evaluate_batch(self, batch, accumulator, options)
     }
 }
 

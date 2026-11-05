@@ -243,8 +243,13 @@ impl RunTaskSpec {
                 .map(sample::projectors)
                 .unwrap_or_default(),
             Self::Image {
-                geometry, display, ..
-            } => full_accumulator::image_projectors(geometry.clone(), *display),
+                geometry,
+                display,
+                accumulator,
+                ..
+            } => {
+                full_accumulator::image_projectors(geometry.clone(), *display, accumulator.clone())
+            }
             Self::PdfAdaptationImage { geometry, .. } => {
                 pdf_adaptation::projectors(geometry.clone())
             }
@@ -256,7 +261,7 @@ impl RunTaskSpec {
                 display,
                 accumulator,
                 ..
-            } => full_accumulator::line_projectors(geometry.clone(), *display, *accumulator),
+            } => full_accumulator::line_projectors(geometry.clone(), *display, accumulator.clone()),
             Self::ParameterScan { .. } => parameter_scan::projectors(),
             Self::HyperparameterTuning { .. } => hyperparameter_tuning::projectors(),
             Self::IntegrationCampaign { .. } => integration_campaign::projectors(),
@@ -389,7 +394,7 @@ fn build_task_summary_entries(
             entries.push(key_value(
                 "accumulator",
                 "Accumulator",
-                plot_accumulator_label(*accumulator),
+                plot_accumulator_label(accumulator),
             ));
             if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
                 entries.push(key_value("batch_transforms", "Transforms", label));
@@ -463,7 +468,7 @@ fn build_task_summary_entries(
             entries.push(key_value(
                 "accumulator",
                 "Accumulator",
-                plot_accumulator_label(*accumulator),
+                plot_accumulator_label(accumulator),
             ));
             if let Some(label) = batch_transforms_label(batch_transforms.as_deref()) {
                 entries.push(key_value("batch_transforms", "Transforms", label));
@@ -722,10 +727,11 @@ fn accumulator_label(config: &AccumulatorConfig) -> &'static str {
     }
 }
 
-fn plot_accumulator_label(kind: crate::core::PlotAccumulatorKind) -> &'static str {
+fn plot_accumulator_label(kind: &crate::core::PlotAccumulatorKind) -> &'static str {
     match kind {
         crate::core::PlotAccumulatorKind::Scalar => "scalar",
-        crate::core::PlotAccumulatorKind::Vector => "vector",
+        crate::core::PlotAccumulatorKind::Vector => "complex",
+        crate::core::PlotAccumulatorKind::Components(_) => "named components",
     }
 }
 

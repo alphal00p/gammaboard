@@ -1,4 +1,4 @@
-# Sampling acceptance through a generated GammaLoop v10 state.
+# Sampling acceptance through a generated GammaLoop state matching the pinned revision.
 # Use a state with no observables or active physical selectors. Width is in the
 # state's momentum units; select a useful scale for the maps under examination.
 # Both real and imaginary targets are one (normalization and normalized moment).

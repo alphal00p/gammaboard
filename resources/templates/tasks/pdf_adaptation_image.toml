@@ -1,23 +1,6 @@
-# Train a Havana sampler, then rasterize its PDF.
-# Requires: an existing run with a compatible evaluator and domain.
-# Scale: 100k training samples plus a 128x128 image.
-# Run: ./gammaboard run task append <RUN> resources/templates/tasks/pdf_adaptation_image.toml
-
-replacements = { train_samples = 100_000, havana_bins = 64, samples_for_update = 16384, image_bins = 128 }
-
+# Append a full-domain 2D PDF comparison to a tetrahedron example.
 [[task_queue]]
-name = "train"
-kind = "sample"
-stop_condition = { max_samples = "$(train_samples:100_000)" }
-sampler = { config = { kind = "havana_training", seed = 0, bins = "$(havana_bins:64)", samples_for_update = "$(samples_for_update:16384)", initial_training_rate = 0.1, final_training_rate = 0.001 } }
-
-[[task_queue]]
-name = "pdf"
+name = "pdf-plane"
 kind = "pdf_adaptation_image"
-
-[task_queue.geometry]
-offset = [0.0, 0.0]
-u_vector = [1.0, 0.0]
-v_vector = [0.0, 1.0]
-u_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:128)" }
-v_linspace = { start = 0.0, stop = 1.0, count = "$(image_bins:128)" }
+sampler = { from_name = "inference" }
+geometry = { offset = [0.0,0.0], u_vector = [1.0,0.0], v_vector = [0.0,1.0], u_linspace = { start = 0.0, stop = 1.0, count = 65 }, v_linspace = { start = 0.0, stop = 1.0, count = 65 } }

@@ -1,5 +1,5 @@
 # Ghost bump with the MADNIS Apptainer runtime under resources/runtimes/madnis.
-# Run: ./gammaboard run create resources/templates/runs/ghost_bump_madnis_apptainer.toml
+# Run: ./gammaboard run create integrations/madnis/examples/ghost_bump_apptainer.toml
 #
 # Required artifacts/tools:
 # - Apptainer with GPU support must be installed on the worker host.

@@ -51,8 +51,8 @@ chart references; frontend lint and the production build passed.
 
 Run cards, configurations, exports, screenshots, browser checks and test logs are
 retained under `/common/dev/cedric/setup-logs/tetrahedron-demo-20261029/` on ITPhlies.
-The [ordinary](../../resources/templates/runs/checkerboard-sine-ordinary.toml) and
-[stratified](../../resources/templates/runs/checkerboard-sine-stratified.toml)
+The [ordinary](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/checkerboard-sine-ordinary.toml) and
+[stratified](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/checkerboard-sine-stratified.toml)
 checkerboard cards are also checked in for reuse.
 
 ## 2D colour and repaint follow-up
@@ -109,6 +109,6 @@ hit rates. This is one matched-seed demonstration, not a general speedup guarant
 
 Both runs completed their 129×129 PDF tasks. Browser checks verified the strata,
 hue/density comparison, membership maps and exports without page-script errors.
-The reusable [ordinary](../../resources/templates/runs/checkerboard-sine-rotated-ordinary.toml)
-and [stratified](../../resources/templates/runs/checkerboard-sine-rotated-stratified.toml)
+The reusable [ordinary](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/checkerboard-sine-rotated-ordinary.toml)
+and [stratified](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/checkerboard-sine-rotated-stratified.toml)
 cards are available in the dashboard's templates too.

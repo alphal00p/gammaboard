@@ -14,7 +14,10 @@ pub use accumulator::{
 pub use batch::{
     Batch, BatchError, BatchResult, DiagnosticSample, Point, SampleEvaluation, WeightFactor,
 };
+pub use evaluator::gammaloop::TrainingProjection as ObservableTrainingProjection;
 pub use evaluator::{
     GammaLoopParams, ProcessEvaluatorParams, ProcessOutput, SymbolicaParams, UnitEvaluatorParams,
 };
-pub use traits::{BatchTransform, EvalBatchOptions, Evaluator, Materializer};
+mod reduction;
+pub use reduction::SampleOutput;
+pub use traits::{BatchTransform, EvalBatchOptions, Evaluator, EvaluatorBatch, Materializer};

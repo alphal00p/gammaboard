@@ -1,7 +1,7 @@
 use super::controller::{child_table_payload, progress_projector};
 use super::controller_output::measurement_results;
 use super::{TaskPanelContext, TaskPanelProjector, panel_projector};
-use crate::core::{AccumulatorMetricName, MeasurementResult, ParameterScanPointOutput};
+use crate::core::{MeasurementResult, ParameterScanPointOutput};
 use crate::server::panels::{
     ImageColorMode, ImageNormalizationMode, PanelHistoryMode, PanelKind, PanelState, PanelWidth,
     PlotPoint, PlotSeries, multi_timeseries_panel, sized_panel_spec,
@@ -46,7 +46,7 @@ fn scan_measurements_projector() -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
             SCAN_MEAN_PANEL_ID,
-            "Observables by Parameter",
+            "Measurement by Parameter",
             PanelKind::MultiTimeseries,
             PanelHistoryMode::None,
             PanelWidth::Full,
@@ -55,9 +55,11 @@ fn scan_measurements_projector() -> TaskPanelProjector {
             let parameter_names = scan_parameter_names(ctx);
             let series = scan_points(ctx)
                 .map(|points| {
-                    if parameter_names.len() == 1 {
+                    if let Some(selected) = first_measurement(points)
+                        && parameter_names.len() == 1
+                    {
                         build_measurement_series(points, &parameter_names[0], |result| {
-                            result.name == AccumulatorMetricName::Mean
+                            result.name == selected.name
                         })
                     } else {
                         Vec::new()
@@ -77,7 +79,7 @@ fn scan_heatmap_projector() -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
             SCAN_MEAN_HEATMAP_PANEL_ID,
-            "Observable Heatmap",
+            "Measurement Heatmap",
             PanelKind::Image2d,
             PanelHistoryMode::None,
             PanelWidth::Full,
@@ -87,7 +89,7 @@ fn scan_heatmap_projector() -> TaskPanelProjector {
             let Some(points) = scan_points(ctx) else {
                 return Ok(None);
             };
-            Ok(scan_mean_heatmap_panel(points, &parameter_names))
+            Ok(scan_measurement_heatmap_panel(points, &parameter_names))
         },
         |_ctx| Ok(None),
     )
@@ -151,13 +153,21 @@ fn scan_points_projector() -> TaskPanelProjector {
     )
 }
 
-fn scan_mean_heatmap_panel(
+fn first_measurement(points: &[ParameterScanPointOutput]) -> Option<&MeasurementResult> {
+    points
+        .iter()
+        .flat_map(|point| measurement_results(&point.child).into_iter().flatten())
+        .find(|result| result.value.is_finite())
+}
+
+fn scan_measurement_heatmap_panel(
     points: &[ParameterScanPointOutput],
     parameter_names: &[String],
 ) -> Option<PanelState> {
     if parameter_names.len() != 2 {
         return None;
     }
+    let selected = first_measurement(points)?;
     let x_name = &parameter_names[0];
     let y_name = &parameter_names[1];
     let mut x_values = BTreeSet::<OrderedF64>::new();
@@ -177,7 +187,11 @@ fn scan_mean_heatmap_panel(
         let Some(result) = measurement_results(&point.child)
             .into_iter()
             .flatten()
-            .find(|result| result.name == AccumulatorMetricName::Mean && result.value.is_finite())
+            .find(|result| {
+                result.name == selected.name
+                    && result.component == selected.component
+                    && result.value.is_finite()
+            })
         else {
             continue;
         };
@@ -223,7 +237,7 @@ fn scan_mean_heatmap_panel(
         y_range: [y_values.first()?.0, y_values.last()?.0],
         color_mode: ImageColorMode::ScalarHeatmap,
         normalization_mode: ImageNormalizationMode::MinMax,
-        metric_label: Some("mean".to_string()),
+        metric_label: Some(measurement_result_label(selected)),
         metric_mode: None,
         x_label: Some(x_name.clone()),
         y_label: Some(y_name.clone()),
@@ -489,60 +503,63 @@ mod tests {
     }
 
     #[test]
-    fn scan_mean_plot_uses_numeric_parameter_values_and_mean_results() {
-        let task = scan_task(Some(json!({
-            "parameters": ["scale"],
-            "completed_points": 2,
-            "running_points": 0,
-            "total_points": 3,
-            "points": [
-                {
-                    "index": 0,
-                    "parameter_values": {"scale": 0.0},
-                    "child_run_id": 11,
-                    "status": "completed",
-                    "measurement": {
+    fn scan_plot_uses_numeric_parameter_values_and_selected_metric() {
+        for metric in ["mean", "error"] {
+            let task = scan_task(Some(json!({
+                "parameters": ["scale"],
+                "completed_points": 2,
+                "running_points": 0,
+                "total_points": 3,
+                "points": [
+                    {
+                        "index": 0,
+                        "parameter_values": {"scale": 0.0},
+                        "child_run_id": 11,
                         "status": "completed",
-                        "results": [
-                            {"name": "mean","estimator":"pooled","basic":null, "value": 1.0, "uncertainty": 0.1, "sample_count": 100}
-                        ]
-                    }
-                },
-                {
-                    "index": 1,
-                    "parameter_values": {"scale": 1.0},
-                    "child_run_id": 12,
-                    "status": "completed",
-                    "measurement": {
+                        "measurement": {
+                            "status": "completed",
+                            "results": [
+                                {"name": metric,"estimator":"pooled","basic":null, "value": 1.0, "uncertainty": 0.1, "sample_count": 100}
+                            ]
+                        }
+                    },
+                    {
+                        "index": 1,
+                        "parameter_values": {"scale": 1.0},
+                        "child_run_id": 12,
                         "status": "completed",
-                        "results": [
-                            {"name": "mean","estimator":"pooled","basic":null, "value": 1.5, "uncertainty": 0.2, "sample_count": 200}
-                        ]
+                        "measurement": {
+                            "status": "completed",
+                            "results": [
+                                {"name": metric,"estimator":"pooled","basic":null, "value": 1.5, "uncertainty": 0.2, "sample_count": 200}
+                            ]
+                        }
+                    },
+                    {
+                        "index": 2,
+                        "parameter_values": {"scale": 2.0},
+                        "child_run_id": null,
+                        "status": "pending"
                     }
-                },
-                {
-                    "index": 2,
-                    "parameter_values": {"scale": 2.0},
-                    "child_run_id": null,
-                    "status": "pending"
-                }
-            ]
-        })));
-        let panel = scan_measurements_projector()
-            .current(&panel_ctx(&task, &JsonValue::Null))
-            .expect("projector")
-            .expect("panel");
-        let PanelState::MultiTimeseries { series, .. } = panel else {
-            panic!("expected multi timeseries");
-        };
-        assert_eq!(series.len(), 1);
-        let points = &series[0].points;
-        assert_eq!(points.len(), 2);
-        assert_eq!(points[0].x, 0.0);
-        assert_eq!(points[0].y, 1.0);
-        assert_eq!(points[0].y_min, Some(0.9));
-        assert_eq!(points[1].x, 1.0);
-        assert_eq!(points[1].x_completed_samples_total, Some(200.0));
+                ]
+            })));
+            let panel = scan_measurements_projector()
+                .current(&panel_ctx(&task, &JsonValue::Null))
+                .expect("projector")
+                .expect("panel");
+            let PanelState::MultiTimeseries { series, .. } = panel else {
+                panic!("expected multi timeseries");
+            };
+            assert_eq!(series.len(), 1);
+            assert_eq!(series[0].label, metric);
+            let points = &series[0].points;
+            assert_eq!(points.len(), 2);
+            assert_eq!(points[0].x, 0.0);
+            assert_eq!(points[0].y, 1.0);
+            assert_eq!(points[0].y_min, Some(0.9));
+            assert_eq!(points[1].x, 1.0);
+            assert_eq!(points[1].x_completed_samples_total, Some(200.0));
+        }
     }
 
     #[test]
@@ -595,58 +612,62 @@ mod tests {
 
     #[test]
     fn scan_heatmap_uses_two_numeric_parameters() {
-        let task = scan_task(Some(json!({
-            "parameters": ["scale", "offset"],
-            "completed_points": 4,
-            "running_points": 0,
-            "total_points": 4,
-            "points": [
-                {
-                    "index": 0,
-                    "parameter_values": {"scale": 0.0, "offset": 1.0},
-                    "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 1.0, "sample_count": 0}]}
-                },
-                {
-                    "index": 1,
-                    "parameter_values": {"scale": 1.0, "offset": 1.0},
-                    "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 1.5, "sample_count": 0}]}
-                },
-                {
-                    "index": 2,
-                    "parameter_values": {"scale": 0.0, "offset": 2.0},
-                    "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 2.0, "sample_count": 0}]}
-                },
-                {
-                    "index": 3,
-                    "parameter_values": {"scale": 1.0, "offset": 2.0},
-                    "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 2.5, "sample_count": 0}]}
-                }
-            ]
-        })));
-        let panel = scan_heatmap_projector()
-            .current(&panel_ctx(&task, &JsonValue::Null))
-            .expect("projector")
-            .expect("panel");
-        let PanelState::Image2d {
-            width,
-            height,
-            values,
-            x_label,
-            y_label,
-            ..
-        } = panel
-        else {
-            panic!("expected image panel");
-        };
-        assert_eq!(width, 2);
-        assert_eq!(height, 2);
-        assert_eq!(values, vec![1.0, 1.5, 2.0, 2.5]);
-        assert_eq!(x_label.as_deref(), Some("scale"));
-        assert_eq!(y_label.as_deref(), Some("offset"));
+        for metric in ["mean", "error"] {
+            let task = scan_task(Some(json!({
+                "parameters": ["scale", "offset"],
+                "completed_points": 4,
+                "running_points": 0,
+                "total_points": 4,
+                "points": [
+                    {
+                        "index": 0,
+                        "parameter_values": {"scale": 0.0, "offset": 1.0},
+                        "status": "completed",
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 1.0, "sample_count": 0}]}
+                    },
+                    {
+                        "index": 1,
+                        "parameter_values": {"scale": 1.0, "offset": 1.0},
+                        "status": "completed",
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 1.5, "sample_count": 0}]}
+                    },
+                    {
+                        "index": 2,
+                        "parameter_values": {"scale": 0.0, "offset": 2.0},
+                        "status": "completed",
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 2.0, "sample_count": 0}]}
+                    },
+                    {
+                        "index": 3,
+                        "parameter_values": {"scale": 1.0, "offset": 2.0},
+                        "status": "completed",
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 2.5, "sample_count": 0}]}
+                    }
+                ]
+            })));
+            let panel = scan_heatmap_projector()
+                .current(&panel_ctx(&task, &JsonValue::Null))
+                .expect("projector")
+                .expect("panel");
+            let PanelState::Image2d {
+                width,
+                height,
+                values,
+                metric_label,
+                x_label,
+                y_label,
+                ..
+            } = panel
+            else {
+                panic!("expected image panel");
+            };
+            assert_eq!(metric_label.as_deref(), Some(metric));
+            assert_eq!(width, 2);
+            assert_eq!(height, 2);
+            assert_eq!(values, vec![1.0, 1.5, 2.0, 2.5]);
+            assert_eq!(x_label.as_deref(), Some("scale"));
+            assert_eq!(y_label.as_deref(), Some("offset"));
+        }
     }
 
     #[test]

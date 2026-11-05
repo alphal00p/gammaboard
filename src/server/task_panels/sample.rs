@@ -736,7 +736,11 @@ fn stratified_summary_entries(
         key_value("plan", "Partition ID", state.plan.id()),
     ];
     if state.pooled.is_some() {
-        entries.push(key_value("histogram_estimator", "Histogram estimator", "Pooled, masked full-weight samples; histogram totals can differ from the stratified integral"));
+        entries.push(key_value(
+            "histogram_estimator",
+            "Histogram estimator",
+            "Stratified: sum of conditional bin means; errors in quadrature",
+        ));
     }
     let means = state.mean();
     let covariance = state.covariance();
@@ -1271,11 +1275,8 @@ fn estimate_eta_seconds(
 
 #[cfg(feature = "gammaloop")]
 fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    let state = accumulator.gammaloop()?;
-    let mut payload = serde_json::to_value(&state.bundle).unwrap_or(JsonValue::Null);
+    let mut payload = crate::services::results::observable_payload(&accumulator)?;
     if let JsonValue::Object(payload) = &mut payload {
-        payload.insert("estimator".into(), json!("pooled"));
-        payload.insert("estimator_note".into(), json!("Histogram totals use pooled full-weight samples and can differ from the stratified primary estimate."));
         payload.insert(
             "actions".to_string(),
             json!({
@@ -1285,11 +1286,7 @@ fn gammaloop_histogram_bundle_panel(accumulator: AccumulatorState) -> Option<Pan
         );
     }
 
-    super::observable::histogram_bundle_panel(
-        "gammaloop_histogram_bundle",
-        "Observables (pooled; full sampling weights)",
-        payload,
-    )
+    super::observable::histogram_bundle_panel("gammaloop_histogram_bundle", "Observables", payload)
 }
 
 fn discrete_projection_bundle_panel(
@@ -2518,7 +2515,7 @@ mod stratification_panels {
         }
         let entries =
             serde_json::to_string(&base_estimate_summary_entries(&restored, None)).unwrap();
-        assert!(entries.contains("Pooled, masked full-weight"));
+        assert!(entries.contains("sum of conditional bin means"));
         #[cfg(feature = "gammaloop")]
         assert!(gammaloop_histogram_bundle_panel(restored).is_some());
     }

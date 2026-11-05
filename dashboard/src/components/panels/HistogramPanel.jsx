@@ -78,12 +78,15 @@ const HistogramPanel = ({
   onUpdateBundleSelection = null,
   onRemoveComparedHistogram = null,
   onAddComparedHistogram = null,
+  extraControls = null,
+  caption = null,
+  controlledView = false,
 }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
   const panelId = state?.panel_id || null;
   const sourcePanelId = state?.source_panel_id || panelId;
-  const isBundleControlled = Boolean(sourcePanelId && sourcePanelId !== panelId);
+  const isBundleControlled = controlledView || Boolean(sourcePanelId && sourcePanelId !== panelId);
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
   const defaultYScale = inferDefaultHistogramYScale();
   const defaultXScale = inferDefaultHistogramXScale(state);
@@ -451,7 +454,9 @@ const HistogramPanel = ({
   );
   const yDomain = useMemo(() => {
     const baseDomain = buildHistogramYDomain(bins, yScale, visibleXRange);
-    const extraValues = [];
+    const extraValues = Number.isFinite(state?.reference_value)
+      ? [yScale === "log" ? signedLog10(state.reference_value) : state.reference_value] : [];
+    if (state?.zero_baseline && yScale === "linear") extraValues.push(0);
     for (const overlay of asArray(overlaySeries)) {
       if (isDiscrete) {
         for (const y of asArray(overlay?.discreteValues)) {
@@ -503,8 +508,9 @@ const HistogramPanel = ({
       ...(Number.isFinite(baseMin) ? [baseMin] : []),
       ...(Number.isFinite(baseMax) ? [baseMax] : []),
     ].filter((value) => Number.isFinite(value));
-    return fitDomain(candidates);
-  }, [bins, isDiscrete, overlaySeries, pdfComparisonData, visibleXRange, yScale]);
+    const domain = fitDomain(candidates);
+    return state?.zero_baseline && yScale === "linear" ? [0, domain[1]] : domain;
+  }, [bins, isDiscrete, overlaySeries, pdfComparisonData, visibleXRange, yScale, state?.reference_value, state?.zero_baseline]);
   const relativeErrorYDomain = useMemo(
     () => buildRelativeErrorYDomain(isDiscrete ? discreteRelativeErrorData : relativeErrorData, visibleXRange),
     [discreteRelativeErrorData, isDiscrete, relativeErrorData, visibleXRange],
@@ -541,6 +547,9 @@ const HistogramPanel = ({
     () =>
       buildHistogramOption({
         binErrorData,
+        primaryLabel: state?.series_label,
+        yLabel: state?.y_label,
+        referenceValue: state?.reference_value,
         bins,
         categories,
         effectiveXScale,
@@ -558,6 +567,9 @@ const HistogramPanel = ({
         zoomRange,
       }),
     [
+      state?.series_label,
+      state?.y_label,
+      state?.reference_value,
       binErrorData,
       bins,
       categories,
@@ -652,12 +664,13 @@ const HistogramPanel = ({
   return (
     <Card variant="outlined">
       <CardContent>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 2, mb: 2 }}>
           <Typography variant="subtitle1">
             {title}
             {state?.name ? `  (${state.name})` : ""}
           </Typography>
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
+            {extraControls}
             {showExportAction || showResetViewAction ? (
             <FigureExportActions
               baseName={state?.panel_id || state?.name || title || "histogram"}
@@ -840,6 +853,12 @@ const HistogramPanel = ({
             ) : null}
           </Stack>
         </Box>
+        {caption && <Box sx={{ mb: 1 }}>{caption}</Box>}
+        {histogramMode === HISTOGRAM_MODE_CDF && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+            Cumulative uncertainties are unavailable without covariance between bins.
+          </Typography>
+        )}
         {comparedBundleSelections.length > 0 ? (
           <Box sx={{ mb: 1.5, display: "grid", gap: 1 }}>
             {comparedBundleSelections.map(({ bundle, selectionState }) => {
@@ -1012,12 +1031,12 @@ const HistogramPanel = ({
             })}
           </Box>
         ) : null}
-        <Box ref={figureRef} sx={{ width: "100%", display: "grid", gap: 2 }}>
+        <Box ref={figureRef} sx={{ width: "100%", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2 }}>
           <Box sx={{ width: "100%", height: 280 }}>
             <LazyChart
               ref={echartsRef}
               option={histogramOption}
-              notMerge={!isDiscrete}
+              notMerge={!isDiscrete || Boolean(state?.selection)}
               onEvents={onDataZoom}
               lazyUpdate
               opts={{ renderer: "canvas" }}

@@ -67,6 +67,22 @@ const histogramEntryCountLine = (bin) => {
   return `entries: ${formatScientific(entryCount, 6)}`;
 };
 
+const histogramBasicLines = (bin) => {
+  const comparison = bin?.comparison;
+  if (comparison) {
+    const number = (v) => v == null ? "n/a" : formatScientific(v, 6);
+    return [
+      `stratified mean: ${number(comparison.stratified_mean)}; error: ${number(comparison.stratified_error)}`,
+      `basic mean: ${number(comparison.basic_mean)}; error: ${number(comparison.basic_error)}`,
+      `error reduction: ${number(comparison.error_ratio)}`,
+    ];
+  }
+  return bin?.basic ? [
+    `basic mean: ${formatScientific(bin.basic.mean, 6)}`,
+    `basic error: ${bin.basic.error == null ? "n/a" : formatScientific(bin.basic.error, 6)}`,
+  ] : [];
+};
+
 const EDGE_EPSILON = 1e-9;
 
 const nearlyEqual = (left, right, epsilon = EDGE_EPSILON) => {
@@ -280,6 +296,9 @@ const buildDiscreteOffsetRangeBarSeries = ({
 
 export const buildHistogramOption = ({
   binErrorData,
+  primaryLabel = "value",
+  yLabel,
+  referenceValue,
   bins,
   categories,
   effectiveXScale,
@@ -296,9 +315,13 @@ export const buildHistogramOption = ({
   yZoomRange,
   zoomRange,
 }) => {
+    const referenceLine = Number.isFinite(referenceValue) ? {
+      silent: true, symbol: "none", lineStyle: { type: "dotted", color: "#94a3b8" },
+      label: { formatter: "Equal error", position: "insideEndTop", fontSize: 11 }, data: [{ yAxis: yScale === "log" ? signedLog10(referenceValue) : referenceValue }],
+    } : undefined;
     const pdfComparisonVisible = isDiscrete && pdfComparisonData;
     const legendEntries = [
-      "value",
+      primaryLabel,
       ...overlaySeries.map((overlay) => overlay.name),
       ...(pdfComparisonVisible ? [pdfComparisonData.markerLabel, pdfComparisonData.deltaLabel] : []),
     ];
@@ -321,7 +344,7 @@ export const buildHistogramOption = ({
           data: legendEntries,
           textStyle: { color: "#64748b", fontSize: 12 },
         },
-        grid: baseCartesianGrid,
+        grid: yLabel ? { ...baseCartesianGrid, top: 46 } : baseCartesianGrid,
         xAxis: {
           type: "category",
           data: categoriesData,
@@ -337,6 +360,8 @@ export const buildHistogramOption = ({
           nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
         },
         yAxis: {
+          name: yLabel,
+          nameTextStyle: { color: "#64748b", fontSize: 12 },
           type: "value",
           min: yDomain[0],
           max: yDomain[1],
@@ -361,10 +386,10 @@ export const buildHistogramOption = ({
               ? formatScientific(relError, 6)
               : "n/a";
             return [
-              `${escapeXml(label)}: ${formatScientific(val, 6)}`,
+              `${escapeXml(label)} · ${escapeXml(primaryLabel)}: ${formatScientific(val, 6)}`,
               histogramEntryCountLine(bin),
-              `abs error: ${absErrorText}`,
-              `rel error: ${relErrorText}`,
+              ...histogramBasicLines(bin),
+              ...(bin?.comparison ? [] : [`abs error: ${absErrorText}`, `rel error: ${relErrorText}`]),
               ...discreteBinInfoLines(bin, selectedView, metricDescriptors),
             ]
               .filter(Boolean)
@@ -385,7 +410,8 @@ export const buildHistogramOption = ({
             : []),
           {
             type: "bar",
-            name: "value",
+            name: primaryLabel,
+            markLine: referenceLine,
             data: barData,
             barCategoryGap: DISCRETE_BAR_CATEGORY_GAP,
             barGap: DISCRETE_BAR_GAP,
@@ -462,9 +488,9 @@ export const buildHistogramOption = ({
         rawY: Number(point?.raw_y ?? point?.y),
       }))
       .filter(
-        (point) => Number.isFinite(point.x) && Number.isFinite(point.y) && (effectiveXScale !== "log" || point.x > 0),
+        (point) => Number.isFinite(point.x) && (effectiveXScale !== "log" || point.x > 0),
       );
-    const valueSeriesData = stepSeriesPoints.map((point) => [point.x, point.y]);
+    const valueSeriesData = stepSeriesPoints.map((point) => [point.x, Number.isFinite(point.y) ? point.y : null]);
     const positiveSeriesData =
       yScale === "log"
         ? stepSeriesPoints.map((point) => (point.rawY > 0 ? [point.x, point.y] : [point.x, null]))
@@ -481,7 +507,8 @@ export const buildHistogramOption = ({
             {
               id: "histogram-value-positive",
               type: "line",
-              name: "value (+)",
+              name: primaryLabel,
+              markLine: referenceLine,
               data: positiveSeriesData,
               step: "end",
               showSymbol: false,
@@ -494,7 +521,7 @@ export const buildHistogramOption = ({
             {
               id: "histogram-value-negative",
               type: "line",
-              name: "value (-)",
+              name: primaryLabel,
               data: negativeSeriesData,
               step: "end",
               showSymbol: false,
@@ -507,7 +534,7 @@ export const buildHistogramOption = ({
             {
               id: "histogram-value-zero",
               type: "line",
-              name: "value (0)",
+              name: primaryLabel,
               data: zeroSeriesData,
               step: "end",
               showSymbol: false,
@@ -522,11 +549,13 @@ export const buildHistogramOption = ({
             {
               id: "histogram-value",
               type: "line",
-              name: "value",
+              name: primaryLabel,
+              markLine: referenceLine,
               data: valueSeriesData,
               step: "end",
               showSymbol: false,
               lineStyle: { width: 1.35, color: "#005f73" },
+              itemStyle: { color: "#005f73" },
               connectNulls: false,
               emphasis: { disabled: true },
               tooltip: { show: false },
@@ -540,17 +569,19 @@ export const buildHistogramOption = ({
         data: legendEntries,
         textStyle: { color: "#64748b", fontSize: 12 },
       },
-      grid: baseCartesianGrid,
+      grid: yLabel ? { ...baseCartesianGrid, top: 46 } : baseCartesianGrid,
       xAxis: {
         type: effectiveXScale === "log" ? "log" : "value",
         min: xDomain[0],
         max: xDomain[1],
         name: inferNumericXAxisLabel(panelId),
-        axisLabel: baseAxisLabel,
+        axisLabel: { ...baseAxisLabel, hideOverlap: true },
         splitLine: { show: false },
         nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
       },
       yAxis: {
+          name: yLabel,
+          nameTextStyle: { color: "#64748b", fontSize: 12 },
         type: "value",
         min: yDomain[0],
         max: yDomain[1],
@@ -583,10 +614,10 @@ export const buildHistogramOption = ({
               : null;
           const relErrorText = Number.isFinite(relError) ? formatScientific(relError, 6) : "n/a";
           return [
-            `${escapeXml(`${formatScientific(Number(bin?.start), 6)} → ${formatScientific(Number(bin?.stop), 6)}`)}: ${formatScientific(valueNumeric, 6)}`,
+            `${escapeXml(`${formatScientific(Number(bin?.start), 6)} → ${formatScientific(Number(bin?.stop), 6)}`)} · ${escapeXml(primaryLabel)}: ${formatScientific(valueNumeric, 6)}`,
             histogramEntryCountLine(bin),
-            `abs error: ${absErrorText}`,
-            `rel error: ${relErrorText}`,
+            ...histogramBasicLines(bin),
+            ...(bin?.comparison ? [] : [`abs error: ${absErrorText}`, `rel error: ${relErrorText}`]),
           ]
             .filter(Boolean)
             .join("<br/>");

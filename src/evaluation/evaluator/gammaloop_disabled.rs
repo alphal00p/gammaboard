@@ -1,7 +1,7 @@
 pub use super::gammaloop_config::{GammaLoopParams, TrainingProjection};
 
-use crate::core::{AccumulatorConfig, EngineError};
-use crate::evaluation::{Batch, BatchResult, EvalBatchOptions, Evaluator};
+use crate::core::EngineError;
+use crate::evaluation::{Batch, Evaluator};
 use crate::utils::domain::Domain;
 
 pub struct GammaLoopEvaluator;
@@ -21,15 +21,12 @@ impl Evaluator for GammaLoopEvaluator {
         Domain::continuous(0)
     }
 
-    fn eval_batch(
+    fn eval_values(
         &mut self,
         _batch: &Batch,
-        _accumulator: &AccumulatorConfig,
-        _options: EvalBatchOptions,
-    ) -> Result<BatchResult, EngineError> {
-        Err(EngineError::eval(
-            "evaluator.kind = \"gammaloop\" requires a gammaboard build with the default \"gammaloop\" feature enabled",
-        ))
+        _components: &[String],
+    ) -> Result<Vec<f64>, EngineError> {
+        Err(gammaloop_disabled_error())
     }
 }
 

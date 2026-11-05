@@ -247,40 +247,27 @@ def test_sampler_snapshot_and_partial_pdf_contract():
     ) == {"values": [1.0, None]}
 
 
-def test_gammaloop_weights_feedback_and_owned_arrays(monkeypatch):
+def test_observable_outputs_are_unweighted_and_one_per_input(monkeypatch):
     import numpy as np
-    from gammaboard_process import GammaLoopBatchResult, GammaLoopEvaluator
+    from gammaboard_process import ObservableBatch, Evaluator
     from gammaboard_process import runners
     from gammaboard_process.protocol import PROTOCOL
 
-    retained = []
-
-    class Evaluator(GammaLoopEvaluator):
+    class ObservableEvaluator(Evaluator):
         def __init__(self, **kwargs):
             pass
 
-        def eval_gammaloop(
-            self,
-            discrete,
-            continuous,
-            weights,
-            *,
-            require_training_values,
-            stratification,
-        ):
+        def eval(self, discrete, continuous):
             assert all(
-                a.flags.writeable and a.flags.owndata
-                for a in (discrete, continuous, weights)
+                a.flags.writeable and a.flags.owndata for a in (discrete, continuous)
             )
-            retained.append(weights)
-            values = continuous[:, 0] * weights
-            return GammaLoopBatchResult(
-                {"sum": float(values.sum())},
-                values if require_training_values else None,
+            return ObservableBatch(
+                np.column_stack((continuous[:, 0], np.zeros(len(continuous)))),
+                [{"histograms": {}} for _ in continuous],
             )
 
     monkeypatch.setattr(runners, "ProtocolIo", lambda: None)
-    worker = runners._EvaluatorWorker(Evaluator)
+    worker = runners._EvaluatorWorker(ObservableEvaluator)
     worker.handle(
         "initialize",
         {
@@ -293,43 +280,30 @@ def test_gammaloop_weights_feedback_and_owned_arrays(monkeypatch):
             "args": {},
         },
     )
-    binary = np.array([0.25, 0.75, 2.0, 3.0], dtype="<f8").tobytes()
-    for required in [True, False]:
-        result = worker.handle(
-            "eval_batch",
-            {
-                "nr_samples": 2,
-                "require_training_values": required,
-                "stratification": None,
-            },
-            binary,
-        )
-        assert result["gammaloop_state"] == {"sum": 2.75}
-        if required:
-            np.testing.assert_array_equal(
-                np.frombuffer(result["__binary__"], dtype="<f8"), [0.5, 2.25]
-            )
-        else:
-            assert "__binary__" not in result
-        retained[-1][:] = 0
+    binary = np.array([0.25, 0.75], dtype="<f8").tobytes()
+    result = worker.handle("eval_batch", {"nr_samples": 2}, binary)
+    assert len(result["observables"]) == 2
+    np.testing.assert_array_equal(
+        np.frombuffer(result["__binary__"], dtype="<f8"), [0.25, 0, 0.75, 0]
+    )
     with pytest.raises(ValueError, match="input length"):
-        worker.handle(
-            "eval_batch",
-            {"nr_samples": 2, "require_training_values": True, "stratification": None},
-            binary[:-1],
-        )
-    with pytest.raises(TypeError, match="must implement eval"):
-        worker.handle(
-            "initialize",
-            {
-                "protocol": PROTOCOL,
-                "role": "evaluator",
-                "output": {"kind": "values", "components": ["value"]},
-                "domain": {
-                    "rectangular": {"discrete_cardinalities": [], "continuous_dims": 1}
-                },
-            },
-        )
+        worker.handle("eval_batch", {"nr_samples": 2}, binary + binary)
+    original = worker.evaluator.eval
+    for invalid in ["missing", "aggregate", "nonfinite"]:
+
+        def broken(*args, invalid=invalid):
+            result = original(*args)
+            if invalid == "missing":
+                result.observables.pop()
+            elif invalid == "aggregate":
+                result.observables[0] = {"histograms": {"x": {"sample_count": 2}}}
+            else:
+                result.values[0, 0] = np.nan
+            return result
+
+        worker.evaluator.eval = broken
+        with pytest.raises(ValueError):
+            worker.handle("eval_batch", {"nr_samples": 2}, binary)
 
 
 def test_sampler_requires_restoration_at_initialization(monkeypatch):

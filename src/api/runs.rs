@@ -1579,45 +1579,33 @@ config = "scalar"
     #[test]
     fn bundled_run_and_task_templates_parse_after_replacement_expansion() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for relative_path in [
-            "resources/templates/runs/installation-smoke.toml",
-            "resources/templates/runs/ghost_bump.toml",
-            "resources/templates/runs/hyperparameter-tuning-symbolica-grid-search.toml",
-            "resources/templates/runs/hyperparameter-tuning-symbolica-variance-search.toml",
-            "resources/templates/runs/hyperparameter-tuning-symbolica.toml",
-            "resources/templates/runs/parameter-scan-symbolica-scale-offset-scan-2d.toml",
-            "resources/templates/runs/parameter-scan-symbolica.toml",
-            "resources/templates/runs/symbolica-havana-pdf-1d2d.toml",
-            "resources/templates/runs/symbolica-variable-smooth-compiled.toml",
-            "resources/templates/runs/symbolica-variable-smooth-egobox.toml",
-            "resources/templates/tasks/pdf_adaptation_image.toml",
-            "resources/templates/tasks/sample_monte_carlo_real.toml",
-            "resources/templates/tasks/train_sample.toml",
+        for directory in ["resources/templates/runs", "resources/templates/tasks"] {
+            for name in crate::api::templates::list_templates(&root.join(directory)).unwrap() {
+                if !cfg!(feature = "gammaloop")
+                    && (name.starts_with("gammaloop") || name == "integration-campaign.toml")
+                {
+                    continue;
+                }
+                let path = root.join(directory).join(&name);
+                if directory.ends_with("tasks") {
+                    parse_task_queue_toml(&fs::read_to_string(&path).unwrap())
+                        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                } else {
+                    load_run_add_config_file(&path)
+                        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                }
+            }
+        }
+        for path in [
             "process_api/examples/python_gammaloop_observable/run.toml",
             "process_api/examples/python_sampler_symbolica_havana/run.toml",
             "process_api/examples/python_scalar_sin/run.toml",
             "process_api/examples/rust_breit_wigner_evaluator/run.toml",
-            "resources/templates/runs/ghost_bump_madnis_apptainer.toml",
+            "integrations/madnis/examples/ghost_bump_apptainer.toml",
+            "examples/symbolica-variable-theta/run.toml",
+            "examples/symbolica-variable-theta/tune.toml",
         ] {
-            let raw = fs::read_to_string(root.join(relative_path)).expect("template file");
-            if relative_path.contains("/tasks/") {
-                parse_task_queue_toml(&raw)
-                    .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
-            } else {
-                load_run_add_config_file(&root.join(relative_path))
-                    .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
-            }
-        }
-
-        if cfg!(feature = "gammaloop") {
-            for relative_path in [
-                "resources/templates/runs/gammaloop.toml",
-                "resources/templates/runs/integration-campaign-qft-like.toml",
-                "resources/templates/runs/tt_h.toml",
-            ] {
-                load_run_add_config_file(&root.join(relative_path))
-                    .unwrap_or_else(|err| panic!("{relative_path} should parse: {err}"));
-            }
+            load_run_add_config_file(&root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
         }
     }
 
@@ -1779,36 +1767,106 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
     }
 
     #[test]
-    fn parse_run_add_accepts_qft_like_integration_campaign_example() {
-        let config = load_run_add_config_file(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("resources/templates/runs/integration-campaign-qft-like.toml")
-                .as_path(),
-        )
-        .expect("integration campaign config");
-        let Some(RunTaskSpec::IntegrationCampaign { children, .. }) = config.controller() else {
-            panic!("expected one integration campaign task");
-        };
-        assert_eq!(children.len(), 3);
-        for (index, child) in children.iter().enumerate() {
-            let child_config = super::super::run_definition::instantiate_child(
+    fn default_tuning_and_scan_children_publish_the_requested_metric() {
+        for file in ["hyperparameter-tuning.toml", "parameter-scan.toml"] {
+            let config = load_run_add_config_file(
+                &Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources/templates/runs")
+                    .join(file),
+            )
+            .unwrap();
+            let (requested, child) = match config.controller().unwrap() {
+                RunTaskSpec::HyperparameterTuning {
+                    objective, child, ..
+                } => (objective, child),
+                RunTaskSpec::ParameterScan {
+                    measurement, child, ..
+                } => (measurement, child),
+                _ => panic!("controller"),
+            };
+            let child = super::super::run_definition::instantiate_child(
                 child.run.clone(),
                 child.replacements.clone(),
                 None,
             )
-            .unwrap_or_else(|err| panic!("invalid child '{}': {err}", child.name));
-            let crate::core::EvaluatorConfig::Gammaloop { params } = child_config
-                .integration()
-                .unwrap()
-                .params
-                .evaluator
-                .clone()
-                .expect("campaign child evaluator")
+            .unwrap();
+            let tasks = &child.integration().unwrap().task_queue;
+            assert_eq!(
+                tasks.len(),
+                2,
+                "controller children should finish at inference"
+            );
+            let source = tasks
+                .iter()
+                .find(|t| t.name.as_deref() == Some(requested.source_task.as_str()))
+                .unwrap();
+            let RunTaskSpec::Sample {
+                measurement: Some(actual),
+                ..
+            } = &source.task
             else {
-                panic!("expected gammaloop child evaluator");
+                panic!("explicit child measurement")
             };
-            assert_eq!(params.graph_groups, Some(vec![usize::from(index > 0)]));
+            assert_eq!(actual, &requested.measurement);
         }
+    }
+
+    #[test]
+    fn default_campaign_averages_independent_native_replicas() {
+        if !cfg!(feature = "gammaloop") {
+            return;
+        }
+        let config = load_run_add_config_file(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources/templates/runs/integration-campaign.toml"),
+        )
+        .unwrap();
+        let Some(RunTaskSpec::IntegrationCampaign {
+            children,
+            allocation,
+            ..
+        }) = config.controller()
+        else {
+            panic!("campaign")
+        };
+        assert_eq!(children.len(), 2);
+        assert_eq!(allocation.max_active_runs, 2);
+        assert_eq!(children.iter().map(|c| c.coefficient).sum::<f64>(), 1.0);
+        let definitions = children
+            .iter()
+            .map(|child| {
+                super::super::run_definition::instantiate_child(
+                    child.run.clone(),
+                    child.replacements.clone(),
+                    None,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut seeds = Vec::new();
+        let mut inference_seeds = Vec::new();
+        for child in &definitions {
+            let integration = child.integration().unwrap();
+            assert!(matches!(
+                integration.params.evaluator,
+                Some(crate::core::EvaluatorConfig::Gammaloop { .. })
+            ));
+            let RunTaskSpec::Sample {
+                sampler: Some(crate::core::tasks::StageSourceSpec::Config { config }),
+                ..
+            } = &integration.task_queue[0].task
+            else {
+                panic!("training stage")
+            };
+            let crate::core::SamplerConfig::HavanaTraining { params } = &config.sampler else {
+                panic!("training sampler")
+            };
+            seeds.push(params.seed);
+            let inference = serde_json::to_value(&integration.task_queue[1].task).unwrap();
+            inference_seeds.push(inference.pointer("/sampler/config/seed").unwrap().clone());
+        }
+        assert_ne!(seeds[0], seeds[1]);
+        assert_ne!(inference_seeds[0], inference_seeds[1]);
     }
 
     #[test]

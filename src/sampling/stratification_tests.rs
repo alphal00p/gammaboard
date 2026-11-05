@@ -1,5 +1,6 @@
 use crate::core::{StratificationConfig, StratificationPlan};
 use crate::evaluation::EvalBatchOptions;
+use crate::evaluation::EvaluatorBatch;
 use crate::evaluation::stratification::integrand_batch;
 use crate::sampling::{DiscreteSubspace, Generation, StageHandoff};
 use crate::utils::domain::{DiscreteAxisRole, DomainBranch};

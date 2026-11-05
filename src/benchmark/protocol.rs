@@ -1,5 +1,6 @@
 //! Paired adapter/callback timings through the production Python SDK.
 use crate::core::{AccumulatorConfig, EvaluatorConfig, SamplingConfig, TrainingProjection};
+use crate::evaluation::EvaluatorBatch;
 use crate::{Batch, Domain, EvalBatchOptions, Generation, Point};
 use anyhow::{Result, ensure};
 use rand::{Rng, SeedableRng};

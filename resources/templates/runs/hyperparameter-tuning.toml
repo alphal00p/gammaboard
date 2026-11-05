@@ -1,0 +1,12 @@
+# Move two Voronoi centres along x; keep the integrand and sampler settings fixed.
+# The 3x3 grid includes the original tetrahedron corners (1, -1).
+kind = "hyperparameter_tuning"
+name = "tetrahedron-tuning"
+max_concurrent_trials = 2
+optimizer = { algorithm = "grid_search" }
+objective = { source_task = "inference", mode = "minimize", selection = { kind = "metric", name = "error", component = "x" } }
+[parameters]
+center_00_x = { kind = "categorical", values = [0.5,1.0,1.5] }
+center_10_x = { kind = "categorical", values = [-1.5,-1.0,-0.5] }
+[child]
+run = { file = "support/tetrahedron-trial.toml" }

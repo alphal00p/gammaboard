@@ -985,10 +985,12 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
-            Self::Image {
-                geometry, evaluator, ..
-            } => {
+            Self::Image { geometry, evaluator, accumulator, display, .. } => {
                 geometry.validate()?;
+                accumulator.full_config().validate()?;
+                if *display == ImageDisplayMode::ComplexPhase && accumulator.components() != ["real", "imag"] {
+                    return Err("complex phase images require real/imag components".into());
+                }
                 if let Some(source) = evaluator {
                     source.validate_ref("evaluator")?;
                 }
@@ -1032,10 +1034,9 @@ impl RunTaskSpec {
                 }
                 Ok(())
             }
-            Self::PlotLine {
-                geometry, evaluator, ..
-            } => {
+            Self::PlotLine { geometry, evaluator, accumulator, .. } => {
                 geometry.validate()?;
+                accumulator.full_config().validate()?;
                 if let Some(source) = evaluator {
                     source.validate_ref("evaluator")?;
                 }
@@ -1463,22 +1464,25 @@ pub enum LineDisplayMode {
     Components,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlotAccumulatorKind {
     Scalar,
+    /// Complex output, with real/imag components.
     Vector,
+    Components(Vec<String>),
 }
 
 impl PlotAccumulatorKind {
-    pub fn components(self) -> Vec<String> {
+    pub fn components(&self) -> Vec<String> {
         match self {
             Self::Scalar => vec!["value".to_string()],
             Self::Vector => vec!["real".to_string(), "imag".to_string()],
+            Self::Components(names) => names.clone(),
         }
     }
 
-    pub fn full_config(self) -> AccumulatorConfig {
+    pub fn full_config(&self) -> AccumulatorConfig {
         AccumulatorConfig::FullVector {
             components: self.components(),
         }

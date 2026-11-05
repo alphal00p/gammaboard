@@ -1,6 +1,6 @@
-# Process wire protocol v9
+# Process wire protocol v10
 
-This is the complete transport contract for `gammaboard-jsonrpc-v9`. The
+This is the complete transport contract for `gammaboard-jsonrpc-v10`. The
 [execution specification](../docs/execution-model.md) defines sampling, weighting,
 feedback ordering, and recovery semantics. The [process guide](README.md) covers
 SDK setup. The protocol has four roles: `evaluator`, `sampler`, `materializer`,
@@ -14,7 +14,7 @@ stdout. Each process handles one synchronous request at a time. Every request ha
 that `id` and contains exactly one of `result` or `error`:
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":"gammaboard-jsonrpc-v9","role":"sampler","domain":{"rectangular":{"discrete_cardinalities":[],"continuous_dims":2}},"args":{},"evaluator_metadata":{},"initialization":{"kind":"fresh"}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":"gammaboard-jsonrpc-v10","role":"sampler","domain":{"rectangular":{"discrete_cardinalities":[],"continuous_dims":2}},"args":{},"evaluator_metadata":{},"initialization":{"kind":"fresh"}}}
 ```
 
 ```json
@@ -53,7 +53,7 @@ All roles receive:
 
 | Parameter | Meaning |
 | --- | --- |
-| `protocol` | Exactly `gammaboard-jsonrpc-v9` |
+| `protocol` | Exactly `gammaboard-jsonrpc-v10` |
 | `role` | One of the four role strings above |
 | `domain` | The structural domain described below |
 | `args` | User construction arguments, as a JSON object |
@@ -152,7 +152,7 @@ specified byte length; extra/truncated data is invalid.
 | Role / method | Request JSON parameters | Request binary blocks, in order | Result JSON | Result binary blocks |
 | --- | --- | --- | --- | --- |
 | Evaluator / `eval_batch`, values output | `nr_samples`, `components`, optional coordinate offsets | `D` i64 discrete, `X` f64 continuous | `{}` | `N*C` unweighted f64 component values |
-| Evaluator / `eval_batch`, GammaLoop output | `nr_samples`, `require_training_values` boolean, `stratification` (object or null), optional coordinate offsets | `D` i64 discrete, `X` f64 continuous, `N` f64 total weights | `{"gammaloop_state":...}` | First `N` weighted f64 training values if requested, then `N*2` unweighted real/imag f64 values if stratifying; omitted blocks have zero length |
+| Evaluator / `eval_batch`, observable output | `nr_samples`, `components:["real","imag"]`, optional coordinate offsets | `D` i64 discrete, `X` f64 continuous | `{"observables":[bundle_0,...,bundle_N_minus_1]}` | `N*2` unweighted f64 real/imaginary values |
 | Sampler / `generate` | Positive integer `max_samples` | Empty | See generation results below | For a batch: `D` i64 discrete, `X` f64 continuous, `N` f64 weights |
 | Sampler / `feedback` | `nr_values`, `stratum_prefixes` (array of complete integer tuples or null) | `N` unmasked weighted f64 values; when prefixes are present, `N` requested u64 table indices followed by `N` actual u64 table indices | `{"ok":true}` | Empty |
 
@@ -164,31 +164,16 @@ partition, `stratum_prefixes` is null and only the value block is present. Split
 and recovery preserve the complete feedback object and original draw boundaries.
 
 The `components` field on ordinary evaluation requests agrees with initialization.
-Ordinary callbacks return unweighted values; the Rust adapter handles accumulation
-and training projection. GammaLoop callbacks apply total weights exactly once to
-both native state and requested feedback. The native state is current
-`GammaLoopAccumulatorState` JSON; use the
-[observable example](examples/python_gammaloop_observable/src/demo_evaluator.py)
-and [typed producer](python/src/gammaboard_process/gammaloop.py) for its structure.
-GammaBoard does not apply another weight to that state. Native state may count
-internal integration samples separately from the queued input sample count.
-
-With stratification, the request object is
-`{"partition":{"kind":"voronoi","domain":...,"centers":{"0":[...],"1,3":[...]},"scales":[...]},"labels":[...]}`.
-Scales can be omitted (ones); labels identify the requested stratum for every
-original draw. Dense labels index centres in numeric lexicographic prefix order.
-The integrand coordinate arrays exclude the complete requested stratum prefix.
-The callback must classify its raw real/imag values, mask contributions before
-observable accumulation, and retain full input weights. A miss retains unmasked weighted training feedback and produces no histogram
-fills, but counts as one sample in every
-histogram and primary estimate. All events from one draw remain one statistical
-unit. The response values block is sample-major `(real,imag)` and contains the
-unmasked values, including on misses. Every value must be finite. No guessed or
-recomputed probabilities are needed by this callback: the host alone applies its
-frozen `p_k` to the primary integral estimator. The native state remains pooled.
-The host requires every native estimate/histogram count to equal `nr_samples`
-when stratifying. Independent integrations triggered by one queue point are
-therefore not valid stratified observable producers.
+Every evaluator returns exactly one unweighted result per input. Observable bundles
+use the GammaLoop histogram snapshot schema, but each histogram has sample_count=1.
+Sum all correlated fills within each bin before squaring; include empty draws.
+The host validates these counts and moments and applies sampling weights,
+classification, masking, feedback projection and per-stratum reduction centrally.
+Evaluators never receive outer weights or stratification metadata and cannot
+return aggregate statistics. See the [observable example](examples/python_gammaloop_observable/src/demo_evaluator.py)
+and [typed output](python/src/gammaboard_process/gammaloop.py).
+Initialization may specify `output.training_projection` for observable output:
+`real` (default), `imag`, `abs`, or `abs_sq`; this is interpreted by the Rust host.
 
 Generation results are one of:
 

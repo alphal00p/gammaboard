@@ -15,6 +15,7 @@ use serde_json::Value as JsonValue;
 pub(super) fn image_projectors(
     geometry: PlaneRasterGeometry,
     display: ImageDisplayMode,
+    accumulator: PlotAccumulatorKind,
 ) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(
@@ -23,55 +24,52 @@ pub(super) fn image_projectors(
             geometry.nr_points(),
             "pixels",
         ),
-        image_view_mode_projector(display),
-        image_view_projector(geometry, display),
+        image_view_mode_projector(display, accumulator.components()),
+        image_view_projector(geometry, display, accumulator.components()),
     ]
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ImageViewMode {
-    ScalarHeatmapMinMax,
-    ScalarHeatmapSymmetric,
-    VectorMagnitude,
-    ComplexPhase,
+    Component(String),
+    Magnitude,
+    Phase,
 }
 
 impl ImageViewMode {
-    fn as_str(self) -> &'static str {
+    fn as_str(&self) -> String {
         match self {
-            Self::ScalarHeatmapMinMax => "scalar_heatmap_min_max",
-            Self::ScalarHeatmapSymmetric => "scalar_heatmap_symmetric",
-            Self::VectorMagnitude => "vector_magnitude",
-            Self::ComplexPhase => "complex_phase",
+            Self::Component(name) => format!("component:{name}"),
+            Self::Magnitude => "vector_magnitude".into(),
+            Self::Phase => "complex_phase".into(),
         }
     }
 
-    fn panel_spec(default_mode: Self, display: ImageDisplayMode) -> PanelSpec {
+    fn panel_spec(display: ImageDisplayMode, components: &[String]) -> PanelSpec {
         let mut spec = panel_spec(
             "image_view_mode",
-            "Image View Mode",
+            "Image component",
             PanelKind::Select,
             PanelHistoryMode::None,
         );
         spec.width = PanelWidth::Compact;
-        let mut options = vec![
-            state_option(Self::ScalarHeatmapMinMax.as_str(), "Heatmap / Min-Max"),
-            state_option(Self::ScalarHeatmapSymmetric.as_str(), "Heatmap / Symmetric"),
-        ];
-        if matches!(
-            display,
-            ImageDisplayMode::Auto
-                | ImageDisplayMode::VectorMagnitude
-                | ImageDisplayMode::ComplexPhase
-        ) {
-            options.push(state_option(
-                Self::VectorMagnitude.as_str(),
-                "Vector Magnitude",
-            ));
-            options.push(state_option(Self::ComplexPhase.as_str(), "Complex Phase"));
+        let mut options = components
+            .iter()
+            .map(|name| state_option(format!("component:{name}"), name))
+            .collect::<Vec<_>>();
+        options.push(state_option(
+            "vector_magnitude",
+            if components.len() == 1 {
+                "Absolute value"
+            } else {
+                "Vector magnitude"
+            },
+        ));
+        if components == ["real", "imag"] {
+            options.push(state_option("complex_phase", "Complex phase"));
         }
         spec.state = Some(select_state_spec(
-            JsonValue::String(default_mode.as_str().to_string()),
+            JsonValue::String(default_image_view_mode(display, components).as_str()),
             options,
             None,
         ));
@@ -90,10 +88,10 @@ pub(super) fn line_projectors(
         geometry.nr_points(),
         "points",
     )];
-    if line_uses_vector_components(display, accumulator) {
+    if line_uses_vector_components(display, &accumulator) {
         projectors.push(line_components_projector(geometry));
     } else {
-        let label = if matches!(accumulator, PlotAccumulatorKind::Vector) {
+        let label = if accumulator.components().len() > 1 {
             "Primary Component"
         } else {
             "Value"
@@ -134,6 +132,7 @@ fn progress_projector(
 fn image_view_projector(
     geometry: PlaneRasterGeometry,
     display: ImageDisplayMode,
+    components: Vec<String>,
 ) -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
@@ -147,7 +146,7 @@ fn image_view_projector(
             Some(accumulator) => Ok(Some(image_view_panel(
                 accumulator,
                 &geometry,
-                selected_image_view_mode(ctx, display),
+                selected_image_view_mode(ctx, display, &components),
             )?)),
             None => Ok(None),
         },
@@ -155,10 +154,12 @@ fn image_view_projector(
     )
 }
 
-fn image_view_mode_projector(display: ImageDisplayMode) -> TaskPanelProjector {
-    let default_mode = default_image_view_mode(display);
+fn image_view_mode_projector(
+    display: ImageDisplayMode,
+    components: Vec<String>,
+) -> TaskPanelProjector {
     panel_projector(
-        ImageViewMode::panel_spec(default_mode, display),
+        ImageViewMode::panel_spec(display, &components),
         |_ctx| Ok(None),
         |_ctx| Ok(None),
     )
@@ -215,29 +216,42 @@ fn image_view_panel(
     let total = geometry.nr_points();
     match accumulator {
         AccumulatorState::FullVector(state) => {
-            let real_values = state
-                .component_values("real")
-                .or_else(|| state.component_values("value"))
-                .or_else(|| {
+            let (values, imag_values, color_mode, label) = match mode {
+                ImageViewMode::Component(name) => (
+                    state.component_values(&name).unwrap_or_default(),
+                    None,
+                    ImageColorMode::ScalarHeatmap,
+                    name,
+                ),
+                ImageViewMode::Magnitude => (
                     state
-                        .components
-                        .first()
-                        .and_then(|name| state.component_values(name))
-                })
-                .unwrap_or_default();
-            let imag_values = state.component_values("imag");
+                        .values_row_major
+                        .chunks_exact(state.components.len())
+                        .map(|row| row.iter().fold(0.0_f64, |n, x| n.hypot(*x)))
+                        .collect(),
+                    None,
+                    ImageColorMode::ScalarHeatmap,
+                    "Vector magnitude".into(),
+                ),
+                ImageViewMode::Phase => (
+                    state.component_values("real").unwrap_or_default(),
+                    state.component_values("imag"),
+                    ImageColorMode::ComplexPhase,
+                    "Complex phase".into(),
+                ),
+            };
             Ok(PanelState::Image2d {
                 panel_id: "image_view".to_string(),
                 width,
                 height,
-                values: reorder_scalar_values(&real_values, total),
+                values: reorder_scalar_values(&values, total),
                 imag_values: imag_values.map(|values| reorder_scalar_values(&values, total)),
                 invalid_indices: None,
                 x_range: [geometry.u_linspace.start, geometry.u_linspace.stop],
                 y_range: [geometry.v_linspace.start, geometry.v_linspace.stop],
-                color_mode: image_color_mode(mode),
-                normalization_mode: image_normalization_mode(mode),
-                metric_label: None,
+                color_mode,
+                normalization_mode: ImageNormalizationMode::MinMax,
+                metric_label: Some(label),
                 metric_mode: None,
                 x_label: None,
                 y_label: None,
@@ -250,45 +264,35 @@ fn image_view_panel(
     }
 }
 
-fn default_image_view_mode(display: ImageDisplayMode) -> ImageViewMode {
+fn default_image_view_mode(display: ImageDisplayMode, components: &[String]) -> ImageViewMode {
     match display {
-        ImageDisplayMode::VectorMagnitude => ImageViewMode::VectorMagnitude,
-        ImageDisplayMode::ComplexPhase => ImageViewMode::ComplexPhase,
-        ImageDisplayMode::Auto | ImageDisplayMode::ScalarHeatmap => {
-            ImageViewMode::ScalarHeatmapMinMax
-        }
+        ImageDisplayMode::VectorMagnitude => ImageViewMode::Magnitude,
+        ImageDisplayMode::ComplexPhase if components == ["real", "imag"] => ImageViewMode::Phase,
+        _ => ImageViewMode::Component(
+            components
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "value".into()),
+        ),
     }
 }
 
 fn selected_image_view_mode(
     ctx: &TaskPanelContext<'_>,
     display: ImageDisplayMode,
+    components: &[String],
 ) -> ImageViewMode {
     match ctx.selected_value("image_view_mode") {
-        Some("scalar_heatmap_symmetric") => ImageViewMode::ScalarHeatmapSymmetric,
-        Some("vector_magnitude") => ImageViewMode::VectorMagnitude,
-        Some("complex_phase") => ImageViewMode::ComplexPhase,
-        Some("scalar_heatmap_min_max") => ImageViewMode::ScalarHeatmapMinMax,
-        _ => default_image_view_mode(display),
-    }
-}
-
-fn image_color_mode(mode: ImageViewMode) -> ImageColorMode {
-    match mode {
-        ImageViewMode::VectorMagnitude => ImageColorMode::VectorMagnitude,
-        ImageViewMode::ComplexPhase => ImageColorMode::ComplexPhase,
-        ImageViewMode::ScalarHeatmapMinMax | ImageViewMode::ScalarHeatmapSymmetric => {
-            ImageColorMode::ScalarHeatmap
+        Some("vector_magnitude") if !components.is_empty() => ImageViewMode::Magnitude,
+        Some("complex_phase") if components == ["real", "imag"] => ImageViewMode::Phase,
+        Some(value)
+            if value
+                .strip_prefix("component:")
+                .is_some_and(|name| components.iter().any(|c| c == name)) =>
+        {
+            ImageViewMode::Component(value[10..].into())
         }
-    }
-}
-
-fn image_normalization_mode(mode: ImageViewMode) -> ImageNormalizationMode {
-    match mode {
-        ImageViewMode::ScalarHeatmapSymmetric => ImageNormalizationMode::Symmetric,
-        ImageViewMode::ScalarHeatmapMinMax
-        | ImageViewMode::VectorMagnitude
-        | ImageViewMode::ComplexPhase => ImageNormalizationMode::MinMax,
+        _ => default_image_view_mode(display, components),
     }
 }
 
@@ -354,8 +358,11 @@ fn line_real_panel(
     }
 }
 
-fn line_uses_vector_components(display: LineDisplayMode, accumulator: PlotAccumulatorKind) -> bool {
-    matches!(accumulator, PlotAccumulatorKind::Vector)
+fn line_uses_vector_components(
+    display: LineDisplayMode,
+    accumulator: &PlotAccumulatorKind,
+) -> bool {
+    accumulator.components().len() > 1
         && matches!(display, LineDisplayMode::Auto | LineDisplayMode::Components)
 }
 
@@ -400,4 +407,51 @@ fn reorder_scalar_values(values: &[f64], total: usize) -> Vec<f32> {
 fn decode_full_progress(persisted: &JsonValue) -> Result<FullAccumulatorProgress, EngineError> {
     serde_json::from_value(persisted.clone())
         .map_err(|err| EngineError::build(format!("invalid full accumulator progress: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evaluation::FullVectorAccumulatorState;
+
+    #[test]
+    fn named_vector_images_include_every_component_in_the_norm() {
+        let components = vec!["x".into(), "y".into(), "z".into()];
+        let state = AccumulatorState::FullVector(FullVectorAccumulatorState {
+            components: components.clone(),
+            values_row_major: vec![3., 4., 12.],
+        });
+        let geometry = serde_json::from_value(serde_json::json!({
+            "offset":[0.,0.],"u_vector":[1.,0.],"v_vector":[0.,1.],
+            "u_linspace":{"start":0.,"stop":1.,"count":1},
+            "v_linspace":{"start":0.,"stop":1.,"count":1}
+        }))
+        .unwrap();
+        for (mode, expected) in [
+            (ImageViewMode::Magnitude, 13.),
+            (ImageViewMode::Component("z".into()), 12.),
+        ] {
+            let PanelState::Image2d {
+                values,
+                imag_values,
+                ..
+            } = image_view_panel(&state, &geometry, mode).unwrap()
+            else {
+                panic!("image")
+            };
+            assert_eq!(values, vec![expected]);
+            assert!(imag_values.is_none());
+        }
+        let options = serde_json::to_string(&ImageViewMode::panel_spec(
+            ImageDisplayMode::Auto,
+            &components,
+        ))
+        .unwrap();
+        assert!(options.contains("component:z"));
+        assert!(!options.contains("complex_phase"));
+        assert!(line_uses_vector_components(
+            LineDisplayMode::Auto,
+            &PlotAccumulatorKind::Components(components)
+        ));
+    }
 }

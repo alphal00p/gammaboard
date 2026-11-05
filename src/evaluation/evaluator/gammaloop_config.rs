@@ -19,6 +19,17 @@ pub enum TrainingProjection {
     AbsSq,
 }
 
+impl TrainingProjection {
+    pub(crate) fn project(self, value: num::Complex<f64>) -> f64 {
+        match self {
+            Self::Real => value.re,
+            Self::Imag => value.im,
+            Self::Abs => value.norm(),
+            Self::AbsSq => value.norm_sqr(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GammaLoopParams {

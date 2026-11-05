@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::SamplingConfig;
+use crate::evaluation::EvaluatorBatch;
 use crate::evaluation::Materializer;
 use crate::sampling::{IdentityMaterializer, NaiveMonteCarloSamplerParams};
 
@@ -108,10 +109,9 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
         let batch = IdentityMaterializer::new()
             .materialize_batch(&latent)
             .unwrap();
-        let expected = modes.each_ref().map(|mode| {
-            evaluator.integrand = evaluator.pristine_integrand.clone();
-            stable_result(&evaluator.eval_batch(&batch, mode, options).unwrap())
-        });
+        let expected = modes
+            .each_ref()
+            .map(|mode| stable_result(&evaluator.eval_batch(&batch, mode, options).unwrap()));
         let snapshot = evaluator
             .eval_batch(&batch, &AccumulatorConfig::Gammaloop, options)
             .unwrap();
@@ -131,7 +131,7 @@ fn observable_batches_are_isolated_after_mixed_modes_and_failure() {
         }
 
         // Bypass GammaBoard's input validation to exercise an external failure
-        // after one valid sample has already updated the integrand's observables.
+        // after one valid sample has already been evaluated.
         let point = &batch.points()[0];
         let discrete = point
             .discrete
@@ -186,18 +186,13 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
         // Parameterization is squared; the Monte Carlo weight is applied once.
         (TrainingProjection::AbsSq, [300.0, 84.5]),
     ] {
-        let whole = GammaLoopEvaluator::gammaloop_estimate(
-            &results,
-            &points,
-            projection,
-            EvalBatchOptions::default(),
-        )
-        .unwrap();
+        let whole =
+            reduce_results(&results, &points, projection, EvalBatchOptions::default()).unwrap();
         let mut merged = GammaLoopAccumulatorState::default();
         for i in 0..2 {
             merged
                 .merge_in_place(
-                    GammaLoopEvaluator::gammaloop_estimate(
+                    reduce_results(
                         &results[i..i + 1],
                         &points[i..i + 1],
                         projection,
@@ -272,4 +267,50 @@ fn gammaloop_efficiency_uses_weighted_training_projection_through_merge_and_roun
         assert!(incompatible.merge_in_place(restored).is_err());
         assert_eq!(incompatible.to_persistent_json().unwrap(), before);
     }
+}
+
+// Exercise the runtime reducer with controlled native values and diagnostics.
+fn reduce_results(
+    results: &[EvaluationResult],
+    points: &[crate::Point],
+    projection: TrainingProjection,
+    options: EvalBatchOptions<'_>,
+) -> Result<GammaLoopAccumulatorState, EngineError> {
+    struct Fixture<'a>(&'a [EvaluationResult], TrainingProjection);
+    impl Evaluator for Fixture<'_> {
+        fn domain(&self) -> Domain {
+            Domain::continuous(0)
+        }
+        fn training_projection(&self) -> TrainingProjection {
+            self.1
+        }
+        fn eval_samples(
+            &mut self,
+            _: &Batch,
+            _: &[String],
+            emit: &mut dyn FnMut(crate::evaluation::SampleOutput) -> Result<(), EngineError>,
+        ) -> Result<(), EngineError> {
+            for result in self.0 {
+                let value = GammaLoopEvaluator::project_result_value(result);
+                let mut output = crate::evaluation::SampleOutput::values(vec![value.re, value.im]);
+                output.observables = Some(Default::default());
+                output.evaluation = Some(crate::evaluation::SampleEvaluation {
+                    integrand_value_re: result.integrand_result.re.0,
+                    integrand_value_im: result.integrand_result.im.0,
+                    parameterization_jacobian: result.parameterization_jacobian.map(|j| j.0),
+                });
+                emit(output)?;
+            }
+            Ok(())
+        }
+    }
+    let result = Fixture(results, projection).eval_batch(
+        &Batch::new(points.to_vec()),
+        &AccumulatorConfig::Gammaloop,
+        options,
+    )?;
+    let AccumulatorState::Gammaloop(state) = result.accumulator else {
+        unreachable!()
+    };
+    Ok(state)
 }

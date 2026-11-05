@@ -2,9 +2,9 @@
 use serde::{Deserialize, Deserializer};
 
 /// Fresh database schema; checkpoint and queue formats have independent versions.
-pub const DATABASE_MODEL_VERSION: u32 = 7;
+pub const DATABASE_MODEL_VERSION: u32 = 8;
 
-pub const MODEL_VERSION: u32 = 5;
+pub const MODEL_VERSION: u32 = 6;
 pub const PERFORMANCE_SCHEMA_VERSION: u32 = 2;
 pub(crate) const QUEUE_MAGIC: &[u8; 4] = b"GBQ\x04";
 
@@ -47,7 +47,7 @@ mod tests {
             format_version: u32,
         }
         assert_eq!(
-            serde_json::from_str::<Envelope>("{\"format_version\":5}")
+            serde_json::from_str::<Envelope>("{\"format_version\":6}")
                 .unwrap()
                 .format_version,
             MODEL_VERSION

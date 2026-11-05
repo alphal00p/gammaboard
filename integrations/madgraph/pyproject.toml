@@ -28,7 +28,6 @@ Issues = "https://github.com/alphal00p/gammaboard/issues"
 
 [project.scripts]
 madgraph-gammaboard-evaluator = "madgraph_gammaboard.evaluator:main"
-madgraph-gammaboard-event-evaluator = "madgraph_gammaboard.event_evaluator:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

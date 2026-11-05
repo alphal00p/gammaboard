@@ -526,7 +526,7 @@ mod tests {
         SymbolicaEngine, SymbolicaParams, SymbolicaSource, compile_complex_evaluator, namespace,
     };
     use crate::core::AccumulatorConfig;
-    use crate::evaluation::{Batch, EvalBatchOptions, Evaluator, Point};
+    use crate::evaluation::{Batch, EvalBatchOptions, EvaluatorBatch, Point};
     use std::collections::BTreeMap;
     use symbolica::atom::Atom;
     use symbolica::evaluate::FunctionMap;

@@ -41,7 +41,7 @@ const downloadJsonFile = (baseName, payload) => {
 };
 
 const csvCell = (value) => {
-  if (value == null) return "";
+  if (value == null || (typeof value === "number" && !Number.isFinite(value))) return "";
   const text = typeof value === "object" ? JSON.stringify(value) : String(value);
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 };
@@ -74,6 +74,12 @@ export const figureCsv = (payload) => {
     columns = ["record_type","x","y","target","pdf","actual_stratum","normalization","relative_mismatch","log_ratio","coverage"];
     rows = state.points.map(point=>["grid",point.x,point.y,point.target,point.pdf,point.actual_stratum,state.normalization,point.relative_mismatch,point.log_ratio,point.coverage]);
     for (const [x,pdf] of state.pdf_steps||[]) rows.push(["pdf_step",x,null,null,pdf,null,state.normalization,null,null,null]);
+  } else if (Array.isArray(state?.bins)) {
+    columns = ["start","stop","bin_id","label","stratum","display","value","error","stratified_mean","stratified_error","basic_mean","basic_error","error_reduction","samples"];
+    rows = state.bins.map((bin) => [bin.start, bin.stop, bin.bin_id, bin.label,
+      state.stratum_prefix ?? "combined", state.selection?.display ?? "estimate", bin.value, bin.error,
+      bin.comparison?.stratified_mean, bin.comparison?.stratified_error, bin.comparison?.basic_mean,
+      bin.comparison?.basic_error, bin.comparison?.error_ratio, state.sample_count]);
   } else if (Array.isArray(state?.rows) && Array.isArray(state?.columns)) {
     columns = [...state.columns];
     rows = state.rows.map((row) => [...row]);

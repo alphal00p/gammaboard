@@ -1,8 +1,6 @@
-# Append to sine-stratified or tetrahedron-stratified after inference.
-# All complete stratum prefixes are queried automatically on the same t grid.
-# geometry.discrete contains only integrand discrete coordinates (none here).
+# Append to a tetrahedron example; reuse its frozen inference sampler.
 [[task_queue]]
-name = "stratum-pdf"
+name = "pdf-line"
 kind = "pdf_adaptation_plot_line"
 sampler = { from_name = "inference" }
-geometry = { offset = [0.0], direction = [1.0], linspace = { start = 0.0, stop = 1.0, count = 4097 } }
+geometry = { offset = [0.0,0.125], direction = [1.0,0.75], linspace = { start = 0.0, stop = 1.0, count = 1025 } }

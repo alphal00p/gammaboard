@@ -3117,14 +3117,13 @@ impl gammaboard::evaluation::Evaluator for CountingEvaluator {
     fn domain(&self) -> gammaboard::Domain {
         gammaboard::Domain::rectangular(1, 0)
     }
-    fn eval_batch(
+    fn eval_values(
         &mut self,
-        _batch: &Batch,
-        _accumulator: &gammaboard::core::AccumulatorConfig,
-        _options: gammaboard::evaluation::EvalBatchOptions,
-    ) -> Result<gammaboard::evaluation::BatchResult, gammaboard::core::EngineError> {
+        batch: &Batch,
+        _components: &[String],
+    ) -> Result<Vec<f64>, gammaboard::core::EngineError> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(empty_batch_result())
+        Ok(vec![0.; batch.len()])
     }
 }
 

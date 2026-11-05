@@ -516,8 +516,9 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
                   {['density', 'mismatch'].includes(view) &&
                     (!c.pdf.some(finite) || !c.target.some(finite)) && (
                       <Alert severity="info">
-                        Normalization or density unavailable: check completion, positive slice
-                        integrals and exact prefix masses in the details below.
+                        {c.zeroTarget && mode === 'shape'
+                          ? `${c.k == null ? 'The target is zero' : 'This stratum has no target support'} at the evaluated slice points. Unit-area normalization is undefined, so the target curve is omitted. The sampler PDF still shows where points are proposed.`
+                          : 'Normalization or density unavailable: check completion, positive slice integrals and exact prefix masses in the details below.'}
                       </Alert>
                     )}
                   {view === 'histogram' ? (

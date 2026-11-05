@@ -106,10 +106,12 @@ identity and full settings. Measurements were made on the development worktree;
 subsequent display/validation changes do not alter the fixed-budget estimator.
 
 For distributed execution, use the matching
-[stratified](../../resources/templates/runs/tetrahedron-stratified.toml) and
-[ordinary](../../resources/templates/runs/tetrahedron-ordinary.toml) cards.
+[stratified](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/tetrahedron-stratified.toml) and
+[ordinary](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/tetrahedron-ordinary.toml) cards.
 The historical cards were validated and executed in an isolated model-3 deployment.
-The current cards have been rerun on model 5; see the prefix-model validation. The ordinary
+Those cards were rerun on model 5; see the prefix-model validation. The ordinary
 run was assigned workers through the webapp; the completed stratified task exposed
 per-stratum attempted/matched counts, probabilities and component estimates without
 browser errors. The sampler summary now displays the lifted sampling domain.
+
+The current [default catalog](../../docs/quickstart.md#default-examples) uses a two-dimensional tetrahedron surface. The measurements above remain the historical one-dimensional path experiment.

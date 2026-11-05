@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail};
 use gammaboard::core::{StratificationConfig, StratificationPlan, TrainingProjection};
 use gammaboard::evaluation::stratification::integrand_batch;
-use gammaboard::evaluation::{AccumulatorState, EvalBatchOptions};
+use gammaboard::evaluation::{AccumulatorState, EvalBatchOptions, EvaluatorBatch};
 use gammaboard::sampling::{DiscreteSubspace, Generation, StageHandoff};
 use gammaboard::{AccumulatorConfig, Batch, Evaluator, EvaluatorConfig, SamplingConfig};
 use serde_json::{Value, json};
