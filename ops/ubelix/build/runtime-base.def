@@ -1,0 +1,30 @@
+Bootstrap: docker
+From: @DEBIAN_IMAGE@
+
+%setup
+    mkdir -p "${APPTAINER_ROOTFS:?}/cache" "${APPTAINER_ROOTFS}/build-cache"
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    # Symbolica compiles expressions on sampler and evaluator workers.
+    apt-get install -y --no-install-recommends ca-certificates curl python3 g++ libpython3.11 libgfortran5 libgmp10 libmpfr6 libmpc3 libstdc++6 tzdata nginx postgresql postgresql-contrib
+    curl -fsSL https://github.com/apptainer/apptainer/releases/download/v1.5.0/apptainer_1.5.0_amd64.deb -o /tmp/apptainer.deb
+    apt-get install -y --no-install-recommends /tmp/apptainer.deb
+    rm /tmp/apptainer.deb
+    set -- /usr/lib/postgresql/*/bin
+    PG_BINDIR="$1"
+    for bin in initdb pg_ctl psql createdb dropdb pg_dump pg_restore; do
+        ln -sf "${PG_BINDIR}/${bin}" "/usr/local/bin/${bin}"
+    done
+    mkdir -p /usr/local/share/build
+    dpkg-query -W > /usr/local/share/build/runtime-packages.txt
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%test
+    g++ --version
+    pg_ctl --version
+    nginx -v
+    apptainer --version

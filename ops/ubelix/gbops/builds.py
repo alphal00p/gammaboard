@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import uuid
 
 from . import settings
@@ -131,6 +132,7 @@ def publish(build, record):
         "family": record["family"],
         "build_info": info,
         "base_images": json.loads((build / "images.lock.json").read_text()),
+        "prepared_images": json.loads((build / "prepared-images.json").read_text()),
         "build_directory": str(build),
         "validated": True,
     }
@@ -176,19 +178,23 @@ def execute(path, slurm):
                 os.link(image, target)
                 target.chmod(0o444)
         else:
-            with tarfile.open(build / "source.tar") as archive:
-                archive.extractall(build / "src", filter="data")
-            subprocess.run(
-                ["bash", str(recipe / "build/service-build.sh"), record["family"]],
-                env=env,
-                check=True,
-            )
+            # Slurm provides node-local TMPDIR. Outside Slurm, use the OS temp dir.
+            # Keep the archive, rendered definitions and logs on shared storage so
+            # failed builds remain diagnosable after the allocation ends.
+            with tempfile.TemporaryDirectory(
+                prefix="gb-build-", dir=os.environ.get("TMPDIR") or None
+            ) as scratch:
+                with tarfile.open(build / "source.tar") as archive:
+                    archive.extractall(Path(scratch) / "src", filter="data")
+                subprocess.run(
+                    ["bash", str(recipe / "build/service-build.sh"), record["family"]],
+                    env=dict(env, GAMMABOARD_BUILD_SCRATCH=scratch),
+                    check=True,
+                )
             with deployments.locked():
                 require_stopped(record["workspace"], slurm)
                 record["image"] = publish(build, record)
-            # Successful builds retain logs and provenance, not redundant source/targets.
-            for name in ("src", "tmp"):
-                shutil.rmtree(build / name, ignore_errors=True)
+            # Sources/root filesystems were job-local; retain only logs/provenance.
             (build / "source.tar").unlink()
         record["state"] = "completed"
     except BaseException:

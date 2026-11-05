@@ -1,28 +1,19 @@
-Bootstrap: docker
-From: @NODE_IMAGE@
-Stage: node
-
-Bootstrap: docker
-From: @RUST_IMAGE@
+Bootstrap: localimage
+From: @BUILDER_IMAGE@
 Stage: builder
 
 %setup
     # Writable fakeroot builds need bind destinations before entering %post.
     mkdir -p "${APPTAINER_ROOTFS:?}/cache" "${APPTAINER_ROOTFS}/build-cache"
 
-%files from node
-    /usr/local/bin/node /usr/local/bin/node
-    /usr/local/lib/node_modules /usr/local/lib/node_modules
-
 %files
     @SOURCE@ /src
 
 %post
     set -eux
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends python3-dev pkg-config clang gfortran libgmp-dev libmpfr-dev libmpc-dev
-    ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+    # Set build-time paths explicitly when bootstrapping from the prepared SIF.
+    export PATH=/usr/local/cargo/bin:/usr/local/bin:$PATH
+    export RUSTUP_HOME=/usr/local/rustup
     cd /src
     export GAMMABOARD_GIT_REVISION=@REVISION@
     # Include actual compiler/system libraries as apt packages can change.
@@ -37,9 +28,12 @@ Stage: builder
     export CFLAGS='-O2 -march=x86-64 -mtune=generic'
     export CXXFLAGS="$CFLAGS"
     unset NO_SYMBOLICA_OEM_LICENSE
+    compile_started="$(date +%s)"
     @CARGO_BUILD@
+    printf 'Build timing: cargo %ss\n' "$(( $(date +%s) - compile_started ))"
     mkdir -p /out
     install -m755 "${CARGO_TARGET_DIR}/release/@FAMILY@" /out/@FAMILY@
+    strip --strip-unneeded /out/@FAMILY@
     rustc --version > /out/toolchain.txt
     cargo --version >> /out/toolchain.txt
     dpkg-query -W > /out/builder-packages.txt
@@ -47,15 +41,18 @@ Stage: builder
         cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features rustls,postgres --root "${build_cache}/sqlx"
         mkdir -p /out/sqlx/bin
         install -m755 "${build_cache}/sqlx/bin/sqlx" /out/sqlx/bin/sqlx
+        strip --strip-unneeded /out/sqlx/bin/sqlx
         cp -a migrations /out/migrations
         cd dashboard
+        frontend_started="$(date +%s)"
         npm ci --cache /cache/npm
         npm run build
+        printf 'Build timing: frontend %ss\n' "$(( $(date +%s) - frontend_started ))"
         cp -a build /out/dashboard
     fi
 
-Bootstrap: docker
-From: @DEBIAN_IMAGE@
+Bootstrap: localimage
+From: @RUNTIME_IMAGE@
 Stage: runtime
 
 %setup
@@ -63,33 +60,19 @@ Stage: runtime
     mkdir -p "${APPTAINER_ROOTFS:?}/cache" "${APPTAINER_ROOTFS}/build-cache"
 
 %files from builder
-    /out /usr/local/share/build
+    /out /opt/service-build
 
 %post
     set -eux
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    # Symbolica compiles expression evaluators when workers start, including samplers.
-    apt-get install -y --no-install-recommends ca-certificates curl python3 g++ libpython3.11 libgfortran5 libgmp10 libmpfr6 libmpc3 libstdc++6 tzdata nginx postgresql postgresql-contrib
-    # Explicit version; the official package is required for nested process runtimes.
-    curl -fsSL https://github.com/apptainer/apptainer/releases/download/v1.5.0/apptainer_1.5.0_amd64.deb -o /tmp/apptainer.deb
-    apt-get install -y --no-install-recommends /tmp/apptainer.deb
-    rm /tmp/apptainer.deb
-    install -m755 /usr/local/share/build/@FAMILY@ /usr/local/bin/@FAMILY@
+    mv /opt/service-build/@FAMILY@ /usr/local/bin/@FAMILY@
     if [ '@FAMILY@' = gammaboard ]; then
-        install -m755 /usr/local/share/build/sqlx/bin/sqlx /usr/local/bin/sqlx
+        mv /opt/service-build/sqlx/bin/sqlx /usr/local/bin/sqlx
         mkdir -p /usr/local/share/gammaboard
-        mv /usr/local/share/build/migrations /usr/local/share/gammaboard/migrations
-        mv /usr/local/share/build/dashboard /usr/local/share/gammaboard/dashboard
+        mv /opt/service-build/migrations /usr/local/share/gammaboard/migrations
+        mv /opt/service-build/dashboard /usr/local/share/gammaboard/dashboard
     fi
-    set -- /usr/lib/postgresql/*/bin
-    PG_BINDIR="$1"
-    for bin in initdb pg_ctl psql createdb dropdb pg_dump pg_restore; do
-        ln -sf "${PG_BINDIR}/${bin}" "/usr/local/bin/${bin}"
-    done
-    dpkg-query -W > /usr/local/share/build/runtime-packages.txt
-    apt-get clean
-    rm -rf /var/lib/apt/lists/*
+    mv /opt/service-build/toolchain.txt /opt/service-build/builder-packages.txt /usr/local/share/build/
+    rm -rf /opt/service-build
 
 %environment
     export PATH=/usr/local/bin:$PATH

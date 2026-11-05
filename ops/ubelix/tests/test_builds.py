@@ -75,16 +75,27 @@ args=sys.argv[1:]
 if args[0]=='build':
     image,definition=Path(args[-2]),Path(args[-1])
     text=definition.read_text()
+    with open(os.environ['BUILD_CALLS'],'a') as log:
+        log.write(json.dumps({'definition':definition.name,'image':str(image)})+'\n')
     if definition.name=='runtime.def':
         image.write_text(text)
         sys.exit(0)
+    scratch=Path(os.environ['GAMMABOARD_BUILD_SCRATCH'])
+    assert image.is_relative_to(scratch)
+    assert Path(os.environ['APPTAINER_TMPDIR']).is_relative_to(scratch)
+    assert args[args.index('--mksquashfs-args')+1]=='-comp gzip -Xcompression-level 1 -processors '+os.environ.get('SLURM_CPUS_PER_TASK','4')
+    if definition.name.endswith('-base.def'):
+        image.write_text(text)
+        if os.environ.get('FAIL_BASE')==definition.name:sys.exit(19)
+        sys.exit(0)
     assert '@REVISION@' not in text and '@RUST_IMAGE@' not in text
+    assert all(Path(path.strip()).is_file() for path in re.findall(r'^From: (.*)$',text,re.M))
     assert 'CARGO_TARGET_DIR="${build_cache}/target"' in text
     binds={value.split(':')[1]:Path(value.split(':')[0]) for i,value in enumerate(args) if i>0 and args[i-1]=='--bind'}
     assert binds['/cache'].name=='download-cache' and binds['/cache'].is_dir()
     assert binds['/build-cache'].name=='build-cache' and binds['/build-cache'].is_dir()
     source=Path(json.loads(re.search(r'%files\n    (".*") /src',text).group(1)))
-    assert not (source/'ops/ubelix/local.toml').exists()
+    assert source.is_relative_to(scratch) and not (source/'ops/ubelix/local.toml').exists()
     revision=re.search(r'GAMMABOARD_GIT_REVISION=([a-f0-9]+)',text).group(1)
     image.write_text(json.dumps({'revision':revision,'marker':(source/'marker').read_text()}))
 elif args[0]=='exec':
@@ -100,7 +111,10 @@ elif args[0]=='inspect':assert Path(args[1]).is_file()
 else:raise AssertionError(args)
 """,
     )
-    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", PYTHONDONTWRITEBYTECODE="1")
+    local = tmp_path / "node-local"
+    local.mkdir()
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", PYTHONDONTWRITEBYTECODE="1",
+               TMPDIR=str(local), BUILD_CALLS=str(tmp_path / "build-calls.jsonl"))
     return repo, workspace, env
 
 
@@ -124,7 +138,7 @@ def execute(workspace, record, env, scheduler, **extra):
 
 
 def test_all_post_stages_create_cache_bind_destination_before_container_start(tmp_path):
-    definition = (ROOT / "build/service.def").read_text()
+    definition = "\n".join(path.read_text() for path in sorted((ROOT / "build").glob("*.def")))
     post_stages = 0
     for index, stage in enumerate(re.split(r"(?m)^Bootstrap:", definition)[1:]):
         if not re.search(r"(?m)^%post\b", stage):
@@ -160,6 +174,8 @@ def test_renderer_rejects_tag_and_digest_before_apptainer(checkout, tmp_path):
             "gammaboard",
             "a" * 40,
             "4",
+            str(rendered / "scratch"),
+            str(rendered / "image-cache"),
         ],
         env=env,
         capture_output=True,
@@ -193,6 +209,9 @@ def test_build_replaces_fixed_image_and_failed_smoke_preserves_it(checkout):
     assert sorted(p.name for p in image.parent.iterdir()) == ["gammaboard.json", "gammaboard.sif"]
     assert not (Path(info["build_directory"]) / "source.tar").exists()
     assert not (Path(info["build_directory"]) / "src").exists()
+    assert not list(Path(env["TMPDIR"]).glob("gb-build-*"))
+    assert set(info["prepared_images"]) == {"builder", "runtime"}
+    assert (Path(info["build_directory"]) / "timings.tsv").is_file()
     # The normal deployment automatically uses the replacement.
     assert Deployments(workspace, 0).image()["source_revision"] == revision
 
@@ -211,6 +230,58 @@ def test_queued_build_is_independent_of_checkout_and_local_settings(checkout):
         json.loads(Path(saved["image"]).with_suffix(".json").read_text())["source_revision"]
         == record["revision"]
     )
+
+
+def test_prepared_bases_are_reused_and_invalidated_independently(checkout):
+    repo, workspace, env = checkout
+    scheduler = FakeSlurm()
+
+    def build():
+        result, saved = execute(workspace, submit(workspace, scheduler), env, scheduler)
+        assert result.returncode == 0, result.stderr
+        assert not list(Path(env["TMPDIR"]).glob("gb-build-*"))
+        return json.loads(Path(saved["image"]).with_suffix(".json").read_text())["prepared_images"]
+
+    first = build()
+    commit(repo, "new application")
+    assert build() == first
+    calls = [json.loads(line)["definition"] for line in Path(env["BUILD_CALLS"]).read_text().splitlines()]
+    assert calls == ["builder-base.def", "runtime-base.def", "service.def", "service.def"]
+
+    runtime = settings.OPS_ROOT / "build/runtime-base.def"
+    runtime.write_text(runtime.read_text() + "\n# runtime dependency update\n")
+    commit(repo, "new runtime")
+    second = build()
+    assert second["builder"] == first["builder"]
+    assert second["runtime"] != first["runtime"]
+    calls = [json.loads(line)["definition"] for line in Path(env["BUILD_CALLS"]).read_text().splitlines()]
+    assert calls[-2:] == ["runtime-base.def", "service.def"]
+
+    builder = settings.OPS_ROOT / "build/builder-base.def"
+    builder.write_text(builder.read_text() + "\n# build dependency update\n")
+    commit(repo, "new builder")
+    third = build()
+    assert third["builder"] != second["builder"]
+    assert third["runtime"] == second["runtime"]
+    calls = [json.loads(line)["definition"] for line in Path(env["BUILD_CALLS"]).read_text().splitlines()]
+    assert calls[-2:] == ["builder-base.def", "service.def"]
+
+
+def test_failed_base_build_is_not_cached_or_published(checkout):
+    _, workspace, env = checkout
+    scheduler = FakeSlurm()
+    result, saved = execute(workspace, submit(workspace, scheduler), env, scheduler,
+                            FAIL_BASE="runtime-base.def")
+    assert result.returncode != 0 and saved["state"] == "failed"
+    assert len(list((workspace / "artifacts/image-cache").glob("builder-*.sif"))) == 1
+    assert not list((workspace / "artifacts/image-cache").glob("runtime-*.sif"))
+    assert not (workspace / "images/gammaboard.sif").exists()
+    assert not list(Path(env["TMPDIR"]).glob("gb-build-*"))
+    build = workspace / "artifacts/builds" / saved["id"]
+    assert (build / "source.tar").is_file()
+    assert (build / "service.def").is_file()
+    result, saved = execute(workspace, submit(workspace, scheduler), env, scheduler)
+    assert result.returncode == 0 and saved["state"] == "completed", result.stderr
 
 
 @pytest.mark.parametrize("change", ["tracked", "staged", "untracked"])
@@ -312,6 +383,8 @@ def render_definition(ops, directory, revision="a" * 40, cpus=4, family="gammabo
             family,
             revision,
             str(cpus),
+            str(directory / "scratch"),
+            str(directory / "image-cache"),
         ]
     )
     return (directory / "service.def").read_text()
@@ -327,8 +400,18 @@ def test_compilation_cache_survives_revision_paths_and_cpu_changes(checkout, tmp
         namespace(render_definition(ops, tmp_path / "second", revision="b" * 40, cpus=8)) == first
     )
     assert namespace(render_definition(ops, tmp_path / "loop", family="gammaloop")) != first
+    runtime = ops / "build/runtime-base.def"
+    runtime.write_text(runtime.read_text() + "\n# runtime-only update\n")
+    assert namespace(render_definition(ops, tmp_path / "runtime")) == first
+    keys = lambda path: json.loads((path / "prepared-images.json").read_text())
+    assert keys(tmp_path / "runtime")["builder"]["recipe_sha256"] == keys(tmp_path / "first")["builder"]["recipe_sha256"]
+    assert keys(tmp_path / "runtime")["runtime"]["recipe_sha256"] != keys(tmp_path / "first")["runtime"]["recipe_sha256"]
     lock = ops / "build/images.lock.json"
     pins = json.loads(lock.read_text())
+    pins["debian"]["image"] = "docker.io/library/debian@sha256:" + "2" * 64
+    lock.write_text(json.dumps(pins))
+    assert namespace(render_definition(ops, tmp_path / "runtime-pin")) == first
+    assert keys(tmp_path / "runtime-pin")["runtime"]["recipe_sha256"] != keys(tmp_path / "runtime")["runtime"]["recipe_sha256"]
     pins["rust"]["image"] = "docker.io/library/rust@sha256:" + "1" * 64
     lock.write_text(json.dumps(pins))
     changed_image = namespace(render_definition(ops, tmp_path / "image"))

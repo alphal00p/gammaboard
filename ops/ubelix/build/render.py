@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a standalone definition with immutable base images and clean sources."""
+"""Render cached base environments and an application build from frozen sources."""
 
 import hashlib
 import json
@@ -8,9 +8,11 @@ import re
 import shutil
 import sys
 
-workspace, build, family, sha, cpus = sys.argv[1:]
-workspace, build = Path(workspace), Path(build)
-pins = json.loads((workspace / "build/images.lock.json").read_text())
+recipe, build, family, sha, cpus, scratch, image_cache = sys.argv[1:]
+recipe, build, scratch, image_cache = map(Path, (recipe, build, scratch, image_cache))
+if int(cpus) < 1:
+    raise ValueError("build CPU count must be positive")
+pins = json.loads((recipe / "build/images.lock.json").read_text())
 for item in pins.values():
     repository, separator, checksum = item["image"].partition("@sha256:")
     if (
@@ -21,16 +23,37 @@ for item in pins.values():
         raise ValueError(
             "base image must use repository@sha256:<64 hex digits>, without a tag (Apptainer requirement)"
         )
-template = (workspace / "build/service.def").read_text()
-# Source revisions, staging paths and CPU allocations must not invalidate reuse.
-cache_key = hashlib.sha256(
-    json.dumps(pins, sort_keys=True).encode() + b"\0" + template.encode()
-).hexdigest()
 values = {
     "NODE_IMAGE": pins["node"]["image"],
     "RUST_IMAGE": pins["rust"]["image"],
     "DEBIAN_IMAGE": pins["debian"]["image"],
-    "SOURCE": json.dumps(str(build / "src")),
+}
+
+
+def expand(text, replacements):
+    for key, value in replacements.items():
+        text = text.replace("@" + key + "@", value)
+    return text
+
+
+prepared = {}
+for role in ("builder", "runtime"):
+    text = expand((recipe / f"build/{role}-base.def").read_text(), values)
+    key = hashlib.sha256(text.encode()).hexdigest()
+    prepared[role] = {"recipe_sha256": key, "path": str(image_cache / f"{role}-{key}.sif")}
+    (build / f"{role}-base.def").write_text(text)
+
+template = (recipe / "build/service.def").read_text()
+# Only the builder environment and application build commands affect Cargo reuse.
+# Runtime packages, final-image layout, source revisions, paths and CPU counts do not.
+builder_stage = template.split("\nBootstrap:", 1)[0]
+cache_key = hashlib.sha256(
+    (prepared["builder"]["recipe_sha256"] + "\0" + builder_stage).encode()
+).hexdigest()
+values.update({
+    "BUILDER_IMAGE": prepared["builder"]["path"],
+    "RUNTIME_IMAGE": prepared["runtime"]["path"],
+    "SOURCE": json.dumps(str(scratch / "src")),
     "REVISION": sha,
     "CPUS": str(int(cpus)),
     "FAMILY": family,
@@ -38,10 +61,8 @@ values = {
     "CARGO_BUILD": "cargo build --release --locked --bin gammaboard"
     if family == "gammaboard"
     else "cargo build --release --locked -p gammaloop-api --bin gammaloop --features ufo_support",
-}
-text = template
-for key, value in values.items():
-    text = text.replace("@" + key + "@", value)
-(build / "service.def").write_text(text)
-shutil.copy2(workspace / "build/images.lock.json", build / "images.lock.json")
-shutil.copy2(workspace / "build/smoke.sh", build / "smoke.sh")
+})
+(build / "service.def").write_text(expand(template, values))
+(build / "prepared-images.json").write_text(json.dumps(prepared, indent=2) + "\n")
+shutil.copy2(recipe / "build/images.lock.json", build / "images.lock.json")
+shutil.copy2(recipe / "build/smoke.sh", build / "smoke.sh")

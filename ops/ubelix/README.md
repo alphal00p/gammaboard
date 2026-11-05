@@ -85,8 +85,9 @@ fail during evaluator initialization. Rebuild the image using the current recipe
 restart the deployment, and create a new run from the template. Loading a compiler
 module only in the login shell does not install it inside the container. The build
 smoke test now probes and executes a Symbolica evaluator before publishing the image.
-Changing the image recipe selects a new compilation-cache namespace once;
-dependency downloads remain cached and subsequent builds reuse the new namespace.
+Runtime-package changes rebuild the prepared runtime image while preserving the
+builder image and Rust compilation cache. The first build with prepared-image
+caching initializes the new caches once.
 
 Native GammaLoop examples remain available in the main repository, after preparing
 compatible physics states. Process examples additionally need their SDK and
@@ -236,6 +237,7 @@ resources/runtimes/       process environments and custom images
 artifacts/builds/          build records, recipes, logs and failed build evidence
 artifacts/download-cache/ shared dependency downloads
 artifacts/build-cache/    reusable Rust targets and installed build tools
+artifacts/image-cache/    prepared builder and runtime SIFs
 artifacts/database-archives/
 logs/slurm/
 ```
@@ -247,7 +249,9 @@ cards from the checkout, or remove `resources/templates/` while stopped to resee
 it entirely at the next start. Generated states and process runtimes are supplied
 separately. They must match the current SDK, protocol and physics code.
 
-Successful builds remove their source and temporary staging automatically. Old
+Build staging uses the job's node-local temporary directory and is removed when
+the helper exits. Successful builds also remove the captured source archive;
+failed builds retain that archive, rendered definitions and logs. Old
 build directories and retired deployment directories can be deleted manually when
 no longer needed. Keep the current deployment record referenced by each
 `deployments/active-*.json` pointer, even while stopped. There is no automatic
@@ -284,27 +288,56 @@ the deployment before recording success. Failures print the phase and relevant
 deploy/database/worker logs into the Slurm error log; detailed evidence remains in
 the build directory. Initial connection attempts while services start are quiet.
 
-Downloads persist in `artifacts/download-cache/`, bound at `/cache`. Rust compilation
-output and installed `sqlx-cli` persist in `artifacts/build-cache/`, bound at
-`/build-cache`. Successful-build cleanup preserves both caches. Cargo can reuse
-compiled dependencies across commits, and skips reinstalling an unchanged tool.
-See [Cargo's installation cache](https://doc.rust-lang.org/cargo/commands/cargo-install.html#description).
+### Build caching and packing
 
-Compilation caches are separated by service, base-image pins, definition contents,
-actual Rust compiler and installed system-package versions. Source revisions,
-staging directories and allocated CPU counts keep the same cache. Changes to the
-compiler, native libraries or build recipe start a fresh cache automatically.
-The helper permits one build at a time in a workspace. To force recompilation,
-remove `artifacts/build-cache/` while no build is running; downloads can be kept.
+`build gammaboard` and `build gammaloop` manage all caches automatically:
 
-The first build using this feature populates the compilation cache. Previously
-submitted jobs retain their old recipes and cannot warm it. Source compilation,
-linking, frontend builds and smoke checks still run as needed, so build time depends
-on what changed.
+| Cache | Contents | Rebuilt when |
+| --- | --- | --- |
+| `artifacts/image-cache/builder-*.sif` | Rust, Node and build dependencies | Builder recipe or Rust/Node base pins change |
+| `artifacts/image-cache/runtime-*.sif` | Runtime packages, g++, PostgreSQL, nginx and Apptainer | Runtime recipe or Debian base pin changes |
+| `artifacts/build-cache/` | Cargo targets and installed SQLx tools | Builder environment/build commands change; Cargo also tracks changed sources and dependencies |
+| `artifacts/download-cache/` | Cargo/npm downloads and Apptainer's downloaded layers | Missing or changed downloads |
 
-Both stages that run `%post` create the cache bind destinations in `%setup`:
-writable fakeroot builds require them before the container starts. Creating them
-inside `%post` would be too late. See [Apptainer's bind requirements](https://apptainer.org/docs/user/latest/bind_paths_and_mounts.html#using-bind-or-mount-with-the-writable-flag).
+Both services reuse the prepared base images. Runtime-only changes do not
+invalidate the builder image or Cargo namespace. Source revisions, staging paths
+and CPU counts do not invalidate either base. The actual compiler and installed
+builder-package versions also enter the Cargo namespace. Cache entries are
+published only after a successful base build, using an atomic rename; failed
+builds cannot replace a working service image. The helper permits one build at a
+time per workspace.
+
+Source extraction, temporary container filesystems and SIF packing use a private
+directory under Slurm's `$TMPDIR` (the OS temporary directory outside Slurm).
+Persistent caches, build records and final images stay on shared storage. Only
+the completed SIF is copied back before smoke validation and publication.
+This avoids expanding package and source trees on shared storage. There is no
+automatic disk-size selection: the allocation's temporary filesystem must fit
+the unpacked stages and image.
+
+SIFs use gzip level 1 and the allocated `SLURM_CPUS_PER_TASK` for packing. This
+favors build speed over maximum compression while retaining gzip compatibility.
+Packaged executables are stripped and staging copies removed; the original Cargo
+outputs remain cached. Every changed application still needs final image packing,
+and frontend builds and smoke checks still run.
+
+Build logs report cache hits, Cargo/frontend durations and elapsed times for the
+prepared bases, application image, copy-back and smoke phases. The latter are
+also saved in `artifacts/builds/BUILD_ID/timings.tsv`; `application-image` includes
+compilation, frontend work, extraction and packing. `prepared-images.json` records
+the selected base paths and recipe fingerprints.
+
+The first build with this layout creates the base images and a new Cargo namespace;
+benefits apply to subsequent builds. Previously submitted jobs keep their frozen
+recipes. Existing caches are left intact. To refresh installed OS packages without
+changing a recipe, remove `artifacts/image-cache/` while no build or deployment is
+running. Keep download and compilation caches; actual builder-package changes will
+select a new Cargo namespace as needed. To force Rust recompilation, remove
+`artifacts/build-cache/` instead. Cached bases do not update OS packages on every
+application build.
+
+Stages that run `%post` create cache bind destinations in `%setup`, before writable
+fakeroot startup. See [Apptainer's bind requirements](https://apptainer.org/docs/user/latest/bind_paths_and_mounts.html#using-bind-or-mount-with-the-writable-flag).
 
 ## Workers and recovery
 

@@ -1,0 +1,32 @@
+Bootstrap: docker
+From: @NODE_IMAGE@
+Stage: node
+
+Bootstrap: docker
+From: @RUST_IMAGE@
+Stage: builder
+
+%setup
+    mkdir -p "${APPTAINER_ROOTFS:?}/cache" "${APPTAINER_ROOTFS}/build-cache"
+
+%files from node
+    /usr/local/bin/node /usr/local/bin/node
+    /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends python3-dev pkg-config g++ clang gfortran libgmp-dev libmpfr-dev libmpc-dev
+    ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/usr/local/cargo/bin:/usr/local/bin:$PATH
+    export RUSTUP_HOME=/usr/local/rustup
+
+%test
+    rustc --version
+    node --version
+    g++ --version
