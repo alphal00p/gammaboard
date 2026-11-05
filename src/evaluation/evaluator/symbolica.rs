@@ -431,8 +431,10 @@ fn compile_complex_evaluator(
         )
         .build_err()?;
     let compiled_code = exported_code
-        .compile(path.with_extension("so"), CompileOptions::default())
-        .build_err()?;
+        .compile(path.with_extension("so"), CompileOptions::default().compiler("g++"))
+        .map_err(|err| EngineError::build(format!(
+            "Symbolica expression compilation with g++ failed: {err}; the worker environment or container must provide g++ and its C++ headers"
+        )))?;
     compiled_code.load().build_err()
 }
 

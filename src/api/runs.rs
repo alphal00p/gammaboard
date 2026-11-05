@@ -1579,9 +1579,14 @@ config = "scalar"
     #[test]
     fn bundled_run_and_task_templates_parse_after_replacement_expansion() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for directory in ["resources/templates/runs", "resources/templates/tasks"] {
+        for directory in [
+            "resources/templates/runs",
+            "resources/templates/tasks",
+            "ops/ubelix/resources/templates/runs",
+        ] {
             for name in crate::api::templates::list_templates(&root.join(directory)).unwrap() {
                 if !cfg!(feature = "gammaloop")
+                    && directory == "resources/templates/runs"
                     && (name.starts_with("gammaloop") || name == "integration-campaign.toml")
                 {
                     continue;

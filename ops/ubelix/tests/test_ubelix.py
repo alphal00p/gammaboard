@@ -109,16 +109,29 @@ def create_manifest(workspace, offset=0):
 
 
 def test_templates_are_seeded_once_and_dashboard_edits_survive_new_deployments(workspace):
+    u.main(["install-examples"])
     create_manifest(workspace)
     templates = workspace / "resources/templates"
     assert (templates / "runs/installation-smoke.toml").is_file()
     assert (templates / "nodes/cpu-workers.toml").is_file()
+    assert {path.name for path in (templates / "runs").glob("*.toml")} == {
+        "installation-smoke.toml", "tetrahedron-surface.toml", "hyperparameter-tuning.toml",
+        "parameter-scan.toml", "integration-campaign.toml",
+    }
+    assert (templates / "runs/support/tetrahedron-trial.toml").is_file()
+    assert (templates / "runs/support/ubelix-sine.toml").is_file()
     (templates / "nodes/cpu-workers.toml").unlink()
     edited = templates / "runs/installation-smoke.toml"
     edited.write_text('name="custom"\n')
     create_manifest(workspace, 10)
     assert not (templates / "nodes/cpu-workers.toml").exists()
     assert edited.read_text() == 'name="custom"\n'
+    private = templates / "runs/private.toml"
+    private.write_text('name="private"\n')
+    u.main(["install-examples"])
+    assert 'name = "installation-smoke"' in edited.read_text()
+    assert private.read_text() == 'name="private"\n'
+    assert not (templates / "nodes/cpu-workers.toml").exists()
 
 
 def control(manifest, scheduler, state="RUNNING"):

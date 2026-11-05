@@ -1,0 +1,22 @@
+# CPU-only campaign: average two independent, stratified sine integrals.
+# No generated state, Python worker or external data is required.
+kind = "integration_campaign"
+name = "ubelix-sine-campaign"
+target = { kind = "scalar", value = 0.0 }
+[stop_condition]
+max_total_samples = 163840
+[allocation]
+max_active_runs = 2
+min_evaluators_per_run = 2
+min_samples_per_child = 4096
+allocation_window_samples = 8192
+[[children]]
+name = "replica-a"
+coefficient = 0.5
+replacements = { run_name = "sine-replica-a", seed = 101, inference_seed = 201 }
+run = { file = "support/ubelix-sine.toml" }
+[[children]]
+name = "replica-b"
+coefficient = 0.5
+replacements = { run_name = "sine-replica-b", seed = 102, inference_seed = 202 }
+run = { file = "support/ubelix-sine.toml" }

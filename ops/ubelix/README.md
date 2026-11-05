@@ -47,6 +47,52 @@ Run that tunnel on your workstation. No login-terminal watcher is needed. If the
 startup wait expires while Slurm is still queueing the job, repeat `up` or use
 `status`; the recorded job is reused.
 
+## Example runs
+
+Fresh deployments install five CPU-only examples. The image includes `g++` because
+Symbolica expression evaluators compile C++ at startup on both sampler and
+evaluator workers. No generated physics state or Python process environment is
+needed for these examples.
+
+| Dashboard template | Example | Suggested workers |
+| --- | --- | --- |
+| `installation-smoke.toml` | Built-in unit integrand, exact result 1; works without a compiler | 2 |
+| `tetrahedron-surface.toml` | Stratified 2D → 3D surface, component/phase images, lines and per-stratum PDF diagnostics | 3–6 |
+| `hyperparameter-tuning.toml` | Nine Voronoi-centre configurations for the tetrahedron | 3–6 |
+| `parameter-scan.toml` | Nine surface sharpness/shear points with an error heatmap | 3–6 |
+| [integration-campaign.toml](resources/templates/runs/integration-campaign.toml) | Two independently trained sine integrals with ± strata, averaged with coefficients 1/2 and a shared 163,840-sample cap | 6 for two active children |
+
+The portable cards reuse the [canonical examples](../../docs/quickstart.md#default-examples).
+The campaign and its child live under `ops/ubelix/resources/templates/runs/`.
+All examples use the same image on each worker; GPU allocations are unnecessary.
+Create the run in the dashboard, then assign/resume workers after Slurm starts them.
+`PD (Priority)` means the allocation is waiting in the scheduler, not that its
+worker has registered with GammaBoard yet.
+
+To install these examples into an **existing workspace**, run from `ops/ubelix`:
+
+```bash
+python3 ubelix.py install-examples
+```
+
+This refreshes the five named cards and their support files, including replacing
+the generic GammaLoop campaign with the portable sine campaign. Other templates,
+node cards and existing runs are preserved. Reload the New Run template list;
+the deployment can stay running while templates are installed.
+
+An older image without `g++` can run `installation-smoke`, but Symbolica examples
+fail during evaluator initialization. Rebuild the image using the current recipe,
+restart the deployment, and create a new run from the template. Loading a compiler
+module only in the login shell does not install it inside the container. The build
+smoke test now probes and executes a Symbolica evaluator before publishing the image.
+Changing the image recipe selects a new compilation-cache namespace once;
+dependency downloads remain cached and subsequent builds reuse the new namespace.
+
+Native GammaLoop examples remain available in the main repository, after preparing
+compatible physics states. Process examples additionally need their SDK and
+interpreter inside an appropriate worker runtime; they are not seeded by default
+on UBELIX.
+
 ## Configuration
 
 Paths in `local.toml` are absolute or relative to that file, independent of your
@@ -194,8 +240,8 @@ artifacts/database-archives/
 logs/slurm/
 ```
 
-On first deployment, dashboard templates are copied from the checkout and enriched
-with the UBELIX node cards. Later starts preserve that directory, including edits
+On first deployment, the portable example catalog, common task templates and
+UBELIX node cards are copied from the checkout. Later starts preserve that directory, including edits
 and deletions made in the dashboard. To refresh bundled templates, copy individual
 cards from the checkout, or remove `resources/templates/` while stopped to reseed
 it entirely at the next start. Generated states and process runtimes are supplied
@@ -229,7 +275,7 @@ Service base images use `repository@sha256:digest` references in
 `build/images.lock.json`; Apptainer rejects references with both a tag and a digest.
 Rust builds use `--locked` and generic
 x86-64 flags. Before publication, GammaBoard starts PostgreSQL, API, frontend and
-two workers and completes a 32-sample run; GammaLoop checks CLI startup. Apt
+two workers and completes a 32-sample Symbolica run; GammaLoop checks CLI startup. Apt
 repositories can change, so these are not byte-for-byte reproducible builds.
 
 The smoke test waits for the frontend and both registered workers before assigning

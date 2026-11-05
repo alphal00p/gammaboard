@@ -1,0 +1,34 @@
+# integral_0^1 2*pi*sin(2*pi*t) dt = integral_0^(2*pi) sin(x) dx = 0.
+replacements = { run_name = "sine-replica", seed = 1, inference_seed = 2 }
+name = "$(run_name:sine-replica)"
+target = { kind = "scalar", value = 0.0 }
+[evaluator]
+kind = "symbolica"
+args = ["t"]
+source = { kind = "expression", expr = "2*pi*sin(2*pi*t)" }
+
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = 16384 }
+accumulator = { config = "scalar" }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = "$(seed:1)"
+bins = 32
+samples_for_update = 1024
+initial_training_rate = 0.5
+final_training_rate = 0.1
+[task_queue.sampler.config.stratification]
+kind = "voronoi"
+domain = { rectangular = { strata_dims = 1, discrete_cardinalities = [2], continuous_dims = 0 } }
+centers = { "0" = [-1.0], "1" = [1.0] }
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "stratified"
+stop_condition = { max_samples = 65536 }
+accumulator = { config = "scalar" }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = "$(inference_seed:2)" } }

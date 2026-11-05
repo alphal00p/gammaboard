@@ -69,7 +69,8 @@ Stage: runtime
     set -eux
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl python3 libpython3.11 libgfortran5 libgmp10 libmpfr6 libmpc3 libstdc++6 tzdata nginx postgresql postgresql-contrib
+    # Symbolica compiles expression evaluators when workers start, including samplers.
+    apt-get install -y --no-install-recommends ca-certificates curl python3 g++ libpython3.11 libgfortran5 libgmp10 libmpfr6 libmpc3 libstdc++6 tzdata nginx postgresql postgresql-contrib
     # Explicit version; the official package is required for nested process runtimes.
     curl -fsSL https://github.com/apptainer/apptainer/releases/download/v1.5.0/apptainer_1.5.0_amd64.deb -o /tmp/apptainer.deb
     apt-get install -y --no-install-recommends /tmp/apptainer.deb

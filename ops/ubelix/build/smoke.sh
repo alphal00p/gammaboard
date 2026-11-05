@@ -34,7 +34,7 @@ cleanup() {
         printf 'Smoke: passed and stopped\n'
     else
         printf 'Smoke test failed during %s (exit %s). Diagnostics:\n' "$phase" "$status" >&2
-        for log in deploy.log resources/db/logfile workers.json nodes.json assignment.json run-result.json cleanup.log resources/logs/nodes/*.stderr.log; do
+        for log in deploy.log resources/db/logfile evaluator-probe.json workers.json nodes.json assignment.json run-result.json cleanup.log resources/logs/nodes/*.stderr.log; do
             if [[ -f "$log" ]]; then
                 printf '\n%s\n' "$log" >&2
                 tail -n 60 "$log" >&2
@@ -94,14 +94,17 @@ wait_http "http://127.0.0.1:${web}" frontend.html
 cat > run.toml <<'TOML'
 name="image-smoke"
 [evaluator]
-kind="unit"
-continuous_dims=1
+kind="symbolica"
+args=["x"]
+source={kind="expression",expr="1"}
 [[task_queue]]
 kind="sample"
 stop_condition={max_samples=32}
 accumulator={config="scalar"}
 sampler={config={kind="naive_monte_carlo"}}
 TOML
+step 'validating Symbolica runtime'
+board --json run validate run.toml --probe > evaluator-probe.json
 step 'creating run and launching workers'
 board run create run.toml
 http -H 'Content-Type: application/json' -d '{"count":2,"name_prefix":"smoke"}' "http://127.0.0.1:${api}/api/node-launch-requests" > workers.json

@@ -6,6 +6,16 @@ import tomllib
 
 OPS_ROOT = Path(__file__).resolve().parents[1]
 
+# Reuse the canonical portable cards; cluster-specific additions live beside the
+# UBELIX node cards. Generated physics states and external runtimes are optional.
+PORTABLE_RUNS = (
+    "installation-smoke.toml",
+    "tetrahedron-surface.toml",
+    "hyperparameter-tuning.toml",
+    "parameter-scan.toml",
+    "support/tetrahedron-trial.toml",
+)
+
 
 def local_config():
     path = OPS_ROOT / "local.toml"
@@ -36,5 +46,20 @@ def snapshot_helper(target):
 def seed_templates(workspace):
     target = Path(workspace) / "resources/templates"
     if not target.exists():
-        shutil.copytree(OPS_ROOT.parents[1] / "resources/templates", target)
-        shutil.copytree(OPS_ROOT / "resources/templates", target, dirs_exist_ok=True)
+        shutil.copytree(OPS_ROOT.parents[1] / "resources/templates/tasks", target / "tasks")
+        shutil.copytree(OPS_ROOT / "resources/templates/nodes", target / "nodes")
+        install_examples(workspace)
+
+
+def install_examples(workspace):
+    """Refresh only the bundled portable run cards, including their child files."""
+    target = Path(workspace) / "resources/templates/runs"
+    common = OPS_ROOT.parents[1] / "resources/templates/runs"
+    cluster = OPS_ROOT / "resources/templates/runs"
+    sources = [(common / name, Path(name)) for name in PORTABLE_RUNS]
+    sources += [(path, path.relative_to(cluster)) for path in sorted(cluster.rglob("*.toml"))]
+    for source, name in sources:
+        destination = target / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    return {"directory": str(target), "installed": [str(name) for _, name in sources]}

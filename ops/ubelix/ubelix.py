@@ -749,6 +749,10 @@ def main(argv=None):
             with deployments.locked():
                 result = reset_database(deployments, slurm, args.discard)
             print(json.dumps(result, indent=2))
+        elif args.command == "install-examples":
+            workspace = settings.workspace_root()
+            settings.seed_templates(workspace)
+            print(json.dumps(settings.install_examples(workspace), indent=2))
         else:
             _, manifest = require_deployment(args)
             job = control_job(manifest, slurm)
@@ -914,6 +918,7 @@ def parser():
     commands.add_parser("run-build").add_argument("--record", required=True)
     commands.add_parser("run-control").add_argument("--manifest", required=True)
     commands.add_parser("run-worker").add_argument("--spec", required=True)
+    commands.add_parser("install-examples", help="refresh bundled UBELIX run templates and child files")
     return p
 
 

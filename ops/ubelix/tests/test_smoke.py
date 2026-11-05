@@ -19,7 +19,7 @@ def smoke(tmp_path):
     (binaries / "python3").symlink_to(sys.executable)
     stub = binaries / "gammaboard"
     stub.write_text(r"""#!/usr/bin/env python3
-import json,os,signal,sys,time
+import json,os,signal,sys,time,tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
 root=Path.cwd()
@@ -51,6 +51,12 @@ if args[0]=='deploy':
     (root/'supervisor.pid').write_text(str(os.getpid()))
     while not stopped:time.sleep(.02)
     (root/'supervisor-stopped').write_text('yes')
+elif args[:2]==['run','validate']:
+    card=tomllib.loads((root/'run.toml').read_text())
+    assert card['evaluator']['kind']=='symbolica' and '--probe' in args
+    if mode=='missing_compiler':
+        print('Symbolica expression compilation with g++ failed',file=sys.stderr);sys.exit(1)
+    print('{"runtime_probes":1}')
 elif args[:2]==['run','create']:print('created run_id=1 name=image-smoke')
 elif args[:2]==['node','auto-assign']:
     n=int((root/'polls').read_text())
@@ -81,7 +87,7 @@ else:raise AssertionError(args)
             pass
 
 
-@pytest.mark.parametrize("mode", ["success", "empty_assignment", "startup_failure"])
+@pytest.mark.parametrize("mode", ["success", "empty_assignment", "startup_failure", "missing_compiler"])
 def test_smoke_waits_for_registration_reports_failures_and_stops_supervisor(smoke, mode):
     work, env = smoke
     # A stale marker must never make a failed check look successful.
@@ -99,7 +105,8 @@ def test_smoke_waits_for_registration_reports_failures_and_stops_supervisor(smok
         assert (work / "supervisor-stopped").exists(), result.stderr
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
-        assert int((work / "assigned-after-polls").read_text()) >= 3
+        if mode != "missing_compiler":
+            assert int((work / "assigned-after-polls").read_text()) >= 3
     if mode == "success":
         assert result.returncode == 0, result.stderr
         assert (work / "smoke.result").read_text().strip() == "passed"
@@ -110,9 +117,11 @@ def test_smoke_waits_for_registration_reports_failures_and_stops_supervisor(smok
     else:
         assert result.returncode != 0
         assert not (work / "smoke.result").exists()
-        expected = (
-            "assigning sampler and evaluator" if mode == "empty_assignment" else "starting services"
-        )
+        expected = {
+            "empty_assignment": "assigning sampler and evaluator",
+            "startup_failure": "starting services",
+            "missing_compiler": "validating Symbolica runtime",
+        }[mode]
         assert f"Smoke test failed during {expected}" in result.stderr
         if mode == "startup_failure":
             assert "injected startup failure" in result.stderr
