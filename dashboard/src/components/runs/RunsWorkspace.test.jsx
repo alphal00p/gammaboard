@@ -4,6 +4,10 @@ import * as api from "../../services/api";
 import { copyToClipboard } from "../../utils/clipboard";
 import RunsWorkspace from "./RunsWorkspace";
 
+// Exercise dialog/draft behaviour here; TomlEditor.test covers the actual editor.
+vi.mock("../common/TomlEditor", () => ({ default: ({ label, value, onChange, disabled }) =>
+  <textarea aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} /> }));
+
 const fixtures = vi.hoisted(() => ({ tasks: [], loadTemplate: vi.fn(), saveTemplate: vi.fn(), templates: [] }));
 vi.mock("../../auth/AuthProvider", () => ({ useAuth: () => ({ authenticated: true }) }));
 vi.mock("../../hooks/useRunTasks", () => ({ useRunTasks: () => ({ tasks: fixtures.tasks }) }));
@@ -175,7 +179,7 @@ describe("definition editors", () => {
     expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
     const value = action === "New run" ? 'name="new"' : taskToml;
     fireEvent.change(screen.getByLabelText(action === "New run" ? "Run TOML" : "Task TOML"), { target: { value } });
-    fireEvent.click(screen.getByRole("button", { name: "Save as Template" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save as template" }));
     fireEvent.change(await screen.findByLabelText("Template file name"), { target: { value: "my-template.toml" } });
     fireEvent.click(screen.getByRole("button", { name: "Save", exact: true }));
     await waitFor(() => expect(fixtures.saveTemplate).toHaveBeenCalledWith("my-template.toml", value));
@@ -199,7 +203,7 @@ test("separate delete button keeps deletion busy and errors visible until dismis
   renderRun(1, { setSelectedRun });
   fireEvent.click(await screen.findByRole("button", { name: "Delete run" }));
   expect(screen.getByRole("button", { name: "Open run definition" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Assign / Resume" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Assign / resume" })).toBeDisabled();
   expect(screen.getByText(/Large histories can take several minutes/)).toBeInTheDocument();
   vi.useFakeTimers();
   await act(async () => { fail(new Error("Database could not finish deletion")); });

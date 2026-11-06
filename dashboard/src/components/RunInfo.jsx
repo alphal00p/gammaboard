@@ -20,7 +20,7 @@ const RunInfo = ({ runId, refreshKey }) => {
   }
 
   return <><Typography variant="caption" color="text.secondary">Run totals across tasks · updated {lastUpdate || "pending"}</Typography>
-    <PanelCollection title="Run Summary" panelSpecs={panelSpecs} panelStates={panelStates} /></>;
+    <PanelCollection title="Run summary" panelSpecs={panelSpecs} panelStates={panelStates} /></>;
 };
 
 export default RunInfo;

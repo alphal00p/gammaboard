@@ -292,7 +292,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
         if (Number.isFinite(Number(nextPollAfterMs)) && Number(nextPollAfterMs) > 0) return Number(nextPollAfterMs);
         return undefined;
       } catch (err) {
-        if (err?.name === "AbortError") return;
+        if (signal.aborted || err?.name === "AbortError") return;
         setState((previous) => ({
           ...previous,
           error: err?.message || "Failed to fetch panels",

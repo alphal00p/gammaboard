@@ -1,3 +1,4 @@
+import { PanelHeader, ControlBar } from "../common/PanelChrome";
 import { useMemo, useRef, useState } from "react";
 import { Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, Typography } from "@mui/material";
 import { asArray } from "../../utils/collections";
@@ -63,7 +64,8 @@ import {
 } from "./histogramOptions";
 import LazyChart from "./LazyChart";
 
-const histogramOverlayColors = ["#9b2226", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
+const histogramSelectSx = { fontSize: "0.875rem", ".MuiSelect-select": { py: 0.75 } };
+const histogramOverlayColors = ["#ce4555", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
 
 const inferDefaultHistogramYScale = () => "linear";
 
@@ -664,14 +666,8 @@ const HistogramPanel = ({
   return (
     <Card variant="outlined">
       <CardContent>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 2, mb: 2 }}>
-          <Typography variant="subtitle1">
-            {title}
-            {state?.name ? `  (${state.name})` : ""}
-          </Typography>
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
-            {extraControls}
-            {showExportAction || showResetViewAction ? (
+        <PanelHeader title={<>{title}{state?.name ? ` (${state.name})` : ""}</>}>
+          {showExportAction || showResetViewAction ? (
             <FigureExportActions
               baseName={state?.panel_id || state?.name || title || "histogram"}
               payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, xScale: effectiveXScale, yScale }}
@@ -689,170 +685,160 @@ const HistogramPanel = ({
                 : null
               }
             />
-            ) : null}
-            {declaredViews.length > 1 ? (
-              <FormControl size="small" sx={{ minWidth: 152 }}>
-                <Select
-                  value={selectedView.id}
-                  onChange={(event) => {
-                    const next = String(event.target.value || "");
-                    if (isBundleControlled && sourcePanelId && typeof onValueChange === "function" && currentHistogramName) {
-                      onValueChange(
-                        sourcePanelId,
-                        writeHistogramBundlePanelValue(value, {
-                          selectedViewByHistogram: { [currentHistogramName]: next },
-                        }),
-                        false,
-                      );
-                      return;
-                    }
-                    setLocalSelectedViewId(next);
-                  }}
-                  sx={{
-                    fontSize: "0.875rem",
-                    ".MuiSelect-select": { py: 0.75 },
-                  }}
-                >
-                  {declaredViews.map((view) => (
-                    <MenuItem key={view.id} value={view.id}>
-                      {view.label}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            ) : null}
-            {showScaleControls ? (
-            <FormControl size="small" sx={{ minWidth: 128 }}>
+          ) : null}
+        </PanelHeader>
+        <ControlBar sx={{ mb: 2 }}>
+          {extraControls}
+          {declaredViews.length > 1 ? (
+            <FormControl size="small" sx={{ minWidth: 152 }}>
               <Select
-                value={yScale}
+                value={selectedView.id}
                 onChange={(event) => {
-                  const next = event.target.value;
-                  if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                    onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { yScale: next }), false);
+                  const next = String(event.target.value || "");
+                  if (isBundleControlled && sourcePanelId && typeof onValueChange === "function" && currentHistogramName) {
+                    onValueChange(
+                      sourcePanelId,
+                      writeHistogramBundlePanelValue(value, {
+                        selectedViewByHistogram: { [currentHistogramName]: next },
+                      }),
+                      false,
+                    );
                     return;
                   }
-                  setLocalYScale(next);
+                  setLocalSelectedViewId(next);
                 }}
-                sx={{
-                  fontSize: "0.875rem",
-                  ".MuiSelect-select": { py: 0.75 },
-                }}
+                sx={histogramSelectSx}
               >
-                <MenuItem value="linear">Y Linear</MenuItem>
-                <MenuItem value="log">Y Log</MenuItem>
+                {declaredViews.map((view) => (
+                  <MenuItem key={view.id} value={view.id}>
+                    {view.label}
+                  </MenuItem>
+                ))}
               </Select>
             </FormControl>
-            ) : null}
-            {showXScaleControl ? (
-            <FormControl size="small" sx={{ minWidth: 128 }}>
+          ) : null}
+          {showXScaleControl ? (
+          <FormControl size="small" sx={{ minWidth: 128 }}>
+            <Select
+              value={effectiveXScale}
+              disabled={isDiscrete}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (isDiscrete) {
+                  return;
+                }
+                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { xScale: next }), false);
+                  return;
+                }
+                setLocalXScale(next);
+              }}
+              sx={histogramSelectSx}
+            >
+              <MenuItem value="linear">X linear</MenuItem>
+              <MenuItem value="log">X log</MenuItem>
+            </Select>
+          </FormControl>
+          ) : null}
+          {showScaleControls ? (
+          <FormControl size="small" sx={{ minWidth: 128 }}>
+            <Select
+              value={yScale}
+              onChange={(event) => {
+                const next = event.target.value;
+                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { yScale: next }), false);
+                  return;
+                }
+                setLocalYScale(next);
+              }}
+              sx={histogramSelectSx}
+            >
+              <MenuItem value="linear">Y linear</MenuItem>
+              <MenuItem value="log">Y log</MenuItem>
+            </Select>
+          </FormControl>
+          ) : null}
+          {showPdfCdfControl ? (
+          <Button
+            size="small"
+            variant={histogramMode === HISTOGRAM_MODE_CDF ? "contained" : "outlined"}
+            onClick={() => {
+              const next = histogramMode === HISTOGRAM_MODE_CDF ? HISTOGRAM_MODE_PDF : HISTOGRAM_MODE_CDF;
+              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { histogramMode: next }), false);
+                return;
+              }
+              setLocalHistogramMode(next);
+            }}
+          >
+            {histogramMode === HISTOGRAM_MODE_CDF ? "CDF" : "PDF"}
+          </Button>
+          ) : null}
+          {showRatioControl && ratioOption ? (
+          <Button
+            size="small"
+            variant={showRatio ? "contained" : "outlined"}
+            onClick={() => {
+              const next = !showRatio;
+              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRatio: next }), false);
+                return;
+              }
+              setLocalShowRatio(next);
+            }}
+          >
+            Ratio
+          </Button>
+          ) : null}
+          {isDiscrete && showSortControl ? (
+            <FormControl size="small" sx={{ minWidth: 156 }}>
               <Select
-                value={effectiveXScale}
-                disabled={isDiscrete}
+                value={requestedSortMode}
                 onChange={(event) => {
-                  const next = event.target.value;
-                  if (isDiscrete) {
+                  const next = normalizeHistogramSortMode(event.target.value);
+                  if (
+                    isBundleControlled &&
+                    sourcePanelId &&
+                    typeof onValueChange === "function" &&
+                    currentHistogramName
+                  ) {
+                    onValueChange(
+                      sourcePanelId,
+                      writeHistogramBundlePanelValue(value, {
+                        sortModeByHistogram: { [currentHistogramName]: next },
+                      }),
+                      false,
+                    );
                     return;
                   }
-                  if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                    onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { xScale: next }), false);
-                    return;
-                  }
-                  setLocalXScale(next);
+                  setLocalSortMode(next);
                 }}
-                sx={{
-                  fontSize: "0.875rem",
-                  ".MuiSelect-select": { py: 0.75 },
-                }}
+                sx={histogramSelectSx}
               >
-                <MenuItem value="linear">X Linear</MenuItem>
-                <MenuItem value="log">X Log</MenuItem>
+                <MenuItem value={HISTOGRAM_SORT_CANONICAL}>Lexicographic</MenuItem>
+                <MenuItem value={HISTOGRAM_SORT_BY_VALUE}>By value</MenuItem>
+                <MenuItem value={HISTOGRAM_SORT_BY_ABS_VALUE}>By |value|</MenuItem>
               </Select>
             </FormControl>
-            ) : null}
-            {showPdfCdfControl ? (
-            <Button
-              size="small"
-              variant={histogramMode === HISTOGRAM_MODE_CDF ? "contained" : "outlined"}
-              onClick={() => {
-                const next = histogramMode === HISTOGRAM_MODE_CDF ? HISTOGRAM_MODE_PDF : HISTOGRAM_MODE_CDF;
-                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { histogramMode: next }), false);
-                  return;
-                }
-                setLocalHistogramMode(next);
-              }}
-            >
-              {histogramMode === HISTOGRAM_MODE_CDF ? "CDF" : "PDF"}
-            </Button>
-            ) : null}
-            {showRatioControl && ratioOption ? (
-            <Button
-              size="small"
-              variant={showRatio ? "contained" : "outlined"}
-              onClick={() => {
-                const next = !showRatio;
-                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRatio: next }), false);
-                  return;
-                }
-                setLocalShowRatio(next);
-              }}
-            >
-              Ratio
-            </Button>
-            ) : null}
-            {isDiscrete && showSortControl ? (
-              <FormControl size="small" sx={{ minWidth: 156 }}>
-                <Select
-                  value={requestedSortMode}
-                  onChange={(event) => {
-                    const next = normalizeHistogramSortMode(event.target.value);
-                    if (
-                      isBundleControlled &&
-                      sourcePanelId &&
-                      typeof onValueChange === "function" &&
-                      currentHistogramName
-                    ) {
-                      onValueChange(
-                        sourcePanelId,
-                        writeHistogramBundlePanelValue(value, {
-                          sortModeByHistogram: { [currentHistogramName]: next },
-                        }),
-                        false,
-                      );
-                      return;
-                    }
-                    setLocalSortMode(next);
-                  }}
-                  sx={{
-                    fontSize: "0.875rem",
-                    ".MuiSelect-select": { py: 0.75 },
-                  }}
-                >
-                  <MenuItem value={HISTOGRAM_SORT_CANONICAL}>Lexicographic</MenuItem>
-                  <MenuItem value={HISTOGRAM_SORT_BY_VALUE}>By Value</MenuItem>
-                  <MenuItem value={HISTOGRAM_SORT_BY_ABS_VALUE}>By |Value|</MenuItem>
-                </Select>
-              </FormControl>
-            ) : null}
-            {showRelativeErrorControl ? (
-            <Button
-              size="small"
-              variant={showRelativeErrors ? "contained" : "outlined"}
-              onClick={() => {
-                const next = !showRelativeErrors;
-                if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                  onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRelativeError: next }), false);
-                  return;
-                }
-                setLocalShowRelativeErrors(next);
-              }}
-            >
-              Rel Error
-            </Button>
-            ) : null}
-          </Stack>
-        </Box>
+          ) : null}
+          {showRelativeErrorControl ? (
+          <Button
+            size="small"
+            variant={showRelativeErrors ? "contained" : "outlined"}
+            onClick={() => {
+              const next = !showRelativeErrors;
+              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRelativeError: next }), false);
+                return;
+              }
+              setLocalShowRelativeErrors(next);
+            }}
+          >
+            Relative error
+          </Button>
+          ) : null}
+        </ControlBar>
         {caption && <Box sx={{ mb: 1 }}>{caption}</Box>}
         {histogramMode === HISTOGRAM_MODE_CDF && (
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
@@ -899,7 +885,7 @@ const HistogramPanel = ({
                         onAddComparedHistogram?.(sourcePanelId, bundle.id, currentHistogramName, isDiscrete)
                       }
                     >
-                      Add Histogram
+                      Add histogram
                     </Button>
                   </Stack>
                   <Box sx={{ display: "grid", gap: 0.75 }}>
@@ -979,8 +965,8 @@ const HistogramPanel = ({
                               sx={{ minWidth: 140, fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
                             >
                               <MenuItem value={HISTOGRAM_SORT_CANONICAL}>Canonical</MenuItem>
-                              <MenuItem value={HISTOGRAM_SORT_BY_VALUE}>By Value</MenuItem>
-                              <MenuItem value={HISTOGRAM_SORT_BY_ABS_VALUE}>By |Value|</MenuItem>
+                              <MenuItem value={HISTOGRAM_SORT_BY_VALUE}>By value</MenuItem>
+                              <MenuItem value={HISTOGRAM_SORT_BY_ABS_VALUE}>By |value|</MenuItem>
                             </Select>
                           </FormControl>
                         ) : null}
@@ -1008,8 +994,8 @@ const HistogramPanel = ({
                               }}
                               sx={{ minWidth: 140, fontSize: "0.8125rem", ".MuiSelect-select": { py: 0.625 } }}
                             >
-                              <MenuItem value="by_key">Match: Key</MenuItem>
-                              <MenuItem value="by_index">Match: Index</MenuItem>
+                              <MenuItem value="by_key">Match: key</MenuItem>
+                              <MenuItem value="by_index">Match: index</MenuItem>
                             </Select>
                           </FormControl>
                         ) : null}

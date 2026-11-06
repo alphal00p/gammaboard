@@ -1,3 +1,4 @@
+import { PanelHeader, ControlBar } from "../common/PanelChrome";
 import { memo, useRef } from 'react';
 import {
   Accordion,
@@ -45,21 +46,14 @@ const Figure = ({ name, option, payload, onEvents }) => {
         minWidth: 0
       }}
     >
-      <Stack
-        direction="row"
-        justifyContent="space-between"
-        alignItems="center"
-        flexWrap="wrap"
-        gap={1}
-      >
-        <Typography variant="subtitle2">{name}</Typography>
+      <PanelHeader title={name} sx={{ mb: 0 }}>
         <FigureExportActions
           baseName={name}
           payload={payload}
           echartsRef={chart}
           elementRef={element}
         />
-      </Stack>
+      </PanelHeader>
       <LazyChart
         ref={chart}
         option={option}
@@ -196,17 +190,11 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
     <Card>
       <CardContent>
         <Stack spacing={2}>
-          <Stack
-            direction="row"
-            justifyContent="space-between"
-            alignItems="center"
-            flexWrap="wrap"
-            gap={1}
-          >
-            <Typography variant="h6">{title}</Typography>
-            <FigureExportActions baseName="pdf-comparison" payload={rawExport} imageFormat={null} />
-          </Stack>
-          <Stack direction="row" gap={2} flexWrap="wrap" alignItems="center">
+          <PanelHeader title={title} sx={{ mb: 0 }}>
+            <FigureExportActions baseName="pdf-comparison" payload={rawExport} imageFormat={null}
+              onResetView={() => update({ zoom: FULL_ZOOM, yZoom: FULL_ZOOM, histogram: {} })} />
+          </PanelHeader>
+          <ControlBar>
             <ScopeSelector prefixes={prefixes} scope={scope} page={value?.page} onChange={update} />
             <TextField
               select
@@ -313,18 +301,7 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
                 <MenuItem value="strata">Stratum hue + density</MenuItem>
               </TextField>
             )}
-            <Button
-              onClick={() =>
-                update({
-                  zoom: FULL_ZOOM,
-                  yZoom: FULL_ZOOM,
-                  histogram: {}
-                })
-              }
-            >
-              Reset view
-            </Button>
-          </Stack>
+          </ControlBar>
           {stratumColours && (
             <Stack spacing={1}>
               <Typography variant="caption">

@@ -27,6 +27,34 @@ afterEach(() => {
 const imageSpec = { panel_id: "pdf_adaptation_pdf", label: "Sampler PDF", kind: "image2d" };
 const histogramSpec = { panel_id: "pdf_histogram", label: "PDF Histogram", kind: "histogram" };
 
+test("image controls share the progress card and preserve their panel action", () => {
+  const change = vi.fn();
+  render(<PanelCollection panelSpecs={[
+    { panel_id: "image_progress", kind: "progress", label: "Image Progress" },
+    { panel_id: "image_view_mode", kind: "select", label: "Image component", state: {
+      default_value: "component:x", options: [{ value: "component:x", label: "x" }, { value: "complex_phase", label: "Complex phase" }],
+    } },
+  ]} panelStates={[{ panel_id: "image_progress", kind: "progress", current: 4, total: 4 }]}
+    onPanelValueChange={change} />);
+  const input = screen.getByRole("combobox", { name: "Image component" });
+  expect(input.closest(".MuiCard-root")).toBe(screen.getByText("Image Progress").closest(".MuiCard-root"));
+  expect(input).toHaveTextContent("x");
+  fireEvent.mouseDown(input);
+  fireEvent.click(screen.getByRole("option", { name: "Complex phase" }));
+  expect(change).toHaveBeenCalledWith("image_view_mode", "complex_phase", true);
+});
+
+test("phase images use a phase key and magnitude limits excluding invalid pixels", () => {
+  render(<PanelCollection panelSpecs={[{ ...imageSpec, label: "Phase image" }]} panelStates={[{
+    panel_id: imageSpec.panel_id, kind: "image2d", width: 5, height: 1,
+    color_mode: "complex_phase", values: [1, -1, 0, 0, 1000000], imag_values: [0, 0, 1, -1, 1000000], invalid_indices: [4],
+  }]} />);
+  expect(screen.getByRole("img", { name: /^Complex phase colour key/ })).toBeInTheDocument();
+  expect(screen.getByText("Magnitude |z|")).toBeInTheDocument();
+  expect(screen.getByText("1.000e+0")).toBeInTheDocument();
+  expect(screen.queryByText("-1.000e+0")).not.toBeInTheDocument();
+});
+
 test("keeps expanded campaign observables before Task Summary", () => {
   const specs = [
     { panel_id: "campaign_histograms", label: "Combined Observables", kind: "table", width: "full" },

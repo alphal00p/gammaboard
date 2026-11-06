@@ -1,16 +1,16 @@
-import { Box, Chip, Typography } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import WifiIcon from "@mui/icons-material/Wifi";
 import WifiOffIcon from "@mui/icons-material/WifiOff";
+import StatusChip from "./common/StatusChip";
 
 const ConnectionStatus = ({ isConnected, lastUpdate, serverName = "local" }) => {
   const normalizedServerName = typeof serverName === "string" && serverName.trim() ? serverName.trim() : "local";
   return (
-    <Box sx={{ mb: 3, display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
-      <Chip
+    <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+      <StatusChip
+        status={isConnected ? "connected" : "disconnected"}
         icon={isConnected ? <WifiIcon /> : <WifiOffIcon />}
         label={isConnected ? `Connected to ${normalizedServerName}` : `Disconnected from ${normalizedServerName}`}
-        color={isConnected ? "success" : "error"}
-        variant="outlined"
       />
 
       {lastUpdate && (

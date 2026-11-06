@@ -13,14 +13,14 @@ describe("node startup queue", () => {
       request(4, "failed"), request(5, "canceled"),
     ]} />);
     const queue = within(screen.getByRole("table", { name: "node startup queue" }));
-    expect(queue.getByText("pending")).toBeTruthy();
-    expect(queue.getByText("starting")).toBeTruthy();
+    expect(queue.getByText("Pending")).toBeTruthy();
+    expect(queue.getByText("Starting")).toBeTruthy();
     expect(queue.queryByText("worker exited before connecting")).toBeNull();
-    expect(queue.queryByText("fulfilled")).toBeNull();
+    expect(queue.queryByText("Fulfilled")).toBeNull();
     expect(screen.queryByRole("table", { name: "node launch history" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Launch history (3)" }));
     const history = within(screen.getByRole("table", { name: "node launch history" }));
-    expect(history.getByText("fulfilled")).toBeTruthy();
+    expect(history.getByText("Fulfilled")).toBeTruthy();
     expect(history.getByText("worker exited before connecting")).toBeTruthy();
     expect(history.getAllByText("w-1")).toHaveLength(3);
   });

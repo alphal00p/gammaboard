@@ -19,6 +19,7 @@ import TomlActionDialog from "./runs/TomlActionDialog";
 import NodeLaunchQueue from "./NodeLaunchQueue";
 import WorkerDetailsPanel from "./WorkerDetailsPanel";
 import EmptyStateCard from "./common/EmptyStateCard";
+import StatusChip from "./common/StatusChip";
 import { formatDateTime } from "../utils/formatters";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { useAuth } from "../auth/AuthProvider";
@@ -99,11 +100,11 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
           alignItems={{ xs: "stretch", sm: "center" }}
           sx={{ mb: 2 }}
         >
-          <Typography variant="h6">Node Management</Typography>
+          <Typography variant="h6">Node management</Typography>
           {authenticated ? (
             <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
               <Button variant="outlined" disabled={startingNodes} onClick={() => setLaunchOpen(true)}>
-                Request Nodes
+                Request nodes
               </Button>
               <Button
                 variant="outlined"
@@ -124,7 +125,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
                   }
                 }}
               >
-                Unassign All
+                Unassign all
               </Button>
               <Button
                 color="warning"
@@ -146,14 +147,14 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
                   }
                 }}
               >
-                Stop All Nodes
+                Stop all nodes
               </Button>
             </Stack>
           ) : null}
         </Stack>
 
         <Typography variant="subtitle1" gutterBottom>
-          Live Nodes
+          Live nodes
         </Typography>
 
         {workers.length === 0 ? (
@@ -177,8 +178,10 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
               ))}
             </Box>
 
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small" aria-label="nodes table">
+            <TableContainer component={Paper} variant="outlined" role="region" aria-label="Live nodes list" tabIndex={0}
+              sx={{ maxHeight: "min(440px, 55vh)", overflow: "auto",
+                "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 } }}>
+              <Table size="small" stickyHeader aria-label="nodes table">
                 <TableHead>
                   <TableRow>
                     <TableCell>Node</TableCell>
@@ -186,7 +189,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
                     <TableCell>Run</TableCell>
                     <TableCell>Role</TableCell>
                     <TableCell>Capabilities</TableCell>
-                    <TableCell>Last Seen</TableCell>
+                    <TableCell>Last seen</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -207,7 +210,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
                         }}
                       >
                         <TableCell>{nodeName || "unknown"}</TableCell>
-                        <TableCell>{worker.status || "unknown"}</TableCell>
+                        <TableCell><StatusChip status={worker.status} /></TableCell>
                         <TableCell>{displayRun(worker)}</TableCell>
                         <TableCell>{displayRole(worker)}</TableCell>
                         <TableCell>{displayCapabilities(worker)}</TableCell>
@@ -250,9 +253,9 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
       />
       <TomlActionDialog
         open={launchOpen}
-        title="Request Nodes"
+        title="Request nodes"
         label="Node Launch TOML"
-        submitLabel="Request Nodes"
+        submitLabel="Request nodes"
         initialValue={DEFAULT_NODE_LAUNCH_TOML}
         templateSelectionStorageKey={NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY}
         templateKind="nodes"

@@ -5,7 +5,7 @@ import { useTaskOutput } from "../hooks/useTaskOutput";
 const TaskOutputPanel = ({
   runId,
   task,
-  title = "Selected Task Output",
+  title = "Selected task output",
   onSelectRun = null,
 }) => {
   const { panelSpecs, panelStates, panelValues, setPanelValue, error, lastUpdate } = useTaskOutput({

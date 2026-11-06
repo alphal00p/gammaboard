@@ -24,6 +24,8 @@ import { asArray } from "../../utils/collections";
 import { formatCentralValueWithError, formatScientific } from "../../utils/formatters";
 import { renderStructuredValue } from "./BasicPanels";
 import SamplePointValue from "./SamplePointValue";
+import StatusChip from "../common/StatusChip";
+import { PanelHeader } from "../common/PanelChrome";
 import FigureExportActions, { downloadTextFile } from "./FigureExportActions";
 import { readHistogramBundleSelectedValue, writeHistogramBundlePanelValue } from "./histogramUtils";
 
@@ -230,6 +232,9 @@ const TablePanel = ({
 
   const renderTableCell = (row, columnIndex) => {
     const value = row?.[columnIndex];
+    if (["state", "status"].includes(columnKeys[columnIndex]) && typeof value === "string") {
+      return <StatusChip status={value} />;
+    }
     if (value?.kind === "sample_point") return <SamplePointValue point={value} />;
     if (payload?.column_formats?.[columns[columnIndex]] === "scientific") {
       return <Box component="span" sx={{ whiteSpace: "nowrap" }}>{typeof value === "number" ? formatScientific(value) : renderStructuredValue(value)}</Box>;
@@ -245,8 +250,7 @@ const TablePanel = ({
       <CardContent>
         {payload?.weight_basis && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.weight_basis}</Typography>}
         {payload?.estimator_note && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.estimator_note}</Typography>}
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 2, mb: 2 }}>
-          <Typography variant="subtitle1">{title}</Typography>
+        <PanelHeader title={title}>
           {!isHistogramBundle && <FigureExportActions baseName={state?.panel_id || title} payload={{ kind: "table", state: { ...state, columns, rows } }} imageFormat={null} />}
           {absoluteComponents ? (
             <Tooltip describeChild title="Means of |real| and |imag|, with their own errors. Variance contribution still refers to the signed campaign result.">
@@ -271,7 +275,7 @@ const TablePanel = ({
               ) : null}
             </Stack>
           ) : null}
-        </Box>
+        </PanelHeader>
         {supportsBundleUpload ? (
           <BundleUploadControls
             state={state}
@@ -282,6 +286,11 @@ const TablePanel = ({
             inputRef={uploadInputRef}
           />
         ) : null}
+        {payload?.description && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{payload.description}</Typography>}
+        {payload?.help && <Box component="details" sx={{ mb: 2 }}>
+          <Typography component="summary" variant="body2" sx={{ cursor: "pointer", color: "text.secondary" }}>{payload.help.title}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, whiteSpace: "pre-line" }}>{payload.help.text}</Typography>
+        </Box>}
         {omittedHistogramCount > 0 ? (
           <Alert severity="warning" sx={{ mb: 2 }}>
             {omittedHistogramCount} incompatible {omittedHistogramCount === 1 ? "observable was" : "observables were"}

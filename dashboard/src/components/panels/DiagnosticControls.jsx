@@ -1,5 +1,6 @@
-import { Autocomplete, Button, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Autocomplete, Button, MenuItem, TextField, Typography } from '@mui/material';
 import { prefixLabel } from './strataUtils';
+import { ControlBar } from '../common/PanelChrome';
 import {
   FULL_ZOOM,
   buildDataZoom,
@@ -60,7 +61,7 @@ export function ScopeSelector({ prefixes, scope, page = 0, onChange, overall = t
   const groups = Math.ceil(prefixes.length / STRATA_PAGE_SIZE);
   const index = comparisonPage(page, prefixes.length);
   return (
-    <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+    <ControlBar>
       <DiagnosticSelect
         label="Scope"
         value={scope}
@@ -116,7 +117,7 @@ export function ScopeSelector({ prefixes, scope, page = 0, onChange, overall = t
           </Button>
         </>
       )}
-    </Stack>
+    </ControlBar>
   );
 }
 export const navigationZoom = (value) =>

@@ -1,5 +1,6 @@
-import { Suspense, forwardRef, lazy, useCallback, useLayoutEffect, useRef } from "react";
-import { Box } from "@mui/material";
+import { Suspense, forwardRef, lazy, useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { Box, useTheme } from "@mui/material";
+import { withChartTheme } from "./chartTheme";
 
 const ReactECharts = lazy(() =>
   Promise.all([import("echarts-for-react"), import("../../lib/echarts")]).then(([module]) => ({
@@ -8,7 +9,17 @@ const ReactECharts = lazy(() =>
 );
 
 const LazyChart = forwardRef((props, ref) => {
+  const { palette } = useTheme();
   const chartRef = useRef(null);
+  const previous = useRef({ option: props.option, palette });
+  const option = useMemo(() => {
+    // Some panels replace all options on data changes. A theme-only update must
+    // retain the live legend/zoom state, including controls not stored by a panel.
+    const themeOnly = previous.current.palette !== palette && previous.current.option === props.option;
+    const navigation = themeOnly ? chartRef.current?.getEchartsInstance()?.getOption() : null;
+    return withChartTheme(props.option, palette, navigation);
+  }, [props.option, palette]);
+  useLayoutEffect(() => { previous.current = { option: props.option, palette }; });
   const captureChart = useCallback((chart) => {
     chartRef.current = chart;
     if (typeof ref === "function") ref(chart);
@@ -38,7 +49,7 @@ const LazyChart = forwardRef((props, ref) => {
         </Box>
       }
     >
-      <ReactECharts ref={captureChart} {...props} />
+      <ReactECharts ref={captureChart} {...props} option={option} />
     </Suspense>
   );
 });

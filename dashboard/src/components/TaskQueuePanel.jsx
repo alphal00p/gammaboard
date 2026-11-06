@@ -11,12 +11,13 @@ import {
   Typography,
 } from "@mui/material";
 import { formatCompactNumber } from "../utils/formatters";
+import StatusChip from "./common/StatusChip";
 
 const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null, renderTaskActions = null }) => {
   return (
     <>
       <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-        <Typography variant="h6">Task Queue</Typography>
+        <Typography variant="h6">Task queue</Typography>
         {actions}
       </Stack>
       <Card>
@@ -31,7 +32,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                   <TableCell>Failure</TableCell>
                   <TableCell align="right">Goal</TableCell>
                   <TableCell align="right">Completed</TableCell>
-                  <TableCell align="right">Allocated Core-hours</TableCell>
+                  <TableCell align="right">Allocated core-hours</TableCell>
                   {renderTaskActions && <TableCell align="right">Actions</TableCell>}
                 </TableRow>
               </TableHead>
@@ -50,7 +51,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                       }}
                     >
                       <TableCell>{task.name || "Unnamed task"}</TableCell>
-                      <TableCell>{task.state}</TableCell>
+                      <TableCell><StatusChip status={task.state} /></TableCell>
                       <TableCell>{task.task_kind}</TableCell>
                       <TableCell>{task.failure_reason || "-"}</TableCell>
                       <TableCell align="right">

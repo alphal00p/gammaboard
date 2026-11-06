@@ -17,7 +17,6 @@ import {
   baseAxisLabel,
   baseCartesianGrid,
   buildErrorBarSeries,
-  gridColor,
   inferXAxisLabel,
 } from "./chartPrimitives";
 
@@ -342,7 +341,7 @@ export const buildHistogramOption = ({
           show: true,
           top: 0,
           data: legendEntries,
-          textStyle: { color: "#64748b", fontSize: 12 },
+          textStyle: { fontSize: 12 },
         },
         grid: yLabel ? { ...baseCartesianGrid, top: 46 } : baseCartesianGrid,
         xAxis: {
@@ -350,23 +349,21 @@ export const buildHistogramOption = ({
           data: categoriesData,
           name: inferNumericXAxisLabel(panelId),
           axisLabel: {
-            color: baseAxisLabel.color,
             fontSize: baseAxisLabel.fontSize,
             formatter: (axisValue) => formatCategoryAxisValue(axisValue),
             interval: 0,
             rotate: categoriesData.length > 6 ? 30 : 0,
           },
           splitLine: { show: false },
-          nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+          nameTextStyle: { fontSize: 12, padding: [12, 0, 0, 0] },
         },
         yAxis: {
           name: yLabel,
-          nameTextStyle: { color: "#64748b", fontSize: 12 },
+          nameTextStyle: { fontSize: 12 },
           type: "value",
           min: yDomain[0],
           max: yDomain[1],
           axisLabel: yScale === "log" ? { ...baseAxisLabel, formatter: formatSignedLogAxisValue } : baseAxisLabel,
-          splitLine: { lineStyle: { color: gridColor } },
         },
         tooltip: {
           trigger: "item",
@@ -420,7 +417,7 @@ export const buildHistogramOption = ({
                 ? {
                     color: (params) => histogramSignColorFromRaw(params?.data?.rawValue),
                   }
-                : { color: "#005f73" },
+                : { color: "#00838f" },
           },
           ...overlaySeries.flatMap((overlay, index) => {
             const slotIndex = index + 1;
@@ -457,7 +454,7 @@ export const buildHistogramOption = ({
                 buildDiscreteOffsetErrorBarSeries({
                   name: pdfComparisonData.deltaLabel,
                   data: pdfComparisonData.deltaData,
-                  color: "#475569",
+                  color: "#7c8a96",
                   slotIndex: 0,
                   slotCount: discreteBarSeriesCount,
                   barWidthRatio: 0.32,
@@ -468,7 +465,7 @@ export const buildHistogramOption = ({
                   data: pdfComparisonData.markerData,
                   symbol: "diamond",
                   symbolSize: 9,
-                  itemStyle: { color: "#0f172a", borderColor: "#ffffff", borderWidth: 1 },
+                  itemStyle: { color: "#818b98", borderColor: "#ffffff", borderWidth: 1 },
                   z: 8,
                   tooltip: {
                     valueFormatter: (value) =>
@@ -554,8 +551,8 @@ export const buildHistogramOption = ({
               data: valueSeriesData,
               step: "end",
               showSymbol: false,
-              lineStyle: { width: 1.35, color: "#005f73" },
-              itemStyle: { color: "#005f73" },
+              lineStyle: { width: 1.35, color: "#00838f" },
+              itemStyle: { color: "#00838f" },
               connectNulls: false,
               emphasis: { disabled: true },
               tooltip: { show: false },
@@ -567,7 +564,7 @@ export const buildHistogramOption = ({
         show: true,
         top: 0,
         data: legendEntries,
-        textStyle: { color: "#64748b", fontSize: 12 },
+        textStyle: { fontSize: 12 },
       },
       grid: yLabel ? { ...baseCartesianGrid, top: 46 } : baseCartesianGrid,
       xAxis: {
@@ -577,16 +574,15 @@ export const buildHistogramOption = ({
         name: inferNumericXAxisLabel(panelId),
         axisLabel: { ...baseAxisLabel, hideOverlap: true },
         splitLine: { show: false },
-        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+        nameTextStyle: { fontSize: 12, padding: [12, 0, 0, 0] },
       },
       yAxis: {
           name: yLabel,
-          nameTextStyle: { color: "#64748b", fontSize: 12 },
+          nameTextStyle: { fontSize: 12 },
         type: "value",
         min: yDomain[0],
         max: yDomain[1],
         axisLabel: yScale === "log" ? { ...baseAxisLabel, formatter: formatSignedLogAxisValue } : baseAxisLabel,
-        splitLine: { lineStyle: { color: gridColor } },
       },
       tooltip: {
         trigger: "axis",
@@ -676,21 +672,19 @@ export const buildRelativeHistogramOption = ({
           data: categoriesData,
           name: inferNumericXAxisLabel(panelId),
           axisLabel: {
-            color: baseAxisLabel.color,
             fontSize: baseAxisLabel.fontSize,
             formatter: (axisValue) => formatCategoryAxisValue(axisValue),
             interval: 0,
             rotate: categoriesData.length > 6 ? 30 : 0,
           },
           splitLine: { show: false },
-          nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+          nameTextStyle: { fontSize: 12, padding: [12, 0, 0, 0] },
         },
         yAxis: {
           type: "value",
           min: relativeErrorYDomain[0],
           max: relativeErrorYDomain[1],
           axisLabel: baseAxisLabel,
-          splitLine: { lineStyle: { color: gridColor } },
         },
         tooltip: {
           trigger: "axis",
@@ -742,14 +736,13 @@ export const buildRelativeHistogramOption = ({
         name: inferNumericXAxisLabel(panelId),
         axisLabel: baseAxisLabel,
         splitLine: { show: false },
-        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+        nameTextStyle: { fontSize: 12, padding: [12, 0, 0, 0] },
       },
       yAxis: {
         type: "value",
         min: relativeErrorYDomain[0],
         max: relativeErrorYDomain[1],
         axisLabel: baseAxisLabel,
-        splitLine: { lineStyle: { color: gridColor } },
       },
       tooltip: {
         trigger: "axis",
@@ -827,7 +820,7 @@ export const buildRatioHistogramOption = ({
           show: true,
           top: 0,
           data: ratioSeries.map((overlay) => overlay.name),
-          textStyle: { color: "#64748b", fontSize: 12 },
+          textStyle: { fontSize: 12 },
         },
         grid: baseCartesianGrid,
         xAxis: {
@@ -835,14 +828,13 @@ export const buildRatioHistogramOption = ({
           data: categoriesData,
           name: inferNumericXAxisLabel(panelId),
           axisLabel: {
-            color: baseAxisLabel.color,
             fontSize: baseAxisLabel.fontSize,
             formatter: (axisValue) => formatCategoryAxisValue(axisValue),
             interval: 0,
             rotate: categoriesData.length > 6 ? 30 : 0,
           },
           splitLine: { show: false },
-          nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+          nameTextStyle: { fontSize: 12, padding: [12, 0, 0, 0] },
         },
         yAxis: {
           type: "value",
@@ -850,7 +842,6 @@ export const buildRatioHistogramOption = ({
           max: ratioYDomain[1],
         name: "1 - value / comparison",
           axisLabel: baseAxisLabel,
-          splitLine: { lineStyle: { color: gridColor } },
         },
         tooltip: {
           trigger: "axis",
@@ -891,7 +882,7 @@ export const buildRatioHistogramOption = ({
         show: true,
         top: 0,
         data: ratioSeries.map((overlay) => overlay.name),
-        textStyle: { color: "#64748b", fontSize: 12 },
+        textStyle: { fontSize: 12 },
       },
       grid: baseCartesianGrid,
       xAxis: {
@@ -901,7 +892,7 @@ export const buildRatioHistogramOption = ({
         name: inferNumericXAxisLabel(panelId),
         axisLabel: baseAxisLabel,
         splitLine: { show: false },
-        nameTextStyle: { color: "#64748b", fontSize: 12, padding: [12, 0, 0, 0] },
+        nameTextStyle: { fontSize: 12, padding: [12, 0, 0, 0] },
       },
       yAxis: {
         type: "value",
@@ -909,7 +900,6 @@ export const buildRatioHistogramOption = ({
         max: ratioYDomain[1],
           name: "1 - value / comparison",
         axisLabel: baseAxisLabel,
-        splitLine: { lineStyle: { color: gridColor } },
       },
       tooltip: {
         trigger: "axis",

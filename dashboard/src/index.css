@@ -27,6 +27,9 @@ code {
 /* Ensure smooth scrolling */
 html {
     scroll-behavior: smooth;
+    /* Keep the header width stable while a workspace's loading state is short.
+       MUI also compensates this scrollbar when opening menus and dialogs. */
+    overflow-y: scroll;
 }
 
 /* Remove default link styles that might conflict with MUI */

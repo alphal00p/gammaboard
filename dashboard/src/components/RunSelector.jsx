@@ -1,5 +1,6 @@
 import { Box, Button, FormControl, FormControlLabel, InputLabel, MenuItem, Select, Switch, Typography } from "@mui/material";
 import { formatRunLabel, formatRunSecondaryLabel, orderRunsForSelector } from "../utils/runs";
+import StatusChip from "./common/StatusChip";
 
 const RunSelector = ({
   runs,
@@ -13,9 +14,10 @@ const RunSelector = ({
 }) => {
   if (runs.length === 0) return null;
   const orderedRuns = orderRunsForSelector(runs);
+  const selected = runs.find((run) => run.run_id === selectedRun);
 
   return (
-    <Box sx={{ mb: 3 }}>
+    <Box sx={{ mb: 2 }}>
       <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
         <FormControlLabel
           control={
@@ -29,20 +31,30 @@ const RunSelector = ({
         />
       </Box>
       <FormControl fullWidth variant="outlined">
-        <InputLabel id="run-selector-label">Select Run</InputLabel>
+        <InputLabel id="run-selector-label">Select run</InputLabel>
         <Select
           labelId="run-selector-label"
           value={selectedRun || ""}
           onChange={(e) => onRunChange(Number(e.target.value))}
-          label="Select Run"
+          label="Select run"
+          renderValue={() => selected && (
+            <Box title={`${formatRunLabel(selected)} · ${formatRunSecondaryLabel(selected)}`}
+              sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+              <Typography component="span" noWrap sx={{ fontSize: "0.875rem", fontWeight: 500 }}>
+                {formatRunLabel(selected)}
+              </Typography>
+              <StatusChip status={selected.lifecycle_state} />
+            </Box>
+          )}
+          MenuProps={{ PaperProps: { sx: { maxWidth: "calc(100vw - 32px)" } } }}
         >
           {orderedRuns.map((run) => (
-            <MenuItem key={run.run_id} value={run.run_id}>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <Typography component="span" sx={{ fontWeight: 500 }}>
+            <MenuItem key={run.run_id} value={run.run_id} aria-label={`${formatRunLabel(run)} · ${formatRunSecondaryLabel(run)}`}>
+              <Box sx={{ minWidth: 0, py: 0.25, whiteSpace: "normal", overflowWrap: "anywhere" }}>
+                <Typography component="span" sx={{ fontSize: "0.875rem", fontWeight: 500 }}>
                   {formatRunLabel(run)}
                 </Typography>
-                <Typography component="span" color="text.secondary">
+                <Typography variant="caption" component="span" display="block" color="text.secondary">
                   {formatRunSecondaryLabel(run)}
                 </Typography>
               </Box>

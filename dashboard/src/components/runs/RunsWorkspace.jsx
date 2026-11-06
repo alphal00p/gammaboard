@@ -1,4 +1,4 @@
-import { Alert, Box, Button, IconButton, Snackbar, Stack, TextField, Tooltip } from "@mui/material";
+import { Alert, Box, Button, IconButton, Snackbar, TextField, Tooltip } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
@@ -10,6 +10,7 @@ import { addRunTasks, autoAssignRun, createRun, deleteRun, deleteRunTask, editRu
 import { asArray } from "../../utils/collections";
 import { getCurrentTask } from "../../utils/tasks";
 import RunScopedWorkspace from "../common/RunScopedWorkspace";
+import { ControlBar } from "../common/PanelChrome";
 
 const RunInfo = lazy(() => import("../RunInfo"));
 const TaskOutputPanel = lazy(() => import("../TaskOutputPanel"));
@@ -59,13 +60,13 @@ function WorkerPoolControls({ run, disabled, notify }) {
     } catch (error) { notify(error.message, "error"); }
     finally { setBusy(false); }
   };
-  return <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ mb: 2 }}>
-    <TextField size="small" value={count} placeholder="all" inputProps={{ "aria-label": "Evaluator node count" }}
+  return <ControlBar sx={{ mb: 2 }}>
+    <TextField size="small" value={count} placeholder="all" inputProps={{ "aria-label": "Evaluator node count" }} sx={{ width: 150 }}
       onChange={(event) => setCount(event.target.value.replace(/[^\d]/g, ""))} />
-    <Button variant="contained" disabled={disabled || busy} onClick={() => act("assign")}>Assign / Resume</Button>
+    <Button variant="contained" disabled={disabled || busy} onClick={() => act("assign")}>Assign / resume</Button>
     <Button variant="outlined" color="warning" disabled={disabled || busy} onClick={() => act("remove")}>Remove evaluators</Button>
-    <Button variant="outlined" color="warning" disabled={disabled || busy} onClick={() => act("pause")}>Pause Run</Button>
-  </Stack>;
+    <Button variant="outlined" color="warning" disabled={disabled || busy} onClick={() => act("pause")}>Pause run</Button>
+  </ControlBar>;
 }
 
 function RunContent({ run, disabled, notify, onSelectRun }) {
@@ -129,7 +130,7 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
         editable={editable && task.state === "pending"} disabled={disabled || busy} onOpen={() => openTask(task)}
         deleteLabel={`Delete task ${task.name}`} onDelete={authenticated ? () => removeTask(task) : null}
         deleteReason={!editable ? "This queue is managed by its parent run." : task.state !== "pending" ? "Only pending tasks can be deleted." : null} />} />}
-    {(selectedTask || isIntegration) && <TaskOutputPanel title={isIntegration ? "Selected Task Output" : "Run Output"}
+    {(selectedTask || isIntegration) && <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
       key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} onSelectRun={onSelectRun} />}
     <RunInfo runId={run.run_id} refreshKey={taskList.map((task) => `${task.id}:${task.state}`).join(",")} />
     {editor && <TomlActionDialog open title={editor.title} label="Task TOML"

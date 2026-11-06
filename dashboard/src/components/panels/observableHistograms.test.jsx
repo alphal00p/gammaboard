@@ -44,7 +44,7 @@ test("histogram selectors default to one combined curve and compare errors witho
   expect(lastChart().yAxis.min).toBe(0);
   expect(lastChart().series.every((s) => s.type !== "custom")).toBe(true);
   expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Rel Error" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Relative error" })).not.toBeInTheDocument();
   expect(screen.getAllByTestId("chart")).toHaveLength(1);
   fireEvent.change(screen.getByRole("combobox", { name: "Stratum" }), { target: { value: "1,3" } });
   fireEvent.click(screen.getByRole("option", { name: "(1,3)" }));

@@ -1,7 +1,5 @@
 import { formatScientific } from "../../utils/formatters";
 
-export const gridColor = "rgba(148,163,184,0.18)";
-
 export const baseCartesianGrid = {
   left: 56,
   right: 20,
@@ -18,7 +16,6 @@ export const inferXAxisLabel = (panelId) =>
   String(panelId || "").includes("_history") ? "Nr samples" : null;
 
 export const baseAxisLabel = {
-  color: "#64748b",
   fontSize: 12,
   formatter: formatAxisValue,
 };

@@ -12,7 +12,6 @@ import {
   Paper,
   Select,
   Snackbar,
-  Stack,
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
@@ -20,6 +19,7 @@ import { useAuth } from "../auth/AuthProvider";
 import PanelCollection from "./panels/PanelCollection";
 import { useNodePanels } from "../hooks/useNodePanels";
 import { assignNode, stopNode, unassignNode } from "../services/api";
+import { ControlBar } from "./common/PanelChrome";
 
 const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   const nodeName = worker?.node_name || null;
@@ -46,7 +46,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
-        Node Details
+        Node details
       </Typography>
       {worker.pool_run_id != null && <Typography sx={{ mb: 2 }}>
         Pool: {worker.pool_run_name || `#${worker.pool_run_id}`}.
@@ -57,7 +57,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
       {error ? <Alert severity="error">{error}</Alert> : null}
       {authenticated ? (
         <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+          <ControlBar>
             <FormControl size="small" sx={{ minWidth: 220 }}>
               <InputLabel id="assign-run-label">Worker pool</InputLabel>
               <Select
@@ -82,10 +82,10 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
                 onChange={(event) => setSelectedRole(event.target.value)}
               >
                 <MenuItem value="evaluator">Evaluator</MenuItem>
-                <MenuItem value="sampler_aggregator">Sampler Aggregator</MenuItem>
+                <MenuItem value="sampler_aggregator">Sampler / aggregator</MenuItem>
               </Select>
             </FormControl>
-            <Stack direction="row" spacing={1}>
+            <ControlBar>
               <Button
                 variant="contained"
                 disabled={busy || !selectedRunId}
@@ -120,15 +120,15 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
                 Remove from pool
               </Button>
               <Button color="error" disabled={busy} onClick={() => setConfirmStopOpen(true)}>
-                Stop Node
+                Stop node
               </Button>
-            </Stack>
-          </Stack>
+            </ControlBar>
+          </ControlBar>
         </Paper>
       ) : null}
       <PanelCollection panelSpecs={panelSpecs} panelStates={panelStates} />
       <Dialog open={confirmStopOpen} onClose={() => (busy ? null : setConfirmStopOpen(false))} maxWidth="sm" fullWidth>
-        <DialogTitle>Stop Node?</DialogTitle>
+        <DialogTitle>Stop node?</DialogTitle>
         <DialogContent>
           This will request a complete shutdown of <strong>{nodeName}</strong>. Do you really want to continue? This
           will stop the current process; you can start a replacement from Management.
@@ -154,7 +154,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
               }
             }}
           >
-            Confirm Stop
+            Confirm stop
           </Button>
         </DialogActions>
       </Dialog>

@@ -6,7 +6,9 @@ import {
   LinearProgress,
   MenuItem,
   Select,
+  Stack,
   Typography,
+  useTheme,
 } from "@mui/material";
 import prettyMilliseconds from "pretty-ms";
 import LatexFormula from "../LatexFormula";
@@ -23,6 +25,8 @@ import {
 } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 import { isObject } from "./panelView";
+import StatusChip from "../common/StatusChip";
+import { PanelHeader } from "../common/PanelChrome";
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
 
@@ -126,7 +130,7 @@ const formatEtaSeconds = (seconds) => {
   });
 };
 
-export const ProgressPanel = ({ title, state }) => {
+export const ProgressPanel = ({ title, state, controls = null }) => {
   const current = Number(state?.current);
   const total = Number(state?.total);
   const eta = formatEtaSeconds(state?.eta_seconds);
@@ -137,20 +141,25 @@ export const ProgressPanel = ({ title, state }) => {
         <Typography variant="subtitle1" sx={{ mb: 2 }}>
           {title}
         </Typography>
-        <Typography variant="h5" sx={{ fontFamily: "monospace", mb: 1 }}>
-          {Number.isFinite(current) ? current.toLocaleString() : "0"}
-          {Number.isFinite(total) ? ` / ${total.toLocaleString()}` : ""}
-        </Typography>
-        <LinearProgress
-          variant={Number.isFinite(total) && total > 0 ? "determinate" : "indeterminate"}
-          value={progress}
-          sx={{ height: 6, borderRadius: 999 }}
-        />
-        {eta ? (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-            ETA: {eta}
-          </Typography>
-        ) : null}
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="h5" sx={{ fontFamily: "monospace", mb: 1 }}>
+              {Number.isFinite(current) ? current.toLocaleString() : "0"}
+              {Number.isFinite(total) ? ` / ${total.toLocaleString()}` : ""}
+            </Typography>
+            <LinearProgress
+              variant={Number.isFinite(total) && total > 0 ? "determinate" : "indeterminate"}
+              value={progress}
+              sx={{ height: 6, borderRadius: 999 }}
+            />
+            {eta ? (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                ETA: {eta}
+              </Typography>
+            ) : null}
+          </Box>
+          {controls}
+        </Stack>
       </CardContent>
     </Card>
   );
@@ -159,10 +168,9 @@ export const ProgressPanel = ({ title, state }) => {
 export const KeyValuePanel = ({ title, state }) => (
   <Card variant="outlined">
     <CardContent>
-      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2 }}>
-        <Typography variant="subtitle1">{title}</Typography>
+      <PanelHeader title={title}>
         {asArray(state?.entries).some((entry) => entry.value?.kind === "estimate") && <FigureExportActions baseName={state?.panel_id || title} payload={{ kind: "key_value", state }} imageFormat={null} />}
-      </Box>
+      </PanelHeader>
       <Box
         sx={{
           display: "grid",
@@ -177,11 +185,14 @@ export const KeyValuePanel = ({ title, state }) => (
               key={displayEntry.key}
               sx={{
                 display: "grid",
+                // Give primary results room while keeping metadata compact.
+                gridColumn: state?.panel_id === "campaign_combined_result" &&
+                  (isEstimateValue(displayEntry.value) || isTargetComparisonValue(displayEntry.value)) ? "1 / -1" : undefined,
                 gridTemplateColumns: state?.panel_id === "campaign_combined_result"
                   ? "max-content minmax(0, 1fr)"
                   : "minmax(120px, 0.9fr) minmax(0, 1.1fr)",
                 gap: 1,
-                py: 0.5,
+                py: 0.75,
                 borderBottom: "1px solid",
                 borderColor: "divider",
               }}
@@ -193,6 +204,8 @@ export const KeyValuePanel = ({ title, state }) => (
                 <EstimateValueBlock value={displayEntry.value} />
               ) : isTargetComparisonValue(displayEntry.value) ? (
                 <TargetComparisonValueBlock value={displayEntry.value} />
+              ) : ["state", "status"].includes(displayEntry.label?.toLowerCase()) && typeof displayEntry.value === "string" ? (
+                <Box><StatusChip status={displayEntry.value} /></Box>
               ) : displayEntry?.key === "domain" && isObject(displayEntry.value) ? (
                 <Box sx={{ minWidth: 0 }}>
                   <Box component="details">
@@ -261,7 +274,7 @@ export const EstimateValueBlock = ({ value }) => {
   }
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Box title="Mean and parenthesized absolute error use the same displayed scale." sx={{ fontSize: "1.05rem", fontWeight: 700, lineHeight: 1.35, whiteSpace: "nowrap", overflowX: "auto", pb: 0.25 }}>
+      <Box title="Mean and parenthesized absolute error use the same displayed scale." sx={{ fontSize: "1.25rem", fontWeight: 600, fontVariantNumeric: "tabular-nums", lineHeight: 1.4, whiteSpace: "nowrap", overflowX: "auto", pb: 0.5 }}>
         {central == null ? "Mean unavailable" : <LatexFormula latex={estimate.latex_with_relative || estimate.latex} display={false} fallbackPrefix="Estimate" />}
       </Box>
       <Typography variant="caption" color="text.secondary">{`${estimator} estimate${error == null ? "; error unavailable" : ""}`}</Typography>
@@ -341,7 +354,7 @@ export const SvgPanel = ({ title, state }) => {
           {title}
         </Typography>
         {src ? (
-          <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.5, p: 1, overflowX: "auto", backgroundColor: "background.paper" }}>
+          <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.5, p: 1, overflowX: "auto", backgroundColor: "#fff" }}>
             <Box component="img" src={src} alt={title} sx={{ display: "block", width: "100%", height: "auto", minWidth: 320 }} />
           </Box>
         ) : (
@@ -355,6 +368,7 @@ export const SvgPanel = ({ title, state }) => {
 };
 
 export const TickBreakdownPanel = ({ title, state }) => {
+  const { palette } = useTheme();
   const totalMs = Number(state?.total_ms);
   const segments = asArray(state?.segments)
     .map((segment) => ({ ...segment, valueMs: Number(segment?.value_ms) }))
@@ -388,14 +402,15 @@ export const TickBreakdownPanel = ({ title, state }) => {
         const y = legendTop + index * rowHeight;
         return [
           `<rect x="0" y="${y - 10}" width="10" height="10" fill="${escapeXml(segment.color || "#0f766e")}" />`,
-          `<text x="16" y="${y - 1}" font-size="12" font-family="monospace" fill="#334155">${escapeXml(segment.label || segment.key)}</text>`,
-          `<text x="${width}" y="${y - 1}" text-anchor="end" font-size="12" font-family="monospace" fill="#475569">${escapeXml(`${formatScientific(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatScientific(percent, 3)}%)`)}</text>`,
+          `<text x="16" y="${y - 1}" font-size="12" font-family="monospace" fill="${palette.text.primary}">${escapeXml(segment.label || segment.key)}</text>`,
+          `<text x="${width}" y="${y - 1}" text-anchor="end" font-size="12" font-family="monospace" fill="${palette.text.secondary}">${escapeXml(`${formatScientific(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatScientific(percent, 3)}%)`)}</text>`,
         ].join("");
       })
       .join("");
     return [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-      `<text x="0" y="60" font-size="12" font-family="monospace" fill="#64748b">total ${escapeXml(formatScientific(displayTotal, 4))} ${displayTimeUnit}</text>`,
+      `<rect width="100%" height="100%" fill="${palette.background.paper}" />`,
+      `<text x="0" y="60" font-size="12" font-family="monospace" fill="${palette.text.secondary}">total ${escapeXml(formatScientific(displayTotal, 4))} ${displayTimeUnit}</text>`,
       bars,
       legend,
       "</svg>",
@@ -405,16 +420,13 @@ export const TickBreakdownPanel = ({ title, state }) => {
   return (
     <Card variant="outlined">
       <CardContent>
-        <Box sx={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 2, mb: 2 }}>
-          <Typography variant="subtitle1">{title}</Typography>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <FigureExportActions baseName={state?.panel_id || title || "tick_breakdown"} payload={{ panel_id: state?.panel_id ?? null, kind: "tick_breakdown", state }} svgBuilder={buildTickBreakdownSvg} />
-            <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-              total {formatScientific(displayTotal, 4)} {displayTimeUnit}
-            </Typography>
-          </Box>
-        </Box>
-        <Box sx={{ display: "flex", width: "100%", minHeight: 44, borderRadius: 1.5, overflow: "hidden", border: "1px solid", borderColor: "divider", backgroundColor: "rgba(15,23,42,0.04)" }}>
+        <PanelHeader title={title}>
+          <FigureExportActions baseName={state?.panel_id || title || "tick_breakdown"} payload={{ panel_id: state?.panel_id ?? null, kind: "tick_breakdown", state }} svgBuilder={buildTickBreakdownSvg} />
+          <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+            total {formatScientific(displayTotal, 4)} {displayTimeUnit}
+          </Typography>
+        </PanelHeader>
+        <Box sx={{ display: "flex", width: "100%", minHeight: 44, borderRadius: 1.5, overflow: "hidden", border: "1px solid", borderColor: "divider", backgroundColor: "action.hover" }}>
           {segments.map((segment) => {
             const percent = (segment.valueMs / normalizedTotal) * 100;
             const showInlineLabel = percent >= 10;
@@ -455,21 +467,24 @@ export const TickBreakdownPanel = ({ title, state }) => {
   );
 };
 
-export const SelectPanel = ({ title, descriptor, value, onValueChange }) => (
+export const SelectInput = ({ title, descriptor, value, onValueChange }) => (
+  <FormControl fullWidth size="small">
+    <Select inputProps={{ "aria-label": title }} value={value ?? descriptor?.state?.default_value ?? ""}
+      onChange={(event) => onValueChange?.(descriptor.panel_id, event.target.value)}>
+      {asArray(descriptor?.state?.options).map((option) => (
+        <MenuItem key={String(option.value)} value={option.value}>{option.label}</MenuItem>
+      ))}
+    </Select>
+  </FormControl>
+);
+
+export const SelectPanel = ({ title, ...props }) => (
   <Card variant="outlined">
     <CardContent>
       <Typography variant="subtitle1" sx={{ mb: 2 }}>
         {title}
       </Typography>
-      <FormControl fullWidth size="small">
-        <Select value={value ?? ""} onChange={(event) => onValueChange?.(descriptor.panel_id, event.target.value)}>
-          {asArray(descriptor?.state?.options).map((option) => (
-            <MenuItem key={String(option.value)} value={option.value}>
-              {option.label}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      <SelectInput title={title} {...props} />
     </CardContent>
   </Card>
 );

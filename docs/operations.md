@@ -66,6 +66,26 @@ waits; completed operations awaiting collection do not count. Compute and I/O ca
 overlap. They are not CPU/GPU utilization or database saturation measurements.
 Check reporting-worker coverage before interpreting an average.
 
+Each percentage is a **time-weighted average across reporting workers**:
+`100 × sum(active seconds) / sum(observed worker seconds)` within the selected
+interval, using valid report spans and proportional clipping at its edges.
+Longer reporting spans carry more weight; allocated CPU counts are not part of
+the denominator. Compute includes materialization,
+evaluation and reduction on evaluators, and generation, feedback/training and
+aggregation on samplers. These are elapsed operation times, including internal
+waits. I/O includes active queue/database operations and their waits; waiting for
+new work is idle. Overlapping operations count once within each category, but
+compute and I/O overlap independently.
+
+For expensive integrands, high evaluator compute with low exposed waits usually
+indicates well-fed workers.
+Low compute with high fetch wait suggests insufficient input supply; high submit
+wait suggests result-publication delays or backpressure. High I/O alone can be
+healthy overlap. Low compute and I/O while work remains suggests idle/coordination
+time. Compare accepted samples/s and the fetch/submit waits in Diagnostics; inspect
+queue depth while the run is live. Current queues cannot explain a past interval
+by themselves.
+
 Rates count accepted progress. Missing/stale reports are unavailable, not zero;
 restarts and task changes start new measurement intervals. Allocated core-hours
 are assigned wall time × declared CPU allowance (one if omitted). Memory is

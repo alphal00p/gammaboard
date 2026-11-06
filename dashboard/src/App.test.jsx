@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
 import * as api from "./services/api";
 
+vi.mock("./components/common/TomlEditor", () => ({ default: ({ label, value, onChange, disabled }) =>
+  <textarea aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} /> }));
+
 vi.mock("./services/api", () => ({
   fetchRuns: vi.fn(),
   fetchNodes: vi.fn(),
@@ -60,7 +63,7 @@ describe("App Component", () => {
 
   test("renders the empty runs view and primary navigation", async () => {
     await renderApp();
-    expect(screen.getByAltText(/GammaBoard/i)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "GammaBoard" })).toBeInTheDocument();
     expect(await screen.findByText(/Connected to local/i)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Management/i })).toBeInTheDocument();
@@ -78,7 +81,7 @@ describe("App Component", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create run" }));
     await waitFor(() => expect(screen.queryByLabelText("Run TOML")).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("tab", { name: "Management" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Request Nodes" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Request nodes" }));
     const draft = '[[groups]]\ncount=3\nname_prefix="unsaved"';
     fireEvent.change(await screen.findByLabelText("Node Launch TOML"), { target: { value: draft } });
     const requests = api.fetchRuns.mock.calls.length;
@@ -110,10 +113,10 @@ describe("App Component", () => {
     await renderApp();
     await waitFor(() => expect(api.fetchRunTaskPanels).toHaveBeenCalled());
     if (kind === "integration") {
-      expect(screen.getByText("Task Queue")).toBeInTheDocument();
+      expect(screen.getByText("Task queue")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Add tasks" })).toBeInTheDocument();
     } else {
-      expect(screen.queryByText("Task Queue")).not.toBeInTheDocument();
+      expect(screen.queryByText("Task queue")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Add Task" })).not.toBeInTheDocument();
     }
   });

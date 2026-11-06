@@ -10,13 +10,14 @@ import {
   Typography,
 } from "@mui/material";
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
-import gammaboardLogo from "./assets/gammalooplogo.svg";
+import gammaboardLogo from "./assets/gammalooplogo.svg?raw";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import LoginDialog from "./components/auth/LoginDialog";
 import { useRuns } from "./hooks/useRuns";
 import { useServerStatus } from "./hooks/useServerStatus";
 import { useWorkersData } from "./hooks/useWorkersData";
 import { asArray } from "./utils/collections";
+import { DashboardTheme, ThemeToggle } from "./theme";
 
 const LogsWorkspace = lazy(() => import("./components/LogsWorkspace"));
 const PerformanceWorkspace = lazy(() => import("./components/PerformanceWorkspace"));
@@ -35,19 +36,19 @@ const DashboardHeader = () => {
   const { authenticated, authEnabled = true, busy, ready, requestLogin, logout } = useAuth();
 
   return (
-    <Box sx={{ mb: 3, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 2 }}>
-      <Box>
-        <Box
-          component="img"
-          src={gammaboardLogo}
-          alt="GammaBoard"
-          sx={{ display: "block", width: "min(100%, 320px)", height: "auto", mb: 1 }}
-        />
-        <Typography variant="body2" color="text.secondary">
-          Real-time Monte Carlo simulation monitoring
-        </Typography>
-      </Box>
-      <Stack direction="row" spacing={1} alignItems="center">
+    <Box sx={{ mb: 2, display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 1.5 }}>
+      <Box
+        role="img"
+        aria-label="GammaBoard"
+        // Inline only this trusted, bundled SVG so it inherits the theme colours.
+        dangerouslySetInnerHTML={{ __html: gammaboardLogo }}
+        sx={(theme) => ({ width: { xs: 180, sm: 220 }, maxWidth: "100%",
+          color: theme.palette.mode === "dark" ? theme.palette.common.white : theme.palette.common.black,
+          "--logo-background": theme.palette.background.default,
+          "& svg": { display: "block", width: "100%", height: "auto" } })}
+      />
+      <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ flexWrap: "wrap" }}>
+        <ThemeToggle />
         <Chip
           color={authenticated ? "success" : "default"}
           label={authenticated ? (authEnabled ? "Operator mode" : "Operator mode · no password") : ready ? (authEnabled ? "Read-only" : "Read-only in this browser") : "Checking session"}
@@ -55,11 +56,11 @@ const DashboardHeader = () => {
         />
         {authenticated ? (
           <Button onClick={logout} disabled={busy}>
-            {authEnabled ? "Log Out" : "Switch to read-only"}
+            {authEnabled ? "Log out" : "Switch to read-only"}
           </Button>
         ) : (
           <Button onClick={() => requestLogin()} disabled={!ready || busy}>
-            {authEnabled ? "Log In" : "Enable controls"}
+            {authEnabled ? "Log in" : "Enable controls"}
           </Button>
         )}
       </Stack>
@@ -109,11 +110,11 @@ function AppContent() {
   }, []);
 
   return (
-    <Container maxWidth="xl" sx={{ py: 3 }}>
+    <Container maxWidth="xl" sx={{ py: 2 }}>
       <DashboardHeader />
       <LoginDialog />
 
-      <Tabs value={mode} onChange={(_, next) => setMode(next)} sx={{ mb: 3 }}>
+      <Tabs value={mode} onChange={(_, next) => setMode(next)} sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}>
         <Tab value="runs" label="Runs" />
         <Tab value="workers" label="Management" />
         <Tab value="performance" label="Performance" />
@@ -193,9 +194,11 @@ function SessionGate({ children }) {
 
 function App() {
   return (
-    <AuthProvider>
-      <SessionGate><AppContent /></SessionGate>
-    </AuthProvider>
+    <DashboardTheme>
+      <AuthProvider>
+        <SessionGate><AppContent /></SessionGate>
+      </AuthProvider>
+    </DashboardTheme>
   );
 }
 

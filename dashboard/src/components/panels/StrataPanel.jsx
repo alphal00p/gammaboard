@@ -1,7 +1,7 @@
+import { PanelHeader, ControlBar } from "../common/PanelChrome";
 import { useEffect, useRef } from 'react';
 import {
   Box,
-  Button,
   Card,
   CardContent,
   Checkbox,
@@ -22,7 +22,7 @@ import {
   navigationEvents
 } from './DiagnosticControls';
 import { FULL_ZOOM } from './panelView';
-import { buildErrorBarSeries, formatAxisValue, gridColor } from './chartPrimitives';
+import { buildErrorBarSeries, formatAxisValue } from './chartPrimitives';
 import { formatEstimateDisplay, formatScientific } from '../../utils/formatters';
 import {
   finite,
@@ -207,7 +207,7 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
         ...series,
         {
           name: 'Total (all strata)',
-          color: '#525b68',
+          color: '#818b98',
           points: totalPoints
         }
       ]
@@ -252,11 +252,6 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
         hideOverlap: true,
         formatter: formatAxisValue
       },
-      splitLine: {
-        lineStyle: {
-          color: gridColor
-        }
-      }
     },
     yAxis: {
       type: 'value',
@@ -306,14 +301,7 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
     <Card ref={panel}>
       <CardContent>
         <Stack spacing={2}>
-          <Stack
-            direction="row"
-            justifyContent="space-between"
-            alignItems="center"
-            flexWrap="wrap"
-            gap={1}
-          >
-            <Typography variant="h6">{title}</Typography>
+          <PanelHeader title={title} sx={{ mb: 0 }}>
             <FigureExportActions
               baseName="strata"
               payload={{
@@ -322,9 +310,10 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
               }}
               elementRef={panel}
               echartsRef={ref}
+              onResetView={() => update({ zoom: FULL_ZOOM, yZoom: FULL_ZOOM, follow: true })}
             />
-          </Stack>
-          <Stack direction="row" gap={2} flexWrap="wrap">
+          </PanelHeader>
+          <ControlBar>
             <ScopeSelector
               prefixes={latest.rows.map((r) => r.prefix)}
               scope={scope}
@@ -332,6 +321,40 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
               onChange={update}
               overall={false}
             />
+            {conditional && state.components.length > 1 && (
+              <DiagnosticSelect
+                label="Component"
+                value={String(component)}
+                onChange={(next) =>
+                  update({
+                    component: Number(next)
+                  })
+                }
+                options={state.components.map((c, i) => ({
+                  value: String(i),
+                  label: c
+                }))}
+                minWidth={130}
+              />
+            )}
+            <TextField
+              select
+              label="History"
+              size="small"
+              sx={{
+                minWidth: 220
+              }}
+              value={activeMetric}
+              onChange={(e) =>
+                update({
+                  metric: e.target.value
+                })
+              }
+            >
+              {conditional && <MenuItem value="contribution">Integral contributions</MenuItem>}
+              <MenuItem value="allocation">Sampling allocation</MenuItem>
+              <MenuItem value="hit_rate">Hit rate</MenuItem>
+            </TextField>
             <TextField
               select
               label="Horizontal axis"
@@ -376,52 +399,7 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
               }
               label="Follow latest"
             />
-            <Button
-              onClick={() =>
-                update({
-                  zoom: FULL_ZOOM,
-                  yZoom: FULL_ZOOM,
-                  follow: true
-                })
-              }
-            >
-              Reset view
-            </Button>
-            {conditional && state.components.length > 1 && (
-              <DiagnosticSelect
-                label="Component"
-                value={String(component)}
-                onChange={(next) =>
-                  update({
-                    component: Number(next)
-                  })
-                }
-                options={state.components.map((c, i) => ({
-                  value: String(i),
-                  label: c
-                }))}
-                minWidth={130}
-              />
-            )}
 
-            <TextField
-              select
-              label="History"
-              size="small"
-              sx={{
-                minWidth: 220
-              }}
-              value={activeMetric}
-              onChange={(e) =>
-                update({
-                  metric: e.target.value
-                })
-              }
-            >
-              {conditional && <MenuItem value="contribution">Integral contributions</MenuItem>}
-              <MenuItem value="allocation">Sampling allocation</MenuItem>
-              <MenuItem value="hit_rate">Hit rate</MenuItem>
-            </TextField>
             {activeMetric === 'contribution' ? (
               <FormControlLabel
                 control={
@@ -451,7 +429,8 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
                 label="Between snapshots"
               />
             )}
-          </Stack>
+
+          </ControlBar>
           <Typography variant="body2" color="text.secondary">
             {conditional
               ? 'Conditional integral contributions; bands show ±1 reported standard error. Legend selections affect visibility only.'

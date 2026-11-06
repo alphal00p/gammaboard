@@ -2,6 +2,7 @@ import { Accordion, AccordionDetails, AccordionSummary, Paper, Table, TableBody,
   TableContainer, TableHead, TableRow, Typography } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import { formatDateTime } from "../utils/formatters";
+import StatusChip from "./common/StatusChip";
 
 const LaunchTable = ({ requests, label }) => (
   <TableContainer component={Paper} variant="outlined">
@@ -17,7 +18,7 @@ const LaunchTable = ({ requests, label }) => (
         {requests.map((request) => (
           <TableRow key={request.id}>
             <TableCell>{request.id}</TableCell>
-            <TableCell>{request.state}</TableCell>
+            <TableCell><StatusChip status={request.state} /></TableCell>
             <TableCell>{request.backend}</TableCell>
             <TableCell>{(request.args?.groups || []).flatMap((group) => group.node_names || []).join(", ") || "-"}</TableCell>
             <TableCell>{request.requested_count}</TableCell>

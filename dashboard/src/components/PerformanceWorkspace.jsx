@@ -14,6 +14,13 @@ import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { getCurrentTask } from "../utils/tasks";
 
 const OVERVIEW_PANELS = new Set(["performance_overview", "busy_rates", "measurement_window"]);
+const ACTIVITY_HELP = {
+  title: "How activity is measured",
+  text: "Time-weighted average across reporting workers in each role: 100 × sum(active seconds) / sum(observed worker seconds). Longer reporting spans carry more weight; allocated CPU cores are not part of the denominator.\n\n" +
+    "Compute covers evaluation/materialization/reduction or sampler generation/training/aggregation. I/O covers queue/database operations and their waits. Waiting for new work is idle.\n\n" +
+    "For expensive integrands, high evaluator compute with low fetch/submit waits usually means workers are well fed. Low compute with high fetch wait suggests insufficient input supply; high submit wait suggests publication delays or backpressure. Compare accepted samples/s and exposed waits in Diagnostics, plus live queue depth.\n\n" +
+    "Unavailable means missing measurement, not zero activity. Check Measurement window for reporting coverage.",
+};
 
 const PerformanceWorkspaceContent = (props) => {
   const { runs, workers, selectedRun, isConnected } = props;
@@ -37,7 +44,7 @@ const PerformanceWorkspaceContent = (props) => {
     .sort(compareNodesByName), [workers, selectedRun]);
   const evaluatorNodeName = selectedNode || null;
   const performance = useRunPerformancePanels({ runId: view === "graphs" ? null : selectedRun, selection, pollMs: 5000 });
-  const { panelSpecs, panelStates, panelValues, setPanelValue, error } = performance;
+  const { panelSpecs, panelStates, panelValues, setPanelValue, error, refreshing } = performance;
 
   useEffect(() => {
     setExpired(false);
@@ -72,13 +79,18 @@ const PerformanceWorkspaceContent = (props) => {
     ...asArray(panelStates).filter((state) => state.panel_id === "evaluator_diagnostics").flatMap((state) => asArray(state.rows).map((row) => row[0])),
     ...(selectedNode ? [selectedNode] : []),
   ])].sort();
-  const unavailable = error || expired || !isConnected;
+  const unavailable = error || (expired && !refreshing) || !isConnected;
   // Missing values are rendered as unavailable, without changing generic panels'
   // meaning of null in configuration and result views.
   const displayStates = visibleStates.map((state) => state.kind === "key_value"
     ? { ...state, entries: asArray(state.entries).map((entry) => ({ ...entry, value: entry.value ?? "Unavailable" })) }
     : state.kind === "table"
-      ? { ...state, rows: asArray(state.rows).map((row) => row.map((value) => value ?? "Unavailable")) }
+      ? { ...state, rows: asArray(state.rows).map((row) => row.map((value) => value ?? "Unavailable")),
+          ...(state.panel_id === "busy_rates" && { payload: { ...state.payload,
+            description: "Time-weighted averages across reporting workers. Compute and I/O can overlap; these percentages are not CPU/GPU utilization.",
+            help: ACTIVITY_HELP,
+          } }),
+        }
       : state);
 
   return (
@@ -104,6 +116,9 @@ const PerformanceWorkspaceContent = (props) => {
         <Typography variant="body2" color="text.secondary">
           {selection?.seconds ? `Latest ${selection.seconds === 30 ? "30 seconds" : "5 minutes"} of recorded history.` : selection ? "Custom recorded interval." : "All recorded history."}
           {" "}Activity and rates share this window across tabs. Worker status, memory and report age are current.
+          <Typography component="span" variant="caption" aria-live="polite" sx={{ display: "block", minHeight: 20 }}>
+            {refreshing && view !== "graphs" ? "Updating… showing the previous interval." : "\u00a0"}
+          </Typography>
         </Typography>
         {view === "graphs" ? <PerformanceGraphs runId={selectedRun} selection={selection} onSelectionChange={setSelection} /> : unavailable ? <Alert severity="warning">{error || "Measurements are unavailable until the next successful refresh."}</Alert>
           : displayStates.length ? <PanelCollection title={{ overview: "Usage", diagnostics: "Diagnostics", graphs: "Graphs" }[view]}

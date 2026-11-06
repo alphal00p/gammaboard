@@ -10,9 +10,11 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useTemplates } from "../../hooks/useTemplates";
 import { copyToClipboard } from "../../utils/clipboard";
+
+const TomlEditor = lazy(() => import("../common/TomlEditor"));
 
 const TomlActionDialog = ({
   open,
@@ -234,7 +236,7 @@ const TomlActionDialog = ({
                   </TextField>}
                   {templateKind ? (
                     <Button variant="outlined" onClick={handleSaveTemplate} disabled={busy || templateActionBusy || templateBusy}>
-                      Save as Template
+                      Save as template
                     </Button>
                   ) : null}
                   {allowTemplateDelete ? (
@@ -244,22 +246,15 @@ const TomlActionDialog = ({
                       onClick={handleDeleteTemplate}
                       disabled={busy || templateActionBusy || templateBusy || !selectedTemplate}
                     >
-                      Delete Template
+                      Delete template
                     </Button>
                   ) : null}
                 </Stack>
               ) : null}
-              <TextField
-                autoFocus
-                fullWidth
-                multiline
-                minRows={14}
-                label={label}
-                value={value}
-                onChange={(event) => setValue(event.target.value)}
-                disabled={busy || templateBusy || templateActionBusy}
-                InputLabelProps={{ shrink: true }}
-              />
+              {open && <Suspense fallback={<Typography sx={{ minHeight: 280 }} color="text.secondary">Loading editor...</Typography>}>
+                <TomlEditor label={label} value={value} onChange={setValue}
+                  disabled={busy || templateBusy || templateActionBusy} />
+              </Suspense>}
               {templateError ? <Alert severity="error">{templateError}</Alert> : null}
               {error ? <Alert severity="error">{error}</Alert> : null}
               {exportNotice && <Alert severity={exportNotice.severity}>{exportNotice.message}</Alert>}

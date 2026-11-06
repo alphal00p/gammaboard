@@ -191,10 +191,10 @@ const FigureExportActions = ({
   };
 
   return (
-    <Stack direction="row" spacing={1} alignItems="center">
+    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" alignItems="center" justifyContent="flex-end">
       {typeof onResetView === "function" ? (
         <Button size="small" variant="outlined" onClick={onResetView}>
-          Reset
+          Reset view
         </Button>
       ) : null}
       <Button size="small" variant="outlined" onClick={() => downloadJsonFile(baseName, payload)}>

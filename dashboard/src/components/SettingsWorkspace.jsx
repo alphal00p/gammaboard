@@ -109,7 +109,7 @@ const SettingsWorkspace = () => {
 
       <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <SettingsCard title="Config Files">
+          <SettingsCard title="Config files">
             <Stack spacing={1.5}>
               <PathValue label="Runtime config" value={paths.runtime_config} />
               <PathValue label="Server config" value={paths.server_config} />
@@ -117,7 +117,7 @@ const SettingsWorkspace = () => {
           </SettingsCard>
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <SettingsCard title="Resource Paths">
+          <SettingsCard title="Resource paths">
             <Stack spacing={1.5}>
               <PathValue label="Resources root" value={paths.resources_root} />
               <PathValue label="Run templates" value={paths.run_templates_dir} />
@@ -161,7 +161,7 @@ const SettingsWorkspace = () => {
       </Stack>
 
       {authenticated ? (
-        <SettingsCard title="Danger Zone">
+        <SettingsCard title="Danger zone">
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             These actions affect the whole local control stack, not just one run or node.
           </Typography>
@@ -175,7 +175,7 @@ const SettingsWorkspace = () => {
               disabled={shuttingDownControl}
               onClick={() => setShutdownControlOpen(true)}
             >
-              Kill Control Process
+              Kill control process
             </Button>
           </Stack>
         </SettingsCard>
@@ -193,7 +193,7 @@ const SettingsWorkspace = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Reset Database?</DialogTitle>
+        <DialogTitle>Reset database?</DialogTitle>
         <DialogContent>
           This deletes local database state and recreates it from migrations. Running nodes and run execution will be
           interrupted and existing local runs/data will be lost.
@@ -229,7 +229,7 @@ const SettingsWorkspace = () => {
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Kill Control Process?</DialogTitle>
+        <DialogTitle>Kill control process?</DialogTitle>
         <DialogContent>
           This asks the running backend process to exit. The dashboard and API will go offline until the deployment is
           restarted.
@@ -254,7 +254,7 @@ const SettingsWorkspace = () => {
               }
             }}
           >
-            Kill Control Process
+            Kill control process
           </Button>
         </DialogActions>
       </Dialog>

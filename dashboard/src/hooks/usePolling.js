@@ -15,17 +15,18 @@ export const usePolling = ({ enabled = true, intervalMs, poll, reset = null }) =
 
   const run = useCallback(
     async (token) => {
-      controllerRef.current = new AbortController();
+      const controller = new AbortController();
+      controllerRef.current = controller;
       let nextIntervalMs = intervalMs;
       try {
-        const requestedInterval = await poll(controllerRef.current.signal);
+        const requestedInterval = await poll(controller.signal);
         if (requestedInterval === null || requestedInterval === false) {
           nextIntervalMs = null;
         } else if (Number.isFinite(Number(requestedInterval)) && Number(requestedInterval) > 0) {
           nextIntervalMs = Number(requestedInterval);
         }
       } finally {
-        controllerRef.current = null;
+        if (controllerRef.current === controller) controllerRef.current = null;
         if (!cancelledRef.current && token === runTokenRef.current && nextIntervalMs != null) {
           timeoutRef.current = setTimeout(() => {
             const nextToken = runTokenRef.current + 1;

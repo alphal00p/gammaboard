@@ -1,13 +1,13 @@
 import { formatScientific } from '../../utils/formatters';
 import { escapeXml } from './FigureExportActions';
-import { formatAxisValue, gridColor } from './chartPrimitives';
+import { formatAxisValue } from './chartPrimitives';
 import { finite, prefixLabel, stratumColor } from './strataUtils';
 import { COVERAGE } from './pdfDiagnostics';
 import { navigationZoom } from './DiagnosticControls';
 export const DENSITY_COLORS = ['#f4f8fb', '#b8d9e9', '#5cabc9', '#146b99', '#062c54'];
 const MISMATCH_COLORS = ['#0072b2', '#a9d1df', '#f5f5f5', '#e6b49c', '#b34016'];
 export const stratumDensityColor = (stratum, value, limits) => {
-  const color = Number.isInteger(stratum) && stratum >= 0 ? stratumColor(stratum) : '#525b68';
+  const color = Number.isInteger(stratum) && stratum >= 0 ? stratumColor(stratum) : '#818b98';
   const fraction = limits.max > limits.min
     ? (value - limits.min) / (limits.max - limits.min)
     : Number(value > 0);
@@ -30,7 +30,7 @@ export const lineComparisonOption = (
     values.map((v, i) => [c.axes.x[i], finite(v) && (!targetLog || v > 0) ? v : null]);
   let series = [];
   if (density) {
-    const color = c.k == null ? '#525b68' : stratumColor(c.k);
+    const color = c.k == null ? '#818b98' : stratumColor(c.k);
     const targetColor = c.k == null ? '#009e73' : stratumColor(c.k);
     const target = {
       name: 'Target',
@@ -174,11 +174,6 @@ export const lineComparisonOption = (
         hideOverlap: true,
         formatter: formatAxisValue
       },
-      splitLine: {
-        lineStyle: {
-          color: gridColor
-        }
-      }
     },
     yAxis: [
       {
@@ -326,7 +321,7 @@ export const planeComparisonOption = (
           orient: 'horizontal',
           left: 'center',
           bottom: 34,
-          inRange: { color: stratumColours ? ['#ffffff', '#525b68'] : colors },
+          inRange: { color: stratumColours ? ['#ffffff', '#818b98'] : colors },
           text: [
             formatScientific(log ? 10 ** limits.max : limits.max, 3),
             formatScientific(log ? 10 ** limits.min : limits.min, 3)
