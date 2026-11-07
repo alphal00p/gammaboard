@@ -4,7 +4,7 @@ use crate::evaluation::EvaluatorBatch;
 use crate::evaluation::{Accumulator, Point};
 use gammaloop_api::state::GraphImportOptions;
 use gammalooprs::{
-    graph::Graph, model::ModelGammaLoopExt, settings::GlobalSettings, utils::load_generic_model,
+    graph::Graph, model::InputParamCard, settings::GlobalSettings, utils::load_generic_model,
 };
 use std::sync::OnceLock;
 
@@ -17,13 +17,12 @@ fn fixture() -> &'static std::path::Path {
             let temp = tempfile::tempdir().unwrap();
             let mut state = State::new_test();
             state.model = load_generic_model("scalars");
-            state.model_parameters = state.model.default_param_card();
+            state.model_parameters = InputParamCard::default_from_model(&state.model);
             state
                 .import_graphs(
-                    Graph::import_dot(
+                    Graph::from_string(
                         r#"
             digraph sampling_cut_bubble {
-                final_state="scalar_1,scalar_1";
                 num=1; edge [pdg=1001]; node [num=1];
                 ext [style=invis, is_cut=0];
                 ext -> a [id=0];
