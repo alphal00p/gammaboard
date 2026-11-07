@@ -12,6 +12,10 @@ pub struct StratumMoments {
     pub matches: u64,
     pub mean: Vec<f64>,
     pub m2: Vec<f64>,
+    /// Absolute conditional-contribution sums. Older snapshots lack these;
+    /// keep that absence explicit instead of inventing an ESS from variance.
+    #[serde(default)]
+    pub sum_abs: Option<Vec<f64>>,
     pub extrema: Vec<crate::evaluation::batch::ContributionExtrema>,
 }
 impl StratumMoments {
@@ -37,6 +41,7 @@ impl StratumMoments {
             matches: 0,
             mean: vec![0.; width],
             m2: vec![0.; width * width],
+            sum_abs: Some(vec![0.; width]),
             extrema: vec![Default::default(); width],
         }
     }
@@ -69,6 +74,19 @@ impl StratumMoments {
         if next.iter().chain(&m2).any(|v| !v.is_finite()) {
             return Err(EngineError::eval("stratified moment overflow"));
         }
+        let sum_abs = self.sum_abs.as_ref().map(|sums| {
+            sums.iter()
+                .zip(values)
+                .map(|(sum, value)| sum + value.abs())
+                .collect::<Vec<_>>()
+        });
+        if sum_abs
+            .as_ref()
+            .is_some_and(|sums| sums.iter().any(|x| !x.is_finite()))
+        {
+            return Err(EngineError::eval("stratified absolute moment overflow"));
+        }
+        self.sum_abs = sum_abs;
         self.attempts = n;
         self.matches += u64::from(matched);
         self.mean = next;
@@ -105,6 +123,11 @@ impl StratumMoments {
         }
         self.attempts = n;
         self.matches += other.matches;
+        self.sum_abs = self
+            .sum_abs
+            .as_ref()
+            .zip(other.sum_abs.as_ref())
+            .map(|(left, right)| left.iter().zip(right).map(|(a, b)| a + b).collect());
         for (left, right) in self.extrema.iter_mut().zip(&other.extrema) {
             left.merge(right);
         }
@@ -269,6 +292,9 @@ impl StratifiedAccumulatorState {
                 || s.extrema.len() != width
                 || s.matches > s.attempts
                 || s.mean.iter().chain(&s.m2).any(|v| !v.is_finite())
+                || s.sum_abs.as_ref().is_some_and(|sums| {
+                    sums.len() != width || sums.iter().any(|v| !v.is_finite() || *v < 0.0)
+                })
             {
                 return Err(EngineError::eval("invalid stratum moments"));
             }
@@ -376,7 +402,7 @@ impl StratifiedAccumulatorState {
     /// Pooled reference from the same masked draws. Scale each conditional
     /// group back by 1/p, then merge central moments without subtracting raw
     /// squared sums. This is a different mean, not another error on `mean()`.
-    pub fn basic_estimates(&self) -> Option<Vec<crate::core::BasicEstimate>> {
+    fn pooled_moments(&self) -> Option<StratumMoments> {
         let width = self.strata[0].mean.len();
         let mut pooled = StratumMoments::new(width);
         for (stratum, &p) in self.strata.iter().zip(self.plan.probabilities.as_ref()?) {
@@ -384,6 +410,8 @@ impl StratifiedAccumulatorState {
             group.attempts = stratum.attempts;
             group.mean = stratum.mean.iter().map(|v| v / p).collect();
             group.m2 = stratum.m2.iter().map(|v| (v / p) / p).collect();
+            // Absolute moments are not needed for the pooled reference estimate.
+            group.sum_abs = None;
             if group.mean.iter().chain(&group.m2).any(|v| !v.is_finite()) {
                 return None;
             }
@@ -392,6 +420,12 @@ impl StratifiedAccumulatorState {
                 return None;
             }
         }
+        Some(pooled)
+    }
+
+    pub fn basic_estimates(&self) -> Option<Vec<crate::core::BasicEstimate>> {
+        let pooled = self.pooled_moments()?;
+        let width = pooled.mean.len();
         let n = pooled.attempts;
         if n == 0 {
             return None;
@@ -410,6 +444,81 @@ impl StratifiedAccumulatorState {
                 .collect(),
         )
     }
+
+    fn training_projection_index(&self) -> Option<(usize, bool)> {
+        if let Some(pooled) = &self.pooled {
+            use crate::evaluation::evaluator::gammaloop::TrainingProjection;
+            return Some(match pooled.training_projection {
+                Some(TrainingProjection::Real) => (0, false),
+                Some(TrainingProjection::Imag) => (1, false),
+                Some(TrainingProjection::AbsSq) => (3, true),
+                Some(TrainingProjection::Abs) | None => (2, true),
+            });
+        }
+        match &self.config {
+            AccumulatorConfig::Vector {
+                training_projection: TrainingProjection::Norm,
+                ..
+            } => Some((self.plan.components.len(), true)),
+            AccumulatorConfig::Vector {
+                training_projection: TrainingProjection::Component { name },
+                ..
+            } => self
+                .plan
+                .components
+                .iter()
+                .position(|component| component == name)
+                .map(|index| (index, false)),
+            _ => None,
+        }
+    }
+
+    /// Kish ESS/N within each assigned stratum, including zero-valued misses.
+    /// Constant conditional-weight factors cancel inside each stratum. Mixing
+    /// strata first would confound training quality with different allocations.
+    pub fn training_ess_by_stratum(&self) -> Vec<Option<f64>> {
+        let Some((index, nonnegative)) = self.training_projection_index() else {
+            return vec![None; self.strata.len()];
+        };
+        self.strata
+            .iter()
+            .map(|stratum| {
+                let n = stratum.attempts as f64;
+                if n == 0.0 {
+                    return None;
+                }
+                let mean = stratum.mean[index];
+                let rms = mean
+                    .hypot((stratum.m2[index * stratum.mean.len() + index].max(0.0) / n).sqrt());
+                if rms == 0.0 {
+                    return Some(0.0);
+                }
+                let mean_abs = if nonnegative {
+                    mean.max(0.0)
+                } else {
+                    *stratum.sum_abs.as_ref()?.get(index)? / n
+                };
+                let ess = (mean_abs / rms).powi(2);
+                ess.is_finite().then(|| ess.clamp(0.0, 1.0))
+            })
+            .collect()
+    }
+
+    /// Sum of the per-stratum effective counts, divided by all attempted draws.
+    pub fn training_ess(&self) -> Option<f64> {
+        let n = self.sample_count();
+        if n == 0 {
+            return None;
+        }
+        let mut fraction = 0.0;
+        for (stratum, ess) in self.strata.iter().zip(self.training_ess_by_stratum()) {
+            if stratum.attempts > 0 {
+                fraction += stratum.attempts as f64 / n as f64 * ess?;
+            }
+        }
+        Some(fraction.clamp(0.0, 1.0))
+    }
+
     pub fn metric(&self, selector: &AccumulatorMetricSelector) -> Option<MeasurementResult> {
         let component = match (selector.component.as_deref(), self.pooled.as_deref()) {
             (None | Some("training_projection"), Some(pooled)) => {
@@ -447,6 +556,7 @@ impl StratifiedAccumulatorState {
             AccumulatorMetricName::Mean => mean,
             AccumulatorMetricName::Error => error?,
             AccumulatorMetricName::RelativeError => super::relative_error(mean, error?),
+            AccumulatorMetricName::Rsd => error? / mean.abs() * (self.sample_count() as f64).sqrt(),
             // Pooled sample variance/ESS/absolute moments do not describe this estimator.
             _ => return None,
         };
@@ -539,6 +649,123 @@ mod tests {
         assert_eq!(stop.error, selected.uncertainty.unwrap());
         assert_eq!(state.sample_count(), 160);
     }
+    #[test]
+    fn signed_training_ess_respects_assignments_and_survives_merging() {
+        let plan = empty().plan;
+        let config =
+            AccumulatorConfig::vector(plan.components.clone(), TrainingProjection::component("x"));
+        let mut left = StratifiedAccumulatorState::new(plan.clone(), config.clone()).unwrap();
+        let mut right = StratifiedAccumulatorState::new(plan, config).unwrap();
+        for i in 0..160 {
+            let k = usize::from(i >= 64);
+            let value = if k == 0 {
+                if i % 2 == 0 { -1.0 } else { 3.0 }
+            } else if i % 2 == 0 {
+                0.0
+            } else {
+                6.0
+            };
+            let state = if i < 70 { &mut left } else { &mut right };
+            let p = state.plan.probabilities.as_ref().unwrap()[k];
+            state
+                .push(k, &[value, value * 2.0], 1.0 / p, value != 0.0)
+                .unwrap();
+        }
+        let mut restored: StratifiedAccumulatorState =
+            serde_json::from_value(serde_json::to_value(left).unwrap()).unwrap();
+        restored.merge(right).unwrap();
+        let ess = restored.training_ess_by_stratum();
+        assert!((ess[0].unwrap() - 0.8).abs() < 1e-12);
+        assert!((ess[1].unwrap() - 0.5).abs() < 1e-12);
+        assert!((restored.training_ess().unwrap() - 0.62).abs() < 1e-12);
+        let metric = restored
+            .metric(&AccumulatorMetricSelector {
+                name: AccumulatorMetricName::Rsd,
+                component: Some("x".into()),
+            })
+            .unwrap();
+        let expected = ((4.0 / 63.0 + 9.0 / 95.0) * 160.0_f64).sqrt() / 4.0;
+        assert!((metric.value - expected).abs() < 1e-12);
+        assert_eq!(metric.estimator, crate::core::EstimateKind::Stratified);
+        let mut old = serde_json::to_value(&restored).unwrap();
+        for stratum in old["strata"].as_array_mut().unwrap() {
+            stratum.as_object_mut().unwrap().remove("sum_abs");
+        }
+        let mut old: StratifiedAccumulatorState = serde_json::from_value(old).unwrap();
+        assert!(old.training_ess().is_none());
+        assert_eq!(old.mean(), restored.mean());
+        assert_eq!(old.covariance(), restored.covariance());
+        old.merge(restored).unwrap();
+        assert!(
+            old.training_ess().is_none(),
+            "new moments cannot repair missing historical absolute sums"
+        );
+    }
+
+    #[test]
+    fn nonnegative_training_ess_can_use_older_conditional_moments() {
+        let mut state = empty();
+        for k in 0..2 {
+            for _ in 0..32 {
+                state.push(k, &[-2.0, 3.0], 4.0, true).unwrap();
+            }
+        }
+        let mut old = serde_json::to_value(&state).unwrap();
+        for stratum in old["strata"].as_array_mut().unwrap() {
+            stratum.as_object_mut().unwrap().remove("sum_abs");
+        }
+        let old: StratifiedAccumulatorState = serde_json::from_value(old).unwrap();
+        assert!((old.training_ess().unwrap() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn conditional_training_ess_avoids_squaring_large_or_tiny_means() {
+        for scale in [1e-160, 1.0, 1e160] {
+            let mut state = empty();
+            for k in 0..2 {
+                for _ in 0..32 {
+                    state.push(k, &[scale, 0.0], 1.0, true).unwrap();
+                }
+            }
+            state.validate().unwrap();
+            assert!((state.training_ess().unwrap() - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn native_ess_follows_each_training_projection_without_pooling_strata() {
+        use crate::evaluation::evaluator::gammaloop::TrainingProjection as Phase;
+        let mut plan = empty().plan;
+        plan.components = vec!["real".into(), "imag".into()];
+        let mut state =
+            StratifiedAccumulatorState::new(plan, AccumulatorConfig::Gammaloop).unwrap();
+        for i in 0..32 {
+            state
+                .push(
+                    0,
+                    &if i % 2 == 0 { [3.0, 4.0] } else { [-12.0, 5.0] },
+                    4.0,
+                    true,
+                )
+                .unwrap();
+        }
+        for _ in 0..96 {
+            state.push(1, &[3.0, 4.0], 4.0 / 3.0, true).unwrap();
+        }
+        for (phase, expected) in [
+            (Phase::Real, 56.25 / 76.5),
+            (Phase::Imag, 20.25 / 20.5),
+            (Phase::Abs, 81.0 / 97.0),
+            (Phase::AbsSq, 9409.0 / 14593.0),
+        ] {
+            state.pooled.as_mut().unwrap().training_projection = Some(phase);
+            let ess = state.training_ess_by_stratum();
+            assert!((ess[0].unwrap() - expected).abs() < 1e-12);
+            assert!((ess[1].unwrap() - 1.0).abs() < 1e-12);
+            assert!((state.training_ess().unwrap() - (expected * 0.25 + 0.75)).abs() < 1e-12);
+        }
+    }
+
     fn empty() -> StratifiedAccumulatorState {
         let plan = StratificationPlan {
             proposal_id: "fixture".into(),

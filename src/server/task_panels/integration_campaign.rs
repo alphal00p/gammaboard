@@ -5,8 +5,8 @@ use super::{
     panel_projector_with_source,
 };
 use crate::server::panels::{
-    PanelHistoryMode, PanelKind, PanelWidth, key_value, key_value_panel, panel_spec,
-    sized_panel_spec, table_panel_with_payload_and_options,
+    PanelHistoryMode, PanelKind, PanelWidth, key_value, key_value_panel, sized_panel_spec,
+    table_panel_with_payload_and_options,
 };
 use serde_json::{Value as JsonValue, json};
 use std::collections::BTreeSet;
@@ -131,11 +131,12 @@ fn campaign_max_samples(ctx: &TaskPanelContext<'_>) -> Option<f64> {
 
 fn summary_projector() -> TaskPanelProjector {
     panel_projector(
-        panel_spec(
+        sized_panel_spec(
             SUMMARY_ID,
             "Result",
             PanelKind::KeyValue,
             PanelHistoryMode::None,
+            PanelWidth::Full,
         ),
         |ctx| {
             let output = ctx

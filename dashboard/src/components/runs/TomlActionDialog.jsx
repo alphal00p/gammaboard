@@ -1,3 +1,4 @@
+import { useWorkspaceActive } from "../common/WorkspaceTabs";
 import LoadingStatus from "../common/LoadingStatus";
 import {
   Alert,
@@ -40,6 +41,7 @@ const TomlActionDialog = ({
   duplicateLabel = "Duplicate task",
   exportName = null,
 }) => {
+  const active = useWorkspaceActive();
   const [value, setValue] = useState(initialValue || "");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [templateBusy, setTemplateBusy] = useState(false);
@@ -210,7 +212,7 @@ const TomlActionDialog = ({
 
   return (
     <>
-      <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
+      <Dialog open={open && active} onClose={handleClose} fullWidth maxWidth="md">
         <form onSubmit={handleSubmit}>
           <DialogTitle>{title}</DialogTitle>
           <DialogContent>
@@ -288,7 +290,7 @@ const TomlActionDialog = ({
         </form>
       </Dialog>
 
-      <Dialog open={saveDialogOpen} onClose={handleSaveDialogClose} fullWidth maxWidth="xs">
+      <Dialog open={saveDialogOpen && active} onClose={handleSaveDialogClose} fullWidth maxWidth="xs">
         <form onSubmit={handleSaveTemplateSubmit}>
           <DialogTitle>Save Template</DialogTitle>
           <DialogContent>

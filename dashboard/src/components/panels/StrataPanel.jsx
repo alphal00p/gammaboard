@@ -9,9 +9,10 @@ import {
   MenuItem,
   Stack,
   TextField,
-  Tooltip,
   Typography
 } from '@mui/material';
+import DisclosureField from "../common/DisclosureField";
+import { fieldHelp } from "./fieldHelp";
 import LazyChart from './LazyChart';
 import FigureExportActions, { escapeXml } from './FigureExportActions';
 import {
@@ -23,7 +24,8 @@ import {
 } from './DiagnosticControls';
 import { FULL_ZOOM } from './panelView';
 import { buildErrorBarSeries, formatAxisValue } from './chartPrimitives';
-import { formatEstimateDisplay, formatScientific } from '../../utils/formatters';
+import { EstimateValueBlock } from "./BasicPanels";
+import { formatScientific } from '../../utils/formatters';
 import {
   finite,
   fraction,
@@ -62,14 +64,9 @@ export const uncertaintyBand = (name, points, color) => ({
 });
 const PercentRow = ({ label, values, rows }) => (
   <Box>
-    <Typography
-      variant="body2"
-      sx={{
-        mb: 0.5
-      }}
-    >
-      {label}
-    </Typography>
+    <DisclosureField section label={label}>
+      <Typography variant="caption">{fieldHelp("", label)}</Typography>
+    </DisclosureField>
     <Box
       sx={{
         display: 'flex',
@@ -78,20 +75,11 @@ const PercentRow = ({ label, values, rows }) => (
       }}
     >
       {rows.map((row, k) => (
-        <Tooltip
-          key={prefixLabel(row.prefix)}
-          title={`${prefixLabel(row.prefix)}: ${finite(values[k]) ? (100 * values[k]).toPrecision(6) + '%' : 'unavailable'}; ${row.attempts} attempts, ${row.matches} matches`}
-        >
-          <Box
-            sx={{
-              flex: '1 1 130px',
-              minWidth: 120
-            }}
-          >
-            <Typography variant="caption">
-              {prefixLabel(row.prefix)} ·{' '}
-              {finite(values[k]) ? `${(100 * values[k]).toFixed(2)}%` : 'unavailable'}
-            </Typography>
+          <Box key={prefixLabel(row.prefix)} sx={{ flex: '1 1 180px', minWidth: 160 }}>
+            <DisclosureField label={prefixLabel(row.prefix)} value={finite(values[k]) ? `${(100 * values[k]).toFixed(2)}%` : 'unavailable'}
+              sx={{ "--field-label-width": "minmax(0, 1fr)" }}>
+              <Typography variant="caption">{row.attempts} attempts, {row.matches} matches. Full fraction: {finite(values[k]) ? values[k].toExponential(16) : 'unavailable'}.</Typography>
+            </DisclosureField>
             <Box
               sx={{
                 height: 7,
@@ -108,7 +96,6 @@ const PercentRow = ({ label, values, rows }) => (
               />
             </Box>
           </Box>
-        </Tooltip>
       ))}
     </Box>
   </Box>
@@ -437,11 +424,8 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
               : 'Pooled training statistics. Stratum plots show allocation and matches; stratified estimates are not used during training.'}
           </Typography>
           {conditional && total && (
-            <Typography variant="body2">
-              Total {state.components[component]}:{' '}
-              {formatEstimateDisplay(total.mean, total.error).text}
-              {total.error == null ? ' · error unavailable' : ''}
-            </Typography>
+            <EstimateValueBlock label={`Total ${state.components[component]}`} value={{ kind: "estimate", value: total.mean,
+              error: total.error, estimator: "stratified", basic: latest.basic?.[component], sample_count: latest.samples }} />
           )}
           <LazyChart
             ref={ref}

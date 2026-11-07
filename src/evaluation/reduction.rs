@@ -57,6 +57,9 @@ pub(super) fn evaluate_batch<T: Evaluator + ?Sized>(
     let mut raw = Vec::with_capacity(batch.len() * components.len());
     let mut feedback =
         (native && options.require_training_values).then(|| Vec::with_capacity(batch.len()));
+    let mut training_moments = options.stratification.map(|(plan, _)| {
+        vec![super::accumulator::TrainingMoments::default(); plan.partition.centers().len()]
+    });
     #[cfg(feature = "gammaloop")]
     let mut histograms = Vec::new();
     let mut count = 0;
@@ -84,6 +87,14 @@ pub(super) fn evaluate_batch<T: Evaluator + ?Sized>(
             )?;
             let projected =
                 projection.project(num::Complex::new(sample.values[0], sample.values[1]));
+            if let Some(moments) = &mut training_moments {
+                let label = options.stratification.expect("partitioned diagnostics").1[count];
+                moments[label].add(if matched {
+                    projected * point.total_weight()
+                } else {
+                    0.0
+                })?;
+            }
             if let Some(aux) = &mut state.training_norm_sqr {
                 aux.add_sample_without_discrete_projection(
                     if matched { projected } else { 0. },
@@ -141,6 +152,9 @@ pub(super) fn evaluate_batch<T: Evaluator + ?Sized>(
     }
     let result = if let Some(mut state) = observable {
         state.estimate.partition = options.partition_diagnostics(&raw, 2)?;
+        if let Some(partition) = &mut state.estimate.partition {
+            partition.training_moments = training_moments;
+        }
         state.validate_stratified_samples(count as i64)?;
         state.validate_values()?;
         let accumulator = if conditional.is_some() {

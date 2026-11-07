@@ -1,3 +1,4 @@
+import { useWorkspaceActive } from "./common/WorkspaceTabs";
 import LoadingStatus from "./common/LoadingStatus";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -15,7 +16,6 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
-import ConnectionStatus from "./ConnectionStatus";
 import TomlActionDialog from "./runs/TomlActionDialog";
 import NodeLaunchQueue from "./NodeLaunchQueue";
 import WorkerDetailsPanel from "./WorkerDetailsPanel";
@@ -30,7 +30,8 @@ import { autoRunNodes, stopAllNodes, unassignAllNodes } from "../services/api";
 const DEFAULT_NODE_LAUNCH_TOML = "";
 const NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.node_launch.selected_template";
 
-const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serverName, isLoading = false }) => {
+const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false }) => {
+  const active = useWorkspaceActive();
   const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -86,7 +87,6 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
 
   return (
     <>
-      <ConnectionStatus isConnected={isConnected} lastUpdate={lastUpdate} serverName={serverName} />
       {error ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           Failed to fetch workers.
@@ -251,7 +251,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
         <Alert severity="info">Select a node to view assignment and heartbeat details.</Alert>
       )}
       <Snackbar
-        open={Boolean(snackbar)}
+        open={active && Boolean(snackbar)}
         autoHideDuration={4000}
         onClose={() => setSnackbar(null)}
         message={snackbar?.message || ""}

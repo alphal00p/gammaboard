@@ -494,6 +494,8 @@ describe("PanelCollection timeseries axes", () => {
         value: { xAxisMode },
       });
       expect(option.xAxis.name).toBe("Completed Samples");
+      expect(option.xAxis.nameLocation).toBe("middle");
+      expect(option.xAxis.nameGap).toBe(30);
       expect(tooltipHeader(option, 1000)).toBe("1.000e+3");
     });
 
@@ -620,7 +622,7 @@ test('stratum component and history controls update their own panel state',()=>{
   fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Component/}));
   fireEvent.click(screen.getByRole('option',{name:'y',exact:true}));
   expect(screen.getByText('Share of reported variance (y)')).toBeInTheDocument();
-  expect(screen.getByText(/^Total y:/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Total y' })).toBeInTheDocument();
   fireEvent.mouseDown(screen.getByRole('combobox',{name:/^History/}));
   fireEvent.click(screen.getByRole('option',{name:'Hit rate',exact:true}));
   expect(screen.getByRole('checkbox',{name:'Between snapshots'})).toBeInTheDocument();

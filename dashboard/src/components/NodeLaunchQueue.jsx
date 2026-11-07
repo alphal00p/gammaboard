@@ -1,6 +1,6 @@
-import { Accordion, AccordionDetails, AccordionSummary, Paper, Table, TableBody, TableCell,
+import { Paper, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Typography } from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import DisclosureField from "./common/DisclosureField";
 import { formatDateTime } from "../utils/formatters";
 import StatusChip from "./common/StatusChip";
 
@@ -43,18 +43,13 @@ export default function NodeLaunchQueue({ requests }) {
         <Typography color="text.secondary">No outstanding launch requests.</Typography>
       )}
       {history.length > 0 && (
-        <Accordion disableGutters elevation={0} sx={{ mt: 2 }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography>Launch history ({history.length})</Typography>
-          </AccordionSummary>
-          <AccordionDetails>
+        <DisclosureField section label={`Launch history (${history.length})`} sx={{ mt: 2 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               Recent fulfilled, canceled, and failed requests. Failures here are past launch attempts. Fulfilled means all requested workers connected;
               current worker health is shown in the node list. Resumed workers keep their names.
             </Typography>
             <LaunchTable requests={history} label="node launch history" />
-          </AccordionDetails>
-        </Accordion>
+        </DisclosureField>
       )}
     </>
   );

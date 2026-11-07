@@ -22,6 +22,21 @@ export const formatCompactNumber = (value, fallback = "n/a") => {
   return result === "-0" ? "0" : result;
 };
 
+// Preserve significant digits, including trailing zeros, without switching to
+// exponential notation for small/large deltas and pulls.
+export const formatDecimalSignificant = (value, digits = 3, fallback = "n/a") => {
+  if (value == null || !Number.isFinite(Number(value))) return fallback;
+  const text = Number(value).toPrecision(digits);
+  const match = /^(-?)(\d+)(?:\.(\d+))?e([+-]?\d+)$/.exec(text);
+  if (!match) return text;
+  const [, sign, whole, fractional = "", exponent] = match;
+  const numbers = whole + fractional;
+  const point = whole.length + Number(exponent);
+  if (point <= 0) return `${sign}0.${"0".repeat(-point)}${numbers}`;
+  if (point >= numbers.length) return sign + numbers + "0".repeat(point - numbers.length);
+  return `${sign}${numbers.slice(0, point)}.${numbers.slice(point)}`;
+};
+
 export const formatDateTime = (value, fallback = "n/a") => {
   if (!value) return fallback;
   const dt = new Date(value);
@@ -76,7 +91,7 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
     relativePercentValue != null && Number.isFinite(relativePercentValue)
       ? relativePercentValue >= 1000 || (relativePercentValue > 0 && relativePercentValue < 0.01)
         ? relativePercentValue.toExponential(2)
-        : relativePercentValue.toLocaleString(undefined, { maximumFractionDigits: 3 })
+        : formatDecimalSignificant(relativePercentValue)
       : null;
   const appendRelativeToLatex = (latex) =>
     relativePercentText != null ? `${latex}\\;\\left(${relativePercentText}\\%\\right)` : latex;
@@ -94,26 +109,26 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
   const exponent = scaleSource === 0 ? 0 : Math.max(-323, Math.floor(Math.log10(scaleSource)));
   const scale = 10 ** exponent;
   const scaledValue = central / scale;
-  // Mean and parenthesized absolute error share the displayed exponent and
-  // decimal scale. Round the uncertainty first to handle carries (9.99 -> 10).
+  // Parentheses contain uncertainty in units of the last displayed digit.
+  // Mean and uncertainty share the displayed exponent. Round the uncertainty first to handle carries (9.99 -> 10).
   const [errorMantissa, errorExponent] = uncertainty.toExponential(1).split("e");
   const decimals = uncertainty === 0 ? 6 : Math.max(0, exponent - Number(errorExponent) + 1);
 
   // toFixed accepts up to 100 fractional digits. Preserve exceptionally small
   // uncertainties without incorrectly rounding them to zero in the UI.
   if (decimals > 100) {
-    const text = `${central.toExponential(16)} (${uncertainty.toExponential(1)})`;
+    const text = `${central.toExponential(16)} ± ${uncertainty.toExponential(1)}`;
     const latex = `${central.toExponential(16)}\\;\\left(\\sigma=${uncertainty.toExponential(1)}\\right)`;
     return { text, latex, relative_percent: relativePercentValue, relative_percent_text: relativePercentText, latex_with_relative: appendRelativeToLatex(latex) };
   }
   let valueText = scaledValue.toFixed(decimals);
-  let errorText = uncertainty === 0 ? "0" : (Number(`${errorMantissa}e${errorExponent}`) / scale).toFixed(decimals);
+  let errorText = uncertainty === 0 ? "0" : (Number(errorMantissa) * 10 ** (Number(errorExponent) - exponent)).toFixed(decimals);
   while (valueText.includes(".") && errorText.includes(".") && valueText.endsWith("0") && errorText.endsWith("0")) {
     valueText = valueText.slice(0, -1);
     errorText = errorText.slice(0, -1);
   }
   valueText = valueText.replace(/\.$/, "");
-  errorText = errorText.replace(/\.$/, "");
+  errorText = errorText.replace(/\.$/, "").replace(".", "").replace(/^0+/, "") || "0";
   const suffix = exponent === 0 ? "" : ` × 10^${exponent}`;
   const latexSuffix = exponent === 0 ? "" : `\\times 10^{${exponent}}`;
   const latex = `${valueText}(${errorText})${latexSuffix}`;

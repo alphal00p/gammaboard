@@ -13,7 +13,7 @@ mod partition_diagnostics;
 mod scalar;
 mod stratified;
 mod vector;
-pub use partition_diagnostics::PartitionDiagnostics;
+pub use partition_diagnostics::{PartitionDiagnostics, TrainingMoments};
 pub use stratified::{StratifiedAccumulatorState, StratumMoments};
 
 use crate::core::{AccumulatorConfig, EngineError, RunSpec};

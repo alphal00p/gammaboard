@@ -1,29 +1,26 @@
 import {
   Card,
   CardContent,
-  Stack,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Typography,
 } from "@mui/material";
+import DisclosureField from "./common/DisclosureField";
 import { formatCompactNumber } from "../utils/formatters";
 import StatusChip from "./common/StatusChip";
 
 const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null, actions = null, renderTaskActions = null }) => {
   return (
     <>
-      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-        <Typography variant="h6">Task queue</Typography>
-        {actions}
-      </Stack>
-      <Card>
+      <DisclosureField section label={`${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
+        ariaLabel="Task queue" actions={actions} defaultOpen>
+      <Card id="task-queue-table">
         <CardContent>
-          <TableContainer>
-            <Table size="small">
+          <TableContainer role="region" aria-label="Task queue table" tabIndex={0} sx={{ maxHeight: 280, overflow: "auto" }}>
+            <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
                   <TableCell>Name</TableCell>
@@ -44,6 +41,9 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
                       key={task.id}
                       hover
                       selected={isSelected}
+                      tabIndex={0}
+                      aria-label={`Select task ${task.name || "Unnamed task"}`}
+                      onKeyDown={(event) => { if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); onSelectTask?.(task.id); } }}
                       onClick={() => onSelectTask?.(task.id)}
                       sx={{
                         cursor: "pointer",
@@ -76,6 +76,7 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
           </TableContainer>
         </CardContent>
       </Card>
+      </DisclosureField>
     </>
   );
 };

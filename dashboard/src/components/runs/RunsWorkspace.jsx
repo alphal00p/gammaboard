@@ -5,14 +5,19 @@ import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import { lazy, useEffect, useRef, useState } from "react";
 import { useAuth } from "../../auth/AuthProvider";
+import { useTaskOutput } from "../../hooks/useTaskOutput";
+import TaskSummary from "../TaskSummary";
 import { useRunTasks } from "../../hooks/useRunTasks";
 import { addRunTasks, autoAssignRun, createRun, deleteRun, deleteRunTask, editRunTask,
   fetchNodes, fetchRunDefinition, fetchTaskDefinition, pauseRun, unassignNode } from "../../services/api";
 import { asArray } from "../../utils/collections";
 import { getCurrentTask } from "../../utils/tasks";
 import RunScopedWorkspace from "../common/RunScopedWorkspace";
+import WorkspaceTabs, { WorkspacePanel, useWorkspaceActive } from "../common/WorkspaceTabs";
 import { ControlBar } from "../common/PanelChrome";
+import StableTaskOutput from "../common/StableTaskOutput";
 
+const PerformanceWorkspace = lazy(() => import("../PerformanceWorkspace"));
 const RunInfo = lazy(() => import("../RunInfo"));
 const TaskOutputPanel = lazy(() => import("../TaskOutputPanel"));
 const TaskQueuePanel = lazy(() => import("../TaskQueuePanel"));
@@ -63,7 +68,7 @@ function WorkerPoolControls({ run, disabled, notify }) {
     } catch (error) { notify(error.message, "error"); }
     finally { setBusy(false); }
   };
-  return <ControlBar sx={{ mb: 2 }}>
+  return <ControlBar>
     <LoadingStatus loading={busy} label={operation} />
     <TextField size="small" value={count} placeholder="all" inputProps={{ "aria-label": "Evaluator node count" }} sx={{ width: 150 }}
       onChange={(event) => setCount(event.target.value.replace(/[^\d]/g, ""))} />
@@ -73,7 +78,10 @@ function WorkerPoolControls({ run, disabled, notify }) {
   </ControlBar>;
 }
 
-function RunContent({ run, disabled, notify, onSelectRun }) {
+function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelectRun, navigation, onNavigate, runActions }) {
+  const [localView, setLocalView] = useState("tasks");
+  const view = navigation?.runTab ?? localView;
+  const setView = (runTab) => onNavigate ? onNavigate({ runTab }) : setLocalView(runTab);
   const { authenticated } = useAuth();
   const { tasks, isLoading: tasksLoading, error: tasksError } = useRunTasks(run.run_id, 2000);
   const [selectedId, setSelectedId] = useState(null);
@@ -85,7 +93,17 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
   const isIntegration = !run.kind || run.kind === "integration";
   const editable = authenticated && isIntegration && run.parent_run_id == null;
   const taskList = asArray(tasks);
-  const selectedTask = taskList.find((task) => task.id === selectedId) ?? getCurrentTask(taskList);
+  const requestedTask = navigation?.taskId ?? selectedId;
+  const selectedTask = taskList.find((task) => String(task.id) === String(requestedTask)) ?? getCurrentTask(taskList);
+  const taskOutput = useTaskOutput({ runId: run.run_id, taskId: selectedTask?.id ?? null,
+    refreshKey: selectedTask?.state, paused: !["tasks", "summary"].includes(view) });
+  const selectTask = (taskId) => { setSelectedId(taskId); onNavigate?.({ taskId: String(taskId) }); };
+  useEffect(() => {
+    if (!tasksLoading && selectedTask && String(requestedTask) !== String(selectedTask.id)) {
+      setSelectedId(selectedTask.id);
+      onNavigate?.({ taskId: String(selectedTask.id) }, { replace: true });
+    }
+  }, [tasksLoading, selectedTask, requestedTask, onNavigate]);
   const canSave = editable && taskList.find((task) => task.id === editor?.taskId)?.state === "pending";
   const openTask = async (task) => {
     setBusy(true);
@@ -122,14 +140,23 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
     finally { setBusy(false); }
   };
   return <>
-    {run.parent_run_id != null ? <Alert severity="info" sx={{ mb: 2 }} action={
-      <Button color="inherit" onClick={() => onSelectRun?.(run.parent_run_id)}>Manage parent workers</Button>
-    }>Workers are allocated by the parent. Its controller manages this task queue. Duplicate this run as a standalone run to change it.</Alert>
-      : authenticated && <WorkerPoolControls run={run} disabled={disabled} notify={notify} />}
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 2 }}>
+      {run.parent_run_id == null && authenticated && <WorkerPoolControls run={run} disabled={disabled} notify={notify} />}
+      {run.parent_run_id != null && <Alert severity="info" sx={{ flex: "1 1 400px", minWidth: 0, flexWrap: { xs: "wrap", sm: "nowrap" },
+        "& .MuiAlert-message": { flex: 1, minWidth: 0 },
+        "& .MuiAlert-action": { width: { xs: "100%", sm: "auto" }, justifyContent: "flex-end", ml: { xs: 0, sm: "auto" } },
+      }} action={
+        <Button color="inherit" onClick={() => onSelectRun?.(run.parent_run_id)}>Manage parent workers</Button>
+      }>Workers are allocated by the parent. Its controller manages this task queue. Duplicate this run as a standalone run to change it.</Alert>}
+      <Box sx={{ ml: "auto", display: "flex", justifyContent: "flex-end" }}>{runActions}</Box>
+    </Box>
+    <WorkspaceTabs id="run" label="Run sections" value={view} onChange={setView}
+      tabs={[["tasks", "Task queue"], ["summary", "Summary"], ["performance", "Performance"], ["settings", "Settings"]]} />
+    <WorkspacePanel id="run" value="tasks" active={view === "tasks"}>
     <LoadingStatus loading={tasksLoading} label="Loading task queue…" />
     <LoadingStatus loading={busy && !editor} label="Loading task definition…" />
     {tasksError && <Alert severity="error">{tasksError.message}</Alert>}
-    {isIntegration && !tasksLoading && <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id} onSelectTask={setSelectedId}
+    {isIntegration && !tasksLoading && <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id} onSelectTask={selectTask}
       actions={editable && <Button size="small" variant="outlined" disabled={disabled || busy}
         onClick={() => { setError(null); setEditor({ title: "Add tasks", value: "" }); }}>Add tasks</Button>}
       renderTaskActions={(task) => <DefinitionButtons
@@ -137,9 +164,24 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
         editable={editable && task.state === "pending"} disabled={disabled || busy} onOpen={() => openTask(task)}
         deleteLabel={`Delete task ${task.name}`} onDelete={authenticated ? () => removeTask(task) : null}
         deleteReason={!editable ? "This queue is managed by its parent run." : task.state !== "pending" ? "Only pending tasks can be deleted." : null} />} />}
-    {!tasksLoading && (selectedTask || isIntegration) && <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
-      key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} onSelectRun={onSelectRun} />}
-    <RunInfo runId={run.run_id} refreshKey={taskList.map((task) => `${task.id}:${task.state}`).join(",")} />
+    {!tasksLoading && (selectedTask || isIntegration) && <StableTaskOutput loading={taskOutput.isLoading} source={selectedTask?.id}>
+    <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
+      key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} output={taskOutput} onSelectRun={onSelectRun}
+      view={navigation?.taskTab} onViewChange={onNavigate ? (taskTab) => onNavigate({ taskTab }) : undefined} />
+    </StableTaskOutput>}
+    </WorkspacePanel>
+    <WorkspacePanel id="run" value="summary" active={view === "summary"}>
+      <RunInfo runId={run.run_id} section="summary" refreshKey={taskList.map((task) => `${task.id}:${task.state}`).join(",")}>
+        <TaskSummary task={selectedTask} output={taskOutput} />
+      </RunInfo>
+    </WorkspacePanel>
+    <WorkspacePanel id="run" value="performance" active={view === "performance"}>
+      <PerformanceWorkspace runs={runs} workers={workers} selectedRun={run.run_id} isConnected={isConnected} tasks={taskList}
+        view={navigation?.performanceTab} onViewChange={onNavigate ? (performanceTab) => onNavigate({ performanceTab }) : undefined} />
+    </WorkspacePanel>
+    <WorkspacePanel id="run" value="settings" active={view === "settings"}>
+      <RunInfo runId={run.run_id} section="settings" refreshKey={taskList.map((task) => `${task.id}:${task.state}`).join(",")} />
+    </WorkspacePanel>
     {editor && <TomlActionDialog open title={editor.title} label="Task TOML"
       submitLabel={editor.taskId ? "Save changes" : "Append tasks"} initialValue={editor.value}
       submitDisabled={Boolean(editor.taskId) && !canSave} exportName={editor.name || "task"}
@@ -160,7 +202,9 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
 }
 
 export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showChildRuns, setShowChildRuns,
-  isConnected, serverName, onRunCreated, onSelectRun, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns, isLoadingRuns }) {
+  isConnected, onRunCreated, onSelectRun, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns, isLoadingRuns,
+  workers = [], navigation, onNavigate }) {
+  const active = useWorkspaceActive();
   const { authenticated } = useAuth();
   const [editor, setEditor] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -211,20 +255,21 @@ export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showC
   return <>
     <RunScopedWorkspace runs={runs} selectedRun={selectedRun} setSelectedRun={setSelectedRun}
       showChildRuns={showChildRuns} setShowChildRuns={setShowChildRuns} hasMoreRuns={hasMoreRuns}
-      loadMoreRuns={loadMoreRuns} isLoadingMoreRuns={isLoadingMoreRuns} isLoadingRuns={isLoadingRuns} isConnected={isConnected} serverName={serverName}
+      loadMoreRuns={loadMoreRuns} isLoadingMoreRuns={isLoadingMoreRuns} isLoadingRuns={isLoadingRuns}
       noRunsMessage="Create a run to start monitoring task output and engine configuration."
       noSelectionMessage="Pick a run to view task output and configuration."
-      headerActions={<Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mb: 2 }}>
+      headerActions={<Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
         {authenticated && <Button variant="outlined" disabled={busy || deleting}
           onClick={() => { setError(null); setEditor({ title: "New run", value: "" }); }}>New run</Button>}
-        {run && <DefinitionButtons openLabel="Open run definition" onOpen={loadDefinition} disabled={busy || deleting}
-          deleteLabel="Delete run" onDelete={authenticated ? remove : null}
-          deleteReason={run.parent_run_id != null ? "Delete managed children through their parent run." : null} />}
+
       </Box>}>
       <LoadingStatus loading={busy && !editor} label="Loading run definition…" />
       {deleting && <Alert severity="info" sx={{ mb: 2 }}>Deleting this run and its child runs. Large histories can take several minutes.</Alert>}
       {run && <RunContent key={run.run_id} run={run} disabled={busy || deleting} notify={notify}
-        onSelectRun={onSelectRun} />}
+        onSelectRun={onSelectRun} runs={runs} workers={workers} isConnected={isConnected} navigation={navigation} onNavigate={onNavigate}
+        runActions={<DefinitionButtons openLabel="Open run definition" onOpen={loadDefinition} disabled={busy || deleting}
+          deleteLabel="Delete run" onDelete={authenticated ? remove : null}
+          deleteReason={run.parent_run_id != null ? "Delete managed children through their parent run." : null} />} />}
     </RunScopedWorkspace>
     {editor && <TomlActionDialog open title={editor.title} label="Run TOML"
       submitLabel={editor.duplicate ? editor.standalone ? "Create standalone run" : "Create duplicate run" : "Create run"}
@@ -246,7 +291,7 @@ export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showC
         } catch (error) { setError(error.message); }
         finally { setBusy(false); }
       } : null} />}
-    <Snackbar open={Boolean(notice)} autoHideDuration={notice?.severity === "error" ? null : 4000}
+    <Snackbar open={active && Boolean(notice)} autoHideDuration={notice?.severity === "error" ? null : 4000}
       onClose={(_, reason) => { if (reason !== "clickaway") setNotice(null); }} message={notice?.message || ""}
       action={<Button color="inherit" size="small" onClick={() => setNotice(null)}>Dismiss</Button>} />
   </>;

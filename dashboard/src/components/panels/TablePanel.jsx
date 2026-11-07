@@ -16,7 +16,6 @@ import {
   TableRow,
   TableSortLabel,
   Switch,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
@@ -24,10 +23,14 @@ import LoadingStatus from "../common/LoadingStatus";
 import { apiUrl } from "../../services/api";
 import { asArray } from "../../utils/collections";
 import { formatCentralValueWithError, formatScientific } from "../../utils/formatters";
-import { renderStructuredValue } from "./BasicPanels";
+import DisclosureField from "../common/DisclosureField";
+import { fieldHelp } from "./fieldHelp";
+import { formatF64Full } from "../../utils/formatters";
+import { EstimateValueBlock, renderStructuredValue } from "./BasicPanels";
 import SamplePointValue from "./SamplePointValue";
 import StatusChip from "../common/StatusChip";
 import { PanelHeader } from "../common/PanelChrome";
+import PanelInfo from "../common/PanelInfo";
 import FigureExportActions, { downloadBlob, downloadTextFile } from "./FigureExportActions";
 import { readHistogramBundleSelectedValue, writeHistogramBundlePanelValue } from "./histogramUtils";
 
@@ -99,7 +102,7 @@ const compareTableValues = (left, right, direction) => {
   return direction === "desc" ? -order : order;
 };
 
-const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, bundleUploading, onUploadBundle, onRemoveBundle, inputRef }) => (
+const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, bundleUploading, onUploadBundle, onRemoveBundle, inputRef, children }) => (
   <Box sx={{ mb: 1.5 }}>
     <input
       ref={inputRef}
@@ -110,7 +113,7 @@ const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, bundl
       style={{ display: "none" }}
       onChange={(event) => onUploadBundle?.(state?.panel_id, event)}
     />
-    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: bundleUploadError ? 1 : 0, flexWrap: "wrap" }}>
+    <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ mb: bundleUploadError ? 1 : 0, flexWrap: "wrap" }}>
       <Button size="small" variant="outlined" disabled={bundleUploading} onClick={() => inputRef.current?.click()}>
         {bundleUploading ? "Importing bundle…" : "Upload Bundle"}
       </Button>
@@ -125,6 +128,8 @@ const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, bundl
           Remove {bundle.label}
         </Button>
       ))}
+      {children && <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap"
+        sx={{ ml: "auto", maxWidth: "100%", justifyContent: "flex-end" }}>{children}</Stack>}
     </Stack>
     {bundleUploadError ? <Alert severity="error">{bundleUploadError}</Alert> : null}
     {asArray(uploadedBundles).flatMap((bundle) => asArray(bundle.warnings).map((warning, index) =>
@@ -153,6 +158,8 @@ const TablePanel = ({
   const pdfRequest = useRef(null);
   useEffect(() => () => pdfRequest.current?.abort(), []);
   const payload = state?.payload;
+  const maxWeightPoints = state?.panel_id === "max_weight_points";
+  const weightBasis = maxWeightPoints && payload?.weight_basis?.startsWith("Pooled full-weight contribution") ? null : payload?.weight_basis;
   const absoluteComponents = payload?.absolute_components;
   const activeData = absolute && absoluteComponents ? absoluteComponents : state;
   const columns = asArray(activeData?.columns);
@@ -173,32 +180,10 @@ const TablePanel = ({
     rowAction?.kind === "select_run"
       ? columns.findIndex((column) => String(column || "").toLowerCase() === String(rowAction.column || "").toLowerCase())
       : -1;
-  if (columns.length === 0 || rows.length === 0) {
-    if (!isHistogramBundle) return null;
-    return (
-      <Card variant="outlined">
-        <CardContent>
-        {payload?.weight_basis && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.weight_basis}</Typography>}
-        {payload?.estimator_note && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.estimator_note}</Typography>}
-          <Typography variant="subtitle1" sx={{ mb: 1 }}>
-            {title}
-          </Typography>
-          {supportsBundleUpload ? (
-            <BundleUploadControls
-              state={state}
-              uploadedBundles={uploadedBundles}
-              bundleUploadError={bundleUploadError}
-            bundleUploading={bundleUploading}
-              onUploadBundle={onUploadBundle}
-              onRemoveBundle={onRemoveBundle}
-              inputRef={uploadInputRef}
-            />
-          ) : null}
-          <Alert severity="info">No observables available.</Alert>
-        </CardContent>
-      </Card>
-    );
-  }
+  const hasRows = columns.length > 0 && rows.length > 0;
+  if (!hasRows && !isHistogramBundle) return null;
+  const bundleNotes = [weightBasis, payload?.estimator_note, payload?.description, payload?.help?.text,
+    payload?.export_source && "Include child observables adds the original unscaled child observables to JSON/HwU downloads. Their data is fetched when you export."];
 
   const columnKeys = columns.map((column) =>
     String(column || "")
@@ -212,7 +197,7 @@ const TablePanel = ({
     if (provided.length === 0) return columns.map((_, index) => index);
     const deduplicated = provided.filter((index, position) => provided.indexOf(index) === position);
     return deduplicated.length > 0 ? deduplicated : columns.map((_, index) => index);
-  })();
+  })().filter((index) => !maxWeightPoints || !["top-level jacobian", "jacobian"].includes(columnKeys[index]));
   const rowKeys = asArray(state?.row_keys).map((value) => String(value ?? ""));
   const centralValueIndex = columnKeys.findIndex((column) => column === "central value");
   const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
@@ -275,61 +260,65 @@ const TablePanel = ({
 
   const renderTableCell = (row, columnIndex) => {
     const value = row?.[columnIndex];
-    if (["state", "status"].includes(columnKeys[columnIndex]) && typeof value === "string") {
-      return <StatusChip status={value} />;
-    }
     if (value?.kind === "sample_point") return <SamplePointValue point={value} />;
-    if (payload?.column_formats?.[columns[columnIndex]] === "scientific") {
-      return <Box component="span" sx={{ whiteSpace: "nowrap" }}>{typeof value === "number" ? formatScientific(value) : renderStructuredValue(value)}</Box>;
+    if (value?.kind === "estimate") return <EstimateValueBlock value={value} />;
+    const help = payload?.column_help?.[columns[columnIndex]] || fieldHelp(columnKeys[columnIndex], columns[columnIndex], state?.panel_id);
+    const precise = typeof value === "number" && !Number.isInteger(value);
+    let displayed = renderStructuredValue(value);
+    if (["state", "status"].includes(columnKeys[columnIndex]) && typeof value === "string") displayed = <StatusChip status={value} />;
+    else if (payload?.column_formats?.[columns[columnIndex]] === "scientific" && typeof value === "number") displayed = formatScientific(value);
+    else if (columnIndex === centralValueIndex && errorIndex >= 0) displayed = formatCentralValueWithError(value, row?.[errorIndex], "n/a");
+    const numericStyle = typeof value === "number" ? { "& .field-value": { whiteSpace: "nowrap" } } : undefined;
+    if (maxWeightPoints && columnKeys[columnIndex] === "max weighted value") {
+      const point = row[columnKeys.indexOf("point")];
+      const legacyJacobian = row[columnKeys.findIndex((key) => ["top-level jacobian", "jacobian"].includes(key))];
+      const jacobian = point?.parameterization_jacobian ?? legacyJacobian;
+      return <DisclosureField inline label="Max Weighted Value details" value={displayed} sx={numericStyle}>
+        <Typography component="pre" variant="caption">{`Jacobian = ${formatF64Full(jacobian)}\nSampling weight = ${formatF64Full(point?.sampling_weight)}`}</Typography>
+      </DisclosureField>;
     }
-    if (columnIndex === centralValueIndex && errorIndex >= 0) {
-      return formatCentralValueWithError(row?.[columnIndex], row?.[errorIndex], "n/a");
-    }
-    return renderStructuredValue(row?.[columnIndex]);
+    return <DisclosureField inline label={`${columns[columnIndex]} details`} value={displayed} sx={numericStyle}>
+      {help || precise ? <>
+        {help && <Typography variant="body2" sx={{ mb: precise ? 1 : 0 }}>{help}</Typography>}
+        {precise && <Typography component="pre" variant="caption">{formatF64Full(value)}</Typography>}
+      </> : null}
+    </DisclosureField>;
   };
+
+  const bundleExports = supportsBundleExport && hasRows ? (
+    <>
+      {actions.export_json !== false && <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={() => handleDownload("json")}>
+        JSON
+      </Button>}
+      {actions.export_hwu !== false && <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={() => handleDownload("hwu")}>
+        HwU
+      </Button>}
+      <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={handleDownloadPdf}>
+        Download plots PDF
+      </Button>
+      {payload?.export_source && <FormControlLabel label="Include child observables" sx={{ m: 0 }}
+        control={<Checkbox size="small" checked={includeChildren} disabled={Boolean(exporting)}
+          onChange={(event) => setIncludeChildren(event.target.checked)} />} />}
+      {uploadedBundles.length > 0 && <FormControlLabel label="Include comparisons in PDF" sx={{ m: 0 }}
+        control={<Checkbox size="small" checked={includeComparisons} disabled={Boolean(exporting)}
+          onChange={(event) => setIncludeComparisons(event.target.checked)} />} />}
+    </>
+  ) : null;
 
   return (
     <Card variant="outlined">
       <CardContent>
-        {payload?.weight_basis && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.weight_basis}</Typography>}
-        {payload?.estimator_note && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.estimator_note}</Typography>}
+        {!isHistogramBundle && weightBasis && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{weightBasis}</Typography>}
+        {!isHistogramBundle && payload?.estimator_note && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.estimator_note}</Typography>}
         <PanelHeader title={title}>
           {!isHistogramBundle && <FigureExportActions baseName={state?.panel_id || title} payload={{ kind: "table", state: { ...state, columns, rows } }} imageFormat={null} />}
           {absoluteComponents ? (
-            <Tooltip describeChild title="Means of |real| and |imag|, with their own errors. Variance contribution still refers to the signed campaign result.">
-              <FormControlLabel
-                sx={{ mr: 0 }}
-                control={<Switch size="small" checked={absolute} onChange={(event) => setAbsolute(event.target.checked)} />}
-                label="Absolute components"
-              />
-            </Tooltip>
+            <DisclosureField section label="Absolute components" ariaLabel="Absolute components explanation" actions={<Switch size="small" checked={absolute}
+              slotProps={{ input: { role: "switch", "aria-label": "Absolute components" } }} onChange={(event) => setAbsolute(event.target.checked)} />}>
+              <Typography variant="caption">Means of |real| and |imag|, with their own errors. Variance contribution still refers to the signed campaign result.</Typography>
+            </DisclosureField>
           ) : null}
-          {supportsBundleExport ? (
-            <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
-              {actions.export_json !== false ? (
-              <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={() => handleDownload("json")}>
-                JSON
-              </Button>
-              ) : null}
-              {actions.export_hwu !== false ? (
-              <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={() => handleDownload("hwu")}>
-                HwU
-              </Button>
-              ) : null}
-              {payload?.export_source && <Tooltip describeChild title="Add the original unscaled child observables to JSON/HwU downloads. Data is fetched when you export.">
-                <FormControlLabel label="Include child observables"
-                  control={<Checkbox size="small" checked={includeChildren}
-                    disabled={Boolean(exporting)}
-                    onChange={(event) => setIncludeChildren(event.target.checked)} />} />
-              </Tooltip>}
-              <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={handleDownloadPdf}>
-                Download plots PDF
-              </Button>
-              {uploadedBundles.length > 0 && <FormControlLabel label="Include comparisons in PDF"
-                control={<Checkbox size="small" checked={includeComparisons} disabled={Boolean(exporting)}
-                  onChange={(event) => setIncludeComparisons(event.target.checked)} />} />}
-            </Stack>
-          ) : null}
+          {isHistogramBundle && <PanelInfo title={title} notes={bundleNotes} />}
         </PanelHeader>
         {supportsBundleUpload ? (
           <BundleUploadControls
@@ -340,13 +329,12 @@ const TablePanel = ({
             onUploadBundle={onUploadBundle}
             onRemoveBundle={onRemoveBundle}
             inputRef={uploadInputRef}
-          />
-        ) : null}
-        {payload?.description && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{payload.description}</Typography>}
-        {payload?.help && <Box component="details" sx={{ mb: 2 }}>
-          <Typography component="summary" variant="body2" sx={{ cursor: "pointer", color: "text.secondary" }}>{payload.help.title}</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, whiteSpace: "pre-line" }}>{payload.help.text}</Typography>
-        </Box>}
+          >{bundleExports}</BundleUploadControls>
+        ) : bundleExports && <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap" sx={{ mb: 1.5, justifyContent: "flex-end" }}>{bundleExports}</Stack>}
+        {!isHistogramBundle && payload?.description && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{payload.description}</Typography>}
+        {!isHistogramBundle && payload?.help && <DisclosureField section label={payload.help.title} sx={{ mb: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "pre-line" }}>{payload.help.text}</Typography>
+        </DisclosureField>}
         <LoadingStatus loading={Boolean(exporting)} label={pdfProgress || "Preparing export…"} />
         {exportError && <Alert severity="error">{exportError}</Alert>}
         {omittedHistogramCount > 0 ? (
@@ -355,7 +343,7 @@ const TablePanel = ({
             omitted from the combined result.
           </Alert>
         ) : null}
-        <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
+        {!hasRows ? <Alert severity="info">No observables available.</Alert> : <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
           <MuiTable size="small" stickyHeader sx={payload?.sortable ? { "& .MuiTableCell-root": { px: 1, whiteSpace: "nowrap" } } : undefined}>
             <TableHead>
               <TableRow>
@@ -452,7 +440,7 @@ const TablePanel = ({
               })}
             </TableBody>
           </MuiTable>
-        </TableContainer>
+        </TableContainer>}
       </CardContent>
     </Card>
   );

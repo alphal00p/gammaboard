@@ -1,3 +1,4 @@
+import { useWorkspaceActive } from "../common/WorkspaceTabs";
 import { PanelHeader } from "../common/PanelChrome";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
@@ -257,6 +258,7 @@ const remapAndSortTimeseriesPoints = (points, mode, nativeAxis) =>
 const lineColors = ["#00838f", "#bb3e03", "#0a9396", "#df5353", "#ca6702"];
 
 const panelColumnSpan = (descriptor) => {
+  if (descriptor?.panel_id === "campaign_progress") return "1 / -1";
   switch (descriptor?.width) {
     case "compact":
       return { xs: "1 / -1", md: "span 4" };
@@ -616,19 +618,21 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         left: "center",
         textStyle: { fontSize: 12 },
       },
-      grid: { ...baseCartesianGrid, top: 52 },
+      grid: { ...baseCartesianGrid, left: 88, right: 56, top: 52, bottom: 64 },
       xAxis: {
         type: "value",
         min: xDomain[0],
         max: xDomain[1],
         name: timeseriesXAxisLabel(historyXAxisMode),
+        nameLocation: "middle",
+        nameGap: 30,
         axisLabel: {
           ...baseAxisLabel,
           formatter: (axisValue) =>
             formatTimeseriesXAxisValue(axisValue, historyXAxisMode, usesTimestampXAxis, xAxisOriginMs),
         },
         splitLine: { show: false },
-        nameTextStyle: { fontSize: 12, padding: [12, 0, 0, 0] },
+        nameTextStyle: { fontSize: 12 },
       },
       yAxis: {
         type: "value",
@@ -824,7 +828,9 @@ const PanelCollection = ({
   panelValues = {},
   onPanelValueChange = null,
   onSelectRun = null,
+  visiblePanelIds = null,
 }) => {
+  const active = useWorkspaceActive();
   const {
     histogramBundlesByPanel,
     histogramBundleUploadErrors,
@@ -875,14 +881,19 @@ const PanelCollection = ({
     [onPanelValueChange, panelValues, sharedHistoryPanelIdSet, sharedHistoryPanelIds],
   );
 
+  // Keep upload and view state alive while unmounting expensive hidden charts.
+  if (!active) return null;
+  const displayedPanels = visiblePanelIds == null ? renderablePanels : renderablePanels.filter(({ descriptor, state }) =>
+    visiblePanelIds.has(state?.source_panel_id || descriptor.panel_id));
+
   return (
-    <Box sx={{ mb: 3 }}>
+    <Box sx={{ mb: displayedPanels.length === 1 && displayedPanels[0].descriptor.panel_id === "sample_progress" ? 1 : 3 }}>
       {title ? (
         <Typography variant="h6" sx={{ mb: 2 }}>
           {title}
         </Typography>
       ) : null}
-      {renderablePanels.length === 0 ? <Alert severity="info">No panel data available yet.</Alert> : null}
+      {displayedPanels.length === 0 && (visiblePanelIds == null || visiblePanelIds.size > 0) ? <Alert severity="info">No panel data available yet.</Alert> : null}
       <Box
         sx={{
           display: "grid",
@@ -894,7 +905,7 @@ const PanelCollection = ({
           alignItems: "start",
         }}
       >
-        {renderablePanels.map(({ descriptor, state, value, controls }) => (
+        {displayedPanels.map(({ descriptor, state, value, controls }) => (
           <Box
             key={descriptor.panel_id}
             sx={{

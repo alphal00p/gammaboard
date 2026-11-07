@@ -8,6 +8,7 @@ vi.mock("../hooks/useRunTasks", () => ({ useRunTasks: () => ({ tasks: [] }) }));
 vi.mock("../hooks/useRunPerformancePanels", () => ({ useRunPerformancePanels: vi.fn() }));
 vi.mock("./common/RunScopedWorkspace", () => ({ default: ({ children }) => children }));
 vi.mock("./runs/QueueTuningPanel", () => ({ default: () => <div>Queue controls</div> }));
+vi.mock("./RunInfo", () => ({ default: () => <div>Live queue and batch</div> }));
 vi.mock("./PerformanceGraphs", () => ({ default: ({ onSelectionChange }) => <button onClick={() => onSelectionChange({ start: 1000, end: 2000, follow: false })}>Historical graphs</button> }));
 vi.mock("./panels/PanelCollection", () => ({ default: ({ panelStates }) => <div data-testid="measurements">{JSON.stringify(panelStates)}</div> }));
 
@@ -29,6 +30,12 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe("performance measurements", () => {
+  test.each(["pending", "active", "completed", "failed"])("live tuning measurements follow the selected task state: %s", (state) => {
+    const { rerender } = render(<PerformanceWorkspace {...props} view="tuning" tasks={[{ id: "1", name: "Sample", is_sample: true, state }]} />);
+    expect(Boolean(screen.queryByText("Live queue and batch"))).toBe(["pending", "active"].includes(state));
+    rerender(<PerformanceWorkspace {...props} view="tuning" tasks={[{ id: "1", name: "Sample", is_sample: true, state: "completed" }]} />);
+    expect(screen.queryByText("Live queue and batch")).not.toBeInTheDocument();
+  });
   test("shows initial loading but keeps background refreshes quiet", () => {
     vi.useFakeTimers();
     useRunPerformancePanels.mockReturnValue({ ...response, panelSpecs: [], panelStates: [], isLoading: true, isFetching: true });
@@ -57,12 +64,14 @@ describe("performance measurements", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Diagnostics" }));
     expect(screen.getByTestId("measurements")).toHaveTextContent("queue_diagnostics");
     expect(screen.getByTestId("measurements")).not.toHaveTextContent("performance_overview");
-    expect(screen.getByText("Queue controls")).toBeInTheDocument();
-    expect(screen.getByTestId("measurements")).not.toHaveTextContent("busy_history");
+    expect(screen.queryByText("Queue controls")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Queue tuning" }));
+    expect(screen.getByText("Queue controls")).toBeVisible();
+    expect(screen.queryByTestId("measurements")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Graphs" }));
     expect(screen.getByText("Historical graphs")).toBeInTheDocument();
     expect(screen.queryByTestId("measurements")).not.toBeInTheDocument();
-    expect(screen.queryByText("Queue controls")).not.toBeInTheDocument();
+    expect(screen.getByText("Queue controls")).not.toBeVisible();
   });
 
   test("shares presets and custom graph selections across tabs and resets on run change", () => {

@@ -1,14 +1,15 @@
 import { expect, test } from "vitest";
-import { formatEstimateDisplay } from "./formatters";
+import { formatDecimalSignificant, formatEstimateDisplay } from "./formatters";
 
 test.each([
-  [1.5, 0.5, "1.5(0.5)"],  [-1.318e-4, 0.0039e-4, "-1.3180(0.0039) × 10^-4"],
-  [1.23456, 0.01234, "1.235(0.012)"],
-  [1.23456, 0.0999, "1.23(0.10)"],
-  [0, 0.0039, "0.0(3.9) × 10^-3"],
-  [0.001, 0.03, "0.1(3.0) × 10^-2"],
-  [1.318e-120, 3.9e-123, "1.3180(0.0039) × 10^-120"],
-  [1.318e100, 3.9e97, "1.3180(0.0039) × 10^100"],
+  [5.4123, 0.0025, "5.4123(25)"],
+  [1.5, 0.5, "1.5(5)"],  [-1.318e-4, 0.0039e-4, "-1.3180(39) × 10^-4"],
+  [1.23456, 0.01234, "1.235(12)"],
+  [1.23456, 0.0999, "1.23(10)"],
+  [0, 0.0039, "0.0(39) × 10^-3"],
+  [0.001, 0.03, "0.1(30) × 10^-2"],
+  [1.318e-120, 3.9e-123, "1.3180(39) × 10^-120"],
+  [1.318e100, 3.9e97, "1.3180(39) × 10^100"],
   [2, 0, "2.000000(0)"],
   [0, 0, "0.000000(0)"],
 ])("estimate %s with uncertainty %s uses aligned parentheses notation", (value, error, text) => {
@@ -28,4 +29,18 @@ test("a provisional mean remains visible without an invented zero error", () => 
   const result = formatEstimateDisplay(1.5, null);
   expect(result.text).toBe("1.500000e+0");
   expect(result.relative_percent).toBeNull();
+});
+
+
+test.each([[12.3456, "12.3"], [1, "1.00"], [0, "0.00"], [-12.3456, "-12.3"],
+  [0.0123456, "0.0123"], [12345, "12300"], [999.6, "1000"], [0.0009996, "0.00100"],
+  [1.23456e-10, "0.000000000123"]])("formats %s with three significant digits and no exponent", (value, expected) => {
+  expect(formatDecimalSignificant(value)).toBe(expected);
+});
+
+test("invalid decimal comparisons and exceptionally disparate uncertainty scales stay explicit", () => {
+  expect(formatDecimalSignificant(null)).toBe("n/a");
+  expect(formatDecimalSignificant(Infinity)).toBe("n/a");
+  expect(formatEstimateDisplay(1e200, 1e-200).text).toContain("±");
+  expect(formatEstimateDisplay(1e308, 1.79e308).text).not.toContain("Infinity");
 });

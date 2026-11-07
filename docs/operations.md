@@ -3,6 +3,39 @@
 Use the same runtime config and port offset as the deployment. Run IDs avoid
 ambiguity when several runs share a name.
 
+## Dashboard navigation
+
+The header shows the connection status and last successful server-status update
+across all tabs. The persistent tabs are **Runs**, **System**, and **Logs**. Runs shares one run
+selector across **Task queue**, **Summary**, **Performance**, and **Settings**.
+Task queue separates the selected task's Result, Observables, Stratum output,
+and Diagnostics. Stratum output is hidden until the task provides stratum data;
+if unavailable, a retained selection displays Result. Collapse the queue to give the output more space.
+Sample progress is an unlabeled bar with ETA; sample counts remain in the task table.
+Campaign progress retains a full-width bordered panel, with its label and sample
+count on the same row.
+Changing tasks reserves output height during loading to avoid scrolling the page.
+Summary combines identity, lifecycle, totals, and targets in a run overview, followed
+by the selected task's metadata and expandable checkpoint recovery. Recovery errors
+remain visible when collapsed. Settings shows effective evaluator/sampler configuration,
+its source stage, with evaluator/sampler summaries before their configuration trees.
+Run definition and deletion actions sit at the right of the worker-assignment
+row below the run selector; child-run worker information occupies the same row.
+Child runs retain their dash and an extra indent
+in run-selection menus. New run and Show child runs share the row above the selector.
+
+Performance provides Overview, Diagnostics, Graphs, and Queue tuning. Queue tuning
+names the sampling task being edited; only pending/active tasks in a standalone
+run can be changed. Live Queue and Batch panels appear here only for pending or
+active sampling tasks. System contains Workers, Database (runtime/server details and
+destructive controls), and Settings (configuration paths and documentation).
+Logs retains its own run and worker filters.
+
+The URL records the selected run, task, and tabs for refresh, bookmarks, and
+browser Back/Forward. Switching tabs keeps drafts, imported comparisons, and view
+preferences while pausing inactive polling and chart rendering. Imported
+comparisons and unsaved drafts remain browser-session state, not saved run data.
+
 ## Manage work
 
 ```bash
@@ -96,10 +129,39 @@ Reporting defaults to two seconds; graph refresh is five seconds. Zoom shows
 available detail but cannot recover sub-report spikes. Higher reporting frequency
 increases database history: two-second cadence is 43,200 rows per worker/day.
 
-RSD is standard deviation / mean absolute contribution; normalized ESS is
-`(Σ|w|)² / (N Σw²)`, between zero and one. Both use the training projection.
-GammaLoop Norm Mean is mean per-sample complex magnitude, not magnitude of the
-final mean. Unsupported statistics display unavailable.
+RSD is `sqrt(N) × SE(estimate) / |estimate|`, using each signed component of the
+primary integral. Stratified runs use their conditional-estimate error, not the
+pooled reference error. RSD is dimensionless and stays roughly constant during
+inference with a fixed proposal. Cancellation to a zero estimate produces an
+infinite RSD when the error is nonzero; `0/0` is undefined. Insufficient coverage
+leaves it unavailable. Only finite values enter the RSD history plot.
+
+Normalized training ESS is `(Σ|w|)² / (N Σw²)`, between zero and one, where `w`
+is the weighted **training projection**. For partitioned sampling, calculate it
+within each requested stratum, counting mismatches as zero contributions. The
+aggregate is `Σ(N_s × ESS_s) / ΣN_s`; stratum-specific values appear under
+**Stratum output**. This measures training-weight concentration, not the variance
+of the primary stratified integral, and is not inferred from RSD.
+
+Result uses the same compact fields for pooled and stratified estimators. Mean
+histories are followed by the RSD and ESS plots. Each component keeps its mean,
+target comparison, and RSD together in one column. Parenthesized uncertainties
+use last-digit notation: `5.4123(25)` means `5.4123 ± 0.0025`. Target deltas and
+pulls use three significant digits in decimal notation.
+Per-stratum estimates, counts, coverage, probabilities, and ESS live under
+Stratum output. Optional moment fields preserve compatibility with old snapshots;
+ESS remains unavailable when the needed historical training moments are missing.
+
+Expandable fields use a triangle between the title and value. Click the title or
+value, or focus the field and press Enter/Space, to expand precision, definitions,
+or configuration children. RSD and ESS each carry their own definitions. Table
+cells put the same triangle directly before the value; sortable headers and
+editable controls retain their usual interactions. Expanded configuration trees
+preserve nested objects, arrays, indentation, and expansion state across refreshes.
+Observable tables keep Upload Bundle on the left and JSON/HwU/PDF exports on the
+right of the same action row.
+Their top-right information icon opens the estimator and campaign-combination
+notes; import/export errors and omitted-observable warnings stay visible.
 
 ## Backup and recovery
 

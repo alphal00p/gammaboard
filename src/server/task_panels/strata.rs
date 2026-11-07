@@ -156,6 +156,7 @@ mod tests {
             attempts: vec![0, 0],
             matches: vec![0, 0],
             feedback_samples: 0,
+            training_moments: None,
         });
         let PanelState::Strata {
             frames, estimator, ..

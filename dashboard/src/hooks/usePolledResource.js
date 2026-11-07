@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePolling } from "./usePolling";
 
-const formatTime = () => new Date().toLocaleTimeString();
+const formatTime = () => new Date().toLocaleTimeString(undefined, { hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchResource, onError = null } = {}) => {
   const [data, setData] = useState(initialData);

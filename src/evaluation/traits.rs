@@ -44,6 +44,7 @@ impl EvalBatchOptions<'_> {
                     partition: plan.partition.clone(),
                     attempts: vec![0; plan.partition.centers().len()],
                     matches: vec![0; plan.partition.centers().len()],
+                    training_moments: None,
                     feedback_samples: if self.require_training_values {
                         labels.len() as u64
                     } else {

@@ -35,3 +35,22 @@ describe("queue tuning", () => {
     expect(screen.queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
   });
 });
+
+test("an unsaved queue draft survives polling after the input refresh hold expires", () => {
+  const { rerender } = render(<QueueTuningPanel {...props} />);
+  fireEvent.change(screen.getByLabelText("Target Evaluation Time (ms)"), { target: { value: "750" } });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60000);
+  rerender(<QueueTuningPanel {...props} run={{ queue_tuning_defaults: { ...defaults, target_batch_eval_ms: 3000 } }} />);
+  expect(screen.getByLabelText("Target Evaluation Time (ms)")).toHaveValue("750");
+  clock.mockRestore();
+});
+
+test("clearing an override releases the draft so later server settings can refresh", async () => {
+  const onClear = vi.fn();
+  const { rerender } = render(<QueueTuningPanel {...props} onClear={onClear} />);
+  fireEvent.change(screen.getByLabelText("Target Evaluation Time (ms)"), { target: { value: "750" } });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clear Task Override" })));
+  expect(onClear).toHaveBeenCalledOnce();
+  rerender(<QueueTuningPanel {...props} onClear={onClear} run={{ queue_tuning_defaults: { ...defaults, target_batch_eval_ms: 3000 } }} />);
+  expect(screen.getByLabelText("Target Evaluation Time (ms)")).toHaveValue("3000");
+});

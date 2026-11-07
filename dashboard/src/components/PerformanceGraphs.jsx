@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRunPerformanceGraphs } from "../services/api";
 import PanelCollection from "./panels/PanelCollection";
 import { readZoomFromPanelValue } from "./panels/panelView";
+import { useWorkspaceActive } from "./common/WorkspaceTabs";
 import LoadingStatus from "./common/LoadingStatus";
 
 const IDS = ["busy_history", "accepted_rate_history"];
@@ -35,6 +36,7 @@ export const mergeHistoryDetail = (full, detail) => full.states.map((state) => {
 });
 
 const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
+  const active = useWorkspaceActive();
   const [yViews, setYViews] = useState({});
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -43,6 +45,7 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
   const boundsRef = useRef(null);
 
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     let timer;
     const load = async () => {
@@ -75,7 +78,7 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
     // Debounce navigation; retain the graphs while the new detail loads.
     timer = setTimeout(load, selection ? 150 : 0);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [runId, selection]);
+  }, [runId, selection, active]);
 
   const changeView = useCallback((id, value) => {
     if (value?.yZoom) setYViews((previous) => ({ ...previous, [id]: value.yZoom }));

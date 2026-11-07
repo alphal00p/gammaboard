@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
 import * as api from "./services/api";
@@ -30,6 +30,7 @@ vi.mock("./services/api", () => ({
 describe("App Component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState(null, "", "/");
     api.fetchRuns.mockResolvedValue({ items: [], nextOffset: null });
     api.fetchNodes.mockResolvedValue([]);
     api.fetchSession.mockResolvedValue({ authenticated: false });
@@ -66,10 +67,20 @@ describe("App Component", () => {
     expect(screen.getByRole("img", { name: "GammaBoard" })).toBeInTheDocument();
     expect(await screen.findByText(/Connected to local/i)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Runs/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Management/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Performance/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /System/i })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Performance" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Logs/i })).toBeInTheDocument();
     expect(await screen.findByText(/No runs available/i)).toBeInTheDocument();
+    const header = within(screen.getByRole("banner"));
+    expect(header.getByText("Connected to local")).toBeVisible();
+    expect(header.getByText(/^Last update: \d{2}:\d{2}:\d{2}$/)).toBeVisible();
+    for (const name of ["System", "Logs", "Runs"]) {
+      fireEvent.click(screen.getByRole("tab", { name, exact: true }));
+      expect(header.getByText("Connected to local")).toBeVisible();
+      expect(screen.getAllByText(/Connected to/)).toHaveLength(1);
+      expect(screen.getAllByText(/Last update:/)).toHaveLength(1);
+    }
+    expect(screen.queryByText("Run logs")).not.toBeInTheDocument();
   });
 
   test("a delayed created-run refresh preserves a newly opened management draft", async () => {
@@ -80,7 +91,7 @@ describe("App Component", () => {
     fireEvent.change(await screen.findByLabelText("Run TOML"), { target: { value: 'name="new-run"' } });
     fireEvent.click(screen.getByRole("button", { name: "Create run" }));
     await waitFor(() => expect(screen.queryByLabelText("Run TOML")).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole("tab", { name: "Management" }));
+    fireEvent.click(screen.getByRole("tab", { name: "System" }));
     fireEvent.click(await screen.findByRole("button", { name: "Request nodes" }));
     const draft = '[[groups]]\ncount=3\nname_prefix="unsaved"';
     fireEvent.change(await screen.findByLabelText("Node Launch TOML"), { target: { value: draft } });
@@ -88,7 +99,7 @@ describe("App Component", () => {
     api.fetchRuns.mockResolvedValue({ items: [{ run_id: 2, run_name: "new-run", kind: "integration" }], nextOffset: null });
     await waitFor(() => expect(api.fetchRuns.mock.calls.length).toBeGreaterThan(requests), { timeout: 6000 });
     await act(async () => {});
-    expect(screen.getByText("Management").closest('[role="tab"]')).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("System").closest('[role="tab"]')).toHaveAttribute("aria-selected", "true");
     expect(screen.getByLabelText("Node Launch TOML")).toHaveValue(draft);
   }, 10000);
   test("checks browser access before fetching workspaces and recovers after retry", async () => {
@@ -113,12 +124,42 @@ describe("App Component", () => {
     await renderApp();
     await waitFor(() => expect(api.fetchRunTaskPanels).toHaveBeenCalled());
     if (kind === "integration") {
-      expect(screen.getByText("Task queue")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Task queue", exact: true })).toHaveAttribute("aria-expanded", "true");
       expect(screen.getByRole("button", { name: "Add tasks" })).toBeInTheDocument();
     } else {
-      expect(screen.queryByText("Task queue")).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Add Task" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Task queue", exact: true })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add tasks" })).not.toBeInTheDocument();
     }
   });
 
+});
+
+test("a deep link resolves a paginated run and keeps task output selection across workspaces", async () => {
+  vi.clearAllMocks();
+  window.history.replaceState(null, "", "/#run=2&task=9007199254740993&taskTab=observables&children=1");
+  api.fetchSession.mockResolvedValue({ authenticated: true });
+  api.fetchRuns.mockImplementation(async ({ offset = 0 }) => offset
+    ? { items: [{ run_id: 2, run_name: "older run", kind: "integration" }], nextOffset: null }
+    : { items: [{ run_id: 1, run_name: "new run", kind: "integration" }], nextOffset: 100 });
+  api.fetchNodes.mockResolvedValue([]);
+  api.fetchServerStatus.mockResolvedValue({ status: "ok" });
+  api.fetchNodeLaunchRequests.mockResolvedValue([]);
+  api.fetchRunTasks.mockResolvedValue([{ id: "9007199254740993", name: "selected sample", state: "active", task_kind: "sample" }]);
+  api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task:2", panels: [{ panel_id: "gammaloop_histogram_bundle", kind: "table", label: "Observables" }, { panel_id: "task_summary", kind: "text", label: "Task summary" }], updates: [{ mode: "replace", panel: { panel_id: "task_summary", kind: "text", text: "Selected task metadata" } }] });
+  render(<App />);
+  expect(await screen.findByRole("tab", { name: "Observables", selected: true })).toBeInTheDocument();
+  expect(api.fetchRuns).toHaveBeenCalledWith(expect.objectContaining({ offset: 100, includeChildren: true }));
+  expect(api.fetchRunTaskPanels.mock.calls.every(([run]) => run === 2)).toBe(true);
+  fireEvent.click(screen.getByRole("tab", { name: "System", exact: true }));
+  expect(await screen.findByRole("tab", { name: "Workers", selected: true })).toBeVisible();
+  fireEvent.click(screen.getByRole("tab", { name: "Runs", exact: true }));
+  expect(screen.getByRole("tab", { name: "Observables", selected: true })).toBeVisible();
+  expect(screen.getByRole("row", { name: "Select task selected sample" })).toHaveClass("Mui-selected");
+  expect(window.location.hash).toContain("task=9007199254740993");
+  expect(screen.queryByText("Selected task metadata")).not.toBeInTheDocument();
+  const polls = api.fetchRunTaskPanels.mock.calls.length;
+  fireEvent.click(screen.getByRole("tab", { name: "Summary", exact: true }));
+  expect(await screen.findByText("Selected task metadata")).toBeVisible();
+  expect(screen.getAllByText("Task summary", { exact: true })).toHaveLength(1);
+  expect(api.fetchRunTaskPanels).toHaveBeenCalledTimes(polls);
 });

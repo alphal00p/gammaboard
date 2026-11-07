@@ -1,8 +1,8 @@
 import LoadingStatus from "./LoadingStatus";
-import ConnectionStatus from "../ConnectionStatus";
 import RunSelector from "../RunSelector";
 import { asArray } from "../../utils/collections";
 import EmptyStateCard from "./EmptyStateCard";
+import { Box } from "@mui/material";
 
 const RunScopedWorkspace = ({
   runs,
@@ -14,19 +14,19 @@ const RunScopedWorkspace = ({
   loadMoreRuns = null,
   isLoadingMoreRuns = false,
   isLoadingRuns = false,
-  isConnected,
-  serverName,
   noRunsMessage,
   noSelectionMessage,
   headerActions = null,
   children,
 }) => {
   const runList = asArray(runs);
+  const header = headerActions && <Box sx={{ display: "flex", mb: 1 }}>
+    {headerActions}
+  </Box>;
   if (runList.length === 0) {
     return (
       <>
-        <ConnectionStatus isConnected={isConnected} lastUpdate={null} serverName={serverName} />
-        {headerActions}
+        {header}
         <LoadingStatus loading={isLoadingRuns} label="Loading runs…" />
         {!isLoadingRuns && <EmptyStateCard title="No runs available" message={noRunsMessage} />}
       </>
@@ -35,9 +35,8 @@ const RunScopedWorkspace = ({
 
   return (
     <>
-      <ConnectionStatus isConnected={isConnected} lastUpdate={null} serverName={serverName} />
-      {headerActions}
       <RunSelector
+        actions={headerActions}
         runs={runList}
         selectedRun={selectedRun}
         onRunChange={setSelectedRun}

@@ -134,7 +134,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
         <DialogTitle>Stop node?</DialogTitle>
         <DialogContent>
           This will request a complete shutdown of <strong>{nodeName}</strong>. Do you really want to continue? This
-          will stop the current process; you can start a replacement from Management.
+          will stop the current process; you can start a replacement from System → Workers.
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmStopOpen(false)} disabled={busy}>

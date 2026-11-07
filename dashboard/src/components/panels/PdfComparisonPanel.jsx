@@ -1,9 +1,6 @@
 import { PanelHeader, ControlBar } from "../common/PanelChrome";
 import { memo, useRef } from 'react';
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Alert,
   Box,
   Button,
@@ -19,6 +16,8 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import DisclosureField from "../common/DisclosureField";
+import { fieldHelp } from "./fieldHelp";
 import LazyChart from './LazyChart';
 import FigureExportActions from './FigureExportActions';
 import HistogramPanel from './HistogramPanel';
@@ -354,9 +353,7 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
             </Typography>
           )}
           {!line && ['density', 'mismatch'].includes(view) && (
-            <Accordion disableGutters>
-              <AccordionSummary>Colour limits · linked across comparable plots</AccordionSummary>
-              <AccordionDetails>
+            <DisclosureField section label="Colour limits · linked across comparable plots">
                 <Stack spacing={2}>
                   {(rawDensity ? ['pdf', 'target'] : ['pdf']).map((role) => {
                     const l = role === 'target' ? targetLimits : limits;
@@ -415,8 +412,7 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
                     Auto limits
                   </Button>
                 </Stack>
-              </AccordionDetails>
-            </Accordion>
+            </DisclosureField>
           )}
           {view === 'membership' && prefixes.length > 8 && scope === 'overall' && (
             <Typography variant="caption">
@@ -628,14 +624,11 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
               );
             })}
           </Stack>
-          <Accordion disableGutters>
-            <AccordionSummary>Normalization and leakage details</AccordionSummary>
-            <AccordionDetails>
+          <DisclosureField section label="Normalization and leakage details">
               <Stack spacing={2}>
-                <Typography variant="body2">
-                  Source estimate of ∫ target: {numeric(state.data.global_abs_integrand_norm)}. This
-                  is an absolute-projection integral, not the magnitude of a signed integral.
-                </Typography>
+                <DisclosureField label="Source target integral" value={numeric(state.data.global_abs_integrand_norm)}>
+                  <Typography variant="caption">This is the source estimate of the absolute-projection integral, not the magnitude of a signed integral. Full value: {String(state.data.global_abs_integrand_norm)}.</Typography>
+                </DisclosureField>
                 <Box
                   sx={{
                     overflowX: 'auto'
@@ -662,13 +655,15 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
                           <TableCell>
                             {c.k == null ? 'Overall' : prefixLabel(prefixes[c.k])}
                           </TableCell>
-                          <TableCell>{numeric(c.targetIntegral)}</TableCell>
+                          <TableCell><DisclosureField inline label="Raw target slice integral details" value={numeric(c.targetIntegral)}><Typography variant="caption">{fieldHelp("", "Raw target slice integral")} Full value: {String(c.targetIntegral)}</Typography></DisclosureField></TableCell>
                           <TableCell>
-                            {numeric(c.pdfIntegral)} · {c.pdfIntegralMethod}
+                            <DisclosureField inline label="PDF slice integral details" value={numeric(c.pdfIntegral)}>
+                              <Typography variant="caption">{fieldHelp("", "PDF slice integral")} Method: {c.pdfIntegralMethod}. Full value: {String(c.pdfIntegral)}.</Typography>
+                            </DisclosureField>
                           </TableCell>
-                          <TableCell>{numeric(c.gridPdfIntegral)}</TableCell>
-                          <TableCell>{numeric(c.targetDivisor)}</TableCell>
-                          <TableCell>{numeric(c.pdfDivisor)}</TableCell>
+                          <TableCell><DisclosureField inline label="Grid PDF integral details" value={numeric(c.gridPdfIntegral)}><Typography variant="caption">{fieldHelp("", "Grid PDF integral")} Full value: {String(c.gridPdfIntegral)}</Typography></DisclosureField></TableCell>
+                          <TableCell><DisclosureField inline label="Target divisor details" value={numeric(c.targetDivisor)}><Typography variant="caption">{fieldHelp("", "Target divisor")} Full value: {String(c.targetDivisor)}</Typography></DisclosureField></TableCell>
+                          <TableCell><DisclosureField inline label="PDF divisor details" value={numeric(c.pdfDivisor)}><Typography variant="caption">{fieldHelp("", "PDF divisor")} Full value: {String(c.pdfDivisor)}</Typography></DisclosureField></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -700,10 +695,10 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
                             <TableCell>
                               {c.k == null ? 'Overall' : prefixLabel(prefixes[c.k])}
                             </TableCell>
-                            <TableCell>{percent(c.probability)}</TableCell>
-                            <TableCell>{percent(c.targetShare)}</TableCell>
-                            <TableCell>{percent(c.actualMass)}</TableCell>
-                            <TableCell>{percent(c.leakage)}</TableCell>
+                            <TableCell><DisclosureField inline label="Exact requested p details" value={percent(c.probability)}><Typography variant="caption">{fieldHelp("", "Exact requested p")} Full fraction: {String(c.probability)}</Typography></DisclosureField></TableCell>
+                            <TableCell><DisclosureField inline label="Target share on slice details" value={percent(c.targetShare)}><Typography variant="caption">{fieldHelp("", "Target share on slice")} Full fraction: {String(c.targetShare)}</Typography></DisclosureField></TableCell>
+                            <TableCell><DisclosureField inline label="Mixture mass in actual cell details" value={percent(c.actualMass)}><Typography variant="caption">{fieldHelp("", "Mixture mass in actual cell")} Full fraction: {String(c.actualMass)}</Typography></DisclosureField></TableCell>
+                            <TableCell><DisclosureField inline label="Proposal outside intended cell details" value={percent(c.leakage)}><Typography variant="caption">{fieldHelp("", "Proposal outside intended cell")} Full fraction: {String(c.leakage)}</Typography></DisclosureField></TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -723,8 +718,7 @@ const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, valu
                   intended strata.
                 </Typography>
               </Stack>
-            </AccordionDetails>
-          </Accordion>
+          </DisclosureField>
         </Stack>
       </CardContent>
     </Card>

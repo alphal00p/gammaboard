@@ -1,3 +1,4 @@
+import { useWorkspaceActive } from "./common/WorkspaceTabs";
 import LoadingStatus from "./common/LoadingStatus";
 import {
   Alert,
@@ -5,7 +6,6 @@ import {
   Button,
   Card,
   CardContent,
-  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -17,34 +17,11 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
+import DisclosureField from "./common/DisclosureField";
+import ConfigurationTree from "./panels/ConfigurationTree";
 import { fetchSettingsOverview, restartDatabase, shutdownControlProcess } from "../services/api";
 
-const PathValue = ({ label, value }) => (
-  <Box>
-    <Typography variant="caption" color="text.secondary">
-      {label}
-    </Typography>
-    <Typography
-      variant="body2"
-      component="div"
-      sx={{
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        overflowWrap: "anywhere",
-      }}
-    >
-      {value || "not set"}
-    </Typography>
-  </Box>
-);
-
-const BoolChip = ({ label, value }) => (
-  <Chip
-    size="small"
-    variant={value ? "filled" : "outlined"}
-    color={value ? "success" : "default"}
-    label={`${label}: ${value ? "on" : "off"}`}
-  />
-);
+const PathValue = ({ label, value }) => <DisclosureField label={label} value={value || "not set"} />;
 
 const SettingsCard = ({ title, children }) => (
   <Card variant="outlined" sx={{ height: "100%" }}>
@@ -57,7 +34,8 @@ const SettingsCard = ({ title, children }) => (
   </Card>
 );
 
-const SettingsWorkspace = () => {
+const SettingsWorkspace = ({ section = "settings" }) => {
+  const active = useWorkspaceActive();
   const { authenticated } = useAuth();
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState(null);
@@ -100,6 +78,7 @@ const SettingsWorkspace = () => {
   return (
     <Stack spacing={2}>
       <LoadingStatus loading={restartingDb || shuttingDownControl} label={restartingDb ? "Restarting database…" : "Requesting shutdown…"} />
+      {section === "settings" && <>
       <SettingsCard title="Repository">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Source and operator documentation live in the project repository.
@@ -130,34 +109,23 @@ const SettingsWorkspace = () => {
         </Box>
       </Stack>
 
+      </>}
+      {section === "database" && <>
       <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <SettingsCard title="Runtime">
-            <Stack spacing={1.5}>
-              <PathValue label="Database URL" value={runtime.database_url} />
-              <PathValue label="Postgres data dir" value={paths.postgres_data_dir} />
-              <PathValue label="Postgres socket dir" value={paths.postgres_socket_dir} />
-              <PathValue label="Postgres log file" value={paths.postgres_log_file} />
-              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                <BoolChip label="runtime logs" value={runtime.tracing?.persist_runtime_logs} />
-                <BoolChip label="wal compression" value={localPostgres.wal_compression} />
-                <BoolChip label="sync commit" value={localPostgres.synchronous_commit} />
-              </Stack>
-            </Stack>
+            <ConfigurationTree value={{
+              database: { url: runtime.database_url },
+              postgres: { ...localPostgres, data_dir: paths.postgres_data_dir, socket_dir: paths.postgres_socket_dir, log_file: paths.postgres_log_file },
+              tracing: runtime.tracing || {},
+            }} />
           </SettingsCard>
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <SettingsCard title="Server">
-            <Stack spacing={1.5}>
-              <PathValue label="Name" value={server.name} />
-              <PathValue label="API bind" value={server.api_bind} />
-              <PathValue label="Allowed origins" value={(server.allowed_origins || []).join(", ")} />
-              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                <BoolChip label="secure cookie" value={server.secure_cookie} />
-                <BoolChip label="auth enabled" value={server.auth_enabled} />
-                <BoolChip label="local node spawn" value={server.allow_local_node_spawn} />
-              </Stack>
-            </Stack>
+            <ConfigurationTree value={{ server: { name: server.name, api_bind: server.api_bind,
+              allowed_origins: server.allowed_origins || [], secure_cookie: server.secure_cookie,
+              auth_enabled: server.auth_enabled, allow_local_node_spawn: server.allow_local_node_spawn } }} />
           </SettingsCard>
         </Box>
       </Stack>
@@ -183,14 +151,16 @@ const SettingsWorkspace = () => {
         </SettingsCard>
       ) : null}
 
+      </>}
+
       <Snackbar
-        open={Boolean(snackbar)}
+        open={active && Boolean(snackbar)}
         autoHideDuration={4000}
         onClose={() => setSnackbar(null)}
         message={snackbar?.message || ""}
       />
       <Dialog
-        open={restartDbOpen}
+        open={active && restartDbOpen}
         onClose={() => (restartingDb ? null : setRestartDbOpen(false))}
         maxWidth="sm"
         fullWidth
@@ -226,7 +196,7 @@ const SettingsWorkspace = () => {
         </DialogActions>
       </Dialog>
       <Dialog
-        open={shutdownControlOpen}
+        open={active && shutdownControlOpen}
         onClose={() => (shuttingDownControl ? null : setShutdownControlOpen(false))}
         maxWidth="sm"
         fullWidth

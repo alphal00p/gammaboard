@@ -2,50 +2,57 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import TablePanel from "./TablePanel";
 
-const columns = ["Component", "Sign", "Integrand", "Jacobian", "Max Weighted Value", "Impact", "Point"];
+const columns = ["Component", "Sign", "Integrand", "Max Weighted Value", "Impact", "Point"];
 const point = {
   kind: "sample_point",
   discrete: [2, 3],
   continuous: [0.9981234567890123, 1.2345678901234567e-8, -12.345678901234567],
   sampling_weight: 7.123456789012345,
+  parameterization_jacobian: 0.00012345,
   total_weight: 7.123456789012345,
   stratum: { requested: [1, 3], actual: [0] },
 };
 const state = {
   panel_id: "max_weight_points", columns,
-  rows: [["real", "+", 1234.5, 0.00012345, 10500, 0.00001, point]],
-  payload: { column_formats: Object.fromEntries(columns.slice(2, 6).map((column) => [column, "scientific"])) },
+  rows: [["real", "+", 1234.5, 10500, 0.00001, point]],
+  payload: { column_formats: Object.fromEntries(columns.slice(2, 5).map((column) => [column, "scientific"])) },
 };
 
 describe("Max Weight Points", () => {
   test("uses scientific columns and three significant digits with a full-precision disclosure", () => {
     const { rerender } = render(<TablePanel title="Max Weight Points" state={state} />);
     const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
-    expect(cells.slice(2, 6).map((cell) => cell.textContent)).toEqual([
-      "1.234500e+3", "1.234500e-4", "1.050000e+4", "1.000000e-5",
+    expect(cells.slice(2, 5).map((cell) => cell.textContent.replaceAll("▸", ""))).toEqual([
+      "1.234500e+3", "1.050000e+4", "1.000000e-5",
     ]);
-    expect(cells[6]).toHaveTextContent("integrand d=[2, 3], c=[0.998, 1.23e-8, -12.3], total weight=7.123457e+0");
-    const toggle = within(cells[6]).getByText("Full Precision (f64)");
-    const details = toggle.closest("details");
-    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(within(cells[3]).getByRole("button", { name: "Max Weighted Value details" }));
+    expect(cells[3]).toHaveTextContent(`Jacobian = ${point.parameterization_jacobian.toExponential(16)}`);
+    expect(cells[3]).toHaveTextContent(`Sampling weight = ${point.sampling_weight.toExponential(16)}`);
+    expect(cells[5]).toHaveTextContent("integrand d=[2, 3], c=[0.998, 1.23e-8, -12.3], total weight=7.123457e+0");
+    const toggle = within(cells[5]).getByRole("button", { name: "Sample point details" });
+    const details = document.getElementById(toggle.getAttribute("aria-controls"));
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
-    expect(details).toHaveAttribute("open");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     point.continuous.forEach((value) => expect(details).toHaveTextContent(value.toExponential(16)));
     expect(details).toHaveTextContent(`total weight=${point.total_weight.toExponential(16)}`);
     // Polling updates should retain the disclosure state.
     rerender(<TablePanel title="Max Weight Points" state={{ ...state, rows: state.rows.map((row) => [...row]) }} />);
-    expect(details).toHaveAttribute("open");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(toggle);
-    expect(details).not.toHaveAttribute("open");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 
   test("preserves unavailable metadata and distinguishes it from zero", () => {
     render(<TablePanel title="Max Weight Points" state={{ ...state, rows: [
-      ["real", "+", "n/a", "n/a", 0, 0, { ...point, continuous: [0, 1], sampling_weight: null, total_weight: null }],
+      ["real", "+", "n/a", 0, 0, { ...point, continuous: [0, 1], parameterization_jacobian: null, sampling_weight: null, total_weight: null }],
     ] }} />);
     const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
-    expect(cells.slice(2, 6).map((cell) => cell.textContent)).toEqual(["n/a", "n/a", "0e+0", "0e+0"]);
-    expect(cells[6]).toHaveTextContent("c=[0.00, 1.00], total weight=n/a");
+    expect(cells.slice(2, 5).map((cell) => cell.textContent.replaceAll("▸", ""))).toEqual(["n/a", "0e+0", "0e+0"]);
+    fireEvent.click(within(cells[3]).getByRole("button", { name: "Max Weighted Value details" }));
+    expect(cells[3]).toHaveTextContent("Jacobian = n/a");
+    expect(cells[3]).toHaveTextContent("Sampling weight = n/a");
+    expect(cells[5]).toHaveTextContent("c=[0.00, 1.00], total weight=n/a");
   });
 });
 
@@ -70,7 +77,7 @@ describe("Campaign Sub-runs", () => {
       },
     },
   };
-  const body = () => screen.getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell").map((cell) => cell.textContent));
+  const body = () => screen.getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell").map((cell) => cell.textContent.replaceAll("▸", "")));
 
   test("sorts raw numbers descending then ascending, renumbers rows, and selects the right run", () => {
     const onSelectRun = vi.fn();
@@ -111,4 +118,17 @@ describe("Campaign Sub-runs", () => {
     fireEvent.click(screen.getByRole("button", { name: "real err (%)" }));
     expect(body().map((row) => row[1])).toEqual(["graph-b", "graph-d", "graph-a", "graph-c"]);
   });
+});
+
+test("stratum estimates use estimate formatting and preserve unavailable errors", () => {
+  render(<TablePanel title="Stratum results" state={{ panel_id: "stratum_results", columns: ["Stratum", "Value estimate"], rows: [
+    [[0], { kind: "estimate", value: 1.25, error: 0.05, estimator: "stratified", sample_count: 64 }],
+    [[1], { kind: "estimate", value: 0, error: null, estimator: "stratified", sample_count: 64 }],
+  ] }} />);
+  const cells = screen.getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell")[1]);
+  expect(cells[0]).toHaveTextContent("1.25");
+  fireEvent.click(within(cells[0]).getByRole("button", { name: "Estimate details" }));
+  expect(cells[0]).toHaveTextContent("stratified");
+  expect(cells[0].textContent).not.toContain('"kind"');
+  expect(cells[1]).toHaveTextContent("unavailable");
 });

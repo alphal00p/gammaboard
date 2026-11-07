@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useWorkspaceActive } from "../components/common/WorkspaceTabs";
 
-export const usePolling = ({ enabled = true, intervalMs, poll, reset = null }) => {
+export const usePolling = ({ enabled = true, intervalMs, poll, reset = null, paused = false }) => {
+  const workspaceActive = useWorkspaceActive();
+  const active = workspaceActive && !paused;
+  const resetSource = useRef(null);
   const timeoutRef = useRef(null);
   const controllerRef = useRef(null);
   const cancelledRef = useRef(true);
@@ -40,29 +44,34 @@ export const usePolling = ({ enabled = true, intervalMs, poll, reset = null }) =
   );
 
   const trigger = useCallback(() => {
-    if (!enabled || cancelledRef.current) return;
+    if (!enabled || !active || cancelledRef.current) return;
     clearScheduled();
     runTokenRef.current += 1;
     if (controllerRef.current) controllerRef.current.abort();
     run(runTokenRef.current);
-  }, [clearScheduled, enabled, run]);
+  }, [clearScheduled, enabled, active, run]);
 
   useEffect(() => {
-    if (typeof reset === "function") reset();
-    cancelledRef.current = !enabled;
+    const previous = resetSource.current;
+    if (!previous || previous.poll !== poll || previous.reset !== reset || previous.enabled !== enabled) {
+      reset?.();
+      resetSource.current = { poll, reset, enabled };
+    }
+    cancelledRef.current = !enabled || !active;
     clearScheduled();
     if (controllerRef.current) controllerRef.current.abort();
-    if (!enabled) return undefined;
+    if (!enabled || !active) return undefined;
 
     runTokenRef.current += 1;
     run(runTokenRef.current);
 
     return () => {
       cancelledRef.current = true;
+      runTokenRef.current += 1;
       clearScheduled();
       if (controllerRef.current) controllerRef.current.abort();
     };
-  }, [clearScheduled, enabled, run, reset]);
+  }, [clearScheduled, enabled, active, run, reset, poll]);
 
   return trigger;
 };

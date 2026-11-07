@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchRuntimeLogPage } from "../services/api";
+import { useWorkspaceActive } from "../components/common/WorkspaceTabs";
 import { asArray } from "../utils/collections";
 
 const defaultFilters = Object.freeze({
@@ -12,6 +13,7 @@ const defaultFilters = Object.freeze({
 });
 
 export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) => {
+  const active = useWorkspaceActive();
   const [items, setItems] = useState([]);
   const [filters, setFilters] = useState(() => ({
     ...defaultFilters,
@@ -93,10 +95,11 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
   );
 
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     loadPage({ beforeId: null, append: false, signal: controller.signal });
     return () => controller.abort();
-  }, [filters, loadPage]);
+  }, [active, filters, loadPage]);
 
   const refresh = useCallback(() => {
     const controller = new AbortController();

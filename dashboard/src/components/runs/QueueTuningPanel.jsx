@@ -1,12 +1,13 @@
+import DisclosureField from "../common/DisclosureField";
 import { Alert, Box, Button, Card, CardContent, Stack, TextField, Typography } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const FORM_REFRESH_HOLD_MS = 5000;
 
 const QUEUE_TUNING_FIELDS = [
-  { key: "target_batch_eval_ms", label: "Target Evaluation Time (ms)", kind: "float" },
+  { key: "target_batch_eval_ms", label: "Target Evaluation Time (ms)", kind: "float", help: "Adaptive evaluator batches aim for this evaluation duration. Queue and database waits are measured separately." },
   { key: "max_generation_size", label: "Maximum Sampler Draw Size", kind: "int", help: "Applies to the next draw. Training windows are unchanged." },
-  { key: "max_batch_size", label: "Maximum Evaluator Batch Size", kind: "int" },
+  { key: "max_batch_size", label: "Maximum Evaluator Batch Size", kind: "int", help: "Upper bound on the number of points sent to an evaluator in one batch. A sampler draw can supply several evaluator batches." },
   { key: "fixed_batch_size", label: "Fixed Evaluator Batch Size (optional)", kind: "int", optional: true },
 ];
 
@@ -45,13 +46,14 @@ const QueueTuningPanel = ({
     return next;
   }, [isSampleTask, run, task]);
 
+  const dirty = useRef(false);
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState(null);
   const [refreshHoldUntilMs, setRefreshHoldUntilMs] = useState(0);
   const [skipNextExternalRefreshes, setSkipNextExternalRefreshes] = useState(0);
 
   useEffect(() => {
-    if (Date.now() < refreshHoldUntilMs) return;
+    if (dirty.current || Date.now() < refreshHoldUntilMs) return;
     if (skipNextExternalRefreshes > 0) {
       setSkipNextExternalRefreshes((count) => Math.max(0, count - 1));
       return;
@@ -75,14 +77,16 @@ const QueueTuningPanel = ({
       payload[field.key] = parsed.value;
     }
     setError(null);
-    await onSave(payload);
+    if (await onSave(payload) === false) return false;
+    dirty.current = false;
     return true;
   };
 
   const handleClear = async () => {
     if (!onClear || disabled) return;
     setError(null);
-    await onClear();
+    if (await onClear() === false) return false;
+    dirty.current = false;
     return true;
   };
 
@@ -92,7 +96,6 @@ const QueueTuningPanel = ({
         <CardContent>
           <Stack spacing={2}>
             <Box>
-              <Typography variant="h6">Queue Tuning</Typography>
               <Typography variant="body2" color="text.secondary">
                 Evaluator batches adapt to the target duration. The draw limit bounds how many samples the sampler generates at once; each draw can supply multiple evaluator batches.
               </Typography>
@@ -118,12 +121,13 @@ const QueueTuningPanel = ({
                 >
                   {QUEUE_TUNING_FIELDS.map((field) => {
                     const input = (
-                    <TextField
+                    <TextField fullWidth
                       disabled={disabled}
                       key={field.key}
                       size="small"
-                      label={field.label}
-                      helperText={field.optional ? "Blank uses the run default." : field.help}
+                      label={field.optional ? field.label : undefined}
+                      slotProps={{ htmlInput: { "aria-label": field.label } }}
+                      helperText={field.optional ? "Blank uses the run default." : undefined}
                       value={form[field.key] ?? ""}
                       onChange={(event) => {
                         const raw = event.target.value;
@@ -131,17 +135,21 @@ const QueueTuningPanel = ({
                           field.kind === "int"
                             ? raw.replace(/[^\d]/g, "")
                             : raw.replace(/[^0-9.-]/g, "");
+                        dirty.current = true;
                         setRefreshHoldUntilMs(Date.now() + FORM_REFRESH_HOLD_MS);
                         setForm((prev) => ({ ...prev, [field.key]: nextValue }));
                       }}
                     />
                     );
                     return field.optional ? (
-                      <Box component="details" key={field.key} sx={{ gridColumn: "1 / -1" }}>
-                        <Typography component="summary" sx={{ cursor: "pointer", mb: 1 }}>Advanced</Typography>
+                      <DisclosureField key={field.key} label="Fixed evaluator batch size" value={form[field.key] || "Automatic"} sx={{ gridColumn: "1 / -1" }}>
+                        <Typography variant="caption" component="p" sx={{ mb: 1 }}>Advanced override. Blank uses the run default; an explicit size overrides adaptive batching.</Typography>
                         {input}
-                      </Box>
-                    ) : input;
+                      </DisclosureField>
+                    ) : <DisclosureField key={field.key} section label={field.label} ariaLabel={`${field.label} explanation`}
+                      actions={<Box sx={{ width: { xs: 100, md: 130 } }}>{input}</Box>}>
+                      <Typography variant="caption">{field.help}</Typography>
+                    </DisclosureField>;
                   })}
                 </Box>
                 {error ? <Alert severity="error">{error}</Alert> : null}

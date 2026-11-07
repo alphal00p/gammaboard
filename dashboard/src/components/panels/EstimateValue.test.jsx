@@ -23,10 +23,11 @@ test('expanded estimates pair the pooled error with its own mean', () => {
       }}
     />
   );
-  expect(screen.getByText('1.5(0.5)\\;\\left(33.333\\%\\right)')).toBeInTheDocument();
-  const summary = screen.getByText('Estimates and full precision (f64)');
+  expect(screen.getByText('1.5(5)')).toBeInTheDocument();
+  expect(screen.getByText('(33.3%)')).toBeInTheDocument();
+  const summary = screen.getByRole('button', { name: 'Estimate details' });
   fireEvent.click(summary);
-  expect(summary.closest('details')).toHaveAttribute('open');
+  expect(summary).toHaveAttribute('aria-expanded', 'true');
   expect(screen.getByText(/strat_err =/)).toHaveTextContent(`mean = ${formatF64Full(1.5)}`);
   expect(screen.getByText(/strat_err =/)).toHaveTextContent(`basic_mean = ${formatF64Full(1.8)}`);
   expect(screen.getByText(/strat_err =/)).toHaveTextContent(`basic_err = ${formatF64Full(0.7)}`);
@@ -36,7 +37,8 @@ test('provisional means keep an unavailable error and pooled stages never imply 
   const { rerender } = render(
     <EstimateValueBlock value={{ value: 1.5, error: null, estimator: 'pooled' }} />
   );
-  expect(screen.getByText('pooled estimate; error unavailable')).toBeInTheDocument();
+  expect(screen.getByText('· error unavailable')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Estimate details' }));
   expect(screen.getByText(/strat_err = not used/)).toHaveTextContent('basic_err = unavailable');
   expect(screen.queryByText(/basic_err = 0/)).not.toBeInTheDocument();
   rerender(

@@ -160,6 +160,10 @@ pub fn accumulate_values(
             partition: plan.partition.clone(),
             attempts: vec![0; plan.partition.centers().len()],
             matches: vec![0; plan.partition.centers().len()],
+            training_moments: Some(vec![
+                super::accumulator::TrainingMoments::default();
+                plan.partition.centers().len()
+            ]),
             feedback_samples: if options.require_training_values {
                 batch.len() as u64
             } else {
@@ -227,7 +231,7 @@ pub fn accumulate_values(
                 ));
             }
         };
-        if let Some(feedback) = &mut feedback {
+        if feedback.is_some() || diagnostics.is_some() {
             let projected = match config {
                 AccumulatorConfig::Vector {
                     training_projection: TrainingProjection::Component { name },
@@ -245,7 +249,18 @@ pub fn accumulate_values(
                 | AccumulatorConfig::Gammaloop => raw.iter().fold(0.0_f64, |n, x| n.hypot(*x)),
                 _ => raw[0],
             };
-            feedback.push(projected * point.total_weight());
+            let weighted = projected * point.total_weight();
+            if let Some(diagnostics) = &mut diagnostics {
+                let label = stratification.expect("partitioned diagnostics").1[i];
+                diagnostics.training_moments.as_mut().unwrap()[label].add(if matched {
+                    weighted
+                } else {
+                    0.0
+                })?;
+            }
+            if let Some(feedback) = &mut feedback {
+                feedback.push(weighted);
+            }
         }
     }
     if let AccumulatorState::Vector(vector) = &mut state {
@@ -311,6 +326,10 @@ mod tests {
         assert_eq!(diagnostics.attempts, vec![2, 1]);
         assert_eq!(diagnostics.matches, vec![1, 1]);
         assert_eq!(diagnostics.feedback_samples, 3);
+        let ess = diagnostics.training_ess_by_stratum();
+        assert!((ess[0].unwrap() - 0.5).abs() < 1e-12);
+        assert!((ess[1].unwrap() - 1.0).abs() < 1e-12);
+        assert!((diagnostics.training_ess().unwrap() - 2.0 / 3.0).abs() < 1e-12);
         let source = training.components[0]
             .state
             .max_weighted_positive_sample

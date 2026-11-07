@@ -11,13 +11,13 @@ import {
   useTheme,
 } from "@mui/material";
 import prettyMilliseconds from "pretty-ms";
-import LatexFormula from "../LatexFormula";
 import FigureExportActions, { escapeXml } from "./FigureExportActions";
 import {
   convertTimeValue,
   formatCompactNumber,
   formatDateTime,
   formatEstimateDisplay,
+  formatDecimalSignificant,
   formatF64Full,
   formatScientific,
   normalizeTimeUnit,
@@ -26,6 +26,9 @@ import {
 import { asArray } from "../../utils/collections";
 import { isObject } from "./panelView";
 import StatusChip from "../common/StatusChip";
+import DisclosureField from "../common/DisclosureField";
+import ConfigurationTree from "./ConfigurationTree";
+import { fieldHelp } from "./fieldHelp";
 import { PanelHeader } from "../common/PanelChrome";
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
@@ -110,14 +113,6 @@ const domainSummaryText = (value) => {
   return "Domain";
 };
 
-const formatDebugJson = (value) => {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-};
-
 const formatEtaSeconds = (seconds) => {
   const numericSeconds = Number(seconds);
   if (!Number.isFinite(numericSeconds) || numericSeconds < 0) return null;
@@ -135,6 +130,24 @@ export const ProgressPanel = ({ title, state, controls = null }) => {
   const total = Number(state?.total);
   const eta = formatEtaSeconds(state?.eta_seconds);
   const progress = Number.isFinite(current) && Number.isFinite(total) && total > 0 ? (current / total) * 100 : 0;
+  if (state?.panel_id === "sample_progress") return <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 0.5 }}>
+    <LinearProgress aria-label={title || "Sample progress"}
+      variant={Number.isFinite(total) && total > 0 ? "determinate" : "indeterminate"}
+      value={Math.max(0, Math.min(100, progress))} sx={{ flex: 1, height: 6, borderRadius: 999 }} />
+    {eta && <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>ETA: {eta}</Typography>}
+  </Stack>;
+  if (state?.panel_id === "campaign_progress") return <Card variant="outlined"><CardContent>
+    <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={2} sx={{ mb: 1 }}>
+      <Typography variant="subtitle1">Campaign progress</Typography>
+      <Typography variant="subtitle1" sx={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+        {Number.isFinite(current) ? current.toLocaleString() : "0"}
+        {state.total != null && Number.isFinite(total) ? ` / ${total.toLocaleString()}` : ""} samples
+      </Typography>
+    </Stack>
+    <LinearProgress aria-label="Campaign progress" variant={Number.isFinite(total) && total > 0 ? "determinate" : "indeterminate"}
+      value={Math.max(0, Math.min(100, progress))} sx={{ height: 6, borderRadius: 999 }} />
+    {eta && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>ETA: {eta}</Typography>}
+  </CardContent></Card>;
   return (
     <Card variant="outlined">
       <CardContent>
@@ -165,97 +178,20 @@ export const ProgressPanel = ({ title, state, controls = null }) => {
   );
 };
 
-export const KeyValuePanel = ({ title, state }) => (
-  <Card variant="outlined">
-    <CardContent>
-      <PanelHeader title={title}>
-        {asArray(state?.entries).some((entry) => entry.value?.kind === "estimate") && <FigureExportActions baseName={state?.panel_id || title} payload={{ kind: "key_value", state }} imageFormat={null} />}
-      </PanelHeader>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "minmax(0, 1fr)", [state?.panel_id === "estimate_summary" ? "md" : "lg"]: "minmax(0, 1fr) minmax(0, 1fr)" },
-          gap: 1.5,
-        }}
-      >
-        {asArray(state?.entries).map((entry) => {
-          const displayEntry = withDynamicTimeUnitEntry(entry);
-          return (
-            <Box
-              key={displayEntry.key}
-              sx={{
-                display: "grid",
-                // Give primary results room while keeping metadata compact.
-                gridColumn: state?.panel_id === "campaign_combined_result" &&
-                  (isEstimateValue(displayEntry.value) || isTargetComparisonValue(displayEntry.value)) ? "1 / -1" : undefined,
-                gridTemplateColumns: state?.panel_id === "campaign_combined_result"
-                  ? "max-content minmax(0, 1fr)"
-                  : "minmax(120px, 0.9fr) minmax(0, 1.1fr)",
-                gap: 1,
-                py: 0.75,
-                borderBottom: "1px solid",
-                borderColor: "divider",
-              }}
-            >
-              <Typography variant="body2" color="text.secondary">
-                {displayEntry.label}
-              </Typography>
-              {isEstimateValue(displayEntry.value) ? (
-                <EstimateValueBlock value={displayEntry.value} />
-              ) : isTargetComparisonValue(displayEntry.value) ? (
-                <TargetComparisonValueBlock value={displayEntry.value} />
-              ) : ["state", "status"].includes(displayEntry.label?.toLowerCase()) && typeof displayEntry.value === "string" ? (
-                <Box><StatusChip status={displayEntry.value} /></Box>
-              ) : displayEntry?.key === "domain" && isObject(displayEntry.value) ? (
-                <Box sx={{ minWidth: 0 }}>
-                  <Box component="details">
-                    <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
-                      {domainSummaryText(displayEntry.value)}
-                    </Box>
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        mt: 0.5,
-                        display: "block",
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        color: "text.primary",
-                      }}
-                    >
-                      {formatDebugJson(displayEntry.value)}
-                    </Typography>
-                  </Box>
-                </Box>
-              ) : (
-                <Typography
-                  variant="body2"
-                  sx={{
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-                    wordBreak: "break-word",
-                    whiteSpace: "pre-wrap",
-                    color:
-                      displayEntry.tone === "good"
-                        ? "success.main"
-                        : displayEntry.tone === "warning"
-                          ? "warning.main"
-                          : displayEntry.tone === "critical"
-                            ? "error.main"
-                            : "text.primary",
-                  }}
-                >
-                  {renderStructuredValue(displayEntry.value)}
-                </Typography>
-              )}
-            </Box>
-          );
-        })}
-      </Box>
-    </CardContent>
-  </Card>
-);
+const RESULT_NOTES = new Set(["diagnostics_basis", "uncertainty_note"]);
+const RESULT_PANELS = new Set(["estimate_summary", "campaign_combined_result"]);
 
-export const EstimateValueBlock = ({ value }) => {
+export function ScientificValue({ text }) {
+  const match = /^(.*?)(?: × 10\^|e)([+-]?\d+)$/.exec(text);
+  if (!match) return <>{text}</>;
+  return <>{match[1]}{Number(match[2]) !== 0 && <> × 10<sup>{Number(match[2])}</sup></>}</>;
+}
+
+function PrecisionText({ children }) {
+  return <Typography component="pre" variant="body2" sx={{ fontFamily: "monospace" }}>{children}</Typography>;
+}
+
+export const EstimateValueBlock = ({ value, label, help }) => {
   const central = value?.value == null ? null : Number(value.value);
   const error = value?.error == null ? null : Number(value.error);
   const estimator = value?.estimator || "pooled";
@@ -263,58 +199,95 @@ export const EstimateValueBlock = ({ value }) => {
   const details = [`estimator = ${estimator}`, `mean = ${formatF64Full(central, "unavailable")}`];
   if (estimator === "stratified") {
     details.push(`strat_err = ${formatF64Full(error, "unavailable: insufficient stratum coverage")}`);
-    details.push(`basic_mean = ${formatF64Full(value?.basic?.mean, "unavailable")}`);
-    details.push(`basic_err = ${formatF64Full(value?.basic?.error, "unavailable")}`);
-  } else if (estimator === "pooled") {
-    details.push(`basic_err = ${formatF64Full(error, "unavailable: fewer than two samples")}`);
-    details.push("strat_err = not used");
+    if (value?.basic) details.push(`basic_mean = ${formatF64Full(value.basic.mean, "unavailable")}`, `basic_err = ${formatF64Full(value.basic.error, "unavailable")}`);
   } else {
-    details.push(`error = ${formatF64Full(error, "unavailable")}`);
-    if (value?.basic) details.push(`basic_mean = ${formatF64Full(value.basic.mean)}`, `basic_err = ${formatF64Full(value.basic.error, "unavailable")}`);
+    details.push(`basic_err = ${formatF64Full(error, "unavailable: fewer than two samples")}`, "strat_err = not used");
   }
-  return (
-    <Box sx={{ minWidth: 0 }}>
-      <Box title="Mean and parenthesized absolute error use the same displayed scale." sx={{ fontSize: "1.25rem", fontWeight: 600, fontVariantNumeric: "tabular-nums", lineHeight: 1.4, whiteSpace: "nowrap", overflowX: "auto", pb: 0.5 }}>
-        {central == null ? "Mean unavailable" : <LatexFormula latex={estimate.latex_with_relative || estimate.latex} display={false} fallbackPrefix="Estimate" />}
-      </Box>
-      <Typography variant="caption" color="text.secondary">{`${estimator} estimate${error == null ? "; error unavailable" : ""}`}</Typography>
-      <Box component="details" sx={{ mt: 0.5 }}>
-        <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>Estimates and full precision (f64)</Box>
-        <Typography variant="caption" sx={{ mt: 0.5, display: "block", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>{details.join("\n")}</Typography>
-        {value?.basic && <Typography variant="caption" color="text.secondary">Basic statistics pool the same masked, weighted samples. Basic error belongs to basic_mean.</Typography>}
-      </Box>
-    </Box>
-  );
+  const compact = <Box component="span" sx={{ display: "inline-flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 0.5 }}>
+    <span>{central == null ? "Mean unavailable" : <ScientificValue text={estimate.text} />}</span>
+    {central != null && error == null ? <span>· error unavailable</span> : estimate.relative_percent_text != null && <span>({estimate.relative_percent_text}%)</span>}
+  </Box>;
+  return <DisclosureField label={label || "Estimate details"} value={compact} inline={!label}>
+    <PrecisionText>{details.join("\n")}</PrecisionText>
+    <Typography variant="caption" component="p" sx={{ mt: 1 }}>Parenthesized digits give the uncertainty in the last displayed digits; for example, 5.4123(25) means 5.4123 ± 0.0025.</Typography>
+    {value?.basic && <Typography variant="caption" component="p">The pooled reference error belongs to its own pooled mean.</Typography>}
+    {help && <Typography variant="caption" component="p" sx={{ mt: 1 }}>{help}</Typography>}
+  </DisclosureField>;
 };
 
-const TargetComparisonValueBlock = ({ value }) => {
-  const estimator = value?.estimator || "pooled";
-  const central = Number(value?.value);
-  const error = value?.error == null ? null : Number(value.error);
-  const target = Number(value?.target);
-  const deltaPercent = value?.delta_percent == null ? NaN : Number(value.delta_percent);
-  const deltaSigma = value?.delta_sigma == null ? NaN : Number(value.delta_sigma);
-  const targetText = formatScientific(target, 4, "n/a");
-  const deltaPercentText = Number.isFinite(deltaPercent) ? formatScientific(deltaPercent, 4, "n/a") : "n/a";
-  const deltaSigmaText = Number.isFinite(deltaSigma) ? formatScientific(deltaSigma, 4, "n/a") : "n/a";
-  return (
-    <Box sx={{ minWidth: 0 }}>
-      <Box sx={{ fontSize: "1rem", fontWeight: 650, lineHeight: 1.4, pb: 0.1 }}>
-        <LatexFormula latex={`t=${targetText}`} display={false} fallbackPrefix="Target" />
+const TargetComparisonValueBlock = ({ value, label }) => {
+  const signed = (number) => number == null || !Number.isFinite(Number(number)) ? "n/a"
+    : `${Number(number) > 0 ? "+" : ""}${formatDecimalSignificant(number)}`;
+  return <DisclosureField label={label || "Target comparison details"} inline={!label}
+    value={<Box component="span" sx={{ display: "inline-flex", alignItems: "baseline", flexWrap: "wrap", columnGap: 0.75 }}>
+      <span><ScientificValue text={formatScientific(value.target, 4)} /></span>
+      <span>· Δ {signed(value.delta_percent)}%</span><span>· {signed(value.delta_sigma)}σ</span>
+    </Box>}>
+    <PrecisionText>{`estimator = ${value.estimator || "pooled"}\nvalue = ${formatF64Full(value.value)}\nerror = ${formatF64Full(value.error)}\ntarget = ${formatF64Full(value.target)}\ndelta_percent = ${formatF64Full(value.delta_percent)}\ndelta_sigma = ${formatF64Full(value.delta_sigma)}`}</PrecisionText>
+    <Typography variant="caption" component="p" sx={{ mt: 1 }}>Delta is 100 × (estimate − target) / |target|. Pull is (estimate − target) / standard error. Positive values lie above the target. Undefined comparisons remain unavailable.</Typography>
+  </DisclosureField>;
+};
+
+function ValueField({ entry, state }) {
+  const display = withDynamicTimeUnitEntry(entry);
+  const { key, label, value } = display;
+  const help = entry.help || fieldHelp(key, label, state.panel_id);
+  const errorNote = asArray(state.entries).find((e) => e.key === "uncertainty_note")?.value;
+  if (isEstimateValue(value)) return <EstimateValueBlock label={label} value={value} help={[help, errorNote].filter(Boolean).join(" ")} />;
+  if (isTargetComparisonValue(value)) return <TargetComparisonValueBlock label={label} value={value} />;
+  if (isObject(value) || Array.isArray(value)) return <DisclosureField label={label}
+    value={key === "domain" ? domainSummaryText(value) : `${Object.keys(value).length} ${Array.isArray(value) ? "items" : "fields"}`}>
+    <ConfigurationTree value={value} />
+  </DisclosureField>;
+  const precise = typeof value === "number" && !Number.isInteger(value);
+  return <DisclosureField label={label} value={["state", "status"].includes(label?.toLowerCase()) && typeof value === "string"
+    ? <StatusChip status={value} /> : <Typography component="span" variant="body2" sx={{ overflowWrap: "anywhere",
+      color: display.tone === "good" ? "success.main" : display.tone === "warning" ? "warning.main" : display.tone === "critical" ? "error.main" : "inherit" }}>
+      {renderStructuredValue(value)}</Typography>}>
+    {help || precise ? <>
+      {help && <Typography variant="body2" sx={{ mb: precise ? 1 : 0 }}>{help}</Typography>}
+      {precise && <PrecisionText>{formatF64Full(value)}</PrecisionText>}
+    </> : null}
+  </DisclosureField>;
+}
+
+export const KeyValuePanel = ({ title, state }) => {
+  const result = RESULT_PANELS.has(state?.panel_id);
+  const entries = asArray(state?.entries).filter((entry) => !result || !RESULT_NOTES.has(entry.key));
+  const allEstimates = entries.filter((entry) => isEstimateValue(entry.value));
+  const estimates = result ? allEstimates : [];
+  const grouped = new Set();
+  const hasTargets = entries.some((entry) => isTargetComparisonValue(entry.value));
+  const groups = estimates.map((mean) => {
+    const component = /^component_(.*)_mean$/.exec(mean.key)?.[1] ?? /^estimate_(.*)$/.exec(mean.key)?.[1] ?? mean.key.replace(/_mean$/, "");
+    const target = entries.find((entry) => entry.key === `target_comparison_${component}`);
+    const rsd = entries.find((entry) => entry.key === `component_${component}_rsd`);
+    const fields = [mean, target || (hasTargets ? { key: `target_comparison_${component}`, label: `${component} vs Target`, value: "not set" } : null), rsd].filter(Boolean);
+    fields.forEach((entry) => grouped.add(entry.key));
+    return { component, fields };
+  });
+  const common = entries.filter((entry) => !grouped.has(entry.key));
+  const renderFields = (fields) => fields.map((entry) => <Box key={entry.key} sx={{ minWidth: 0, borderBottom: 1, borderColor: "divider" }}><ValueField entry={entry} state={state} /></Box>);
+  return <Card variant="outlined"><CardContent>
+    {(title || allEstimates.length > 0) && <PanelHeader title={title}>
+      {allEstimates.length > 0 && <FigureExportActions baseName={state?.panel_id || title} payload={{ kind: "key_value", state }} imageFormat={null} />}
+    </PanelHeader>}
+    {state?.panel_id === "max_weight_summary" ? <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "repeat(3, minmax(0, 1fr))" }, gap: 2 }}>
+      {renderFields(entries.filter((entry) => entry.key !== "weight_basis").map((entry) => ({ ...entry,
+        help: [fieldHelp(entry.key, entry.label, state.panel_id), entries.find((field) => field.key === "weight_basis")?.value].filter(Boolean).join(" "),
+      })))}
+    </Box> : state?.panel_id?.endsWith("_config") ? <ConfigurationTree entries={asArray(state.entries)} /> : <>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "repeat(2, minmax(0, 1fr))" }, columnGap: 2 }}>
+        {renderFields(common.filter((entry) => ["count", "estimator"].includes(entry.key)))}
       </Box>
-      <Box sx={{ fontSize: "0.95rem", lineHeight: 1.35, color: "text.secondary", pb: 0.15 }}>
-        <LatexFormula latex={`\\Delta=${deltaPercentText}\\%,\\;${deltaSigmaText}\\sigma`} display={false} fallbackPrefix="Delta" />
+      {groups.length > 0 && <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "repeat(2, minmax(0, 1fr))" }, columnGap: 2 }}>
+        {groups.map(({ component, fields }) => <Box key={component} data-result-component={component} sx={{ minWidth: 0 }}>{renderFields(fields)}</Box>)}
+      </Box>}
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "repeat(2, minmax(0, 1fr))" }, columnGap: 2 }}>
+        {renderFields(common.filter((entry) => !["count", "estimator"].includes(entry.key)))}
       </Box>
-      <Box component="details" sx={{ mt: 0.5 }}>
-        <Box component="summary" sx={{ cursor: "pointer", fontSize: "0.8rem", color: "text.secondary" }}>
-          Full precision (f64)
-        </Box>
-        <Typography variant="caption" sx={{ mt: 0.5, display: "block", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace", whiteSpace: "pre-wrap" }}>
-          {`estimator = ${estimator}\nvalue = ${formatF64Full(central, "n/a")}\nerror = ${formatF64Full(error, "n/a")}\ntarget = ${formatF64Full(target, "n/a")}\ndelta_percent = ${formatF64Full(deltaPercent, "n/a")}\ndelta_sigma = ${formatF64Full(deltaSigma, "n/a")}`}
-        </Typography>
-      </Box>
-    </Box>
-  );
+    </>}
+  </CardContent></Card>;
 };
 
 export const EmptyPlotPanel = ({ title }) => (

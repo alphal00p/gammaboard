@@ -203,7 +203,7 @@ const panelValueEquals = (left, right) => {
   return leftEntries.every(([key, value]) => Object.is(value, right[key]));
 };
 
-export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null } = {}) => {
+export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null, paused = false } = {}) => {
   const [state, setState] = useState(emptyState);
   const stateRef = useRef(emptyState);
   const [lastUpdate, setLastUpdate] = useState(null);
@@ -323,7 +323,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
     setIsFetching(false);
   }, []);
 
-  const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset });
+  const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset, paused });
   useEffect(() => {
     if (previousRefreshKey.current !== refreshKey) {
       previousRefreshKey.current = refreshKey;

@@ -191,7 +191,7 @@ impl ScalarAccumulatorState {
     }
 
     pub fn rsd(&self) -> f64 {
-        reduced_square_deviation(self.variance(), self.mean_abs())
+        relative_standard_deviation(self.variance(), self.mean().abs())
     }
 
     /// Normalized effective sample size, using absolute weighted contributions:
@@ -212,10 +212,10 @@ impl ScalarAccumulatorState {
     }
 
     pub fn rsd_stderr(&self) -> Option<f64> {
-        reduced_square_deviation_stderr(
+        relative_standard_deviation_stderr(
             self.variance(),
             self.variance_stderr(),
-            self.mean_abs(),
+            self.mean().abs(),
             self.stderr()?,
         )
     }
@@ -422,33 +422,29 @@ fn signal_to_noise_ratio(mean_abs: f64, abs_err: f64) -> f64 {
     }
 }
 
-fn reduced_square_deviation(variance: f64, mean_abs: f64) -> f64 {
-    if mean_abs == 0.0 {
-        0.0
-    } else {
-        variance.max(0.0).sqrt() / mean_abs
-    }
+fn relative_standard_deviation(variance: f64, absolute_mean: f64) -> f64 {
+    variance.max(0.0).sqrt() / absolute_mean
 }
 
-/// First-order uncertainty on `RSD = sqrt(variance) / mean_abs` via error
+/// First-order uncertainty on `RSD = sqrt(variance) / |mean|` via error
 /// propagation. With `RSD = sqrt(V)/M`, the relative uncertainty is
 /// `sqrt((dV / 2V)^2 + (dM / M)^2)`; the `1/2` comes from `d sqrt(V)/dV`. The
-/// V-M covariance is neglected, as is conventional.
-fn reduced_square_deviation_stderr(
+/// V-M covariance is neglected in this approximation.
+fn relative_standard_deviation_stderr(
     variance: f64,
     variance_stderr: Option<f64>,
-    mean_abs: f64,
+    absolute_mean: f64,
     mean_stderr: f64,
 ) -> Option<f64> {
     let variance_stderr = variance_stderr?;
     if variance.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
-        || mean_abs.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+        || absolute_mean.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
     {
         return None;
     }
-    let rsd = variance.sqrt() / mean_abs;
+    let rsd = variance.sqrt() / absolute_mean;
     let relative_variance = variance_stderr / (2.0 * variance);
-    let relative_mean = mean_stderr / mean_abs;
+    let relative_mean = mean_stderr / absolute_mean;
     let stderr =
         rsd * (relative_variance * relative_variance + relative_mean * relative_mean).sqrt();
     stderr.is_finite().then_some(stderr)
@@ -509,6 +505,33 @@ mod tests {
         assert_eq!(super::signal_to_noise_ratio(1.0, 0.0), f64::INFINITY);
         assert!(super::signal_to_noise_ratio(0.0, 0.0).is_nan());
         assert_eq!(super::signal_to_noise_ratio(2.0, 0.5), 16.0);
+    }
+
+    #[test]
+    fn rsd_uses_signed_mean_and_matches_scaled_relative_integration_error() {
+        let point = Point::new(vec![], vec![], 1.0);
+        for values in [[-1.0, 3.0], [1.0, -3.0]] {
+            let mut state = ScalarAccumulatorState::plain();
+            for value in values {
+                state.add_sample(value, &point).unwrap();
+            }
+            assert!((state.rsd() - 8.0_f64.sqrt()).abs() < 1e-12);
+            assert!(
+                (state.rsd()
+                    - state.stderr().unwrap() / state.mean().abs() * (state.count as f64).sqrt())
+                .abs()
+                    < 1e-12
+            );
+            assert!((state.ess() - 0.8).abs() < 1e-12);
+        }
+        let mut state = ScalarAccumulatorState::plain();
+        state.add_sample(-1.0, &point).unwrap();
+        state.add_sample(1.0, &point).unwrap();
+        assert!(state.rsd().is_infinite());
+        let mut zeros = ScalarAccumulatorState::plain();
+        zeros.add_sample(0.0, &point).unwrap();
+        zeros.add_sample(0.0, &point).unwrap();
+        assert!(zeros.rsd().is_nan());
     }
 
     #[test]

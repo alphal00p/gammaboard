@@ -31,6 +31,22 @@ test("campaign JSON/HwU fetch on demand and default to aggregate only", async ()
 });
 
 describe.each(["campaign_histograms", "gammaloop_histogram_bundle"])("%s downloads", (panelId) => {
+  test("keeps explanation text behind the panel information button while import warnings remain visible", () => {
+    const note = panelId === "campaign_histograms" ? "Child estimates are combined in quadrature." : "Pooled means and sample-variance errors.";
+    const { rerender } = render(<TablePanel title="Observables" state={{ panel_id: panelId, columns: ["Observable"], rows: [["energy"]],
+      payload: { estimator_note: note, description: "Additional estimator details.", actions: { upload_bundle: true, export: true }, histograms: { energy: { bins: [] } } } }}
+      bundleUploadError="Import failed" />);
+    expect(screen.queryByText(note)).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Import failed");
+    fireEvent.click(screen.getByRole("button", { name: "Observables information" }));
+    expect(screen.getByRole("dialog", { name: "Observables information" })).toHaveTextContent(note);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Additional estimator details.");
+    // Empty bundles retain access to the same information and upload controls.
+    rerender(<TablePanel title="Observables" state={{ panel_id: panelId, columns: [], rows: [],
+      payload: { estimator_note: note, actions: { upload_bundle: true }, histograms: {} } }} />);
+    expect(screen.getByText("No observables available.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveTextContent(note);
+  });
   test("downloads the whole bundle and lets PDF exports include comparisons independently", async () => {
     const payload = { actions: { export: true }, histograms: {
       energy: { title: "Energy", bins: [{ start: 0, stop: 1, value: 2, error: 0.1 }] },

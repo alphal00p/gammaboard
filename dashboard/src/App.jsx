@@ -5,25 +5,24 @@ import {
   Chip,
   Container,
   Stack,
-  Tab,
-  Tabs,
   Typography,
 } from "@mui/material";
-import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { lazy, useCallback, useEffect, useState } from "react";
 import gammaboardLogo from "./assets/gammalooplogo.svg?raw";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
 import LoginDialog from "./components/auth/LoginDialog";
+import ConnectionStatus from "./components/ConnectionStatus";
 import { useRuns } from "./hooks/useRuns";
 import { useServerStatus } from "./hooks/useServerStatus";
 import { useWorkersData } from "./hooks/useWorkersData";
+import WorkspaceTabs, { WorkspacePanel } from "./components/common/WorkspaceTabs";
+import { useDashboardNavigation } from "./hooks/useDashboardNavigation";
 import { asArray } from "./utils/collections";
 import { DashboardTheme, ThemeToggle } from "./theme";
 
 const LogsWorkspace = lazy(() => import("./components/LogsWorkspace"));
-const PerformanceWorkspace = lazy(() => import("./components/PerformanceWorkspace"));
+const SystemWorkspace = lazy(() => import("./components/SystemWorkspace"));
 const RunsWorkspace = lazy(() => import("./components/runs/RunsWorkspace"));
-const SettingsWorkspace = lazy(() => import("./components/SettingsWorkspace"));
-const WorkersWorkspace = lazy(() => import("./components/WorkersWorkspace"));
 const LoadingPanel = ({ label = "Loading..." }) => (
   <Box sx={{ py: 4 }}>
     <Typography variant="body2" color="text.secondary">
@@ -32,11 +31,11 @@ const LoadingPanel = ({ label = "Loading..." }) => (
   </Box>
 );
 
-const DashboardHeader = () => {
+const DashboardHeader = ({ serverStatus }) => {
   const { authenticated, authEnabled = true, busy, ready, requestLogin, logout } = useAuth();
 
   return (
-    <Box sx={{ mb: 2, display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 1.5 }}>
+    <Box component="header" sx={{ mb: 2, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
       <Box
         role="img"
         aria-label="GammaBoard"
@@ -47,7 +46,10 @@ const DashboardHeader = () => {
           "--logo-background": theme.palette.background.default,
           "& svg": { display: "block", width: "100%", height: "auto" } })}
       />
-      <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ flexWrap: "wrap" }}>
+      <Box sx={{ flex: "1 1 320px", minWidth: 0, pl: { xs: 0, sm: 1 } }}>
+        <ConnectionStatus {...serverStatus} />
+      </Box>
+      <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ flexWrap: "wrap", ml: "auto" }}>
         <ThemeToggle />
         <Chip
           color={authenticated ? "success" : "default"}
@@ -69,112 +71,72 @@ const DashboardHeader = () => {
 };
 
 function AppContent() {
-  const [showChildRuns, setShowChildRuns] = useState(false);
+  const [navigation, navigate] = useDashboardNavigation();
+  const { workspace: mode, runId: selectedRun, children: showChildRuns } = navigation;
+  const setShowChildRuns = (value) => navigate({ children: value });
   const { runs, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns, isLoadingRuns } = useRuns({ includeChildren: showChildRuns });
   const serverStatus = useServerStatus(3000);
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
-  const [mode, setMode] = useState("runs");
-  const [selectedRun, setSelectedRun] = useState(null);
   const [pendingRunSelection, setPendingRunSelection] = useState(null);
   const runList = asArray(runs);
 
   useEffect(() => {
     if (isLoadingRuns) return;
     if (runList.length === 0) {
-      setSelectedRun(null);
+      if (selectedRun != null && !hasMoreRuns) navigate({ runId: null, taskId: null }, { replace: true });
       return;
     }
 
     if (!selectedRun || !runList.some((run) => run.run_id === selectedRun)) {
-      setSelectedRun(runList[0].run_id);
+      if (selectedRun && hasMoreRuns) { if (!isLoadingMoreRuns) loadMoreRuns(); return; }
+      navigate({ runId: runList[0].run_id, taskId: null }, { replace: true });
     }
-  }, [runList, selectedRun, isLoadingRuns]);
+  }, [runList, selectedRun, isLoadingRuns, hasMoreRuns, isLoadingMoreRuns, loadMoreRuns, navigate]);
 
   useEffect(() => {
     if (pendingRunSelection == null) return;
     if (!runList.some((run) => run.run_id === pendingRunSelection)) return;
-    setSelectedRun(pendingRunSelection);
+    navigate({ runId: pendingRunSelection, taskId: null });
     setPendingRunSelection(null);
-  }, [pendingRunSelection, runList]);
+  }, [pendingRunSelection, runList, navigate]);
 
   const selectRunIncludingChildren = useCallback((runId) => {
     // Navigate when requested, not when a later poll finally contains the run.
     // The user may open another workspace (and an unsaved draft) in between.
-    setMode("runs");
-    setShowChildRuns(true);
+    navigate({ workspace: "runs", runTab: "tasks", taskId: null, children: true });
     setPendingRunSelection(runId);
-  }, []);
+  }, [navigate]);
 
   const selectRun = useCallback((runId) => {
     setPendingRunSelection(null);
-    setSelectedRun(runId);
-  }, []);
+    navigate({ runId, taskId: null });
+  }, [navigate]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 2 }}>
-      <DashboardHeader />
+      <DashboardHeader serverStatus={serverStatus} />
       <LoginDialog />
 
-      <Tabs value={mode} onChange={(_, next) => setMode(next)} sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}>
-        <Tab value="runs" label="Runs" />
-        <Tab value="workers" label="Management" />
-        <Tab value="performance" label="Performance" />
-        <Tab value="logs" label="Logs" />
-        <Tab value="settings" label="Settings" />
-      </Tabs>
-
-      <Suspense fallback={<LoadingPanel label="Loading workspace..." />}>
-        {mode === "runs" ? (
-          <RunsWorkspace
-            runs={runList}
-            selectedRun={selectedRun}
-            setSelectedRun={selectRun}
-            showChildRuns={showChildRuns}
-            setShowChildRuns={setShowChildRuns}
-            isConnected={serverStatus.isConnected}
-            serverName={serverStatus.serverName}
-            onRunCreated={setPendingRunSelection}
-            onSelectRun={selectRunIncludingChildren}
-            hasMoreRuns={hasMoreRuns}
-            loadMoreRuns={loadMoreRuns}
-            isLoadingMoreRuns={isLoadingMoreRuns}
-            isLoadingRuns={isLoadingRuns}
-          />
-        ) : mode === "workers" ? (
-          <WorkersWorkspace
-            workers={workersData.workers}
-            isLoading={workersData.isLoading}
-            runs={runList}
-            isConnected={serverStatus.isConnected}
-            lastUpdate={workersData.lastUpdate}
-            error={workersData.error}
-            serverName={serverStatus.serverName}
-          />
-        ) : mode === "performance" ? (
-          <PerformanceWorkspace
-            runs={runList}
-            workers={workersData.workers}
-            selectedRun={selectedRun}
-            setSelectedRun={selectRun}
-            showChildRuns={showChildRuns}
-            setShowChildRuns={setShowChildRuns}
-            isConnected={serverStatus.isConnected}
-            serverName={serverStatus.serverName}
-            hasMoreRuns={hasMoreRuns}
-            loadMoreRuns={loadMoreRuns}
-            isLoadingMoreRuns={isLoadingMoreRuns}
-            isLoadingRuns={isLoadingRuns}
-          />
-        ) : mode === "logs" ? (
-          <LogsWorkspace
-            runs={runList}
-            workers={workersData.workers}
-            selectedRun={null}
-          />
-        ) : (
-          <SettingsWorkspace />
-        )}
-      </Suspense>
+      <Box sx={{ position: "sticky", top: 0, zIndex: (theme) => theme.zIndex.appBar, bgcolor: "background.default", pt: 1, mb: 2 }}>
+        <WorkspaceTabs id="main" label="Main navigation" value={mode} onChange={(workspace) => navigate({ workspace })}
+          level="primary" tabs={[["runs", "Runs"], ["system", "System"], ["logs", "Logs"]]} />
+      </Box>
+      <WorkspacePanel id="main" value="runs" active={mode === "runs"}>
+        <RunsWorkspace runs={runList} workers={workersData.workers} selectedRun={selectedRun} setSelectedRun={selectRun}
+          navigation={navigation} onNavigate={navigate}
+          showChildRuns={showChildRuns} setShowChildRuns={setShowChildRuns}
+          isConnected={serverStatus.isConnected}
+          onRunCreated={setPendingRunSelection} onSelectRun={selectRunIncludingChildren}
+          hasMoreRuns={hasMoreRuns} loadMoreRuns={loadMoreRuns} isLoadingMoreRuns={isLoadingMoreRuns} isLoadingRuns={isLoadingRuns} />
+      </WorkspacePanel>
+      <WorkspacePanel id="main" value="system" active={mode === "system"}>
+        <SystemWorkspace view={navigation.systemTab} onViewChange={(systemTab) => navigate({ systemTab })}
+          workers={workersData.workers} isLoading={workersData.isLoading} runs={runList}
+          isConnected={serverStatus.isConnected} error={workersData.error} />
+      </WorkspacePanel>
+      <WorkspacePanel id="main" value="logs" active={mode === "logs"}>
+        <LogsWorkspace runs={runList} workers={workersData.workers} selectedRun={null} />
+      </WorkspacePanel>
     </Container>
   );
 }

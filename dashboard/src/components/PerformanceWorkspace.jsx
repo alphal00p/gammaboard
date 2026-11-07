@@ -1,14 +1,14 @@
 import LoadingStatus from "./common/LoadingStatus";
-import { Alert, FormControl, InputLabel, MenuItem, Select, Stack, Tab, Tabs, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
+import { Alert, FormControl, InputLabel, MenuItem, Select, Stack, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import PerformanceGraphs from "./PerformanceGraphs";
 import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
 import QueueTuningPanel from "./runs/QueueTuningPanel";
-import RunScopedWorkspace from "./common/RunScopedWorkspace";
+import RunInfo from "./RunInfo";
+import WorkspaceTabs, { WorkspacePanel } from "./common/WorkspaceTabs";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
-import { useRunTasks } from "../hooks/useRunTasks";
 import { updateRunTaskQueueTuning } from "../services/api";
 import { asArray } from "../utils/collections";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
@@ -24,27 +24,35 @@ const ACTIVITY_HELP = {
 };
 
 const PerformanceWorkspaceContent = (props) => {
-  const { runs, workers, selectedRun, isConnected } = props;
+  const { runs, workers, selectedRun, isConnected, tasks = [], view: controlledView, onViewChange } = props;
   const { authenticated } = useAuth();
   const [selection, setSelection] = useState({ seconds: 30 });
-  const [view, setView] = useState("overview");
+  const [localView, setLocalView] = useState("overview");
+  const view = controlledView ?? localView;
+  const setView = onViewChange ?? setLocalView;
+  const [tuningTaskId, setTuningTaskId] = useState(null);
   const [selectedNode, setSelectedNode] = useState("");
   const [queueTuningBusy, setQueueTuningBusy] = useState(false);
   const [queueTuningMessage, setQueueTuningMessage] = useState(null);
   const [expired, setExpired] = useState(false);
   const currentRun = asArray(runs).find((entry) => entry?.run_id === selectedRun) ?? null;
-  const { tasks } = useRunTasks(selectedRun, 2000);
   const sampleTask = useMemo(() => {
     const list = asArray(tasks);
     const current = getCurrentTask(list);
-    return current?.is_sample ? current : list.find((task) => task?.state === "active" && task?.is_sample)
-      ?? list.find((task) => task?.is_sample) ?? null;
-  }, [tasks]);
+    return list.find((task) => String(task.id) === tuningTaskId && task.is_sample)
+      ?? (current?.is_sample ? current : list.find((task) => task?.state === "active" && task?.is_sample))
+      ?? list.find((task) => task?.is_sample && task.state === "pending") ?? list.find((task) => task?.is_sample) ?? null;
+  }, [tasks, tuningTaskId]);
+  useEffect(() => {
+    // Once opened, keep the named task selected even if the queue advances.
+    // A background transition must not redirect a draft to another task.
+    if (view === "tuning" && tuningTaskId == null && sampleTask) setTuningTaskId(String(sampleTask.id));
+  }, [view, sampleTask, tuningTaskId]);
   const evaluators = useMemo(() => asArray(workers)
     .filter((worker) => worker?.current_run_id === selectedRun && worker?.current_role === "evaluator")
     .sort(compareNodesByName), [workers, selectedRun]);
   const evaluatorNodeName = selectedNode || null;
-  const performance = useRunPerformancePanels({ runId: view === "graphs" ? null : selectedRun, selection, pollMs: 5000 });
+  const performance = useRunPerformancePanels({ runId: selectedRun, selection, pollMs: 5000, paused: view === "graphs" || view === "tuning" });
   const { panelSpecs, panelStates, panelValues, setPanelValue, error, refreshing, isLoading } = performance;
 
   useEffect(() => {
@@ -61,8 +69,10 @@ const PerformanceWorkspaceContent = (props) => {
     try {
       await updateRunTaskQueueTuning(selectedRun, sampleTask.id, payload);
       setQueueTuningMessage({ severity: "success", text: payload == null ? "Queue tuning override cleared." : "Queue tuning updated." });
+      return true;
     } catch (err) {
       setQueueTuningMessage({ severity: "error", text: err?.message || "Failed to update queue tuning." });
+      return false;
     } finally {
       setQueueTuningBusy(false);
     }
@@ -89,22 +99,19 @@ const PerformanceWorkspaceContent = (props) => {
       ? { ...state, rows: asArray(state.rows).map((row) => row.map((value) => value ?? "Unavailable")),
           ...(state.panel_id === "busy_rates" && { payload: { ...state.payload,
             description: "Time-weighted averages across reporting workers. Compute and I/O can overlap; these percentages are not CPU/GPU utilization.",
-            help: ACTIVITY_HELP,
+            column_help: Object.fromEntries(state.columns.filter((label) => /compute|i\/o/i.test(label)).map((label) => [label, ACTIVITY_HELP.text])),
           } }),
         }
       : state);
 
   return (
-    <RunScopedWorkspace {...props}
-      noRunsMessage="Create a run to inspect its measurements."
-      noSelectionMessage="Pick a run to inspect its measurements.">
+    <>
       <Stack spacing={2}>
-        <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-          <Tabs value={view} onChange={(_, value) => setView(value)} aria-label="Performance view">
-            <Tab value="overview" label="Overview" />
-            <Tab value="diagnostics" label="Diagnostics" />
-            <Tab value="graphs" label="Graphs" />
-          </Tabs>
+        <WorkspaceTabs id="performance" label="Performance view" value={view} onChange={setView} level="detail"
+          tabs={[["overview", "Overview"], ["diagnostics", "Diagnostics"], ["graphs", "Graphs"], ["tuning", "Queue tuning"]]}
+          panelId="performance-content" />
+        {view !== "tuning" && <>
+        <Stack direction="row" justifyContent="center">
           <ToggleButtonGroup size="small" exclusive aria-label="Measurement window"
             value={selection?.seconds ?? (selection ? "custom" : "all")}
             onChange={(_, value) => { if (value != null && value !== "custom") setSelection(value === "all" ? null : { seconds: value }); }}>
@@ -121,29 +128,47 @@ const PerformanceWorkspaceContent = (props) => {
             {refreshing && view !== "graphs" ? "Updating… showing the previous interval." : "\u00a0"}
           </Typography>
         </Typography>
-        <LoadingStatus loading={isLoading} label="Loading measurements…" />
-        {view === "graphs" ? <PerformanceGraphs runId={selectedRun} selection={selection} onSelectionChange={setSelection} /> : unavailable ? <Alert severity="warning">{error || "Measurements are unavailable until the next successful refresh."}</Alert>
-          : displayStates.length ? <PanelCollection title={{ overview: "Usage", diagnostics: "Diagnostics", graphs: "Graphs" }[view]}
-              panelSpecs={visibleSpecs} panelStates={displayStates}
-              panelValues={panelValues} onPanelValueChange={setPanelValue} />
-            : !isLoading && <EmptyStateCard title="Waiting for measurements" message="Current coverage and measurements will appear after the next refresh." />}
-        {view === "diagnostics" && <>
-          <FormControl size="small" sx={{ maxWidth: 420 }}>
-            <InputLabel id="performance-evaluator-label">Evaluator detail</InputLabel>
-            <Select labelId="performance-evaluator-label" label="Evaluator detail" value={evaluatorNodeName ?? ""}
+        </>}
+        <div id="performance-content" role="tabpanel" aria-labelledby={`performance-tab-${view}`}>
+        {view !== "graphs" && view !== "tuning" && <>
+          <LoadingStatus loading={isLoading} label="Loading measurements…" />
+          {unavailable ? <Alert severity="warning">{error || "Measurements are unavailable until the next successful refresh."}</Alert>
+            : displayStates.length ? <PanelCollection
+                panelSpecs={visibleSpecs} panelStates={displayStates}
+                panelValues={panelValues} onPanelValueChange={setPanelValue} />
+              : !isLoading && <EmptyStateCard title="Waiting for measurements" message="Current coverage and measurements will appear after the next refresh." />}
+        </>}
+        {view === "diagnostics" && <Stack direction="row" alignItems="center" spacing={1.5} useFlexGap flexWrap="wrap">
+          <Typography component="label" id="performance-evaluator-label" htmlFor="performance-evaluator-select" variant="body2">Evaluator detail</Typography>
+          <FormControl size="small" sx={{ minWidth: 220, maxWidth: "100%" }}>
+            <Select id="performance-evaluator-select" labelId="performance-evaluator-label" displayEmpty value={evaluatorNodeName ?? ""}
               onChange={(event) => setSelectedNode(event.target.value)}>
               <MenuItem value="">All reporting evaluators</MenuItem>
               {evaluatorNames.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
             </Select>
           </FormControl>
+        </Stack>}
+        <WorkspacePanel id="performance" value="graphs" active={view === "graphs"}>
+          <PerformanceGraphs runId={selectedRun} selection={selection} onSelectionChange={setSelection} />
+        </WorkspacePanel>
+        <WorkspacePanel id="performance" value="tuning" active={view === "tuning"}>
+          {sampleTask && <FormControl size="small" sx={{ minWidth: 240, maxWidth: "100%", mb: 2 }}>
+            <InputLabel id="queue-task-label">Sampling task</InputLabel>
+            <Select labelId="queue-task-label" label="Sampling task" value={String(sampleTask.id)}
+              onChange={(event) => setTuningTaskId(event.target.value)}>
+              {asArray(tasks).filter((task) => task.is_sample).map((task) => <MenuItem key={task.id} value={String(task.id)}>{task.name} · {task.state}</MenuItem>)}
+            </Select>
+          </FormControl>}
           <LoadingStatus loading={queueTuningBusy} label="Saving queue tuning…" />
           {queueTuningMessage && <Alert severity={queueTuningMessage.severity}>{queueTuningMessage.text}</Alert>}
-          <QueueTuningPanel key={selectedRun} run={currentRun} runId={selectedRun} task={sampleTask}
+          <QueueTuningPanel key={`${selectedRun}:${sampleTask?.id}`} run={currentRun} runId={selectedRun} task={sampleTask}
             authenticated={authenticated} busy={queueTuningBusy} onSave={saveQueueTuning}
             onClear={() => saveQueueTuning(null)} />
-        </>}
+          {["pending", "active"].includes(sampleTask?.state) && <RunInfo runId={selectedRun} section="tuning" refreshKey={sampleTask?.state} />}
+        </WorkspacePanel>
+        </div>
       </Stack>
-    </RunScopedWorkspace>
+    </>
   );
 };
 

@@ -10,6 +10,7 @@ vi.mock("../common/TomlEditor", () => ({ default: ({ label, value, onChange, dis
 
 const fixtures = vi.hoisted(() => ({ tasks: [], loadTemplate: vi.fn(), saveTemplate: vi.fn(), templates: [] }));
 vi.mock("../../auth/AuthProvider", () => ({ useAuth: () => ({ authenticated: true }) }));
+vi.mock("../../hooks/useTaskOutput", () => ({ useTaskOutput: () => ({ panelSpecs: [], panelStates: [] }) }));
 vi.mock("../../hooks/useRunTasks", () => ({ useRunTasks: () => ({ tasks: fixtures.tasks }) }));
 vi.mock("../../hooks/useTemplates", () => ({ useTemplates: () => ({ templates: fixtures.templates, load: fixtures.loadTemplate, save: fixtures.saveTemplate, remove: vi.fn() }) }));
 vi.mock("../../utils/clipboard", () => ({ copyToClipboard: vi.fn() }));
@@ -29,7 +30,7 @@ const runs = [
 const task = { id: "9007199254740993", name: "train", state: "pending", task_kind: "sample", sequence_nr: 1 };
 const taskToml = '[task]\nname="train"\nkind="sample"';
 const renderRun = (id, props = {}) => render(<RunsWorkspace runs={runs} selectedRun={id} {...props} />);
-const openRun = async () => { const button = await screen.findByRole("button", { name: "Open run definition" }); await act(async () => fireEvent.click(button)); };
+const openRun = async () => { fireEvent.click(screen.getByRole("tab", { name: "Settings", exact: true })); const button = await screen.findByRole("button", { name: "Open run definition" }); await act(async () => fireEvent.click(button)); };
 const openTask = async () => { const button = await screen.findByRole("button", { name: /^(Edit|Open) task train$/ }); await act(async () => fireEvent.click(button)); };
 
 beforeEach(() => {
@@ -79,7 +80,9 @@ describe("definition editors", () => {
     renderRun(2);
     expect(await screen.findByText(/Workers are allocated by the parent/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add tasks" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Settings", exact: true }));
     expect(screen.getByRole("button", { name: "Delete run" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("tab", { name: "Task queue", exact: true }));
     expect(screen.getByRole("button", { name: "Delete task train" })).toBeDisabled();
     await openTask();
     expect(await screen.findByLabelText("Task TOML")).not.toHaveAttribute("readonly");
@@ -201,6 +204,7 @@ test("separate delete button keeps deletion busy and errors visible until dismis
   api.deleteRun.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
   const setSelectedRun = vi.fn();
   renderRun(1, { setSelectedRun });
+  fireEvent.click(screen.getByRole("tab", { name: "Settings", exact: true }));
   fireEvent.click(await screen.findByRole("button", { name: "Delete run" }));
   expect(screen.getByRole("button", { name: "Open run definition" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Assign / resume" })).toBeDisabled();
@@ -213,4 +217,18 @@ test("separate delete button keeps deletion busy and errors visible until dismis
   fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
   await act(async () => { await vi.advanceTimersByTimeAsync(500); });
   expect(screen.queryByText("Database could not finish deletion")).not.toBeInTheDocument();
+});
+
+test("a run-definition draft survives temporarily hiding its workspace", async () => {
+  const { WorkspacePanel } = await import("../common/WorkspaceTabs");
+  api.fetchRunDefinition.mockResolvedValue({ toml: 'name="ordinary"' });
+  const tree = (active) => <WorkspacePanel id="test" value="runs" active={active}><RunsWorkspace runs={runs} selectedRun={3} /></WorkspacePanel>;
+  const { rerender } = render(tree(true));
+  await openRun();
+  const draft = 'name="unfinished"\n[evaluator';
+  fireEvent.change(await screen.findByLabelText("Run TOML"), { target: { value: draft } });
+  rerender(tree(false));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  rerender(tree(true));
+  expect(await screen.findByLabelText("Run TOML")).toHaveValue(draft);
 });

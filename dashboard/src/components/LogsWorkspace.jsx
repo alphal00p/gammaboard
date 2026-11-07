@@ -15,7 +15,7 @@ const LogsWorkspace = ({
 
   return (
     <Box>
-      <WorkerLogsPanel {...logReader} runs={runs} title="Run logs" />
+      <WorkerLogsPanel {...logReader} runs={runs} title={null} />
       {logReader.items.length === 0 && !logReader.isLoading && (
         <Alert severity="info" sx={{ mt: 2 }}>
           No logs match the current filters.

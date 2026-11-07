@@ -63,9 +63,9 @@ const WorkerLogsPanel = ({
 
   return (
     <Box sx={{ mb: 3 }}>
-      <Typography variant="h6" gutterBottom>
+      {title && <Typography variant="h6" gutterBottom>
         {title}
-      </Typography>
+      </Typography>}
 
       <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
         <FormControl size="small" sx={{ minWidth: 260 }}>
@@ -78,7 +78,7 @@ const WorkerLogsPanel = ({
           >
             <MenuItem value="">All runs</MenuItem>
             {runOptions.map((run) => (
-              <MenuItem key={run.run_id} value={String(run.run_id)}>
+              <MenuItem key={run.run_id} value={String(run.run_id)} sx={{ pl: run.parent_run_id != null ? 4 : 2 }}>
                 {formatRunLabel(run)} #{run.run_id} | {formatRunSecondaryLabel(run)}
               </MenuItem>
             ))}

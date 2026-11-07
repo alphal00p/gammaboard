@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRunPerformance } from "../services/api";
 import { usePanelSource } from "./usePanelSource";
 
-export const useRunPerformancePanels = ({ runId, evaluatorNodeName = null, selection = null, pollMs = 5000 } = {}) => {
+export const useRunPerformancePanels = ({ runId, evaluatorNodeName = null, selection = null, pollMs = 5000, paused = false } = {}) => {
   const [refreshing, setRefreshing] = useState(false);
   const parameters = useRef({ selection, evaluatorNodeName });
   useEffect(() => { parameters.current = { selection, evaluatorNodeName }; }, [selection, evaluatorNodeName]);
@@ -26,6 +26,7 @@ export const useRunPerformancePanels = ({ runId, evaluatorNodeName = null, selec
     fetchPanels,
     useCursor: false,
     refreshKey,
+    paused,
   });
   return { ...source, refreshing: runId != null && refreshing };
 };

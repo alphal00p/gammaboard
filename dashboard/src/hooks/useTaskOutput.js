@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { fetchRunTaskPanels } from "../services/api";
 import { usePanelSource } from "./usePanelSource";
 
-export const useTaskOutput = ({ runId, taskId, pollMs = 2000, panelLimit = 500, refreshKey } = {}) => {
+export const useTaskOutput = ({ runId, taskId, pollMs = 2000, panelLimit = 500, refreshKey, paused = false } = {}) => {
   const enabled = runId != null && taskId != null;
 
   const fetchPanels = useCallback(
@@ -27,5 +27,6 @@ export const useTaskOutput = ({ runId, taskId, pollMs = 2000, panelLimit = 500, 
     fetchPanels,
     useCursor: true,
     refreshKey,
+    paused,
   });
 };
