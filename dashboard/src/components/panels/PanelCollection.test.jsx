@@ -73,16 +73,17 @@ test("keeps expanded campaign observables before Task Summary", () => {
   expect(observable.compareDocumentPosition(screen.getByText("Task Summary")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
-const ObservableBundleHarness = ({ panelId, label }) => {
+const ObservableBundleHarness = ({ panelId, label, histogramTitle = "energy", bins = [{ start: 0, stop: 1, value: 2, error: 0.2 }] }) => {
   const [values, setValues] = useState({});
   return <PanelCollection
     panelSpecs={[{ panel_id: panelId, label, kind: "table", width: "full" }]}
     panelStates={[{
-      panel_id: panelId, kind: "table", columns: ["Observable"], rows: [["energy"]], row_keys: ["energy"],
+      panel_id: panelId, kind: "table", columns: ["Name", "Title"],
+      rows: [["energy", histogramTitle]], row_keys: ["energy"], visible_column_indices: [1],
       payload: {
         expands_to: { kind: "histogram", source: "selected_row" },
         actions: { upload_bundle: true },
-        histograms: { energy: { bins: [{ start: 0, stop: 1, value: 2, error: 0.2 }] } },
+        histograms: { energy: { title: histogramTitle, bins } },
       },
     }]}
     panelValues={values}
@@ -94,6 +95,98 @@ describe.each([
   { panelId: "gammaloop_histogram_bundle", label: "Observables" },
   { panelId: "campaign_histograms", label: "Combined Observables" },
 ])("$label bundle comparisons", ({ panelId, label }) => {
+  test.each([true, false])("Add Histogram matches the visible table title to dropdown text (match present: %s)", async (hasMatch) => {
+    const title = "Energy distribution";
+    const bins = [{ start: 0, stop: 1, value: 2, error: 0.1 }];
+    const histograms = {
+      first: { title: "First reference", bins },
+      "metadata-match": { title, bins },
+      ...(hasMatch ? { energy: { title: "Different observable", bins }, [title]: { title: "Unrelated metadata", bins } } : {}),
+    };
+    render(<ObservableBundleHarness panelId={panelId} label={label} histogramTitle={title} />);
+    fireEvent.click(screen.getByRole("cell", { name: title, exact: true }));
+    fireEvent.change(screen.getByLabelText("Upload histogram bundle"), { target: { files: [{
+      name: "reference.json", text: async () => JSON.stringify({ histograms }),
+    }] } });
+    await screen.findByRole("button", { name: "Remove reference.json", exact: true });
+    // Clear any automatic selection so Add Histogram must choose a new entry.
+    const remove = screen.queryByRole("button", { name: "Remove", exact: true });
+    if (remove) fireEvent.click(remove);
+    renderChart.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Add histogram", exact: true }));
+    const expected = hasMatch ? title : "first";
+    expect(screen.getAllByRole("combobox").some((select) => select.textContent === expected)).toBe(true);
+    expect(renderChart.mock.calls.some(([props]) =>
+      props.option.series.some((series) => series.name === `reference.json: ${expected}`),
+    )).toBe(true);
+  });
+
+  test("gives repeated filenames separate comparison controls and rejects oversized files", async () => {
+    render(<ObservableBundleHarness panelId={panelId} label={label} />);
+    const input = screen.getByLabelText("Upload histogram bundle");
+    const file = { name: "reference.json", text: async () => JSON.stringify({ histograms: { energy: { bins: [{ start: 0, stop: 1, value: 2, error: 0.1 }] } } }) };
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByRole("button", { name: "Remove reference.json", exact: true });
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByRole("button", { name: "Remove reference.json (2)", exact: true });
+    expect(screen.getByRole("spinbutton", { name: "Merge bins: reference.json / energy", exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Merge bins: reference.json (2) / energy", exact: true })).toBeInTheDocument();
+    const text = vi.fn();
+    fireEvent.change(input, { target: { files: [{ name: "large.hwu", size: 16 * 1024 * 1024 + 1, text }] } });
+    expect(await screen.findByText("Histogram bundles must be at most 16 MiB.")).toBeInTheDocument();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  test("imports HwU through the server with busy state and keeps previous comparisons on failure", async () => {
+    let finish;
+    const fetch = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    vi.stubGlobal("fetch", fetch);
+    render(<ObservableBundleHarness panelId={panelId} label={label} />);
+    const input = screen.getByLabelText("Upload histogram bundle");
+    const contents = '<histogram> 1 "energy"\n0 1 4 0.1\n<\\histogram>';
+    fireEvent.change(input, { target: { files: [{ name: "reference.HwU", text: async () => contents }] } });
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Importing bundle…" })).toBeDisabled();
+    expect(fetch.mock.calls[0][0]).toBe("/api/histogram-bundle/import");
+    expect(fetch.mock.calls[0][1]).toMatchObject({ method: "POST", body: contents, credentials: "include" });
+    await act(async () => finish({ ok: true, json: async () => ({
+      histograms: { energy: { bins: [{ start: 0, stop: 1, value: 4, error: 0.1 }] } }, warnings: ["Extra weight columns omitted."],
+    }) }));
+    expect(await screen.findByRole("button", { name: "Remove reference.HwU" })).toBeInTheDocument();
+    expect(screen.getByText(/Extra weight columns omitted/)).toBeInTheDocument();
+    fetch.mockResolvedValueOnce({ ok: false, status: 400, headers: { get: () => "application/json" }, json: async () => ({ error: "HwU line 2: invalid bin" }) });
+    fireEvent.change(input, { target: { files: [{ name: "invalid.hwu", text: async () => "bad" }] } });
+    expect(await screen.findByText(/HwU line 2: invalid bin/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove reference.HwU" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upload Bundle" })).toBeEnabled();
+  });
+
+  test("merges display bins independently, keeps view settings on refresh, and resets from originals", async () => {
+    const bins = [{ start: 0, stop: 1, value: 1, error: 0.3 }, { start: 1, stop: 2, value: 2, error: 0.4 }];
+    const { rerender } = render(<ObservableBundleHarness panelId={panelId} label={label} bins={bins} />);
+    const merge = screen.getByRole("spinbutton", { name: "Merge adjacent bins", exact: true });
+    renderChart.mockClear();
+    fireEvent.change(merge, { target: { value: "2" } });
+    const chart = renderChart.mock.calls.find(([props]) => props.option.series.some((s) => s.name === "value"))?.[0];
+    expect(chart.option.series.find((s) => s.name === "value").data).toEqual([[0, 3], [2, 3]]);
+    expect(screen.getByText(/uncorrelated-bin approximation/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Upload histogram bundle"), { target: { files: [{
+      name: "reference.json", text: async () => JSON.stringify({ histograms: { energy: { bins } } }),
+    }] } });
+    await screen.findByRole("button", { name: "Remove reference.json" });
+    const overlayMerge = screen.getByRole("spinbutton", { name: "Merge bins: reference.json / energy" });
+    expect(overlayMerge).toHaveValue(1);
+    fireEvent.change(overlayMerge, { target: { value: "2" } });
+    fireEvent.blur(overlayMerge);
+    rerender(<ObservableBundleHarness panelId={panelId} label={label} bins={bins.map((bin) => ({ ...bin, value: bin.value * 2 }))} />);
+    expect(merge).toHaveValue(2);
+    expect(overlayMerge).toHaveValue(2);
+    fireEvent.click(screen.getByRole("button", { name: "Reset view", exact: true }));
+    expect(merge).toHaveValue(1);
+    expect(overlayMerge).toHaveValue(1);
+    expect(bins.map((bin) => bin.value)).toEqual([1, 2]);
+  });
+
   test("uploads, selects and removes reference histograms through the shared panel", async () => {
     const { container, rerender } = render(<ObservableBundleHarness panelId={panelId} label={label} />);
     const input = container.querySelector('input[type="file"]');

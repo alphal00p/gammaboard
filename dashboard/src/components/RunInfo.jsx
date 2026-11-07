@@ -1,9 +1,10 @@
+import LoadingStatus from "./common/LoadingStatus";
 import { Alert, Box, Typography } from "@mui/material";
 import PanelCollection from "./panels/PanelCollection";
 import { useRunPanels } from "../hooks/useRunPanels";
 
 const RunInfo = ({ runId, refreshKey }) => {
-  const { panelSpecs, panelStates, error, lastUpdate } = useRunPanels({ runId, refreshKey });
+  const { panelSpecs, panelStates, error, lastUpdate, isLoading } = useRunPanels({ runId, refreshKey });
 
   if (runId == null) return null;
 
@@ -16,7 +17,7 @@ const RunInfo = ({ runId, refreshKey }) => {
   }
 
   if (!Array.isArray(panelSpecs) || panelSpecs.length === 0) {
-    return null;
+    return <LoadingStatus loading={isLoading} label="Loading run summary…" />;
   }
 
   return <><Typography variant="caption" color="text.secondary">Run totals across tasks · updated {lastUpdate || "pending"}</Typography>

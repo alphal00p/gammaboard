@@ -1,3 +1,4 @@
+import LoadingStatus from "./common/LoadingStatus";
 import { Alert, FormControl, InputLabel, MenuItem, Select, Stack, Tab, Tabs, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
@@ -44,7 +45,7 @@ const PerformanceWorkspaceContent = (props) => {
     .sort(compareNodesByName), [workers, selectedRun]);
   const evaluatorNodeName = selectedNode || null;
   const performance = useRunPerformancePanels({ runId: view === "graphs" ? null : selectedRun, selection, pollMs: 5000 });
-  const { panelSpecs, panelStates, panelValues, setPanelValue, error, refreshing } = performance;
+  const { panelSpecs, panelStates, panelValues, setPanelValue, error, refreshing, isLoading } = performance;
 
   useEffect(() => {
     setExpired(false);
@@ -120,11 +121,12 @@ const PerformanceWorkspaceContent = (props) => {
             {refreshing && view !== "graphs" ? "Updating… showing the previous interval." : "\u00a0"}
           </Typography>
         </Typography>
+        <LoadingStatus loading={isLoading} label="Loading measurements…" />
         {view === "graphs" ? <PerformanceGraphs runId={selectedRun} selection={selection} onSelectionChange={setSelection} /> : unavailable ? <Alert severity="warning">{error || "Measurements are unavailable until the next successful refresh."}</Alert>
           : displayStates.length ? <PanelCollection title={{ overview: "Usage", diagnostics: "Diagnostics", graphs: "Graphs" }[view]}
               panelSpecs={visibleSpecs} panelStates={displayStates}
               panelValues={panelValues} onPanelValueChange={setPanelValue} />
-            : <EmptyStateCard title="Waiting for measurements" message="Current coverage and measurements will appear after the next refresh." />}
+            : !isLoading && <EmptyStateCard title="Waiting for measurements" message="Current coverage and measurements will appear after the next refresh." />}
         {view === "diagnostics" && <>
           <FormControl size="small" sx={{ maxWidth: 420 }}>
             <InputLabel id="performance-evaluator-label">Evaluator detail</InputLabel>
@@ -134,6 +136,7 @@ const PerformanceWorkspaceContent = (props) => {
               {evaluatorNames.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
             </Select>
           </FormControl>
+          <LoadingStatus loading={queueTuningBusy} label="Saving queue tuning…" />
           {queueTuningMessage && <Alert severity={queueTuningMessage.severity}>{queueTuningMessage.text}</Alert>}
           <QueueTuningPanel key={selectedRun} run={currentRun} runId={selectedRun} task={sampleTask}
             authenticated={authenticated} busy={queueTuningBusy} onSave={saveQueueTuning}

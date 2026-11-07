@@ -1,9 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { importHwuBundle } from "../../services/api";
 import { asArray } from "../../utils/collections";
 import { isObject } from "./panelView";
 import {
   HISTOGRAM_SORT_CANONICAL,
-  histogramIsDiscrete,
+  histogramSupportsComparison,
   histogramSelectionKey,
   normalizeHistogramSelectionState,
   normalizeHistogramSortMode,
@@ -13,23 +14,40 @@ import {
 export const useHistogramBundles = () => {
   const [histogramBundlesByPanel, setHistogramBundlesByPanel] = useState({});
   const [histogramBundleUploadErrors, setHistogramBundleUploadErrors] = useState({});
+  const [histogramBundleUploads, setHistogramBundleUploads] = useState({});
+  const requests = useRef(new Map());
+  useEffect(() => () => { requests.current.forEach((request) => request.abort()); requests.current.clear(); }, []);
 
   const uploadHistogramBundle = useCallback(async (panelId, event) => {
     const file = event?.target?.files?.[0];
     if (!panelId || !file) return;
+    if (requests.current.has(panelId)) return;
+    const request = new AbortController();
+    requests.current.set(panelId, request);
+    setHistogramBundleUploads((current) => ({ ...current, [panelId]: true }));
     try {
+      if (file.size > 16 * 1024 * 1024) throw new Error("Histogram bundles must be at most 16 MiB.");
       const text = await file.text();
-      const bundle = parseUploadedHistogramBundle(JSON.parse(text));
+      if (request.signal.aborted) return;
+      const payload = /\.hwu$/i.test(file.name) || text.trimStart().startsWith("<histogram>") || text.trimStart().startsWith("##&")
+        ? await importHwuBundle(text, request.signal) : JSON.parse(text);
+      if (request.signal.aborted) return;
+      const bundle = parseUploadedHistogramBundle(payload);
       setHistogramBundlesByPanel((current) => {
         const existing = asArray(current?.[panelId]);
+        const baseLabel = file.name || `bundle-${existing.length + 1}`;
+        let label = baseLabel;
+        let suffix = 2;
+        while (existing.some((entry) => entry.label === label)) label = `${baseLabel} (${suffix++})`;
         return {
           ...current,
           [panelId]: [
             ...existing,
             {
               id: `overlay-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-              label: file.name || `bundle-${existing.length + 1}`,
+              label,
               histograms: bundle.histograms,
+              warnings: asArray(payload.warnings).filter((warning) => typeof warning === "string"),
               selectionsByHistogram: {},
             },
           ],
@@ -37,9 +55,12 @@ export const useHistogramBundles = () => {
       });
       setHistogramBundleUploadErrors((current) => ({ ...current, [panelId]: null }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid histogram bundle JSON.";
+      if (request.signal.aborted) return;
+      const message = error instanceof Error ? error.message : "Invalid histogram bundle.";
       setHistogramBundleUploadErrors((current) => ({ ...current, [panelId]: message }));
     } finally {
+      requests.current.delete(panelId);
+      if (!request.signal.aborted) setHistogramBundleUploads((current) => ({ ...current, [panelId]: false }));
       if (event?.target) event.target.value = "";
     }
   }, []);
@@ -125,7 +146,7 @@ export const useHistogramBundles = () => {
     }));
   }, []);
 
-  const addComparedHistogram = useCallback((panelId, bundleId, histogramName, currentHistogramIsDiscrete) => {
+  const addComparedHistogram = useCallback((panelId, bundleId, histogramName, currentHistogramIsDiscrete, histogramTitle) => {
     if (!panelId || !bundleId) return;
     setHistogramBundlesByPanel((current) => ({
       ...current,
@@ -133,13 +154,12 @@ export const useHistogramBundles = () => {
         if (bundle?.id !== bundleId) return bundle;
         const selection = normalizeHistogramSelectionState(bundle, histogramName);
         const histogramNames = Object.keys(bundle?.histograms || {}).filter(
-          (name) => histogramIsDiscrete(bundle?.histograms?.[name]) === Boolean(currentHistogramIsDiscrete),
+          (name) => histogramSupportsComparison(bundle?.histograms?.[name], Boolean(currentHistogramIsDiscrete)),
         );
         const used = new Set(asArray(selection.selectedHistograms).filter((value) => typeof value === "string"));
-        const preferred =
-          typeof histogramName === "string" && histogramNames.includes(histogramName) ? histogramName : null;
-        const candidate =
-          preferred && !used.has(preferred) ? preferred : histogramNames.find((name) => !used.has(name)) || null;
+        const available = histogramNames.filter((name) => !used.has(name));
+        // Match the visible table title to the dropdown label (the bundle key).
+        const candidate = available.includes(histogramTitle) ? histogramTitle : available[0];
         if (typeof candidate !== "string") return bundle;
         return {
           ...bundle,
@@ -151,7 +171,7 @@ export const useHistogramBundles = () => {
               ),
               discreteAlignmentByHistogram: {
                 ...(selection.discreteAlignmentByHistogram || {}),
-                [candidate]: "by_key",
+                [candidate]: bundle.histograms[candidate]?.source_format === "hwu" ? "by_index" : "by_key",
               },
               sortModeByHistogram: {
                 ...(selection.sortModeByHistogram || {}),
@@ -167,6 +187,7 @@ export const useHistogramBundles = () => {
   return {
     histogramBundlesByPanel,
     histogramBundleUploadErrors,
+    histogramBundleUploads,
     uploadHistogramBundle,
     removeHistogramBundle,
     updateHistogramBundleSelection,

@@ -1,3 +1,4 @@
+import LoadingStatus from "../common/LoadingStatus";
 import {
   Alert,
   Button,
@@ -49,7 +50,7 @@ const TomlActionDialog = ({
   const [saveTemplateName, setSaveTemplateName] = useState("");
   const wasOpenRef = useRef(false);
   const restoreGenerationRef = useRef(0);
-  const { templates, load: loadTemplate, save: saveTemplate, remove: deleteTemplate } = useTemplates({
+  const { templates, isLoading: templatesLoading, load: loadTemplate, save: saveTemplate, remove: deleteTemplate } = useTemplates({
     kind: templateKind,
     enabled: templatesEnabled && Boolean(templateKind),
     onError: (err) => setTemplateError(err?.message || "Failed to load templates."),
@@ -74,6 +75,7 @@ const TomlActionDialog = ({
       wasOpenRef.current = false;
       restoreGenerationRef.current += 1;
       setSaveDialogOpen(false);
+      setTemplateBusy(false);
       return;
     }
     if (wasOpenRef.current) return;
@@ -132,23 +134,25 @@ const TomlActionDialog = ({
   };
 
   const handleTemplateChange = async (event) => {
+    const generation = ++restoreGenerationRef.current;
     const nextTemplate = event.target.value;
     setSelectedTemplate(nextTemplate);
     writeStoredSelection(nextTemplate);
     setTemplateError(null);
     if (!nextTemplate) {
       setValue(initialValue || "");
+      setTemplateBusy(false);
       return;
     }
     if (!loadTemplate) return;
     setTemplateBusy(true);
     try {
       const templateValue = await loadTemplate(nextTemplate);
-      setValue(templateValue);
+      if (generation === restoreGenerationRef.current) setValue(templateValue);
     } catch (err) {
-      setTemplateError(err?.message || "Failed to load template.");
+      if (generation === restoreGenerationRef.current) setTemplateError(err?.message || "Failed to load template.");
     } finally {
-      setTemplateBusy(false);
+      if (generation === restoreGenerationRef.current) setTemplateBusy(false);
     }
   };
 
@@ -211,6 +215,8 @@ const TomlActionDialog = ({
           <DialogTitle>{title}</DialogTitle>
           <DialogContent>
             <Stack spacing={2} sx={{ pt: 1 }}>
+              <LoadingStatus loading={templatesLoading || templateBusy || templateActionBusy || busy}
+                label={templateBusy ? "Loading template…" : templatesLoading ? "Loading templates…" : templateActionBusy ? "Saving template changes…" : `${submitLabel || "Submitting"}…`} />
               {helperText ? (
                 <Typography variant="body2" color="text.secondary">
                   {helperText}

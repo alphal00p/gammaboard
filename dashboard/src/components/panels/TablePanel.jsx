@@ -5,6 +5,7 @@ import {
   Card,
   CardContent,
   Chip,
+  Checkbox,
   FormControlLabel,
   Stack,
   Table as MuiTable,
@@ -18,7 +19,8 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import LoadingStatus from "../common/LoadingStatus";
 import { apiUrl } from "../../services/api";
 import { asArray } from "../../utils/collections";
 import { formatCentralValueWithError, formatScientific } from "../../utils/formatters";
@@ -26,15 +28,16 @@ import { renderStructuredValue } from "./BasicPanels";
 import SamplePointValue from "./SamplePointValue";
 import StatusChip from "../common/StatusChip";
 import { PanelHeader } from "../common/PanelChrome";
-import FigureExportActions, { downloadTextFile } from "./FigureExportActions";
+import FigureExportActions, { downloadBlob, downloadTextFile } from "./FigureExportActions";
 import { readHistogramBundleSelectedValue, writeHistogramBundlePanelValue } from "./histogramUtils";
 
-const requestHistogramBundleExport = async (payload, format) => {
-  const response = await fetch(apiUrl("/histogram-bundle/export"), {
+const requestHistogramBundleExport = async (payload, format, includeChildren) => {
+  const source = payload?.export_source;
+  const response = await fetch(apiUrl(source ? "/histogram-bundle/campaign-export" : "/histogram-bundle/export"), {
     method: "POST",
     credentials: "include",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ payload, format }),
+    body: JSON.stringify(source ? { ...source, format, include_children: includeChildren } : { payload, format }),
   });
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
@@ -96,18 +99,20 @@ const compareTableValues = (left, right, direction) => {
   return direction === "desc" ? -order : order;
 };
 
-const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, onUploadBundle, onRemoveBundle, inputRef }) => (
+const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, bundleUploading, onUploadBundle, onRemoveBundle, inputRef }) => (
   <Box sx={{ mb: 1.5 }}>
     <input
       ref={inputRef}
       type="file"
-      accept="application/json,.json"
+      accept="application/json,.json,.hwu,.HwU,.HWU"
+      aria-label="Upload histogram bundle"
+      disabled={bundleUploading}
       style={{ display: "none" }}
       onChange={(event) => onUploadBundle?.(state?.panel_id, event)}
     />
     <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: bundleUploadError ? 1 : 0, flexWrap: "wrap" }}>
-      <Button size="small" variant="outlined" onClick={() => inputRef.current?.click()}>
-        Upload Bundle
+      <Button size="small" variant="outlined" disabled={bundleUploading} onClick={() => inputRef.current?.click()}>
+        {bundleUploading ? "Importing bundle…" : "Upload Bundle"}
       </Button>
       {asArray(uploadedBundles).map((bundle) => (
         <Button
@@ -122,6 +127,8 @@ const BundleUploadControls = ({ state, uploadedBundles, bundleUploadError, onUpl
       ))}
     </Stack>
     {bundleUploadError ? <Alert severity="error">{bundleUploadError}</Alert> : null}
+    {asArray(uploadedBundles).flatMap((bundle) => asArray(bundle.warnings).map((warning, index) =>
+      <Alert severity="info" key={`${bundle.id}-${index}`}>{bundle.label}: {warning}</Alert>))}
   </Box>
 );
 
@@ -133,10 +140,18 @@ const TablePanel = ({
   onUploadBundle = null,
   onRemoveBundle = null,
   bundleUploadError = null,
+  bundleUploading = false,
 }) => {
   const uploadInputRef = useRef(null);
   const [sort, setSort] = useState(null);
   const [absolute, setAbsolute] = useState(false);
+  const [exporting, setExporting] = useState(null);
+  const [exportError, setExportError] = useState(null);
+  const [includeComparisons, setIncludeComparisons] = useState(false);
+  const [includeChildren, setIncludeChildren] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState(null);
+  const pdfRequest = useRef(null);
+  useEffect(() => () => pdfRequest.current?.abort(), []);
   const payload = state?.payload;
   const absoluteComponents = payload?.absolute_components;
   const activeData = absolute && absoluteComponents ? absoluteComponents : state;
@@ -173,6 +188,7 @@ const TablePanel = ({
               state={state}
               uploadedBundles={uploadedBundles}
               bundleUploadError={bundleUploadError}
+            bundleUploading={bundleUploading}
               onUploadBundle={onUploadBundle}
               onRemoveBundle={onRemoveBundle}
               inputRef={uploadInputRef}
@@ -204,9 +220,11 @@ const TablePanel = ({
   const rowsSelectRuns = typeof onSelectRun === "function" && rowActionColumnIndex >= 0;
 
   const handleDownload = async (format) => {
-    if (!isHistogramBundle) return;
+    if (!isHistogramBundle || exporting) return;
+    setExporting(format);
+    setExportError(null);
     try {
-      const exported = await requestHistogramBundleExport(payload, format);
+      const exported = await requestHistogramBundleExport(payload, format, includeChildren);
       const filename =
         typeof exported?.filename === "string" && exported.filename.trim().length > 0
           ? exported.filename
@@ -226,7 +244,32 @@ const TablePanel = ({
       downloadTextFile(filename, contents, mimeType);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      alert(`Failed to export histogram bundle (${format.toUpperCase()}): ${message}`);
+      setExportError(`Failed to export histogram bundle (${format.toUpperCase()}): ${message}`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (exporting) return;
+    const request = new AbortController();
+    pdfRequest.current = request;
+    setExporting("pdf");
+    setExportError(null);
+    setPdfProgress(null);
+    try {
+      const { renderHistogramBundlePdf } = await import("./histogramPdf");
+      if (request.signal.aborted) return;
+      const blob = await renderHistogramBundlePdf({ payload, panelId: state.panel_id, value: state.selected_value,
+        uploadedBundles, includeComparisons, signal: request.signal,
+        onProgress: (page, total) => setPdfProgress(`Rendering observable ${page} of ${total}…`),
+      });
+      if (!request.signal.aborted) downloadBlob(`${state.panel_id || "observables"}.pdf`, blob);
+    } catch (error) {
+      if (!request.signal.aborted) setExportError(`Failed to export observable plots: ${error.message}`);
+    } finally {
+      if (!request.signal.aborted) { setExporting(null); setPdfProgress(null); }
+      pdfRequest.current = null;
     }
   };
 
@@ -262,17 +305,29 @@ const TablePanel = ({
             </Tooltip>
           ) : null}
           {supportsBundleExport ? (
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} alignItems="center" useFlexGap flexWrap="wrap">
               {actions.export_json !== false ? (
-              <Button size="small" variant="outlined" onClick={() => handleDownload("json")}>
+              <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={() => handleDownload("json")}>
                 JSON
               </Button>
               ) : null}
               {actions.export_hwu !== false ? (
-              <Button size="small" variant="outlined" onClick={() => handleDownload("hwu")}>
+              <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={() => handleDownload("hwu")}>
                 HwU
               </Button>
               ) : null}
+              {payload?.export_source && <Tooltip describeChild title="Add the original unscaled child observables to JSON/HwU downloads. Data is fetched when you export.">
+                <FormControlLabel label="Include child observables"
+                  control={<Checkbox size="small" checked={includeChildren}
+                    disabled={Boolean(exporting)}
+                    onChange={(event) => setIncludeChildren(event.target.checked)} />} />
+              </Tooltip>}
+              <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={handleDownloadPdf}>
+                Download plots PDF
+              </Button>
+              {uploadedBundles.length > 0 && <FormControlLabel label="Include comparisons in PDF"
+                control={<Checkbox size="small" checked={includeComparisons} disabled={Boolean(exporting)}
+                  onChange={(event) => setIncludeComparisons(event.target.checked)} />} />}
             </Stack>
           ) : null}
         </PanelHeader>
@@ -281,6 +336,7 @@ const TablePanel = ({
             state={state}
             uploadedBundles={uploadedBundles}
             bundleUploadError={bundleUploadError}
+            bundleUploading={bundleUploading}
             onUploadBundle={onUploadBundle}
             onRemoveBundle={onRemoveBundle}
             inputRef={uploadInputRef}
@@ -291,6 +347,8 @@ const TablePanel = ({
           <Typography component="summary" variant="body2" sx={{ cursor: "pointer", color: "text.secondary" }}>{payload.help.title}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1, whiteSpace: "pre-line" }}>{payload.help.text}</Typography>
         </Box>}
+        <LoadingStatus loading={Boolean(exporting)} label={pdfProgress || "Preparing export…"} />
+        {exportError && <Alert severity="error">{exportError}</Alert>}
         {omittedHistogramCount > 0 ? (
           <Alert severity="warning" sx={{ mb: 2 }}>
             {omittedHistogramCount} incompatible {omittedHistogramCount === 1 ? "observable was" : "observables were"}

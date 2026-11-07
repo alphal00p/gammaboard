@@ -675,6 +675,14 @@ http {{\n\
             try_files $uri /index.html;\n\
         }}\n\
 \n\
+        location /api/histogram-bundle/ {{\n\
+            client_max_body_size 16m;\n\
+            proxy_pass http://{backend}/api/histogram-bundle/;\n\
+            proxy_set_header Host $host;\n\
+            proxy_set_header X-Forwarded-Proto http;\n\
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n\
+        }}\n\
+\n\
         location /api/ {{\n\
             proxy_pass http://{backend}/api/;\n\
             proxy_set_header Host $host;\n\

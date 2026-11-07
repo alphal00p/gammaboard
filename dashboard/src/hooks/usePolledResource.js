@@ -8,6 +8,8 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState(null);
+  const [isFetching, setIsFetching] = useState(false);
+  const [source, setSource] = useState(null);
   const initialDataRef = useRef(initialData);
   const onErrorRef = useRef(onError);
 
@@ -28,6 +30,8 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
         return;
       }
 
+      setSource(() => fetchResource);
+      setIsFetching(true);
       try {
         const nextData = await fetchResource(signal);
         if (signal.aborted) return;
@@ -36,24 +40,31 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
         setIsConnected(true);
         setLastUpdate(formatTime());
       } catch (err) {
-        if (err?.name === "AbortError") return;
+        if (signal.aborted || err?.name === "AbortError") return;
         setError(err);
         setIsConnected(false);
         onErrorRef.current?.(err);
+      } finally {
+        if (!signal.aborted) setIsFetching(false);
       }
     },
     [enabled, fetchResource],
   );
 
-  usePolling({ enabled, intervalMs: pollMs, poll });
+  const reset = useCallback(() => {
+    setData(initialDataRef.current); setError(null); setLastUpdate(null); setIsConnected(false); setIsFetching(false);
+  }, []);
+  usePolling({ enabled, intervalMs: pollMs, poll, reset });
 
   return useMemo(
     () => ({
-      data,
-      isConnected,
-      lastUpdate,
-      error,
+      data: source === fetchResource ? data : initialDataRef.current,
+      isConnected: source === fetchResource && isConnected,
+      lastUpdate: source === fetchResource ? lastUpdate : null,
+      error: source === fetchResource ? error : null,
+      isLoading: enabled && (source !== fetchResource || (!lastUpdate && !error)),
+      isFetching: enabled && (source !== fetchResource || isFetching),
     }),
-    [data, error, isConnected, lastUpdate],
+    [data, error, isConnected, lastUpdate, source, fetchResource, enabled, isFetching],
   );
 };

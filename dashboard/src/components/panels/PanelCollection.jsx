@@ -716,6 +716,7 @@ const PanelRenderer = ({
   onValueChange,
   histogramBundlesByPanel,
   histogramBundleUploadErrors,
+  histogramBundleUploads,
   uploadHistogramBundle,
   removeHistogramBundle,
   updateHistogramBundleSelection,
@@ -786,6 +787,7 @@ const PanelRenderer = ({
           onSelectRun={onSelectRun}
           uploadedBundles={histogramBundlesByPanel?.[descriptor.panel_id] ?? []}
           bundleUploadError={histogramBundleUploadErrors?.[descriptor.panel_id] ?? null}
+          bundleUploading={histogramBundleUploads?.[descriptor.panel_id] === true}
           onUploadBundle={uploadHistogramBundle}
           onRemoveBundle={removeHistogramBundle}
         />
@@ -826,6 +828,7 @@ const PanelCollection = ({
   const {
     histogramBundlesByPanel,
     histogramBundleUploadErrors,
+    histogramBundleUploads,
     uploadHistogramBundle,
     removeHistogramBundle,
     updateHistogramBundleSelection,
@@ -907,6 +910,7 @@ const PanelCollection = ({
               onValueChange={handlePanelValueChange}
               histogramBundlesByPanel={histogramBundlesByPanel}
               histogramBundleUploadErrors={histogramBundleUploadErrors}
+              histogramBundleUploads={histogramBundleUploads}
               uploadHistogramBundle={uploadHistogramBundle}
               removeHistogramBundle={removeHistogramBundle}
               updateHistogramBundleSelection={updateHistogramBundleSelection}

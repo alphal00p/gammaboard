@@ -1,3 +1,4 @@
+import LoadingStatus from "./LoadingStatus";
 import ConnectionStatus from "../ConnectionStatus";
 import RunSelector from "../RunSelector";
 import { asArray } from "../../utils/collections";
@@ -12,6 +13,7 @@ const RunScopedWorkspace = ({
   hasMoreRuns = false,
   loadMoreRuns = null,
   isLoadingMoreRuns = false,
+  isLoadingRuns = false,
   isConnected,
   serverName,
   noRunsMessage,
@@ -25,7 +27,8 @@ const RunScopedWorkspace = ({
       <>
         <ConnectionStatus isConnected={isConnected} lastUpdate={null} serverName={serverName} />
         {headerActions}
-        <EmptyStateCard title="No runs available" message={noRunsMessage} />
+        <LoadingStatus loading={isLoadingRuns} label="Loading runs…" />
+        {!isLoadingRuns && <EmptyStateCard title="No runs available" message={noRunsMessage} />}
       </>
     );
   }

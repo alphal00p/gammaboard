@@ -52,6 +52,9 @@ pub(crate) fn combine_independent_observables(
         .map(str::to_string)
         .or_else(|| histograms.keys().next().cloned());
     Some(json!({
+        "estimator": "combined",
+        "statistics_kind": "independent_child_estimates",
+        "estimator_note": "Independent child observable estimates are summed with the campaign coefficients; errors are combined in quadrature.",
         "primary_histogram_name": primary_histogram_name,
         "histograms": histograms,
         "omitted_incompatible_histograms": omitted,
@@ -84,11 +87,17 @@ fn combine_histogram(inputs: &[(f64, &JsonValue)]) -> Option<JsonValue> {
         bin.insert("stop".to_string(), json!(stop));
         bin.insert("value".to_string(), json!(value));
         bin.insert("error".to_string(), json!(error));
-        for key in ["label", "bin_id"] {
+        for key in ["label", "bin_id", "x_min", "x_max"] {
             if let Some(value) = template_bin.get(key) {
                 bin.insert(key.to_string(), value.clone());
             }
         }
+        add_bin_counts(
+            &mut bin,
+            inputs
+                .iter()
+                .filter_map(|(_, histogram)| histogram.get("bins")?.get(index)),
+        )?;
         bins.push(JsonValue::Object(bin));
     }
 
@@ -106,21 +115,72 @@ fn combine_histogram(inputs: &[(f64, &JsonValue)]) -> Option<JsonValue> {
                 histogram.get(key)?,
             ))
         }))?;
-        combined.insert(key.to_string(), json!({ "value": value, "error": error }));
+        let mut bin = template.get(key)?.as_object()?.clone();
+        bin.remove("sum_weights");
+        bin.remove("sum_weights_squared");
+        bin.remove("estimate");
+        bin.remove("basic");
+        bin.insert("value".into(), json!(value));
+        bin.insert("error".into(), json!(error));
+        add_bin_counts(
+            &mut bin,
+            inputs
+                .iter()
+                .filter_map(|(_, histogram)| histogram.get(key)),
+        )?;
+        combined.insert(key.to_string(), JsonValue::Object(bin));
     }
     combined.insert(
         "sample_count".to_string(),
-        json!(
-            inputs
-                .iter()
-                .filter_map(|(_, histogram)| histogram.get("sample_count")?.as_i64())
-                .sum::<i64>()
-        ),
+        json!(inputs.iter().try_fold(0u64, |total, (_, histogram)| {
+            total.checked_add(histogram.get("sample_count")?.as_u64()?)
+        })?),
     );
-    combined.remove("statistics");
+    if inputs
+        .iter()
+        .all(|(_, histogram)| histogram.get("statistics").is_some())
+    {
+        let mut statistics = Map::new();
+        for key in [
+            "in_range_entry_count",
+            "nan_value_count",
+            "mitigated_pair_count",
+        ] {
+            statistics.insert(
+                key.into(),
+                json!(inputs.iter().try_fold(0u64, |total, (_, histogram)| {
+                    total.checked_add(histogram.get("statistics")?.get(key)?.as_u64()?)
+                })?),
+            );
+        }
+        combined.insert("statistics".into(), JsonValue::Object(statistics));
+    } else {
+        combined.remove("statistics");
+    }
     combined.remove("strata");
     combined.remove("stratum_sample_counts");
     Some(JsonValue::Object(combined))
+}
+
+fn add_bin_counts<'a>(
+    target: &mut Map<String, JsonValue>,
+    bins: impl Iterator<Item = &'a JsonValue>,
+) -> Option<()> {
+    let bins = bins.collect::<Vec<_>>();
+    for key in ["entry_count", "mitigated_fill_count"] {
+        // Older/minimal snapshots can lack counters; do not invent them.
+        if bins.iter().all(|bin| bin.get(key).is_some()) {
+            target.insert(
+                key.into(),
+                json!(bins.iter().try_fold(0u64, |total, bin| {
+                    total.checked_add(bin.get(key)?.as_u64()?)
+                })?),
+            );
+        } else {
+            target.remove(key);
+        }
+    }
+    Some(())
 }
 
 fn combine_bin<'a>(

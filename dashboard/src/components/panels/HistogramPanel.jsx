@@ -1,8 +1,10 @@
 import { PanelHeader, ControlBar } from "../common/PanelChrome";
 import { useMemo, useRef, useState } from "react";
-import { Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, Typography } from "@mui/material";
 import { asArray } from "../../utils/collections";
 import { formatScientific, numberOrNaN } from "../../utils/formatters";
+import RebinControl from "./RebinControl";
+import { rebinHistogramBins, alignComparisonBins, alignCumulativeBins } from "./histogramRebin";
 import FigureExportActions from "./FigureExportActions";
 import { EmptyPlotPanel } from "./BasicPanels";
 import {
@@ -22,6 +24,7 @@ import {
   fitDomain,
   fitHistogramXDomain,
   histogramIsDiscrete,
+  histogramSupportsComparison,
   normalizeHistogramMode,
   normalizeHistogramSelectionState,
   normalizeHistogramSortMode,
@@ -67,6 +70,12 @@ import LazyChart from "./LazyChart";
 const histogramSelectSx = { fontSize: "0.875rem", ".MuiSelect-select": { py: 0.75 } };
 const histogramOverlayColors = ["#ce4555", "#3a86ff", "#ff006e", "#6a994e", "#ff7f11", "#8338ec"];
 
+const rebinView = (bins, factor, density = false) => {
+  try { return { bins: rebinHistogramBins(bins, factor, density), error: null }; }
+  catch (error) { return { bins, error: error.message }; }
+};
+const seriesKey = (name, bundle = null, compared = null) => JSON.stringify([name, bundle, compared]);
+
 const inferDefaultHistogramYScale = () => "linear";
 
 const inferDefaultHistogramXScale = (state) => (state?.log_x_axis ? "log" : "linear");
@@ -83,6 +92,7 @@ const HistogramPanel = ({
   extraControls = null,
   caption = null,
   controlledView = false,
+  renderPlots = null,
 }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
@@ -120,7 +130,16 @@ const HistogramPanel = ({
   const yZoomRange = isBundleControlled
     ? readHistogramYZoomFromPanelValue(value, FULL_ZOOM)
     : readYZoomFromPanelValue(value, FULL_ZOOM);
-  const view = isBundleControlled ? readHistogramBundleView(value) : {};
+  const [localView, setLocalView] = useState({});
+  const rebinValue = isBundleControlled ? value : localView;
+  const view = readHistogramBundleView(rebinValue);
+  const changeRebinView = (change) => {
+    const next = writeHistogramBundlePanelValue(rebinValue, change);
+    if (isBundleControlled && onValueChange) onValueChange(sourcePanelId, next, false);
+    else setLocalView(next);
+  };
+  const baseRebinKey = seriesKey(currentHistogramName);
+  const rebinFactor = view.rebin_factors?.[baseRebinKey] ?? 1;
   const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
   const histogramMode = isBundleControlled ? normalizeHistogramMode(view.display_mode) : localHistogramMode;
   const showRatio = isBundleControlled ? view.show_ratio === true : localShowRatio;
@@ -150,9 +169,12 @@ const HistogramPanel = ({
       ? sortHistogramBinsByMode(baseCanonicalBins, requestedSortMode)
       : baseCanonicalBins.slice().sort((left, right) => Number(left?.start) - Number(right?.start));
   }, [baseCanonicalBins, requestedSortMode]);
+  const canRebin = (!state?.selection || state.selection.display === "estimate") && !hasDeclaredViews && !state?.overlay_histograms?.length && !state?.discrete_ordering && !histogramIsDiscrete(state);
+  const rebinned = useMemo(() => canRebin ? rebinView(sortedBaseBins, rebinFactor) : { bins: sortedBaseBins },
+    [canRebin, sortedBaseBins, rebinFactor]);
   const bins = useMemo(
-    () => (histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(sortedBaseBins) : sortedBaseBins),
-    [histogramMode, sortedBaseBins],
+    () => (histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(rebinned.bins) : rebinned.bins),
+    [histogramMode, rebinned.bins],
   );
   const stepData = useMemo(() => buildHistogramRenderData(bins, yScale), [bins, yScale]);
   const relativeErrorData = useMemo(() => buildRelativeErrorStepData(bins), [bins]);
@@ -241,13 +263,14 @@ const HistogramPanel = ({
           return selectedNames.map((selectedName, selectedIndex) => {
             const histogram = bundle.histograms?.[selectedName];
             if (!histogram) return null;
-            if (histogramIsDiscrete(histogram) !== isDiscrete) return null;
+            if (!histogramSupportsComparison(histogram, isDiscrete)) return null;
             const discreteMatchMode =
               selectionState.discreteAlignmentByHistogram?.[selectedName] === "by_index" ? "by_index" : "by_key";
             const color = histogramOverlayColors[(bundleIndex * 3 + selectedIndex) % histogramOverlayColors.length];
             const seriesLabel = `${bundle.label}: ${selectedName}`;
             if (isDiscrete) {
-              const overlayCanonicalBins = buildHistogramData(histogram.bins);
+              const overlayCanonicalBins = buildHistogramData(histogram.bins).map((bin) =>
+                histogram.source_format === "hwu" ? { ...bin, bin_id: bin.start } : bin);
               const overlayBinByKey = new Map(
                 overlayCanonicalBins.map((bin, index) => [discreteHistogramBinKey(bin, index), bin]),
               );
@@ -303,35 +326,35 @@ const HistogramPanel = ({
                 ratioData: buildOneMinusRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
               };
             }
-            const overlayCanonicalBins = buildHistogramData(histogram.bins).sort(
-              (left, right) => Number(left?.start) - Number(right?.start),
-            );
-            const displayOverlayBins =
-              histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
-            const projected = buildOverlaySeriesFromBins(
-              projectBinsToReferenceBins(bins, displayOverlayBins).filter(Boolean),
-              yScale,
-              effectiveXScale,
-            );
+            const key = seriesKey(currentHistogramName, bundle.label, selectedName);
+            const factor = view.rebin_factors?.[key] ?? 1;
+            const rebinnedOverlay = rebinView(buildHistogramData(histogram.bins), factor, view.density_inputs?.[key] === true);
+            const overlayCanonicalBins = rebinnedOverlay.bins;
+            const displayOverlayBins = histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
+            const projected = buildOverlaySeriesFromBins(displayOverlayBins, yScale, effectiveXScale);
+            const matched = histogramMode === HISTOGRAM_MODE_CDF
+              ? alignCumulativeBins(bins, displayOverlayBins)
+              : alignComparisonBins(rebinned.bins, overlayCanonicalBins);
             return {
-              id: `${bundle.id}-${selectedName}`,
-              name: seriesLabel,
-              color,
+              id: `${bundle.id}-${selectedName}`, name: seriesLabel, color,
+              rebinError: rebinnedOverlay.error,
+              merged: factor > 1 || (!binsShareEdges(rebinned.bins, overlayCanonicalBins) && matched.some(Boolean)),
+              unmatched: matched.some((bin) => bin == null),
               valueStep: projected.valueStep,
               relativeStep: projected.relativeStep,
               absError: projected.absError,
-              ratioData: buildOneMinusRatioPoints(
-                bins,
-                projectBinsToReferenceBins(bins, displayOverlayBins),
-                false,
-                effectiveXScale,
-              ),
+              ratioData: rebinned.error || rebinnedOverlay.error ? [] : buildOneMinusRatioPoints(bins, matched, false, effectiveXScale),
             };
           });
         })
         .filter(Boolean),
     [
       bins,
+      rebinned.bins,
+      rebinned.error,
+      currentHistogramName,
+      view.rebin_factors,
+      view.density_inputs,
       comparedBundleSelections,
       discreteBaseKeys,
       discreteBaseSortedCanonicalIndices,
@@ -446,8 +469,8 @@ const HistogramPanel = ({
       .flatMap((bin) => [Number(bin?.start), Number(bin?.stop)])
       .filter((value) => Number.isFinite(value) && value > 0);
     if (positiveEdges.length === 0) return [Number.EPSILON, 1];
-    const min = Math.min(...positiveEdges);
-    const max = Math.max(...positiveEdges);
+    const min = positiveEdges.reduce((a, b) => Math.min(a, b), Infinity);
+    const max = positiveEdges.reduce((a, b) => Math.max(a, b), -Infinity);
     return [Math.max(min, Number.EPSILON), Math.max(max, min * (1 + Number.EPSILON))];
   }, [bins, effectiveXScale, isDiscrete]);
   const visibleXRange = useMemo(
@@ -662,6 +685,15 @@ const HistogramPanel = ({
     [isBundleControlled, onValueChange, sourcePanelId, value, yZoomRange, zoomRange],
   );
 
+  // PDF pages use the same plot options, without mounting interactive charts.
+  if (renderPlots) return renderPlots({
+    histogramOption, relativeOption: showRelativeErrors ? relativeOption : null,
+    ratioOption: showRatio ? ratioOption : null, bins,
+    errors: [rebinned.error, ...comparedOverlaySeries.map((series) => series.rebinError)].filter(Boolean),
+    approximateErrors: rebinFactor > 1 || comparedOverlaySeries.some((series) => series.merged),
+    cumulativeErrorsUnavailable: histogramMode === HISTOGRAM_MODE_CDF,
+    unmatchedComparison: comparedOverlaySeries.some((series) => series.unmatched),
+  });
   if (bins.length === 0) return <EmptyPlotPanel title={title} />;
   return (
     <Card variant="outlined">
@@ -670,25 +702,21 @@ const HistogramPanel = ({
           {showExportAction || showResetViewAction ? (
             <FigureExportActions
               baseName={state?.panel_id || state?.name || title || "histogram"}
-              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state, xScale: effectiveXScale, yScale }}
+              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state: { ...state, bins }, comparison_series: comparedOverlaySeries, histogram_mode: histogramMode, rebin_factor: rebinFactor, comparison_rebin_factors: view.rebin_factors, comparison_density_inputs: view.density_inputs, uncertainty_note: "Merged-bin errors assume uncorrelated bins. Cumulative errors are unavailable without covariance.", xScale: effectiveXScale, yScale }}
               elementRef={figureRef}
               onResetView={
-                showResetViewAction && sourcePanelId && typeof onValueChange === "function"
-                  ? () =>
-                      onValueChange(
-                        sourcePanelId,
-                        isBundleControlled
-                          ? writeHistogramBundlePanelValue(value, { zoom: FULL_ZOOM, yZoom: FULL_ZOOM })
-                          : writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM),
-                        false,
-                      )
-                : null
+                showResetViewAction ? () => {
+                  changeRebinView({ resetRebin: true, zoom: FULL_ZOOM, yZoom: FULL_ZOOM });
+                  if (!isBundleControlled && onValueChange) onValueChange(sourcePanelId, writeZoomPanelValue(value, FULL_ZOOM, null, FULL_ZOOM), false);
+                } : null
               }
             />
           ) : null}
         </PanelHeader>
         <ControlBar sx={{ mb: 2 }}>
           {extraControls}
+          {canRebin && <RebinControl value={rebinFactor} max={sortedBaseBins.length}
+            onChange={(factor) => changeRebinView({ rebinFactors: { [baseRebinKey]: factor } })} />}
           {declaredViews.length > 1 ? (
             <FormControl size="small" sx={{ minWidth: 152 }}>
               <Select
@@ -845,11 +873,22 @@ const HistogramPanel = ({
             Cumulative uncertainties are unavailable without covariance between bins.
           </Typography>
         )}
+        {rebinned.error && <Alert severity="error">{rebinned.error} Original bins are shown.</Alert>}
+        {comparedOverlaySeries.filter((series) => series.rebinError).map((series) =>
+          <Alert severity="error" key={series.id}>{series.name}: {series.rebinError} Original bins are shown.</Alert>)}
+        {(rebinFactor > 1 || comparedOverlaySeries.some((series) => series.merged)) &&
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+            Merged-bin errors use an uncorrelated-bin approximation; cross-bin covariance is unavailable.
+            Merging changes the display only. A smaller final group is retained.
+          </Typography>}
+        {comparedOverlaySeries.some((series) => series.unmatched) && <Alert severity="info" sx={{ mb: 1 }}>
+          Comparisons use their own bin edges. Ratios are shown only for matching intervals or exact sums of finer bins.
+        </Alert>}
         {comparedBundleSelections.length > 0 ? (
           <Box sx={{ mb: 1.5, display: "grid", gap: 1 }}>
             {comparedBundleSelections.map(({ bundle, selectionState }) => {
               const histogramNames = Object.keys(bundle.histograms || {}).filter(
-                (name) => histogramIsDiscrete(bundle.histograms?.[name]) === isDiscrete,
+                (name) => histogramSupportsComparison(bundle.histograms?.[name], isDiscrete),
               );
               const usedNames = new Set(
                 asArray(selectionState.selectedHistograms).filter((value) => typeof value === "string"),
@@ -874,7 +913,7 @@ const HistogramPanel = ({
                     </Typography>
                     {isDiscrete ? (
                       <Typography variant="caption" color="text.secondary">
-                        Discrete matching is configured per histogram row.
+                        Discrete matching is configured per histogram row. HwU has no category labels; unit-width integer bins default to index matching.
                       </Typography>
                     ) : null}
                     <Button
@@ -882,7 +921,7 @@ const HistogramPanel = ({
                       variant="outlined"
                       disabled={!hasAddableComparison}
                       onClick={() =>
-                        onAddComparedHistogram?.(sourcePanelId, bundle.id, currentHistogramName, isDiscrete)
+                        onAddComparedHistogram?.(sourcePanelId, bundle.id, currentHistogramName, isDiscrete, state?.title)
                       }
                     >
                       Add histogram
@@ -896,7 +935,7 @@ const HistogramPanel = ({
                           display: "grid",
                           gridTemplateColumns: {
                             xs: "1fr auto",
-                            sm: isDiscrete ? "minmax(0, 200px) 150px 150px auto" : "minmax(0, 220px) auto",
+                            sm: isDiscrete ? "minmax(0, 200px) 150px 150px auto" : "minmax(0, 220px) 180px 180px auto",
                           },
                           gap: 0.75,
                           alignItems: "center",
@@ -921,7 +960,7 @@ const HistogramPanel = ({
                                 delete nextSortModeByHistogram[oldName];
                               }
                               if (nextName && !nextDiscreteAlignmentByHistogram[nextName]) {
-                                nextDiscreteAlignmentByHistogram[nextName] = "by_key";
+                                nextDiscreteAlignmentByHistogram[nextName] = bundle.histograms[nextName]?.source_format === "hwu" ? "by_index" : "by_key";
                               }
                               if (nextName && !nextSortModeByHistogram[nextName]) {
                                 nextSortModeByHistogram[nextName] = HISTOGRAM_SORT_CANONICAL;
@@ -944,6 +983,20 @@ const HistogramPanel = ({
                             ))}
                           </Select>
                         </FormControl>
+                        {!isDiscrete && <>
+                          <RebinControl label={`Merge bins: ${bundle.label} / ${comparedName}`}
+                            value={view.rebin_factors?.[seriesKey(currentHistogramName, bundle.label, comparedName)] ?? 1}
+                            max={bundle.histograms[comparedName]?.bins.length ?? 1}
+                            onChange={(factor) => changeRebinView({ rebinFactors: { [seriesKey(currentHistogramName, bundle.label, comparedName)]: factor } })} />
+                          <FormControl size="small">
+                            <Select inputProps={{ "aria-label": `Input values: ${bundle.label} / ${comparedName}` }}
+                              value={view.density_inputs?.[seriesKey(currentHistogramName, bundle.label, comparedName)] ? "density" : "integral"}
+                              onChange={(event) => changeRebinView({ densityInputs: { [seriesKey(currentHistogramName, bundle.label, comparedName)]: event.target.value === "density" } })}>
+                              <MenuItem value="integral">Bin integrals</MenuItem>
+                              <MenuItem value="density">Density per unit x</MenuItem>
+                            </Select>
+                          </FormControl>
+                        </>}
                         {isDiscrete ? (
                           <FormControl size="small">
                             <Select

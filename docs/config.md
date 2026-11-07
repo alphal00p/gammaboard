@@ -193,6 +193,74 @@ rechecks the target before publishing completion. Final publication waits for
 worker checkpoints. Interrupted grants survive pause, worker loss and controller
 recovery; they are not issued a second time.
 
+## Observable comparisons
+
+**Upload Bundle** in both **Observables** and **Combined Observables** accepts
+JSON and HwU files up to 16 MiB. JSON imports stay in the browser; HwU files are
+converted by the authenticated server to the same comparison format. Imports
+remain local to the current panel session and never change a run's accumulator.
+HwU imports preserve bin edges, central values, errors, titles, axis flags and
+TYPE descriptions. Extra named weight columns are omitted with a notice. Duplicate
+titles receive numeric suffixes. **Add Histogram** selects the dropdown entry whose
+displayed name exactly matches the selected observable's title in the table. If
+there is no available match, it selects the first compatible histogram in the
+bundle that has not already been added. HwU cannot recover original
+sample counts, raw moments or category labels. Integer unit-width bins can be
+compared to discrete observables by index; review the selected matching mode.
+
+**Merge adjacent bins** changes only the display of continuous histograms. Set
+an integer factor separately for the run histogram and each comparison; valid
+changes apply immediately while editing or using the input arrows. Bins are
+merged in coordinate order, preserving a smaller final group. Overlaps and merges
+across gaps are rejected. Underflow and overflow remain separate. Values are bin
+integrals and are summed; for an imported differential density, select **Density
+per unit x** to multiply its values and errors by bin width before merging.
+
+Merged-bin uncertainties use quadrature, an **uncorrelated-bin approximation**.
+Cumulative uncertainties remain unavailable: GammaLoop histogram snapshots do
+not retain cross-bin covariance.
+Missing errors stay unavailable. Comparisons draw their own edges; ratios use only
+matching intervals or exact sums of finer reference bins, never midpoint sampling
+of a wider bin. Use appropriate merge factors to align coarser comparisons.
+
+Factors persist as panel view preferences across refreshes. **Reset** restores the
+original binning and zoom; the input value convention stays selected. Bundle
+exports retain original data, while figure exports use the displayed bins. No
+checkpoint or database format changes are required for these controls.
+
+Both **Observables** and **Combined Observables** offer **JSON** and **HwU**
+downloads of the entire observable bundle. JSON retains metadata and underflow/
+overflow results; HwU contains the central value and uncertainty of each regular
+bin. Campaign JSON uses GammaLoop-compatible histogram fields, with
+`statistics_kind = "derived_moments"` and `estimator = "combined"`: its moments
+encode the sum of independent child estimates and their quadrature uncertainty.
+Entry and diagnostic counters are actual sums. These derived moments are for
+reading/plotting and are not pooled samples suitable for resuming or ordinary
+accumulator merging. JSON export checks that the encoded moments reproduce values
+and errors (relative tolerances 1e-12 and 1e-6 respectively); if float64 precision
+cannot preserve an uncertainty, it reports an error and HwU remains available.
+Campaign HwU writes values and errors directly. View settings and
+uploaded comparisons do not change these data downloads.
+
+Campaign downloads default to the aggregate only. Check **Include child observables**
+to append the original unscaled child data: JSON adds a `children` array with
+names, coefficients, source references, and bundles; HwU adds child-labelled
+histogram blocks with coefficient comments. Children are fetched only when an
+export is requested, and the aggregate is calculated from exactly those fetched
+states. An active campaign's export may therefore be newer than the last dashboard
+refresh. The same compatibility rule as the dashboard applies: only observables
+present with matching layouts in every child enter the aggregate; omissions are
+listed in JSON. Original child bundles can still contain those omitted observables.
+
+**Download plots PDF** renders one observable per page, using the current scales,
+bin merging, zoom, and enabled relative-error/ratio plots. When comparison bundles
+are uploaded, check **Include comparisons in PDF** to include their overlays.
+Configured selections are retained per observable; for observables not yet
+configured, the export matches the table title to the comparison dropdown name,
+falling back to the first compatible entry. Uncheck the option to export only the
+run's observables. PDF generation shows progress and leaves the dashboard view
+unchanged.
+
 ## Batch and resource tuning
 
 ```toml

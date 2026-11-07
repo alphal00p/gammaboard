@@ -90,6 +90,11 @@ const apiDelete = async (path, message, signal) =>
     method: "DELETE",
   });
 
+export const importHwuBundle = (contents, signal) =>
+  apiRequest("/histogram-bundle/import", "Failed to import HwU bundle", signal, {
+    method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: contents,
+  });
+
 export const fetchRuns = async ({ includeChildren = false, limit = 100, offset = 0 } = {}, signal) => {
   const data = await apiGet(
     `/runs${buildQueryString([

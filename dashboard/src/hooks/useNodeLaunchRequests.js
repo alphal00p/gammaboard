@@ -2,12 +2,12 @@ import { fetchNodeLaunchRequests } from "../services/api";
 import { usePolledResource } from "./usePolledResource";
 
 export const useNodeLaunchRequests = ({ enabled = true, pollMs = 3000 } = {}) => {
-  const { data, isConnected, lastUpdate, error } = usePolledResource({
+  const { data, isConnected, lastUpdate, error, isLoading, isFetching } = usePolledResource({
     enabled,
     pollMs,
     initialData: [],
     fetchResource: fetchNodeLaunchRequests,
   });
 
-  return { launchRequests: data, isConnected, lastUpdate, error };
+  return { launchRequests: data, isConnected, lastUpdate, error, isLoading, isFetching };
 };

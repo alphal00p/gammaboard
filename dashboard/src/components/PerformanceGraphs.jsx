@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRunPerformanceGraphs } from "../services/api";
 import PanelCollection from "./panels/PanelCollection";
 import { readZoomFromPanelValue } from "./panels/panelView";
+import LoadingStatus from "./common/LoadingStatus";
 
 const IDS = ["busy_history", "accepted_rate_history"];
 const seconds = (value) => `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 })} s`;
@@ -107,9 +108,9 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
     <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
       <Typography variant="body2" color="text.secondary">
         {selection ? (selection.follow || selection.seconds != null ? "Following latest recorded data" : "Selected interval") : "All recorded history"}
-        {loading ? " · Updating…" : ""}
       </Typography>
     </Stack>
+    <LoadingStatus loading={loading && !data} label="Loading performance history…" />
     <Typography variant="body2" color="text.secondary">
       Drag the time slider handles to zoom; drag its selection to pan. All three tabs share the range.
       Select the right edge to follow new data. Zooming loads finer detail.

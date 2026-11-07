@@ -16,8 +16,8 @@ const SIGNED_LOG_EPSILON = Number.EPSILON;
 export const fitDomain = (values) => {
   const finiteValues = values.filter((value) => Number.isFinite(value));
   if (finiteValues.length === 0) return ["auto", "auto"];
-  const min = Math.min(...finiteValues);
-  const max = Math.max(...finiteValues);
+  const min = finiteValues.reduce((a, b) => Math.min(a, b), Infinity);
+  const max = finiteValues.reduce((a, b) => Math.max(a, b), -Infinity);
   if (min === max) {
     const padding = Math.abs(min) > 0 ? Math.abs(min) * 0.1 : 1;
     return [min - padding, max + padding];
@@ -29,8 +29,8 @@ export const fitDomain = (values) => {
 export const fitXDomain = (values) => {
   const finiteValues = values.filter((value) => Number.isFinite(value));
   if (finiteValues.length === 0) return ["auto", "auto"];
-  const min = Math.min(...finiteValues);
-  const max = Math.max(...finiteValues);
+  const min = finiteValues.reduce((a, b) => Math.min(a, b), Infinity);
+  const max = finiteValues.reduce((a, b) => Math.max(a, b), -Infinity);
   if (min === max) {
     const padding = Math.abs(min) > 0 ? Math.abs(min) * 0.1 : 1;
     return [min - padding, max + padding];
@@ -114,11 +114,17 @@ export const writeHistogramBundlePanelValue = (
     observableView = undefined,
     histogramMode = undefined,
     sortModeByHistogram = undefined,
+    rebinFactors = undefined,
+    densityInputs = undefined,
+    resetRebin = false,
   } = {},
 ) => {
   const next = isObject(current) ? { ...current } : {};
   const nextView = isObject(next.histogram_view) ? { ...next.histogram_view } : {};
   if (observableView !== undefined) nextView.observable = observableView;
+  if (isObject(rebinFactors)) nextView.rebin_factors = { ...nextView.rebin_factors, ...rebinFactors };
+  if (isObject(densityInputs)) nextView.density_inputs = { ...nextView.density_inputs, ...densityInputs };
+  if (resetRebin) delete nextView.rebin_factors;
   if (selectedHistogram !== undefined) next.selected_histogram = selectedHistogram;
   if (zoom !== undefined) nextView.zoom = normalizeZoomRange(zoom) || FULL_ZOOM;
   if (yZoom !== undefined) nextView.y_zoom = normalizeZoomRange(yZoom) || FULL_ZOOM;
@@ -309,6 +315,10 @@ export const discreteHistogramBinKey = (bin, index) => {
 export const histogramIsDiscrete = (histogram) =>
   asArray(histogram?.bins).some((bin) => bin && (bin.label != null || bin.bin_id != null));
 
+export const histogramSupportsComparison = (histogram, discrete) =>
+  histogramIsDiscrete(histogram) === discrete || (discrete && histogram?.source_format === "hwu" &&
+    asArray(histogram.bins).every((bin) => Number.isSafeInteger(bin.start) && bin.stop === bin.start + 1));
+
 export const parseUploadedHistogramBundle = (payload) => {
   if (!isObject(payload)) throw new Error("bundle payload must be a JSON object");
   const histograms = payload?.histograms;
@@ -317,7 +327,7 @@ export const parseUploadedHistogramBundle = (payload) => {
     ([name, histogram]) => typeof name === "string" && name.trim().length > 0 && isObject(histogram),
   );
   if (entries.length === 0) throw new Error("bundle payload contains no valid histograms");
-  const normalizedHistograms = {};
+  const normalizedHistograms = Object.create(null);
   entries.forEach(([name, histogram]) => {
     normalizedHistograms[name] = normalizeUploadedHistogram(name, histogram);
   });
@@ -334,9 +344,9 @@ const normalizeUploadedHistogram = (name, histogram) => {
   const isNormalizedBins = bins.every(
     (bin) =>
       isObject(bin) &&
-      Number.isFinite(Number(bin.start)) &&
-      Number.isFinite(Number(bin.stop)) &&
-      Number.isFinite(Number(bin.value)),
+      bin.start != null && Number.isFinite(Number(bin.start)) &&
+      bin.stop != null && Number.isFinite(Number(bin.stop)) &&
+      bin.value != null && Number.isFinite(Number(bin.value)),
   );
 
   const normalizedBins = isNormalizedBins
@@ -345,6 +355,9 @@ const normalizeUploadedHistogram = (name, histogram) => {
         const stop = Number(bin.stop);
         const value = Number(bin.value);
         const error = bin.error == null ? NaN : numberOrNaN(bin.error);
+        if (bin.error != null && !Number.isFinite(error)) {
+          throw new Error(`histogram '${name}' contains invalid uncertainty at index ${index}`);
+        }
         if (!Number.isFinite(start) || !Number.isFinite(stop) || !Number.isFinite(value)) {
           throw new Error(`histogram '${name}' contains invalid normalized bin at index ${index}`);
         }
@@ -383,13 +396,18 @@ const normalizeUploadedHistogram = (name, histogram) => {
         !Number.isFinite(Number(bin?.start)) ||
         !Number.isFinite(Number(bin?.stop)) ||
         !Number.isFinite(Number(bin?.value)) ||
-        !Number.isFinite(numberOrNaN(bin?.error)),
+        Number(bin?.start) >= Number(bin?.stop) ||
+        (bin?.error != null && !Number.isFinite(numberOrNaN(bin.error))),
     )
   ) {
     throw new Error(`histogram '${name}' contains non-finite bin values`);
   }
 
   return {
+    source_format: histogram.source_format,
+    type_description: histogram.type_description,
+    log_x_axis: histogram.log_x_axis,
+    log_y_axis: histogram.log_y_axis,
     title: typeof histogram?.title === "string" && histogram.title.trim() ? histogram.title : name,
     bins: normalizedBins.map((bin) => ({
       start: Number(bin.start),
@@ -476,7 +494,7 @@ export const normalizeHistogramSelectionState = (bundle, histogramName) => {
   return {
     key,
     selectedHistograms: fallbackSelection,
-    discreteAlignmentByHistogram: Object.fromEntries(fallbackSelection.map((name) => [name, "by_key"])),
+    discreteAlignmentByHistogram: Object.fromEntries(fallbackSelection.map((name) => [name, bundle.histograms[name]?.source_format === "hwu" ? "by_index" : "by_key"])),
     sortModeByHistogram: Object.fromEntries(fallbackSelection.map((name) => [name, HISTOGRAM_SORT_CANONICAL])),
   };
 };

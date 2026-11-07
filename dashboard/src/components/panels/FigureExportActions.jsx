@@ -2,8 +2,7 @@ import { rasterAxes } from './pdfDiagnostics';
 import { useState } from "react";
 import { Alert, Button, Stack } from "@mui/material";
 
-export const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf-8") => {
-  const blob = new Blob([contents], { type: mimeType });
+export const downloadBlob = (filename, blob) => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -14,6 +13,9 @@ export const downloadTextFile = (filename, contents, mimeType = "text/plain;char
   anchor.remove();
   URL.revokeObjectURL(url);
 };
+
+export const downloadTextFile = (filename, contents, mimeType = "text/plain;charset=utf-8") =>
+  downloadBlob(filename, new Blob([contents], { type: mimeType }));
 
 const sanitizeFigureFilename = (value, fallback = "figure") => {
   const text = String(value ?? "").trim();
@@ -169,8 +171,11 @@ const FigureExportActions = ({
   onResetView = null,
 }) => {
   const [error, setError] = useState(null);
+  const [exporting, setExporting] = useState(false);
   const csv = figureCsv(payload);
   const handleDownloadImage = async () => {
+    if (exporting) return;
+    setExporting(true);
     setError(null);
     try {
       if (imageFormat === "png") {
@@ -188,6 +193,7 @@ const FigureExportActions = ({
       }
       setError("The figure is not ready to export yet.");
     } catch (err) { setError(`Export failed: ${err.message}`); }
+    finally { setExporting(false); }
   };
 
   return (
@@ -201,8 +207,8 @@ const FigureExportActions = ({
         JSON
       </Button>
       {csv != null && <Button size="small" variant="outlined" onClick={() => downloadTextFile(`${sanitizeFigureFilename(baseName)}.csv`, csv, "text/csv;charset=utf-8")}>CSV</Button>}
-      {imageFormat && <Button size="small" variant="outlined" onClick={handleDownloadImage}>
-        {imageFormat.toUpperCase()}
+      {imageFormat && <Button size="small" variant="outlined" disabled={exporting} onClick={handleDownloadImage}>
+        {exporting ? "Preparing export…" : imageFormat.toUpperCase()}
       </Button>}
       {error && <Alert severity="error">{error}</Alert>}
     </Stack>

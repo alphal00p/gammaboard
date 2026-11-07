@@ -1,3 +1,4 @@
+import LoadingStatus from "./common/LoadingStatus";
 import {
   Alert,
   Box,
@@ -23,7 +24,7 @@ import { ControlBar } from "./common/PanelChrome";
 
 const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   const nodeName = worker?.node_name || null;
-  const { panelSpecs, panelStates, error } = useNodePanels({
+  const { panelSpecs, panelStates, error, isLoading } = useNodePanels({
     nodeName,
     pollMs: 3000,
   });
@@ -55,6 +56,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
           : worker.desired_run_id == null ? " Paused; pool membership retained." : ""}
       </Typography>}
       {error ? <Alert severity="error">{error}</Alert> : null}
+      <LoadingStatus loading={busy} label="Updating node assignment…" />
       {authenticated ? (
         <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
           <ControlBar>
@@ -126,7 +128,8 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
           </ControlBar>
         </Paper>
       ) : null}
-      <PanelCollection panelSpecs={panelSpecs} panelStates={panelStates} />
+      <LoadingStatus loading={isLoading} label="Loading node details…" />
+      {!isLoading && <PanelCollection panelSpecs={panelSpecs} panelStates={panelStates} />}
       <Dialog open={confirmStopOpen} onClose={() => (busy ? null : setConfirmStopOpen(false))} maxWidth="sm" fullWidth>
         <DialogTitle>Stop node?</DialogTitle>
         <DialogContent>

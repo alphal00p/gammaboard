@@ -3,6 +3,8 @@ import { deleteTemplateFile, fetchTemplateFile, fetchTemplateList, saveTemplateF
 
 export const useTemplates = ({ kind, enabled = true, onError = null }) => {
   const [templates, setTemplates] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const requestId = useRef(0);
   const mountedRef = useRef(false);
   const onErrorRef = useRef(onError);
 
@@ -19,20 +21,24 @@ export const useTemplates = ({ kind, enabled = true, onError = null }) => {
 
   const reload = useCallback(
     async (signal) => {
+      const id = ++requestId.current;
+      setIsLoading(true);
       try {
         const items = await fetchTemplateList(kind, signal);
-        if (mountedRef.current && !signal?.aborted) setTemplates(items);
+        if (mountedRef.current && !signal?.aborted && id === requestId.current) setTemplates(items);
         return items;
       } catch (error) {
-        if (error?.name !== "AbortError" && mountedRef.current) onErrorRef.current?.(error);
+        if (!signal?.aborted && error?.name !== "AbortError" && mountedRef.current && id === requestId.current) onErrorRef.current?.(error);
         return null;
+      } finally {
+        if (mountedRef.current && id === requestId.current) setIsLoading(false);
       }
     },
     [kind],
   );
 
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled) { setIsLoading(false); return undefined; }
     const controller = new AbortController();
     reload(controller.signal);
     return () => controller.abort();
@@ -71,5 +77,5 @@ export const useTemplates = ({ kind, enabled = true, onError = null }) => {
     [kind],
   );
 
-  return { templates, load, save, remove };
+  return { templates, load, save, remove, isLoading };
 };

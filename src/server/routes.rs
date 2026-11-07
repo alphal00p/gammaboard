@@ -71,7 +71,20 @@ pub(super) fn build_app(state: AppState) -> Router {
             get(get_template).delete(delete_template),
         )
         .route("/logs", get(get_logs))
-        .route("/histogram-bundle/export", post(export_histogram_bundle))
+        .route(
+            "/histogram-bundle/export",
+            post(export_histogram_bundle)
+                .layer(DefaultBodyLimit::max(histogram_import::MAX_IMPORT_BYTES)),
+        )
+        .route(
+            "/histogram-bundle/campaign-export",
+            post(histogram_export::export_campaign),
+        )
+        .route(
+            "/histogram-bundle/import",
+            post(histogram_import::import_hwu)
+                .layer(DefaultBodyLimit::max(histogram_import::MAX_IMPORT_BYTES)),
+        )
         .route("/admin/db/restart", post(restart_db))
         .route("/admin/workers/suspend", post(suspend_workers))
         .route("/admin/control/shutdown", post(shutdown_control_process))

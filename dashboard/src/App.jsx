@@ -70,7 +70,7 @@ const DashboardHeader = () => {
 
 function AppContent() {
   const [showChildRuns, setShowChildRuns] = useState(false);
-  const { runs, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns } = useRuns({ includeChildren: showChildRuns });
+  const { runs, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns, isLoadingRuns } = useRuns({ includeChildren: showChildRuns });
   const serverStatus = useServerStatus(3000);
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [mode, setMode] = useState("runs");
@@ -79,6 +79,7 @@ function AppContent() {
   const runList = asArray(runs);
 
   useEffect(() => {
+    if (isLoadingRuns) return;
     if (runList.length === 0) {
       setSelectedRun(null);
       return;
@@ -87,7 +88,7 @@ function AppContent() {
     if (!selectedRun || !runList.some((run) => run.run_id === selectedRun)) {
       setSelectedRun(runList[0].run_id);
     }
-  }, [runList, selectedRun]);
+  }, [runList, selectedRun, isLoadingRuns]);
 
   useEffect(() => {
     if (pendingRunSelection == null) return;
@@ -137,10 +138,12 @@ function AppContent() {
             hasMoreRuns={hasMoreRuns}
             loadMoreRuns={loadMoreRuns}
             isLoadingMoreRuns={isLoadingMoreRuns}
+            isLoadingRuns={isLoadingRuns}
           />
         ) : mode === "workers" ? (
           <WorkersWorkspace
             workers={workersData.workers}
+            isLoading={workersData.isLoading}
             runs={runList}
             isConnected={serverStatus.isConnected}
             lastUpdate={workersData.lastUpdate}
@@ -160,6 +163,7 @@ function AppContent() {
             hasMoreRuns={hasMoreRuns}
             loadMoreRuns={loadMoreRuns}
             isLoadingMoreRuns={isLoadingMoreRuns}
+            isLoadingRuns={isLoadingRuns}
           />
         ) : mode === "logs" ? (
           <LogsWorkspace

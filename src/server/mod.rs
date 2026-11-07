@@ -18,6 +18,8 @@ async fn get_run_metrics(
 use crate::api::node_launch::resolve_node_launch_groups;
 mod auth;
 mod config_panels;
+mod histogram_export;
+mod histogram_import;
 mod panels;
 mod performance_panels;
 mod routes;
@@ -1155,7 +1157,7 @@ async fn get_run_task_output(
             (None, None)
         };
 
-    let payload = panel_source
+    let mut payload = panel_source
         .build_response(
             format!("run:{run_id}:task:{}", task.id),
             cursor,
@@ -1172,6 +1174,25 @@ async fn get_run_task_output(
             &delta_history_snapshots,
         )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
+
+    if matches!(
+        task.task,
+        crate::core::RunTaskSpec::IntegrationCampaign { .. }
+    ) {
+        for update in &mut payload.updates {
+            if let panels::PanelState::Table {
+                panel_id,
+                payload: Some(bundle),
+                ..
+            } = &mut update.panel
+                && panel_id == "campaign_histograms"
+            {
+                bundle["export_source"] = serde_json::json!({
+                    "run_id": run_id, "task_id": task.id.to_string(),
+                });
+            }
+        }
+    }
 
     json_response(payload)
 }
@@ -1706,13 +1727,18 @@ async fn export_histogram_bundle(
     AxumJson(request): AxumJson<HistogramBundleExportRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let format = request.format.trim().to_ascii_lowercase();
-    let wrapper = if request.payload.get("histograms").is_some() {
+    let mut wrapper = if request.payload.get("histograms").is_some() {
         request.payload
     } else {
         serde_json::json!({
             "histograms": request.payload,
         })
     };
+    if let Some(object) = wrapper.as_object_mut() {
+        for key in ["actions", "expands_to", "expanded_label"] {
+            object.remove(key);
+        }
+    }
     let response = match format.as_str() {
         "json" => {
             let contents = serde_json::to_string_pretty(&wrapper).map_err(|err| {
@@ -1727,8 +1753,7 @@ async fn export_histogram_bundle(
         "hwu" => HistogramBundleExportResponse {
             filename: "histogram_bundle.HwU".to_string(),
             mime_type: "text/plain;charset=utf-8".to_string(),
-            contents: crate::services::results::histogram_hwu(&wrapper)
-                .map_err(ApiError::BadRequest)?,
+            contents: histogram_export::write_hwu(&wrapper)?,
         },
         _ => {
             return Err(ApiError::BadRequest(

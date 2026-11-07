@@ -1,3 +1,4 @@
+import LoadingStatus from "./common/LoadingStatus";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -29,7 +30,7 @@ import { autoRunNodes, stopAllNodes, unassignAllNodes } from "../services/api";
 const DEFAULT_NODE_LAUNCH_TOML = "";
 const NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.node_launch.selected_template";
 
-const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serverName }) => {
+const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serverName, isLoading = false }) => {
   const { authenticated } = useAuth();
   const [selectedNodeName, setSelectedNodeName] = useState(null);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -157,7 +158,10 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
           Live nodes
         </Typography>
 
-        {workers.length === 0 ? (
+        <LoadingStatus loading={isLoading} label="Loading nodes…" />
+        <LoadingStatus loading={startingNodes || stoppingAllNodes || unassigningAllNodes}
+          label={startingNodes ? "Requesting worker launch…" : stoppingAllNodes ? "Requesting worker shutdown…" : "Removing worker assignments…"} />
+        {isLoading ? null : workers.length === 0 ? (
           <EmptyStateCard
             title="No nodes registered"
             message="Start one or more node run processes to inspect desired assignment, current role, and heartbeat."
@@ -228,6 +232,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
           <Typography variant="subtitle1" gutterBottom>
             Node Startup Queue
           </Typography>
+          <LoadingStatus loading={launchRequestsData.isLoading} label="Loading worker launch requests…" />
           {!authenticated ? (
             <EmptyStateCard title="Login required" message="Authenticate to inspect and create node launch requests." />
           ) : launchRequestsData.error ? (
@@ -235,7 +240,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, lastUpdate, error, serve
               Failed to fetch node launch requests.
             </Alert>
           ) : (
-            <NodeLaunchQueue requests={launchRequestsData.launchRequests} />
+            !launchRequestsData.isLoading && <NodeLaunchQueue requests={launchRequestsData.launchRequests} />
           )}
         </Box>
       </Paper>

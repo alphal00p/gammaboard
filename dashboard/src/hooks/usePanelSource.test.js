@@ -26,6 +26,26 @@ const selectPanelResponse = {
 
 describe("usePanelSource", () => {
   beforeEach(() => localStorage.clear());
+  test("shows fetching without clearing existing panels and ignores an aborted refresh", async () => {
+    let finish;
+    const fetchPanels = vi.fn().mockResolvedValueOnce(selectPanelResponse)
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { result, rerender } = renderHook(({ fetchPanels, refreshKey }) => usePanelSource({ fetchPanels, refreshKey }),
+      { initialProps: { fetchPanels, refreshKey: 0 } });
+    await waitFor(() => expect(result.current.panelSpecs).toHaveLength(1));
+    expect(result.current.isLoading).toBe(false);
+    rerender({ fetchPanels, refreshKey: 1 });
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    expect(result.current.panelSpecs).toHaveLength(1);
+    const next = vi.fn().mockResolvedValue({ source_id: "new", panels: [], updates: [], poll_after_ms: null });
+    rerender({ fetchPanels: next, refreshKey: 1 });
+    await waitFor(() => expect(result.current.sourceId).toBe("new"));
+    await act(async () => finish(selectPanelResponse));
+    expect(result.current.sourceId).toBe("new");
+    expect(result.current.panelSpecs).toEqual([]);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isFetching).toBe(false);
+  });
   test("a task state change refreshes a source whose polling had stopped", async () => {
     const fetchPanels = vi.fn(async () => selectPanelResponse);
     const { rerender } = renderHook(({ refreshKey }) => usePanelSource({ fetchPanels, refreshKey }),

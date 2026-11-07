@@ -20,6 +20,7 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
   const [cursor, setCursor] = useState(null);
   const [hasMoreOlder, setHasMoreOlder] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadedFilters, setLoadedFilters] = useState(null);
   const [error, setError] = useState(null);
 
   const workerOptions = useMemo(() => {
@@ -68,12 +69,13 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
           },
           signal,
         );
+        if (signal?.aborted) return;
         setItems((previous) => (append ? [...previous, ...page.items] : page.items));
         setCursor(page.next_before_id ?? null);
         setHasMoreOlder(page.has_more_older === true);
         setError(null);
       } catch (err) {
-        if (err?.name === "AbortError") return;
+        if (signal?.aborted || err?.name === "AbortError") return;
         setError(err);
         if (!append) {
           setItems([]);
@@ -81,7 +83,10 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
           setHasMoreOlder(false);
         }
       } finally {
-        setIsLoading(false);
+        if (!signal?.aborted) {
+          setLoadedFilters(filters);
+          setIsLoading(false);
+        }
       }
     },
     [limit, filters],
@@ -111,6 +116,7 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
     workerOptions,
     hasMoreOlder,
     isLoading,
+    isInitialLoading: loadedFilters !== filters,
     error,
     refresh,
     loadOlder,

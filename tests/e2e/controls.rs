@@ -1,5 +1,161 @@
 use super::*;
 
+#[cfg(feature = "gammaloop")]
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn campaign_observable_exports_load_children_on_demand() -> anyhow::Result<()> {
+    use gammaboard::api::runs::{ChildRunRequest, create_child_run};
+    use gammaboard::core::{RunTaskSpec, RunTaskStore};
+    use gammaboard::evaluation::{AccumulatorState, Point, accumulator::GammaLoopAccumulatorState};
+    use gammalooprs::observables::{
+        HistogramAccumulatorState, ObservablePhase, ObservableSnapshotBundle,
+        ObservableValueTransform,
+    };
+    let mut harness = FullStackHarness::new().await?;
+    let result: anyhow::Result<()> = async {
+        let child = r#"
+name = "observable-child"
+[evaluator]
+kind = "unit"
+continuous_dims = 1
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 10 }
+accumulator = { config = "scalar" }
+sampler = { config = { kind = "naive_monte_carlo" } }
+"#;
+        let card = format!(r#"
+kind = "integration_campaign"
+name = "observable-export"
+stop_condition = {{ max_total_samples = 20 }}
+allocation = {{ min_samples_per_child = 2 }}
+[[children]]
+name = "left"
+coefficient = 2.0
+run = '''{child}'''
+[[children]]
+name = "right"
+coefficient = -0.5
+run = '''{child}'''
+"#);
+        harness.add_run(&temp_config(&card));
+        let parent = harness.run_id("observable-export").await?;
+        let store = gammaboard::PgStore::new(harness.pool.clone());
+        let task = store.list_run_tasks(parent).await?.remove(0);
+        let RunTaskSpec::IntegrationCampaign { children, .. } = &task.task else { unreachable!() };
+        let mut originals = Vec::new();
+        for (index, spec) in children.iter().enumerate() {
+            let run = create_child_run(&store, ChildRunRequest { parent_run_id: parent,
+                parent_task_id: Some(task.id), spawn_kind: "integration_campaign".into(),
+                spawn_label: Some(spec.name.clone()), run: spec.run.clone(), replacements: spec.replacements.clone(),
+            }).await?;
+            let sample = store.list_run_tasks(run.run_id).await?.remove(0);
+            let values = if index == 0 { vec![1.0, 3.0] } else { vec![2.0, 4.0, 6.0] };
+            let mut state = GammaLoopAccumulatorState::default();
+            let mut histogram = HistogramAccumulatorState::continuous("Energy".into(), "LO".into(),
+                ObservablePhase::Real, ObservableValueTransform::Identity, 0.0, 1.0, false, false, 1);
+            for weight in &values {
+                histogram.fill_continuous_sample(&[(0.5, *weight)]).map_err(|err| anyhow::anyhow!(err.to_string()))?;
+                state.estimate.ingest_vector(&[*weight, 0.0], &Point::new(vec![0.5], vec![], 1.0))?;
+            }
+            histogram.update_results();
+            state.bundle.histograms.insert("energy".into(), histogram.snapshot());
+            originals.push(serde_json::to_value(&state.bundle)?);
+            let accumulator = serde_json::to_value(AccumulatorState::Gammaloop(state))?;
+            sqlx::query("UPDATE run_tasks SET state='completed',nr_produced_samples=$2,nr_completed_samples=$2 WHERE id=$1")
+                .bind(sample.id).bind(values.len() as i64).execute(&harness.pool).await?;
+            sqlx::query("INSERT INTO run_stage_snapshots(run_id,task_id,name,sequence_nr,queue_empty,observable_state,batch_transforms) VALUES($1,$2,'sample',1,true,$3,'[]')")
+                .bind(run.run_id).bind(sample.id).bind(accumulator).execute(&harness.pool).await?;
+        }
+        let server = harness.start_server().await?;
+        let cookie = login_cookie(&server).await?;
+        let client = reqwest::Client::new();
+        let url = format!("{server}/api/histogram-bundle/campaign-export");
+        let base = json!({"run_id": parent, "task_id": task.id.to_string(), "format": "json"});
+        let mut aggregate = JsonValue::Null;
+        assert_eq!(client.post(&url).header("Content-Type", "application/json").body(base.to_string()).send().await?.status(), reqwest::StatusCode::UNAUTHORIZED);
+        // No persisted campaign output is needed: the request reads child stages.
+        for include in [false, true] {
+            let mut request = base.clone(); request["include_children"] = json!(include);
+            let response = client.post(&url).header("Cookie", &cookie).header("Content-Type", "application/json")
+                .body(request.to_string()).send().await?;
+            let status = response.status(); let body = response.text().await?;
+            anyhow::ensure!(status.is_success(), "export failed: {body}");
+            let response: JsonValue = serde_json::from_str(&body)?;
+            let exported: JsonValue = serde_json::from_str(response["contents"].as_str().unwrap())?;
+            if !include { aggregate = exported.clone(); }
+            assert_eq!(exported.get("children").is_some(), include);
+            let decoded: ObservableSnapshotBundle = serde_json::from_value(exported.clone())?;
+            let histogram = &decoded.histograms["energy"];
+            assert_eq!(histogram.sample_count, 5);
+            assert!((histogram.bins[0].average(5) - 2.0).abs() < 1e-12);
+            assert!((histogram.bins[0].error(5).powi(2) - (4.0 + 1.0 / 3.0)).abs() < 1e-12);
+            if include {
+                for (child, original) in exported["children"].as_array().unwrap().iter().zip(&originals) {
+                    assert_eq!(child["bundle"]["histograms"], original["histograms"]);
+                }
+            }
+            request["format"] = json!("hwu");
+            let response = client.post(&url).header("Cookie", &cookie).header("Content-Type", "application/json")
+                .body(request.to_string()).send().await?.error_for_status()?.text().await?;
+            let response: JsonValue = serde_json::from_str(&response)?;
+            assert_eq!(response["contents"].as_str().unwrap().matches("<histogram>").count(), if include { 3 } else { 1 });
+        }
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM persisted_observable_snapshots WHERE run_id=$1")
+            .bind(parent).fetch_one(&harness.pool).await?, 0);
+        sqlx::query("INSERT INTO persisted_observable_snapshots(run_id,task_id,persisted_observable) VALUES($1,$2,$3)")
+            .bind(parent).bind(task.id).bind(json!({"observables": aggregate})).execute(&harness.pool).await?;
+        let panels = client.post(format!("{server}/api/runs/{parent}/tasks/{}/output", task.id))
+            .header("Cookie", &cookie).header("Content-Type", "application/json").body("{}")
+            .send().await?.error_for_status()?.text().await?;
+        let panels: JsonValue = serde_json::from_str(&panels)?;
+        let panel = panels["updates"].as_array().unwrap().iter().find(|update| update["panel"]["panel_id"] == "campaign_histograms").unwrap();
+        assert_eq!(panel["panel"]["payload"]["export_source"], json!({"run_id":parent,"task_id":task.id.to_string()}));
+        assert!(panel["panel"]["payload"].get("children").is_none());
+        Ok(())
+    }.await;
+    harness.cleanup().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires local postgres with CREATE DATABASE privilege"]
+async fn histogram_bundle_hwu_import_uses_authenticated_bounded_requests() -> anyhow::Result<()> {
+    let mut harness = FullStackHarness::new().await?;
+    let result: anyhow::Result<()> = async {
+        let server = harness.start_server().await?;
+        let cookie = login_cookie(&server).await?;
+        let client = reqwest::Client::new();
+        let endpoint = format!("{server}/api/histogram-bundle/import");
+        let hwu = "##& xmin & xmax & central value & dy &\n<histogram> 2 \"Energy |TYPE@LO\"\n0 1 -2 0.1\n1 2 4 0.2\n<\\histogram>\n";
+        let request = || client.post(&endpoint).header("Content-Type", "text/plain");
+        assert_eq!(request().body(hwu).send().await?.status(), reqwest::StatusCode::UNAUTHORIZED);
+        // The import route allows more than the usual 2 MiB JSON request limit.
+        let payload = format!("#{}\n{hwu}", " ".repeat(2 * 1024 * 1024));
+        let response = request().header("Cookie", &cookie).body(payload).send().await?.error_for_status()?;
+        let bundle: JsonValue = serde_json::from_str(&response.text().await?)?;
+        assert_eq!(bundle["histograms"]["Energy"]["bins"][0]["value"], -2.0);
+        assert_eq!(bundle["histograms"]["Energy"]["bins"][1]["error"], 0.2);
+        let exported = client.post(format!("{server}/api/histogram-bundle/export"))
+            .header("Cookie", &cookie).header("Content-Type", "application/json")
+            .body(json!({"format":"json","payload":bundle}).to_string())
+            .send().await?.error_for_status()?.text().await?;
+        let exported: JsonValue = serde_json::from_str(&exported)?;
+        let roundtrip: JsonValue = serde_json::from_str(exported["contents"].as_str().unwrap())?;
+        assert_eq!(roundtrip["histograms"], bundle["histograms"]);
+        let malformed = request().header("Cookie", &cookie)
+            .body("<histogram> 1 \"broken\"\n0 1 NaN 0.1\n</histogram>").send().await?;
+        assert_eq!(malformed.status(), reqwest::StatusCode::BAD_REQUEST);
+        assert!(malformed.text().await?.contains("line 2"));
+        let oversized = request().header("Cookie", &cookie).body(" ".repeat(16 * 1024 * 1024 + 1)).send().await?;
+        assert_eq!(oversized.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+        Ok(())
+    }.await;
+    harness.cleanup().await?;
+    result
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege"]

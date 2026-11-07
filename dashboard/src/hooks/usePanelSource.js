@@ -205,7 +205,10 @@ const panelValueEquals = (left, right) => {
 
 export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null } = {}) => {
   const [state, setState] = useState(emptyState);
+  const stateRef = useRef(emptyState);
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [isFetching, setIsFetching] = useState(false);
+  const [source, setSource] = useState(null);
   const previousRefreshKey = useRef(refreshKey);
   const cursorRef = useRef(null);
   const panelValuesRef = useRef({});
@@ -227,6 +230,8 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
   const poll = useCallback(
     async (signal) => {
       if (!enabled || typeof fetchPanels !== "function") return;
+      setSource(() => fetchPanels);
+      setIsFetching(true);
       try {
         const response = await fetchPanels(
           {
@@ -243,7 +248,8 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
             ? response.poll_after_ms
             : undefined;
 
-        setState((previous) => {
+        const nextState = (() => {
+          const previous = stateRef.current;
           const nextSourceId = response?.source_id ?? previous.sourceId;
           const sourceChanged =
             previous.sourceId != null && response?.source_id != null && previous.sourceId !== response.source_id;
@@ -282,7 +288,10 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
             cursor,
             error: null,
           };
-        });
+        })();
+        stateRef.current = nextState;
+        cursorRef.current = nextState.cursor;
+        setState(nextState);
         setLastUpdate(new Date().toLocaleTimeString());
         if (refreshSeededPanelValuesRef.current) {
           refreshSeededPanelValuesRef.current = false;
@@ -293,10 +302,11 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
         return undefined;
       } catch (err) {
         if (signal.aborted || err?.name === "AbortError") return;
-        setState((previous) => ({
-          ...previous,
-          error: err?.message || "Failed to fetch panels",
-        }));
+        const next = { ...stateRef.current, error: err?.message || "Failed to fetch panels" };
+        stateRef.current = next;
+        setState(next);
+      } finally {
+        if (!signal.aborted) setIsFetching(false);
       }
     },
     [enabled, fetchPanels, useCursor],
@@ -306,8 +316,11 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
     cursorRef.current = null;
     panelValuesRef.current = {};
     pendingActionsRef.current = [];
+    stateRef.current = emptyState;
+    refreshSeededPanelValuesRef.current = false;
     setState(emptyState);
     setLastUpdate(null);
+    setIsFetching(false);
   }, []);
 
   const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset });
@@ -327,12 +340,9 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
         [panelId]: value,
       };
       panelValuesRef.current = nextPanelValues;
-      setState((previous) => {
-        return {
-          ...previous,
-          panelValues: nextPanelValues,
-        };
-      });
+      const next = { ...stateRef.current, panelValues: nextPanelValues };
+      stateRef.current = next;
+      setState(next);
       if (shouldTriggerPoll) triggerPoll();
     },
     [triggerPoll],
@@ -355,12 +365,14 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
 
   return useMemo(
     () => ({
-      ...state,
-      lastUpdate,
+      ...(source === fetchPanels ? state : emptyState),
+      lastUpdate: source === fetchPanels ? lastUpdate : null,
+      isLoading: enabled && (source !== fetchPanels || (!lastUpdate && !state.error)),
+      isFetching: enabled && (source !== fetchPanels || isFetching),
       setPanelValue,
       invokePanelAction,
     }),
-    [invokePanelAction, setPanelValue, state, lastUpdate],
+    [invokePanelAction, setPanelValue, state, lastUpdate, source, fetchPanels, enabled, isFetching],
   );
 };
 

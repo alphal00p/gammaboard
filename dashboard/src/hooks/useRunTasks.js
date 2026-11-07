@@ -4,7 +4,7 @@ import { usePolledResource } from "./usePolledResource";
 
 export const useRunTasks = (runId, refreshInterval = 2000) => {
   const fetchResource = useCallback((signal) => fetchRunTasks(runId, signal), [runId]);
-  const { data } = usePolledResource({
+  const { data, isLoading, isFetching, error } = usePolledResource({
     enabled: runId != null,
     pollMs: refreshInterval,
     initialData: [],
@@ -12,5 +12,5 @@ export const useRunTasks = (runId, refreshInterval = 2000) => {
     onError: (err) => console.error("Failed to fetch run tasks:", err),
   });
 
-  return { tasks: data };
+  return { tasks: data, isLoading, isFetching, error };
 };

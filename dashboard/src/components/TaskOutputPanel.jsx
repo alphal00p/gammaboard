@@ -1,3 +1,4 @@
+import LoadingStatus from "./common/LoadingStatus";
 import { Alert, Typography } from "@mui/material";
 import PanelCollection from "./panels/PanelCollection";
 import { useTaskOutput } from "../hooks/useTaskOutput";
@@ -8,7 +9,7 @@ const TaskOutputPanel = ({
   title = "Selected task output",
   onSelectRun = null,
 }) => {
-  const { panelSpecs, panelStates, panelValues, setPanelValue, error, lastUpdate } = useTaskOutput({
+  const { panelSpecs, panelStates, panelValues, setPanelValue, error, lastUpdate, isLoading } = useTaskOutput({
     runId,
     taskId: task?.id ?? null,
     pollMs: 2000,
@@ -24,7 +25,9 @@ const TaskOutputPanel = ({
     return <Alert severity="error">{error}</Alert>;
   }
 
-  if (panelSpecs.length === 0) return null;
+  if (panelSpecs.length === 0) return isLoading
+    ? <LoadingStatus loading label="Loading task output…" />
+    : <Alert severity="info">No task output available yet.</Alert>;
 
   return (
     <>

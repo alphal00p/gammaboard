@@ -4,7 +4,7 @@ import { usePolledResource } from "./usePolledResource";
 
 export const useRuns = ({ refreshInterval = 2000, includeChildren = false } = {}) => {
   const fetchResource = useCallback((signal) => fetchRuns({ includeChildren }, signal), [includeChildren]);
-  const { data: firstPage, isConnected } = usePolledResource({
+  const { data: firstPage, isConnected, isLoading, isFetching } = usePolledResource({
     pollMs: refreshInterval,
     initialData: { items: [], nextOffset: null },
     fetchResource,
@@ -40,5 +40,5 @@ export const useRuns = ({ refreshInterval = 2000, includeChildren = false } = {}
     }
   }, [includeChildren, isLoadingMore, nextOffset]);
 
-  return { runs, isConnected, hasMoreRuns: nextOffset != null, loadMoreRuns: loadMore, isLoadingMoreRuns: isLoadingMore };
+  return { runs, isConnected, isLoadingRuns: isLoading, isFetchingRuns: isFetching, hasMoreRuns: nextOffset != null, loadMoreRuns: loadMore, isLoadingMoreRuns: isLoadingMore };
 };

@@ -1,3 +1,4 @@
+import LoadingStatus from "./common/LoadingStatus";
 import { useMemo, useState } from "react";
 import {
   Alert,
@@ -45,6 +46,7 @@ const WorkerLogsPanel = ({
   workerOptions,
   hasMoreOlder,
   isLoading,
+  isInitialLoading = false,
   error,
   refresh,
   loadOlder,
@@ -162,6 +164,7 @@ const WorkerLogsPanel = ({
         </Button>
       </Stack>
 
+      <LoadingStatus loading={isInitialLoading} label="Loading logs…" />
       {error ? (
         <Alert severity="error" sx={{ mb: 1.5 }}>
           {error?.message || "Failed to fetch logs."}

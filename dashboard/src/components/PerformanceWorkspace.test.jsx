@@ -29,6 +29,22 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe("performance measurements", () => {
+  test("shows initial loading but keeps background refreshes quiet", () => {
+    vi.useFakeTimers();
+    useRunPerformancePanels.mockReturnValue({ ...response, panelSpecs: [], panelStates: [], isLoading: true, isFetching: true });
+    const { rerender } = render(<PerformanceWorkspace {...props} />);
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByRole("status")).toHaveTextContent("Loading measurements");
+    useRunPerformancePanels.mockReturnValue({ ...response, isLoading: false, isFetching: false });
+    rerender(<PerformanceWorkspace {...props} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    useRunPerformancePanels.mockReturnValue({ ...response, isLoading: false, isFetching: true });
+    rerender(<PerformanceWorkspace {...props} />);
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByTestId("measurements")).toBeInTheDocument();
+  });
+
   test("keeps diagnostics and queue controls out of the overview and preserves unknown values", () => {
     render(<PerformanceWorkspace {...props} />);
     expect(screen.getByTestId("measurements")).toHaveTextContent("Unavailable");

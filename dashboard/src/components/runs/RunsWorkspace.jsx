@@ -1,3 +1,4 @@
+import LoadingStatus from "../common/LoadingStatus";
 import { Alert, Box, Button, IconButton, Snackbar, TextField, Tooltip } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
@@ -36,8 +37,10 @@ function DefinitionButtons({ openLabel, onOpen, editable, disabled, onDelete, de
 
 function WorkerPoolControls({ run, disabled, notify }) {
   const [busy, setBusy] = useState(false);
+  const [operation, setOperation] = useState("");
   const [count, setCount] = useState(() => window.localStorage.getItem("runs.evaluator_count") || "");
   const act = async (action) => {
+    setOperation(action === "pause" ? "Requesting pause…" : action === "remove" ? "Removing evaluators…" : "Assigning workers…");
     setBusy(true);
     try {
       const target = count.trim() ? Number(count) : null;
@@ -61,6 +64,7 @@ function WorkerPoolControls({ run, disabled, notify }) {
     finally { setBusy(false); }
   };
   return <ControlBar sx={{ mb: 2 }}>
+    <LoadingStatus loading={busy} label={operation} />
     <TextField size="small" value={count} placeholder="all" inputProps={{ "aria-label": "Evaluator node count" }} sx={{ width: 150 }}
       onChange={(event) => setCount(event.target.value.replace(/[^\d]/g, ""))} />
     <Button variant="contained" disabled={disabled || busy} onClick={() => act("assign")}>Assign / resume</Button>
@@ -71,7 +75,7 @@ function WorkerPoolControls({ run, disabled, notify }) {
 
 function RunContent({ run, disabled, notify, onSelectRun }) {
   const { authenticated } = useAuth();
-  const { tasks } = useRunTasks(run.run_id, 2000);
+  const { tasks, isLoading: tasksLoading, error: tasksError } = useRunTasks(run.run_id, 2000);
   const [selectedId, setSelectedId] = useState(null);
   const loading = useRef(null);
   useEffect(() => () => loading.current?.abort(), []);
@@ -122,7 +126,10 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
       <Button color="inherit" onClick={() => onSelectRun?.(run.parent_run_id)}>Manage parent workers</Button>
     }>Workers are allocated by the parent. Its controller manages this task queue. Duplicate this run as a standalone run to change it.</Alert>
       : authenticated && <WorkerPoolControls run={run} disabled={disabled} notify={notify} />}
-    {isIntegration && <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id} onSelectTask={setSelectedId}
+    <LoadingStatus loading={tasksLoading} label="Loading task queue…" />
+    <LoadingStatus loading={busy && !editor} label="Loading task definition…" />
+    {tasksError && <Alert severity="error">{tasksError.message}</Alert>}
+    {isIntegration && !tasksLoading && <TaskQueuePanel tasks={taskList} selectedTaskId={selectedTask?.id} onSelectTask={setSelectedId}
       actions={editable && <Button size="small" variant="outlined" disabled={disabled || busy}
         onClick={() => { setError(null); setEditor({ title: "Add tasks", value: "" }); }}>Add tasks</Button>}
       renderTaskActions={(task) => <DefinitionButtons
@@ -130,7 +137,7 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
         editable={editable && task.state === "pending"} disabled={disabled || busy} onOpen={() => openTask(task)}
         deleteLabel={`Delete task ${task.name}`} onDelete={authenticated ? () => removeTask(task) : null}
         deleteReason={!editable ? "This queue is managed by its parent run." : task.state !== "pending" ? "Only pending tasks can be deleted." : null} />} />}
-    {(selectedTask || isIntegration) && <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
+    {!tasksLoading && (selectedTask || isIntegration) && <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
       key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} onSelectRun={onSelectRun} />}
     <RunInfo runId={run.run_id} refreshKey={taskList.map((task) => `${task.id}:${task.state}`).join(",")} />
     {editor && <TomlActionDialog open title={editor.title} label="Task TOML"
@@ -153,7 +160,7 @@ function RunContent({ run, disabled, notify, onSelectRun }) {
 }
 
 export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showChildRuns, setShowChildRuns,
-  isConnected, serverName, onRunCreated, onSelectRun, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns }) {
+  isConnected, serverName, onRunCreated, onSelectRun, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns, isLoadingRuns }) {
   const { authenticated } = useAuth();
   const [editor, setEditor] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -204,7 +211,7 @@ export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showC
   return <>
     <RunScopedWorkspace runs={runs} selectedRun={selectedRun} setSelectedRun={setSelectedRun}
       showChildRuns={showChildRuns} setShowChildRuns={setShowChildRuns} hasMoreRuns={hasMoreRuns}
-      loadMoreRuns={loadMoreRuns} isLoadingMoreRuns={isLoadingMoreRuns} isConnected={isConnected} serverName={serverName}
+      loadMoreRuns={loadMoreRuns} isLoadingMoreRuns={isLoadingMoreRuns} isLoadingRuns={isLoadingRuns} isConnected={isConnected} serverName={serverName}
       noRunsMessage="Create a run to start monitoring task output and engine configuration."
       noSelectionMessage="Pick a run to view task output and configuration."
       headerActions={<Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, mb: 2 }}>
@@ -214,6 +221,7 @@ export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showC
           deleteLabel="Delete run" onDelete={authenticated ? remove : null}
           deleteReason={run.parent_run_id != null ? "Delete managed children through their parent run." : null} />}
       </Box>}>
+      <LoadingStatus loading={busy && !editor} label="Loading run definition…" />
       {deleting && <Alert severity="info" sx={{ mb: 2 }}>Deleting this run and its child runs. Large histories can take several minutes.</Alert>}
       {run && <RunContent key={run.run_id} run={run} disabled={busy || deleting} notify={notify}
         onSelectRun={onSelectRun} />}

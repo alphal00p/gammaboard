@@ -1,3 +1,4 @@
+import LoadingStatus from "./common/LoadingStatus";
 import {
   Alert,
   Box,
@@ -98,6 +99,7 @@ const SettingsWorkspace = () => {
 
   return (
     <Stack spacing={2}>
+      <LoadingStatus loading={restartingDb || shuttingDownControl} label={restartingDb ? "Restarting database…" : "Requesting shutdown…"} />
       <SettingsCard title="Repository">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Source and operator documentation live in the project repository.
