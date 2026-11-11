@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
 type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
+type RecordedInsertAttempts = Arc<Mutex<Vec<(Vec<i64>, Vec<Vec<u8>>, bool)>>>;
 
 #[derive(Clone, Default)]
 pub(crate) struct RecordingStore {
@@ -25,7 +26,7 @@ pub(crate) struct RecordingStore {
     pub(crate) assignment_update_result: Option<bool>,
     pub(crate) inserts: RecordedInserts,
     pub(crate) insert_errors: Arc<Mutex<std::collections::VecDeque<StoreError>>>,
-    pub(crate) insert_attempts: Arc<Mutex<Vec<(Vec<i64>, Vec<Vec<u8>>, bool)>>>,
+    pub(crate) insert_attempts: RecordedInsertAttempts,
     pub(crate) active_task: Arc<Mutex<Option<RunTask>>>,
     pub(crate) first_insert_gate: Option<Arc<Notify>>,
     pub(crate) inserted: Arc<Notify>,

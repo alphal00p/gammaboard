@@ -1,6 +1,14 @@
 use super::PgStore;
 use serde_json::{Value, json};
 
+#[derive(sqlx::FromRow)]
+struct OfflineLaunchRecipe {
+    launch_group: Option<Value>,
+    backend: Option<String>,
+    args: Option<Value>,
+    pending: bool,
+}
+
 impl PgStore {
     pub async fn offline_nodes(&self) -> Result<Vec<Value>, sqlx::Error> {
         sqlx::query_scalar(r#"
@@ -29,10 +37,16 @@ impl PgStore {
     ) -> Result<i64, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
         super::connection_budget::lock(&mut tx).await?;
-        let row: Option<(Option<Value>, Option<String>, Option<Value>, bool)> = sqlx::query_as(
-            "SELECT n.launch_group,l.backend,l.args,worker_launch_pending(n.name,n.launch_request_id,n.last_seen) FROM nodes n LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id WHERE n.name=$1 AND n.uuid=$2 AND n.lease_expires_at<=now() FOR UPDATE OF n"
+        let row: Option<OfflineLaunchRecipe> = sqlx::query_as(
+            "SELECT n.launch_group,l.backend,l.args,worker_launch_pending(n.name,n.launch_request_id,n.last_seen) AS pending FROM nodes n LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id WHERE n.name=$1 AND n.uuid=$2 AND n.lease_expires_at<=now() FOR UPDATE OF n"
         ).bind(name).bind(uuid).fetch_optional(&mut *tx).await?;
-        let Some((Some(group), Some(backend), Some(mut args), pending)) = row else {
+        let Some(OfflineLaunchRecipe {
+            launch_group: Some(group),
+            backend: Some(backend),
+            args: Some(mut args),
+            pending,
+        }) = row
+        else {
             return Err(sqlx::Error::Protocol("Node is live, changed identity, or has no saved launch recipe. Refresh the node list.".into()));
         };
         if pending {

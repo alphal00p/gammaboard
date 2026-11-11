@@ -124,7 +124,10 @@ describe("App Component", () => {
     api.fetchRuns.mockResolvedValue({ items: [{ run_id: 1, run_name: "example", kind }], nextOffset: null });
     api.fetchRunTasks.mockResolvedValue([{ id: "1", name: "execution", task_kind: kind, state: "active" }]);
     await renderApp();
-    await waitFor(() => expect(api.fetchRunTaskPanels).toHaveBeenCalled());
+    // A request can start before React finishes loading the queue components.
+    // Wait for the rendered workspace before checking its controls.
+    await screen.findByRole("tablist", { name: "Task output" });
+    expect(api.fetchRunTaskPanels).toHaveBeenCalled();
     if (kind === "integration") {
       expect(screen.getByRole("button", { name: "Task queue", exact: true })).toHaveAttribute("aria-expanded", "true");
       expect(screen.getByRole("button", { name: "Add tasks" })).toBeInTheDocument();

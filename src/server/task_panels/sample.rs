@@ -6,11 +6,13 @@ use crate::core::{
     AccumulatorConfig, DiscreteProjectionConfig, DiscreteProjectionNormalization, EngineError,
     NamedDiscreteProjection, SampleStopCondition,
 };
+#[cfg(test)]
+use crate::evaluation::Accumulator;
 use crate::evaluation::accumulator::DiscreteProjectionBinState;
 use crate::evaluation::accumulator::metrics::ProjectedEstimate;
 #[cfg(test)]
 use crate::evaluation::evaluator::gammaloop::TrainingProjection;
-use crate::evaluation::{Accumulator, AccumulatorState, GammaLoopDiagnostics, relative_error};
+use crate::evaluation::{AccumulatorState, GammaLoopDiagnostics, relative_error};
 use crate::runners::queue::MIN_BATCH_SIZE;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, PlotPoint, PlotSeries, PlotXAxis,
