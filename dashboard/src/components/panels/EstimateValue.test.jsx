@@ -23,7 +23,7 @@ test('expanded estimates pair the pooled error with its own mean', () => {
       }}
     />
   );
-  expect(screen.getByText('1.5(5)')).toBeInTheDocument();
+  expect(screen.getByText('1.50(50)')).toBeInTheDocument();
   expect(screen.getByText('(33.3%)')).toBeInTheDocument();
   const summary = screen.getByRole('button', { name: 'Estimate details' });
   fireEvent.click(summary);

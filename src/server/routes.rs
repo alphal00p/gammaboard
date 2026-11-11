@@ -48,6 +48,7 @@ pub(super) fn build_app(state: AppState) -> Router {
         .route("/nodes/:id/stop", post(stop_node))
         .route("/nodes/unassign-all", post(unassign_all_nodes))
         .route("/nodes/stop-all", post(stop_all_nodes))
+        .route("/nodes/stop-idle", post(stop_idle_nodes))
         .route("/nodes/auto-run", post(auto_run_nodes))
         .route(
             "/node-launch-requests",

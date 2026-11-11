@@ -25,7 +25,7 @@ import { formatDateTime } from "../utils/formatters";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
 import { useAuth } from "../auth/AuthProvider";
 import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
-import { autoRunNodes, stopAllNodes, unassignAllNodes } from "../services/api";
+import { autoRunNodes, stopAllNodes, stopIdleNodes, unassignAllNodes } from "../services/api";
 
 const DEFAULT_NODE_LAUNCH_TOML = "";
 const NODE_LAUNCH_TEMPLATE_SELECTION_STORAGE_KEY = "dialogs.node_launch.selected_template";
@@ -39,6 +39,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
   const [startNodesError, setStartNodesError] = useState(null);
   const [unassigningAllNodes, setUnassigningAllNodes] = useState(false);
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
+  const [stoppingIdleNodes, setStoppingIdleNodes] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
   const launchRequestsData = useNodeLaunchRequests({ enabled: authenticated });
   const sortedWorkers = useMemo(() => [...workers].sort(compareNodesByName), [workers]);
@@ -84,6 +85,10 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
     () => workers.filter((worker) => (worker.status || "").toLowerCase() === "active").length,
     [workers],
   );
+  const hasIdleNodes = workers.some((worker) => worker.status === "idle"
+    && worker.current_run_id == null && worker.current_role == null
+    && worker.desired_run_id == null && worker.desired_role == null
+    && worker.pool_run_id == null && worker.pool_role == null);
 
   return (
     <>
@@ -109,7 +114,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
               </Button>
               <Button
                 variant="outlined"
-                disabled={unassigningAllNodes || workers.length === 0}
+                disabled={unassigningAllNodes || stoppingIdleNodes || stoppingAllNodes || workers.length === 0}
                 onClick={async () => {
                   setUnassigningAllNodes(true);
                   try {
@@ -131,7 +136,26 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
               <Button
                 color="warning"
                 variant="outlined"
-                disabled={stoppingAllNodes || workers.length === 0}
+                disabled={stoppingIdleNodes || stoppingAllNodes || unassigningAllNodes || !hasIdleNodes || !isConnected}
+                onClick={async () => {
+                  setStoppingIdleNodes(true);
+                  try {
+                    const response = await stopIdleNodes();
+                    const rows = Number(response?.rows_updated ?? 0);
+                    setSnackbar({ message: `Requested shutdown for ${rows} idle node${rows === 1 ? "" : "s"}.`, severity: "success" });
+                  } catch (err) {
+                    setSnackbar({ message: err?.message || "Failed to stop idle nodes.", severity: "error" });
+                  } finally {
+                    setStoppingIdleNodes(false);
+                  }
+                }}
+              >
+                Stop Idle nodes
+              </Button>
+              <Button
+                color="warning"
+                variant="outlined"
+                disabled={stoppingAllNodes || stoppingIdleNodes || workers.length === 0}
                 onClick={async () => {
                   setStoppingAllNodes(true);
                   try {
@@ -159,8 +183,8 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
         </Typography>
 
         <LoadingStatus loading={isLoading} label="Loading nodes…" />
-        <LoadingStatus loading={startingNodes || stoppingAllNodes || unassigningAllNodes}
-          label={startingNodes ? "Requesting worker launch…" : stoppingAllNodes ? "Requesting worker shutdown…" : "Removing worker assignments…"} />
+        <LoadingStatus loading={startingNodes || stoppingAllNodes || stoppingIdleNodes || unassigningAllNodes}
+          label={startingNodes ? "Requesting worker launch…" : stoppingAllNodes || stoppingIdleNodes ? "Requesting worker shutdown…" : "Removing worker assignments…"} />
         {isLoading ? null : workers.length === 0 ? (
           <EmptyStateCard
             title="No nodes registered"

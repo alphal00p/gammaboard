@@ -31,6 +31,12 @@ active sampling tasks. System contains Workers, Database (runtime/server details
 destructive controls), and Settings (configuration paths and documentation).
 Logs retains its own run and worker filters.
 
+Node management's **Stop Idle nodes** requests shutdown only for live nodes with
+no current role, pending assignment, or pool membership. Eligibility is checked
+atomically by the server. **Unassign all** reports only live nodes whose stored
+assignment changed; expired stored assignments are also cleared but are excluded
+from the notification count.
+
 The URL records the selected run, task, and tabs for refresh, bookmarks, and
 browser Back/Forward. Switching tabs keeps drafts, imported comparisons, and view
 preferences while pausing inactive polling and chart rendering. Imported
@@ -146,8 +152,14 @@ of the primary stratified integral, and is not inferred from RSD.
 Result uses the same compact fields for pooled and stratified estimators. Mean
 histories are followed by the RSD and ESS plots. Each component keeps its mean,
 target comparison, and RSD together in one column. Parenthesized uncertainties
-use last-digit notation: `5.4123(25)` means `5.4123 ± 0.0025`. Target deltas and
-pulls use three significant digits in decimal notation.
+use last-digit notation with two uncertainty digits retained: `5.4123(25)` means
+`5.4123 ± 0.0025`, and `1.23(20)` means `1.23 ± 0.20`. Same-order errors retain
+their decimal point: `1.2(3.5)` means `1.2 ± 3.5`; any exponent applies to both.
+Target deltas and pulls use at most three significant digits and three decimal
+places. Each component's absolute mean and its own uncertainty appear beneath
+its RSD. Absolute means use the primary estimator, including per-stratum
+allocation; older stratified snapshots without absolute sums show unavailable.
+There is no separate absolute-mean RSD or progression plot.
 Per-stratum estimates, counts, coverage, probabilities, and ESS live under
 Stratum output. Optional moment fields preserve compatibility with old snapshots;
 ESS remains unavailable when the needed historical training moments are missing.
@@ -162,6 +174,29 @@ Observable tables keep Upload Bundle on the left and JSON/HwU/PDF exports on the
 right of the same action row.
 Their top-right information icon opens the estimator and campaign-combination
 notes; import/export errors and omitted-observable warnings stay visible.
+
+Result histories are cumulative accumulator snapshots, not independent batch
+estimates. Active tasks poll every three seconds; hidden workspaces pause polls,
+and completed tasks stop polling. The initial fetch reads only the latest 500
+snapshots and compacts these to approximately 256 plot points. Incremental polls
+merge newer snapshots and the current estimate by sample count. The browser
+retains these appended points for the selected task; zoom settings persist, but
+history data does not survive a reload. Reset view changes the zoom, not the
+initial snapshot window. Full-history backfilling is not currently implemented.
+Mean uncertainty bands render in one pass with the mean line, avoiding the
+incremental painting delay on long histories. UI snapshots are distinct from
+durable sampler checkpoints: recovery rolls back progress and deletes snapshots
+after the checkpoint boundary while retaining allocated core-hour accounting.
+
+Sampler batch insertions preserve explicit PostgreSQL abort codes. Lock timeouts
+(`55P03`), deadlocks (`40P01`), and serialization failures (`40001`) retry the whole
+insertion transaction with the same batch IDs, payloads, and feedback flag.
+Retries use exponential backoff with jitter, capped at five seconds. The failed
+bundle remains an ordering barrier; worker lease/control checks run between
+attempts. These errors do not restart the sampler or reset its progress. Other
+insertion errors, including connection loss with an unknown commit outcome,
+retain the conservative checkpoint-recovery behavior. These retries are separate
+from evaluator `max_batch_retries` and do not re-evaluate completed samples.
 
 ## Backup and recovery
 

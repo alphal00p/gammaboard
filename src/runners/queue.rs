@@ -9,6 +9,7 @@ use crate::runners::rolling_metric::RollingMetric;
 use crate::runners::window_metric::WindowMetric;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
@@ -132,7 +133,25 @@ struct PendingInsertTask {
     batch_count: usize,
     local_pending_at_start: usize,
     db_pending_at_start: Option<i64>,
-    handle: JoinHandle<Result<InsertBatchesMetrics, StoreError>>,
+    bundle: Arc<InsertBundle>,
+    retry_attempt: u32,
+    // None after a confirmed abort: retry starts only when the live queue is
+    // driven again, after the supervisor has checked leases/control requests.
+    handle: Option<JoinHandle<Result<InsertBatchesMetrics, StoreError>>>,
+}
+
+struct InsertBundle {
+    batch_ids: Vec<i64>,
+    batches: Vec<EvaluationBatch>,
+    requires_training_values: bool,
+}
+
+fn insert_retry_delay(attempt: u32) -> Duration {
+    if attempt == 0 {
+        return Duration::ZERO;
+    }
+    let base = (100_u64 << (attempt - 1).min(6)).min(5_000);
+    Duration::from_millis((base + rand::random_range(0..=base / 4)).min(5_000))
 }
 
 type PendingProcessedFetchTask = JoinHandle<Result<(Vec<CompletedBatch>, Duration), StoreError>>;
@@ -490,6 +509,28 @@ where
     }
 
     pub async fn flush(&mut self) -> Result<(), StoreError> {
+        let result = self.flush_inserts().await;
+        if result.is_err() {
+            // A pause/shutdown may drop the queue after a failed flush. Settle
+            // other writes first, and retain confirmed-aborted inputs dormant;
+            // do not leave detached transactions racing checkpoint recovery.
+            while let Some(index) = self
+                .pending_insert_tasks
+                .iter()
+                .position(|task| task.handle.is_some())
+            {
+                let task = self.pending_insert_tasks.swap_remove(index);
+                if let Err(error) = self.consume_insert_task(task).await
+                    && self.insert_error.is_some()
+                {
+                    return Err(error);
+                }
+            }
+        }
+        result
+    }
+
+    async fn flush_inserts(&mut self) -> Result<(), StoreError> {
         loop {
             self.drain_finished_insert().await?;
             if self.pending_insert_tasks.is_empty() && self.pending_insert.is_empty() {
@@ -655,29 +696,56 @@ where
                 .collect::<Vec<_>>();
             let batch_ids = next_batch_ids(batch_count);
             self.checkpoint.last_produced_batch_id = batch_ids.last().copied();
-            let busy = self.busy.clone();
-            let store = self.store.clone();
-            let run_id = self.run_id;
-            let task_id = self.task_id;
-            self.pending_insert_tasks.push(PendingInsertTask {
-                first_batch_id: batch_ids[0],
-                batch_count,
+            let task = self.spawn_insert_task(
+                Arc::new(InsertBundle {
+                    batch_ids,
+                    batches,
+                    requires_training_values,
+                }),
                 local_pending_at_start,
                 db_pending_at_start,
-                handle: self.io.spawn(async move {
-                    let _io = busy.io();
-                    let outcome = store
-                        .insert_batches(
-                            run_id,
-                            task_id,
-                            requires_training_values,
-                            &batch_ids,
-                            &batches,
-                        )
-                        .await?;
-                    Ok(outcome.metrics)
-                }),
-            });
+                0,
+            );
+            self.pending_insert_tasks.push(task);
+        }
+    }
+
+    fn spawn_insert_task(
+        &self,
+        bundle: Arc<InsertBundle>,
+        local_pending_at_start: usize,
+        db_pending_at_start: Option<i64>,
+        retry_attempt: u32,
+    ) -> PendingInsertTask {
+        let busy = self.busy.clone();
+        let store = self.store.clone();
+        let run_id = self.run_id;
+        let task_id = self.task_id;
+        let input = bundle.clone();
+        let delay = insert_retry_delay(retry_attempt);
+        PendingInsertTask {
+            first_batch_id: bundle.batch_ids[0],
+            batch_count: bundle.batches.len(),
+            local_pending_at_start,
+            db_pending_at_start,
+            bundle,
+            retry_attempt,
+            handle: Some(self.io.spawn(async move {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+                let _io = busy.io();
+                let outcome = store
+                    .insert_batches(
+                        run_id,
+                        task_id,
+                        input.requires_training_values,
+                        &input.batch_ids,
+                        &input.batches,
+                    )
+                    .await?;
+                Ok(outcome.metrics)
+            })),
         }
     }
 
@@ -687,7 +755,22 @@ where
         }
         let mut index = 0;
         while index < self.pending_insert_tasks.len() {
-            if !self.pending_insert_tasks[index].handle.is_finished() {
+            if self.pending_insert_tasks[index].handle.is_none() {
+                let task = &self.pending_insert_tasks[index];
+                let retry = self.spawn_insert_task(
+                    task.bundle.clone(),
+                    task.local_pending_at_start,
+                    task.db_pending_at_start,
+                    task.retry_attempt,
+                );
+                self.pending_insert_tasks[index] = retry;
+            }
+            if !self.pending_insert_tasks[index]
+                .handle
+                .as_ref()
+                .unwrap()
+                .is_finished()
+            {
                 index += 1;
                 continue;
             }
@@ -699,14 +782,28 @@ where
         Ok(())
     }
 
-    async fn consume_insert_task(&mut self, task: PendingInsertTask) -> Result<(), StoreError> {
+    async fn consume_insert_task(&mut self, mut task: PendingInsertTask) -> Result<(), StoreError> {
         let outcome = task
             .handle
+            .take()
+            .expect("insertion was started before consuming it")
             .await
             .map_err(|err| StoreError::store(format!("sampler queue insert task failed: {err}")))
             .and_then(|result| result);
         let metrics = match outcome {
             Ok(metrics) => metrics,
+            Err(error) if error.is_retryable_transaction() => {
+                let attempt = task.retry_attempt.saturating_add(1);
+                tracing::warn!(run_id = self.run_id, task_id = self.task_id,
+                    first_batch_id = task.first_batch_id, attempt, error = %error,
+                    "sampler insert transaction aborted; retrying the same batch IDs and payload");
+                task.retry_attempt = attempt;
+                self.pending_insert_tasks.push(task);
+                // Keep the failed insertion as an ordering barrier. Let the
+                // supervisor check leases and controls between attempts, without
+                // poisoning the queue or discarding the live sampler state.
+                return Err(error);
+            }
             Err(error) => {
                 // The transaction may have committed before the connection failed.
                 // Neither continuing nor saving these live cursors is safe. Settle
@@ -718,7 +815,9 @@ where
                 };
                 self.insert_error = Some(error.clone());
                 for pending in self.pending_insert_tasks.drain(..) {
-                    let _ = pending.handle.await;
+                    if let Some(handle) = pending.handle {
+                        let _ = handle.await;
+                    }
                 }
                 let _ = self.finish_background_maintenance().await;
                 return Err(error);
@@ -873,6 +972,17 @@ pub(crate) mod tests {
         LatentBatch::from_batch(&batch).for_evaluation(crate::core::AccumulatorConfig::scalar())
     }
 
+    fn test_insert_bundle(ids: &[i64]) -> Arc<InsertBundle> {
+        Arc::new(InsertBundle {
+            batch_ids: ids.to_vec(),
+            batches: ids
+                .iter()
+                .map(|&id| latent_batch_with_weight(id as f64))
+                .collect(),
+            requires_training_values: true,
+        })
+    }
+
     fn recording_queue(store: RecordingStore) -> SamplerQueue<RecordingStore> {
         SamplerQueue::new(
             store,
@@ -961,15 +1071,17 @@ pub(crate) mod tests {
         queue
             .consume_insert_task(PendingInsertTask {
                 first_batch_id: 1,
+                bundle: test_insert_bundle(&[1, 2]),
+                retry_attempt: 0,
                 batch_count: 2,
                 local_pending_at_start: 2,
                 db_pending_at_start: Some(0),
-                handle: tokio::spawn(async {
+                handle: Some(tokio::spawn(async {
                     Ok(InsertBatchesMetrics {
                         end_to_end_ms: 24.0,
                         ..Default::default()
                     })
-                }),
+                })),
             })
             .await
             .expect("insert completed");
@@ -1087,25 +1199,147 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn aborted_insert_retries_exact_payload_and_ids_without_advancing_or_poisoning_queue() {
+        let store = RecordingStore::default();
+        *store.insert_errors.lock().unwrap() = ["55P03", "40P01", "40001"]
+            .into_iter()
+            .map(|code| StoreError::RetryableTransaction {
+                sqlstate: code.into(),
+                message: "test rollback".into(),
+            })
+            .collect();
+        let mut queue = recording_queue(store.clone());
+        queue.config.max_insert_bundle_size = 2;
+        queue.ingest(
+            vec![
+                latent_batch_with_weight(3.5),
+                latent_batch_with_weight(7.25),
+            ],
+            true,
+        );
+        let ids = queue.pending_insert_tasks[0].bundle.batch_ids.clone();
+        for code in ["55P03", "40P01", "40001"] {
+            let error = tokio::time::timeout(Duration::from_secs(5), queue.flush())
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                matches!(&error, StoreError::RetryableTransaction { sqlstate, .. } if sqlstate == code)
+            );
+            assert!(error.is_database_error());
+            assert!(!error.is_retry_activation());
+            assert!(queue.insert_error.is_none());
+            assert_eq!(queue.pending_insert_tasks.len(), 1);
+            assert_eq!(queue.pending_insert_tasks[0].bundle.batch_ids, ids);
+            assert_eq!(queue.checkpoint.last_produced_batch_id, ids.last().copied());
+            assert_eq!(queue.checkpoint.last_completed_batch_id, None);
+        }
+        // Even if a later bundle has finished evaluating, the uncommitted retry
+        // remains an ordering barrier and cannot be skipped by aggregation.
+        let later = next_batch_ids(1)[0];
+        *store.completed_ids.lock().unwrap() = vec![later];
+        queue.ensure_processed_prefetch();
+        let fetch = queue.pending_processed_fetch.take().unwrap();
+        queue.consume_processed_fetch_task(fetch).await.unwrap();
+        assert!(queue.take_ready_processed().is_empty());
+        tokio::time::timeout(Duration::from_secs(5), queue.flush())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(queue.pending_insert_tasks.is_empty());
+        assert_eq!(store.recorded_inserts().len(), 1);
+        let attempts = store.insert_attempts.lock().unwrap();
+        assert_eq!(attempts.len(), 4);
+        assert!(attempts.iter().all(|attempt| attempt == &attempts[0]));
+        assert_eq!(attempts[0].0, ids);
+        assert!(attempts[0].2);
+    }
+
+    #[test]
+    fn insert_retries_back_off_without_exceeding_five_seconds() {
+        assert_eq!(insert_retry_delay(0), Duration::ZERO);
+        assert!(insert_retry_delay(1) >= Duration::from_millis(100));
+        assert!(insert_retry_delay(2) >= Duration::from_millis(200));
+        assert_eq!(insert_retry_delay(u32::MAX), Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn aborted_flush_settles_other_writes_before_leaving_retry_dormant() {
+        let mut queue = recording_queue(RecordingStore::default());
+        let (release, pending) = tokio::sync::oneshot::channel();
+        let rejected = tokio::spawn(async {
+            Err(StoreError::RetryableTransaction {
+                sqlstate: "55P03".into(),
+                message: "lock timeout".into(),
+            })
+        });
+        while !rejected.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        queue.pending_insert_tasks.push(PendingInsertTask {
+            first_batch_id: 1,
+            batch_count: 1,
+            local_pending_at_start: 2,
+            db_pending_at_start: None,
+            bundle: test_insert_bundle(&[1]),
+            retry_attempt: 0,
+            handle: Some(rejected),
+        });
+        queue.pending_insert_tasks.push(PendingInsertTask {
+            first_batch_id: 2,
+            batch_count: 1,
+            local_pending_at_start: 2,
+            db_pending_at_start: None,
+            bundle: test_insert_bundle(&[2]),
+            retry_attempt: 0,
+            handle: Some(tokio::spawn(async {
+                pending.await.unwrap();
+                Ok(InsertBatchesMetrics::default())
+            })),
+        });
+        {
+            let flush = queue.flush();
+            tokio::pin!(flush);
+            tokio::select! {
+                biased;
+                result = &mut flush => panic!("later transaction is still running: {result:?}"),
+                _ = tokio::task::yield_now() => {}
+            }
+            release.send(()).unwrap();
+            assert!(flush.await.unwrap_err().is_retryable_transaction());
+        }
+        assert_eq!(queue.pending_insert_tasks.len(), 1);
+        assert!(queue.pending_insert_tasks[0].handle.is_none());
+        assert!(queue.insert_error.is_none());
+        queue.flush().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn uncertain_insert_settles_writes_and_blocks_progress_and_checkpointing() {
         let mut queue = recording_queue(RecordingStore::default());
         let (release, pending) = tokio::sync::oneshot::channel();
         queue.pending_insert_tasks.push(PendingInsertTask {
             first_batch_id: 2,
+            bundle: test_insert_bundle(&[2]),
+            retry_attempt: 0,
             batch_count: 1,
             local_pending_at_start: 1,
             db_pending_at_start: None,
-            handle: tokio::spawn(async move {
+            handle: Some(tokio::spawn(async move {
                 pending.await.unwrap();
                 Ok(InsertBatchesMetrics::default())
-            }),
+            })),
         });
         let failure = PendingInsertTask {
             first_batch_id: 1,
+            bundle: test_insert_bundle(&[1]),
+            retry_attempt: 0,
             batch_count: 1,
             local_pending_at_start: 2,
             db_pending_at_start: None,
-            handle: tokio::spawn(async { Err(StoreError::Database("connection lost".into())) }),
+            handle: Some(tokio::spawn(async {
+                Err(StoreError::Database("connection lost".into()))
+            })),
         };
         {
             let recovery = queue.consume_insert_task(failure);
@@ -1139,13 +1373,15 @@ pub(crate) mod tests {
         let (commit, committed) = tokio::sync::oneshot::channel();
         queue.pending_insert_tasks.push(PendingInsertTask {
             first_batch_id: ids[1],
+            bundle: test_insert_bundle(&[ids[1]]),
+            retry_attempt: 0,
             batch_count: 1,
             local_pending_at_start: 1,
             db_pending_at_start: None,
-            handle: tokio::spawn(async move {
+            handle: Some(tokio::spawn(async move {
                 committed.await.unwrap();
                 Ok(InsertBatchesMetrics::default())
-            }),
+            })),
         });
         queue.ensure_processed_prefetch();
         let fetch = queue.pending_processed_fetch.take().unwrap();

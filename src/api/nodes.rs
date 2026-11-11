@@ -233,6 +233,12 @@ pub async fn stop_all_nodes(store: &impl ControlPlaneStore) -> Result<StoppedAll
     Ok(StoppedAllNodes { rows_updated })
 }
 
+/// Stop live, unassigned nodes, preserving active and pending assignments.
+pub async fn stop_idle_nodes(store: &impl ControlPlaneStore) -> Result<StoppedAllNodes, ApiError> {
+    let rows_updated = store.request_idle_nodes_shutdown().await?;
+    Ok(StoppedAllNodes { rows_updated })
+}
+
 pub async fn stop_all_nodes_gracefully(
     store: &impl ControlPlaneStore,
     params: GracefulNodeShutdownParams,

@@ -385,17 +385,22 @@ pub(crate) async fn clear_desired_assignments_for_run_except_node(
 }
 
 pub(crate) async fn clear_all_desired_assignments(pool: &PgPool) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(&format!(
+    let live_changed: i64 = sqlx::query_scalar(&format!(
         r#"
-        UPDATE nodes
-        SET
-            {set_clause}
+        WITH cleared AS (
+            UPDATE nodes SET {set_clause}
+            WHERE pool_run_id IS NOT NULL OR desired_run_id IS NOT NULL
+            RETURNING lease_expires_at > now() AS live
+        )
+        SELECT count(*) FROM cleared WHERE live
         "#,
         set_clause = CLEAR_DESIRED_ASSIGNMENT_SET
     ))
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
-    Ok(result.rows_affected())
+    // Clear stored assignments too, but report actual changes to live nodes,
+    // rather than every historical row (including already-unassigned nodes).
+    Ok(live_changed as u64)
 }
 
 pub(crate) async fn get_desired_assignment(
@@ -759,6 +764,24 @@ pub(crate) async fn request_all_nodes_shutdown(pool: &PgPool) -> Result<u64, sql
     .execute(pool)
     .await?;
 
+    Ok(result.rows_affected())
+}
+
+pub(crate) async fn request_idle_nodes_shutdown(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    // Check and request in one UPDATE. PostgreSQL rechecks the predicate after
+    // a concurrent assignment releases the row; a stale UI list cannot stop it.
+    let result = sqlx::query(
+        r#"
+        UPDATE nodes SET shutdown_requested_at = now(), updated_at = now()
+        WHERE lease_expires_at > now()
+          AND active_run_id IS NULL AND active_role IS NULL
+          AND desired_run_id IS NULL AND desired_role IS NULL
+          AND pool_run_id IS NULL AND pool_role IS NULL
+          AND NOT resume_requested AND shutdown_requested_at IS NULL
+        "#,
+    )
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 

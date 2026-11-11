@@ -807,6 +807,24 @@ fn base_estimate_summary_entries(
             "error": estimate.as_ref().and_then(|e| e.uncertainty), "estimator": estimator,
             "basic": estimate.as_ref().and_then(|e| e.basic.clone()), "sample_count": accumulator.sample_count(),
         })));
+        let absolute = crate::evaluation::extract_accumulator_metric(
+            accumulator,
+            &crate::core::AccumulatorMetricSelector {
+                name: crate::core::AccumulatorMetricName::AbsMean,
+                component: Some(name.clone()),
+            },
+        )
+        .ok()
+        .flatten();
+        entries.push(key_value(
+            &format!("component_{name}_mean_abs"),
+            &format!("|{name}| Mean"),
+            json!({
+                "kind": "estimate", "value": absolute.as_ref().map(|e| e.value),
+                "error": absolute.as_ref().and_then(|e| e.uncertainty), "estimator": estimator,
+                "sample_count": accumulator.sample_count(),
+            }),
+        ));
         if let Some(target) = run_target
             .as_ref()
             .and_then(|t| t.integrand_component(&name))
@@ -1953,6 +1971,18 @@ mod tests {
             let value = |key: &str| &entries.iter().find(|entry| entry.key == key).unwrap().value;
             assert_eq!(value("component_real_mean")["value"], -4.5);
             assert_eq!(value("component_imag_mean")["value"], 4.5);
+            for name in ["real", "imag"] {
+                let absolute = &value(&format!("component_{name}_mean_abs"));
+                let component = state
+                    .pooled_vector()
+                    .unwrap()
+                    .components
+                    .iter()
+                    .find(|c| c.name == name)
+                    .unwrap();
+                assert_eq!(absolute["value"], json!(component.state.mean_abs()));
+                assert_eq!(absolute["error"], json!(component.state.mean_abs_stderr()));
+            }
             assert_eq!(value("target_comparison_real")["target"], -4.0);
             assert!(
                 (value("component_real_rsd").as_f64().unwrap()

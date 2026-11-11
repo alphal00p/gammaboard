@@ -10,6 +10,10 @@ pub enum StoreError {
     NotFound(String),
     #[error("database error: {0}")]
     Database(String),
+    /// PostgreSQL explicitly rejected this insertion transaction. Its exact
+    /// input can be retried; this is not an unknown commit outcome.
+    #[error("database transaction aborted ({sqlstate}): {message}")]
+    RetryableTransaction { sqlstate: String, message: String },
     #[error("runtime activation must be retried: {0}")]
     RetryActivation(String),
     #[error("serialization error: {0}")]
@@ -51,7 +55,11 @@ impl StoreError {
     }
 
     pub fn is_database_error(&self) -> bool {
-        matches!(self, Self::Database(_))
+        matches!(self, Self::Database(_) | Self::RetryableTransaction { .. })
+    }
+
+    pub fn is_retryable_transaction(&self) -> bool {
+        matches!(self, Self::RetryableTransaction { .. })
     }
 }
 

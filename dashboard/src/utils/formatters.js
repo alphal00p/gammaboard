@@ -37,6 +37,15 @@ export const formatDecimalSignificant = (value, digits = 3, fallback = "n/a") =>
   return `${sign}${numbers.slice(0, point)}.${numbers.slice(point)}`;
 };
 
+// Target deltas and pulls have both a significant-digit and decimal-place cap.
+// Round once from the original value (0.001499 must not become 0.002).
+export const formatComparisonDecimal = (value, fallback = "n/a") => {
+  if (value == null || !Number.isFinite(Number(value))) return fallback;
+  const number = Number(value);
+  const text = Math.abs(number) < 0.1 ? number.toFixed(3) : formatDecimalSignificant(number);
+  return Number(text) === 0 ? text.replace(/^-/, "") : text;
+};
+
 export const formatDateTime = (value, fallback = "n/a") => {
   if (!value) return fallback;
   const dt = new Date(value);
@@ -121,14 +130,12 @@ export const formatEstimateDisplay = (value, error, fallback = "n/a") => {
     const latex = `${central.toExponential(16)}\\;\\left(\\sigma=${uncertainty.toExponential(1)}\\right)`;
     return { text, latex, relative_percent: relativePercentValue, relative_percent_text: relativePercentText, latex_with_relative: appendRelativeToLatex(latex) };
   }
-  let valueText = scaledValue.toFixed(decimals);
-  let errorText = uncertainty === 0 ? "0" : (Number(errorMantissa) * 10 ** (Number(errorExponent) - exponent)).toFixed(decimals);
-  while (valueText.includes(".") && errorText.includes(".") && valueText.endsWith("0") && errorText.endsWith("0")) {
-    valueText = valueText.slice(0, -1);
-    errorText = errorText.slice(0, -1);
-  }
-  valueText = valueText.replace(/\.$/, "");
-  errorText = errorText.replace(/\.$/, "").replace(".", "").replace(/^0+/, "") || "0";
+  const valueText = scaledValue.toFixed(decimals);
+  const scaledError = uncertainty === 0 ? 0 : Number(errorMantissa) * 10 ** (Number(errorExponent) - exponent);
+  const decimalError = scaledError.toFixed(decimals);
+  // Small errors use last-place digits, retaining both significant digits.
+  // Same-order errors retain their decimal point: 1.2(3.5), not 1.2(35).
+  const errorText = scaledError >= 1 ? decimalError : decimalError.replace(".", "").replace(/^0+/, "") || "0";
   const suffix = exponent === 0 ? "" : ` × 10^${exponent}`;
   const latexSuffix = exponent === 0 ? "" : `\\times 10^{${exponent}}`;
   const latex = `${valueText}(${errorText})${latexSuffix}`;

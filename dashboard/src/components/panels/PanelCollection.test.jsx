@@ -450,6 +450,7 @@ describe("PanelCollection scalar legends", () => {
     expect(option.legend.show).toBe(true);
     expect(option.series.map((series) => series.name)).toEqual(["uncertainty", "Test", "target"]);
     expect(option.series[0].data).toEqual([[250, 0.1, 0.3, 1000, 0.7, 0.9]]);
+    expect(option.series[0].progressive).toBe(0);
     expect(option.series[2].data).toEqual([[250, 0], [1000, 0]]);
   });
 

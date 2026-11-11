@@ -143,6 +143,7 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn count_active_evaluator_nodes(&self, run_id: i32) -> Result<i64, StoreError>;
     async fn request_node_shutdown(&self, node_name: &str) -> Result<u64, StoreError>;
     async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError>;
+    async fn request_idle_nodes_shutdown(&self) -> Result<u64, StoreError>;
     async fn consume_node_shutdown_request(&self, node_uuid: &str) -> Result<bool, StoreError>;
     async fn expire_node_lease(&self, node_uuid: &str) -> Result<(), StoreError>;
 

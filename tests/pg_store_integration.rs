@@ -12,6 +12,263 @@ use tokio::time::{Duration, sleep};
 static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn node_management_stops_only_live_unassigned_nodes_and_counts_live_unassignments() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, _, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("INSERT INTO nodes (name,uuid,lease_expires_at) SELECT name,name,now()+interval '1 hour' FROM unnest($1::text[]) AS name")
+        .bind(vec!["idle", "starting", "pooled", "expired", "resuming", "already-stopping", "free"])
+        .execute(store.pool()).await.unwrap();
+    sqlx::query(
+        "UPDATE nodes SET desired_run_id=$1,desired_role='evaluator' WHERE name='starting'",
+    )
+    .bind(run)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE nodes SET pool_run_id=$1,pool_role='evaluator' WHERE name IN ('pooled','expired')",
+    )
+    .bind(run)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 hour' WHERE name='expired'")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET resume_requested=true WHERE name='resuming'")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET shutdown_requested_at=now() WHERE name='already-stopping'")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        gammaboard::api::nodes::stop_idle_nodes(&store)
+            .await
+            .unwrap()
+            .rows_updated,
+        2
+    );
+    assert_eq!(
+        gammaboard::api::nodes::stop_idle_nodes(&store)
+            .await
+            .unwrap()
+            .rows_updated,
+        0
+    );
+    let requested: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM nodes WHERE shutdown_requested_at IS NOT NULL ORDER BY name",
+    )
+    .fetch_all(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(requested, vec!["already-stopping", "free", "idle"]);
+    // The existing active evaluator has no desired/pool assignment; only these
+    // two live assignments change. Expired stored assignments are still cleared.
+    assert_eq!(
+        gammaboard::api::nodes::unassign_all_nodes(&store)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        gammaboard::api::nodes::unassign_all_nodes(&store)
+            .await
+            .unwrap(),
+        0
+    );
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM nodes WHERE desired_run_id IS NOT NULL OR pool_run_id IS NOT NULL",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(remaining, 0);
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn node_management_idle_stop_rechecks_a_concurrent_assignment() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, _, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("INSERT INTO nodes (name,uuid,lease_expires_at) VALUES ('assignment-race','assignment-race',now()+interval '1 hour')").execute(store.pool()).await.unwrap();
+    let mut assign = store.pool().begin().await.unwrap();
+    sqlx::query(
+        "UPDATE nodes SET desired_run_id=$1,desired_role='evaluator' WHERE name='assignment-race'",
+    )
+    .bind(run)
+    .execute(&mut *assign)
+    .await
+    .unwrap();
+    let stopper = store.clone();
+    let mut stop = tokio::spawn(async move { stopper.request_idle_nodes_shutdown().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut stop)
+            .await
+            .is_err(),
+        "stop waits for the assignment row lock"
+    );
+    assign.commit().await.unwrap();
+    assert_eq!(stop.await.unwrap().unwrap(), 0);
+    let stopped: bool = sqlx::query_scalar(
+        "SELECT shutdown_requested_at IS NOT NULL FROM nodes WHERE name='assignment-race'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert!(!stopped);
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn sampler_insert_lock_timeouts_retry_insert_copy_and_commit_without_duplicate_work() {
+    use gammaboard::runners::{SamplerQueue, SamplerQueueConfig};
+    let (_guard, store) = locked_test_store().await;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET lock_timeout = '80ms'")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&std::env::var("GAMMABOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    // The counter trigger is deferred until COMMIT, so the final case exercises
+    // an explicit server rejection at commit, not just an early statement error.
+    for table in ["batches", "batch_inputs", "run_batch_queue_counters"] {
+        let (run, task, _, _) = reliability_fixture(&store, 0).await;
+        let config: SamplerQueueConfig = serde_json::from_value(serde_json::json!({
+            "target_batch_eval_ms": 2000.0, "max_batch_size": 128,
+            "max_batches_per_tick": 8, "max_insert_bundle_size": 2,
+            "max_concurrent_insert_tasks": 2, "completed_batch_fetch_limit": 8,
+        }))
+        .unwrap();
+        let mut queue = SamplerQueue::new(
+            PgStore::new(pool.clone()),
+            run,
+            task,
+            config,
+            Default::default(),
+            tokio::runtime::Handle::current(),
+        );
+        let batches = [1.25, 2.5]
+            .into_iter()
+            .map(|weight| {
+                LatentBatch::from_batch(&Batch::from_iter([Point::new(vec![0.5], vec![], weight)]))
+                    .for_evaluation(gammaboard::core::AccumulatorConfig::scalar())
+            })
+            .collect::<Vec<_>>();
+        let expected = batches
+            .iter()
+            .map(|batch| batch.to_bytes().unwrap())
+            .collect::<Vec<_>>();
+        let mut blocker = store.pool().begin().await.unwrap();
+        sqlx::query(&format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        queue.ingest(batches, true);
+        let last_produced = queue.checkpoint().last_produced_batch_id;
+        // Repeated failures must keep the retryable classification, not turn
+        // into permanent queue poisoning or checkpoint recovery after a budget.
+        for _ in 0..2 {
+            let error = tokio::time::timeout(Duration::from_secs(5), queue.flush())
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                matches!(&error, StoreError::RetryableTransaction { sqlstate, .. } if sqlstate == "55P03"),
+                "{table}: {error}"
+            );
+            assert!(!error.is_retry_activation());
+            assert_eq!(queue.checkpoint().last_produced_batch_id, last_produced);
+            assert_eq!(queue.checkpoint().last_completed_batch_id, None);
+        }
+        blocker.rollback().await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM batches WHERE run_id=$1")
+            .bind(run)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "rejected transaction must leave no partial batches: {table}"
+        );
+        tokio::time::timeout(Duration::from_secs(5), queue.flush())
+            .await
+            .unwrap()
+            .unwrap();
+        let rows: Vec<(i64, bool, Vec<u8>)> = sqlx::query_as("SELECT b.id,b.requires_training_values,i.latent_batch FROM batches b JOIN batch_inputs i ON i.batch_id=b.id WHERE b.run_id=$1 ORDER BY b.id")
+            .bind(run).fetch_all(store.pool()).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.last().map(|row| row.0), last_produced);
+        assert_eq!(queue.checkpoint().last_produced_batch_id, last_produced);
+        for (row, bytes) in rows.iter().zip(expected) {
+            assert!(row.1);
+            assert_eq!(row.2, bytes);
+        }
+        let counters: (i64, i64, i64) = sqlx::query_as("SELECT total_batches,total_samples,pending_batches FROM run_batch_queue_counters WHERE run_id=$1")
+            .bind(run).fetch_one(store.pool()).await.unwrap();
+        assert_eq!(counters, (2, 2, 2));
+        let progress: i64 =
+            sqlx::query_scalar("SELECT nr_completed_samples FROM run_tasks WHERE id=$1")
+                .bind(task)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(progress, 0);
+        drop(queue);
+        store.remove_run(run).await.unwrap();
+    }
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn sampler_insert_classifies_sqlstates_without_retrying_unknown_or_permanent_failures() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, task, _, _) = reliability_fixture(&store, 0).await;
+    sqlx::raw_sql("CREATE FUNCTION reject_test_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected insert rejection' USING ERRCODE = TG_ARGV[0]; END $$;")
+        .execute(store.pool()).await.unwrap();
+    let batches =
+        [
+            LatentBatch::from_batch(&Batch::from_iter([Point::new(vec![0.5], vec![], 1.0)]))
+                .for_evaluation(gammaboard::core::AccumulatorConfig::scalar()),
+        ];
+    for code in ["55P03", "40P01", "40001", "23505", "40003", "57014"] {
+        sqlx::raw_sql(&format!("CREATE TRIGGER reject_test_insert BEFORE INSERT ON batches FOR EACH ROW EXECUTE FUNCTION reject_test_insert('{code}');"))
+            .execute(store.pool()).await.unwrap();
+        let error = store
+            .insert_batches(run, task, false, &next_batch_ids(1), &batches)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.is_retryable_transaction(),
+            matches!(code, "55P03" | "40P01" | "40001"),
+            "{code}: {error}"
+        );
+        sqlx::query("DROP TRIGGER reject_test_insert ON batches")
+            .execute(store.pool())
+            .await
+            .unwrap();
+    }
+    sqlx::query("DROP FUNCTION reject_test_insert()")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "requires postgres with project migrations applied"]
 async fn run_removal_waits_for_lease_expiry_and_restores_connection_timeouts() {
     let (_guard, store) = locked_test_store().await;

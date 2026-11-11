@@ -23,6 +23,9 @@ impl From<StoreError> for ServiceError {
             | StoreError::Database(message)
             | StoreError::RetryActivation(message)
             | StoreError::Serialization(message) => Self::Internal(message),
+            StoreError::RetryableTransaction { sqlstate, message } => Self::Internal(format!(
+                "database transaction aborted ({sqlstate}): {message}"
+            )),
             StoreError::BatchOwnershipLost {
                 batch_id,
                 node_uuid,

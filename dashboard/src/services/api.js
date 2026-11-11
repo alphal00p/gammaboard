@@ -189,6 +189,7 @@ export const stopNode = async (nodeName, signal) =>
   apiPost(`/nodes/${nodeName}/stop`, {}, "Failed to stop node", signal);
 
 export const stopAllNodes = async (signal) => apiPost("/nodes/stop-all", {}, "Failed to stop all nodes", signal);
+export const stopIdleNodes = async (signal) => apiPost("/nodes/stop-idle", {}, "Failed to stop idle nodes", signal);
 
 export const restartDatabase = async (signal) => apiPost("/admin/db/restart", {}, "Failed to restart database", signal);
 

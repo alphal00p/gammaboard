@@ -134,6 +134,20 @@ fn store_err(message: impl Into<String>) -> StoreError {
     StoreError::store(message)
 }
 
+fn map_insert_error(error: sqlx::Error) -> StoreError {
+    // Only explicit server rejection is safe to replay. In particular, an I/O
+    // error during COMMIT (or SQLSTATE 40003) remains an uncertain outcome.
+    if let Some(code) = error.as_database_error().and_then(|error| error.code())
+        && matches!(code.as_ref(), "55P03" | "40P01" | "40001")
+    {
+        return StoreError::RetryableTransaction {
+            sqlstate: code.into_owned(),
+            message: error.to_string(),
+        };
+    }
+    map_sqlx(error)
+}
+
 pub(crate) fn map_sqlx(err: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(db_err) = &err {
         if db_err.code().as_deref() == Some("23505") {
@@ -569,6 +583,12 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)
     }
 
+    async fn request_idle_nodes_shutdown(&self) -> Result<u64, StoreError> {
+        queries::request_idle_nodes_shutdown(&self.pool)
+            .await
+            .map_err(map_sqlx)
+    }
+
     async fn consume_node_shutdown_request(&self, node_uuid: &str) -> Result<bool, StoreError> {
         queries::consume_node_shutdown_request(&self.pool, node_uuid)
             .await
@@ -801,7 +821,7 @@ impl WorkQueueStore for PgStore {
             batches,
         )
         .await
-        .map_err(map_sqlx)
+        .map_err(map_insert_error)
     }
 
     async fn get_batch_queue_counts(

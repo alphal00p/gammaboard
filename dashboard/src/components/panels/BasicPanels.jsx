@@ -17,7 +17,7 @@ import {
   formatCompactNumber,
   formatDateTime,
   formatEstimateDisplay,
-  formatDecimalSignificant,
+  formatComparisonDecimal,
   formatF64Full,
   formatScientific,
   normalizeTimeUnit,
@@ -209,15 +209,17 @@ export const EstimateValueBlock = ({ value, label, help }) => {
   </Box>;
   return <DisclosureField label={label || "Estimate details"} value={compact} inline={!label}>
     <PrecisionText>{details.join("\n")}</PrecisionText>
-    <Typography variant="caption" component="p" sx={{ mt: 1 }}>Parenthesized digits give the uncertainty in the last displayed digits; for example, 5.4123(25) means 5.4123 ± 0.0025.</Typography>
+    <Typography variant="caption" component="p" sx={{ mt: 1 }}>Parenthesized integer digits give the uncertainty in the last displayed places: 5.4123(25) means 5.4123 ± 0.0025. A decimal uncertainty uses the same scale as the mean: 1.2(3.5) means 1.2 ± 3.5. Both share any displayed power of ten.</Typography>
     {value?.basic && <Typography variant="caption" component="p">The pooled reference error belongs to its own pooled mean.</Typography>}
     {help && <Typography variant="caption" component="p" sx={{ mt: 1 }}>{help}</Typography>}
   </DisclosureField>;
 };
 
 const TargetComparisonValueBlock = ({ value, label }) => {
-  const signed = (number) => number == null || !Number.isFinite(Number(number)) ? "n/a"
-    : `${Number(number) > 0 ? "+" : ""}${formatDecimalSignificant(number)}`;
+  const signed = (number) => {
+    const text = formatComparisonDecimal(number);
+    return `${Number(text) > 0 ? "+" : ""}${text}`;
+  };
   return <DisclosureField label={label || "Target comparison details"} inline={!label}
     value={<Box component="span" sx={{ display: "inline-flex", alignItems: "baseline", flexWrap: "wrap", columnGap: 0.75 }}>
       <span><ScientificValue text={formatScientific(value.target, 4)} /></span>
@@ -255,14 +257,15 @@ export const KeyValuePanel = ({ title, state }) => {
   const result = RESULT_PANELS.has(state?.panel_id);
   const entries = asArray(state?.entries).filter((entry) => !result || !RESULT_NOTES.has(entry.key));
   const allEstimates = entries.filter((entry) => isEstimateValue(entry.value));
-  const estimates = result ? allEstimates : [];
+  const estimates = result ? allEstimates.filter((entry) => !entry.key.endsWith("_mean_abs")) : [];
   const grouped = new Set();
   const hasTargets = entries.some((entry) => isTargetComparisonValue(entry.value));
   const groups = estimates.map((mean) => {
     const component = /^component_(.*)_mean$/.exec(mean.key)?.[1] ?? /^estimate_(.*)$/.exec(mean.key)?.[1] ?? mean.key.replace(/_mean$/, "");
     const target = entries.find((entry) => entry.key === `target_comparison_${component}`);
     const rsd = entries.find((entry) => entry.key === `component_${component}_rsd`);
-    const fields = [mean, target || (hasTargets ? { key: `target_comparison_${component}`, label: `${component} vs Target`, value: "not set" } : null), rsd].filter(Boolean);
+    const absolute = entries.find((entry) => entry.key === `component_${component}_mean_abs`);
+    const fields = [mean, target || (hasTargets ? { key: `target_comparison_${component}`, label: `${component} vs Target`, value: "not set" } : null), rsd, absolute].filter(Boolean);
     fields.forEach((entry) => grouped.add(entry.key));
     return { component, fields };
   });

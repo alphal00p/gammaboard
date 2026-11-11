@@ -439,6 +439,9 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
               {
                 name: errorLabel,
                 type: "custom",
+                // A long-lived history can exceed ECharts' 3,000-item threshold.
+                // Draw the band with the line, rather than 400 segments/frame.
+                progressive: 0,
                 data: bandSegments,
                 clip: true,
                 silent: true,

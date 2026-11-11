@@ -24,6 +24,8 @@ pub(crate) struct RecordingStore {
     pub(crate) nodes: Option<Vec<RegisteredNode>>,
     pub(crate) assignment_update_result: Option<bool>,
     pub(crate) inserts: RecordedInserts,
+    pub(crate) insert_errors: Arc<Mutex<std::collections::VecDeque<StoreError>>>,
+    pub(crate) insert_attempts: Arc<Mutex<Vec<(Vec<i64>, Vec<Vec<u8>>, bool)>>>,
     pub(crate) active_task: Arc<Mutex<Option<RunTask>>>,
     pub(crate) first_insert_gate: Option<Arc<Notify>>,
     pub(crate) inserted: Arc<Notify>,
@@ -67,6 +69,17 @@ impl WorkQueueStore for RecordingStore {
         batch_ids: &[i64],
         batches: &[crate::core::EvaluationBatch],
     ) -> Result<InsertBatchesOutcome, StoreError> {
+        self.insert_attempts.lock().unwrap().push((
+            batch_ids.to_vec(),
+            batches
+                .iter()
+                .map(|batch| batch.to_bytes().unwrap())
+                .collect(),
+            _requires_training_values,
+        ));
+        if let Some(error) = self.insert_errors.lock().unwrap().pop_front() {
+            return Err(error);
+        }
         let logical_weight = match &batches[0].samples.payload {
             LatentBatchPayload::IndexedBatch { weights, .. } => weights[0],
             LatentBatchPayload::HavanaInference { .. } => 0.0,
@@ -531,6 +544,10 @@ impl ControlPlaneStore for RecordingStore {
     }
 
     async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError> {
+        unreachable!("unused in test")
+    }
+
+    async fn request_idle_nodes_shutdown(&self) -> Result<u64, StoreError> {
         unreachable!("unused in test")
     }
 

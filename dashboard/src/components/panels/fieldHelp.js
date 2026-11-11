@@ -1,5 +1,6 @@
 // Definitions live with the field that owns the value, including in table cells.
 export function fieldHelp(key = "", label = "", panelId = "") {
+  if (key.endsWith("_mean_abs")) return "Mean of absolute weighted component values, including zero contributions. Stratified estimates sum conditional absolute means and their independent variances. This is not the absolute value of the signed mean. Older snapshots lacking absolute moments show unavailable.";
   const name = `${key} ${label}`.toLowerCase();
   if (/\brsd\b|_rsd\b/.test(name)) return "RSD = sqrt(N) × SE(estimate) / |estimate|. It uses the signed component and the primary estimator's standard error, including stratified uncertainty where applicable. It stays roughly constant during inference with a fixed proposal. A zero estimate gives infinity for nonzero error; 0/0 is undefined.";
   if (/\bess\b|_ess\b/.test(name)) return "Normalized training ESS = (Σ|w|)² / (N Σw²), where w is the weighted training projection and zero-valued misses count as samples. Values range from 0 to 1. " + (panelId === "stratum_results" ? "This value uses the requested stratum's samples." : "For partitioned sampling the aggregate is Σ(Nₛ × ESSₛ) / ΣNₛ, using each requested stratum separately.") + " Older snapshots without the required training moments show unavailable.";

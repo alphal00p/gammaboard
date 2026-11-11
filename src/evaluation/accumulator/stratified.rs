@@ -399,6 +399,32 @@ impl StratifiedAccumulatorState {
         Some(covariance)
     }
 
+    /// Integral of the absolute component using the same stratum assignment.
+    /// Squaring removes the sign, so stored second moments also determine its
+    /// error. Older checkpoints without absolute sums remain unavailable.
+    fn absolute_estimate(&self, index: usize) -> Option<crate::core::BasicEstimate> {
+        let mut mean = 0.0;
+        let mut error = 0.0_f64;
+        for stratum in &self.strata {
+            if stratum.attempts == 0 {
+                return None;
+            }
+            let n = stratum.attempts as f64;
+            let absolute = stratum.sum_abs.as_ref()?.get(index)? / n;
+            mean += absolute;
+            if stratum.uncertainty_ready() {
+                let signed = stratum.mean[index];
+                let centered_second = stratum.m2[index * stratum.mean.len() + index] / n
+                    + (signed - absolute) * (signed + absolute);
+                error = error.hypot((centered_second.max(0.0) / (n - 1.0)).sqrt());
+            }
+        }
+        Some(crate::core::BasicEstimate {
+            mean,
+            error: self.uncertainty_ready().then_some(error),
+        })
+    }
+
     /// Pooled reference from the same masked draws. Scale each conditional
     /// group back by 1/p, then merge central moments without subtracting raw
     /// squared sums. This is a different mean, not another error on `mean()`.
@@ -548,16 +574,26 @@ impl StratifiedAccumulatorState {
             },
             Some(name) => self.plan.components.iter().position(|n| n == name)?,
         };
-        let mean = self.mean()?[index];
-        let error = self
-            .covariance()
-            .map(|c| c[index * self.strata[0].mean.len() + index].max(0.).sqrt());
+        let absolute = (selector.name == AccumulatorMetricName::AbsMean)
+            .then(|| self.absolute_estimate(index))
+            .flatten();
+        let mean = if selector.name == AccumulatorMetricName::AbsMean {
+            absolute.as_ref()?.mean
+        } else {
+            self.mean()?[index]
+        };
+        let error = if selector.name == AccumulatorMetricName::AbsMean {
+            absolute?.error
+        } else {
+            self.covariance()
+                .map(|c| c[index * self.strata[0].mean.len() + index].max(0.).sqrt())
+        };
         let value = match selector.name {
-            AccumulatorMetricName::Mean => mean,
+            AccumulatorMetricName::Mean | AccumulatorMetricName::AbsMean => mean,
             AccumulatorMetricName::Error => error?,
             AccumulatorMetricName::RelativeError => super::relative_error(mean, error?),
             AccumulatorMetricName::Rsd => error? / mean.abs() * (self.sample_count() as f64).sqrt(),
-            // Pooled sample variance/ESS/absolute moments do not describe this estimator.
+            // Pooled sample variance/ESS do not describe this estimator.
             _ => return None,
         };
         if !value.is_finite() {
@@ -576,7 +612,10 @@ impl StratifiedAccumulatorState {
                     .unwrap_or_else(|| "training_projection".into()),
             ),
             value,
-            uncertainty: if selector.name == AccumulatorMetricName::Mean {
+            uncertainty: if matches!(
+                selector.name,
+                AccumulatorMetricName::Mean | AccumulatorMetricName::AbsMean
+            ) {
                 error
             } else {
                 None
@@ -593,6 +632,55 @@ impl StratifiedAccumulatorState {
 mod tests {
     use super::*;
     use crate::core::StratificationConfig;
+
+    #[test]
+    fn absolute_component_estimate_respects_strata_misses_merge_and_legacy_data() {
+        let mut left = empty();
+        let mut right = empty();
+        let mut absolute_samples = [Vec::new(), Vec::new()];
+        for i in 0..160 {
+            let k = usize::from(i >= 64);
+            let hit = i % 5 != 0;
+            let value = if hit { (i % 7) as f64 - 3.0 } else { 0.0 };
+            let weight = 2.0;
+            absolute_samples[k]
+                .push(value.abs() * weight * left.plan.probabilities.as_ref().unwrap()[k]);
+            let state = if i < 91 { &mut left } else { &mut right };
+            state.push(k, &[value, -value], weight, hit).unwrap();
+        }
+        left.merge(right).unwrap();
+        let selector = AccumulatorMetricSelector {
+            name: AccumulatorMetricName::AbsMean,
+            component: Some("x".into()),
+        };
+        let estimate = left.metric(&selector).unwrap();
+        let mut expected = 0.0;
+        let mut variance = 0.0;
+        for values in &absolute_samples {
+            let n = values.len() as f64;
+            let mean = values.iter().sum::<f64>() / n;
+            expected += mean;
+            variance += values.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n * (n - 1.0));
+        }
+        assert!((estimate.value - expected).abs() < 1e-12);
+        assert!((estimate.uncertainty.unwrap() - variance.sqrt()).abs() < 1e-12);
+        assert!(estimate.value > left.mean().unwrap()[0].abs());
+        let mut saved = serde_json::to_value(&left).unwrap();
+        let restored: StratifiedAccumulatorState = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(restored.metric(&selector).unwrap().value, estimate.value);
+        saved["strata"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("sum_abs");
+        let legacy: StratifiedAccumulatorState = serde_json::from_value(saved).unwrap();
+        assert!(legacy.metric(&selector).is_none());
+        let mut insufficient = empty();
+        insufficient.push(0, &[1., 0.], 4., true).unwrap();
+        insufficient.push(1, &[-1., 0.], 4. / 3., true).unwrap();
+        let provisional = insufficient.metric(&selector).unwrap();
+        assert_eq!(provisional.value, 2.0);
+        assert_eq!(provisional.uncertainty, None);
+    }
 
     #[test]
     fn pooled_reference_matches_direct_samples_through_merge_and_restore() {

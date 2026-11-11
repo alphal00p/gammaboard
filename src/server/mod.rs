@@ -1530,6 +1530,22 @@ async fn stop_all_nodes(
     }))
 }
 
+async fn stop_idle_nodes(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let result = node_api::stop_idle_nodes(&state.store)
+        .await
+        .inspect_err(|err| log_control_api_error("node_stop_idle", err))?;
+    tracing::info!(
+        source = "control",
+        control_surface = "dashboard",
+        action = "node_stop_idle",
+        rows_updated = result.rows_updated,
+        "dashboard action completed"
+    );
+    json_response(serde_json::json!({ "rows_updated": result.rows_updated }))
+}
+
 async fn auto_run_nodes(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<AutoRunNodesRequest>,
