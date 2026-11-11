@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePolling } from "./usePolling";
 import { asArray, isPlainObject } from "../utils/collections";
+import { readResourceCache, writeResourceCache, deleteResourceCache } from "../services/resourceCache";
+import { useWorkspaceActive } from "../components/common/WorkspaceTabs";
 
 const emptyState = Object.freeze({
   sourceId: null,
@@ -9,6 +11,7 @@ const emptyState = Object.freeze({
   panelValues: {},
   cursor: null,
   error: null,
+  availableSections: null,
 });
 
 const asObject = (value) => (isPlainObject(value) ? value : {});
@@ -49,12 +52,19 @@ const mergePlotPoints = (previousPoints, incomingPoints) => {
     if (!Number.isFinite(x)) continue;
     byX.set(x, point);
   }
-  return Array.from(byX.entries())
+  let points = Array.from(byX.entries())
     .sort((left, right) => left[0] - right[0])
     .map(([, point]) => point);
+  if (points.length > 1024) {
+    const last = points.at(-1);
+    const stride = Math.ceil(points.length / 1023);
+    points = points.filter((_, index) => index % stride === 0);
+    if (points.at(-1) !== last) points.push(last);
+  }
+  return points;
 };
 
-const mergePanelState = (previous, incoming) => {
+export const mergePanelState = (previous, incoming) => {
   if (!previous) return incoming;
   if (previous.kind === "strata" && incoming.kind === "strata") {
     const frames = new Map(asArray(previous.frames).map((frame) => [frame.samples, frame]));
@@ -66,23 +76,26 @@ const mergePanelState = (previous, incoming) => {
         sampler_uptime_ms: frame.sampler_uptime_ms ?? old?.sampler_uptime_ms ?? null,
       });
     }
-    return { ...incoming, frames: [...frames.values()].sort((a, b) => a.samples - b.samples) };
+    let sorted = [...frames.values()].sort((a, b) => a.samples - b.samples);
+    if (sorted.length > 1024) { const last = sorted.at(-1); const stride = Math.ceil(sorted.length / 1023); sorted = sorted.filter((_,i) => i % stride === 0); if (sorted.at(-1) !== last) sorted.push(last); }
+    return { ...incoming, frames: sorted };
   }
   if (previous.kind === "scalar_timeseries" && incoming.kind === "scalar_timeseries") {
     return {
       ...previous,
+      ...incoming,
       points: mergePlotPoints(previous.points, incoming.points),
     };
   }
   if (previous.kind === "multi_timeseries" && incoming.kind === "multi_timeseries") {
     const seriesMap = new Map(asArray(previous.series).map((series) => [series.id, { ...series }]));
     for (const series of asArray(incoming.series)) {
-      const existing = seriesMap.get(series.id) || { ...series, points: [] };
-      existing.points = mergePlotPoints(existing.points, series.points);
-      seriesMap.set(series.id, existing);
+      const existing = seriesMap.get(series.id);
+      seriesMap.set(series.id, { ...existing, ...series, points: mergePlotPoints(existing?.points, series.points) });
     }
     return {
       ...previous,
+      ...incoming,
       series: Array.from(seriesMap.values()),
     };
   }
@@ -203,7 +216,10 @@ const panelValueEquals = (left, right) => {
   return leftEntries.every(([key, value]) => Object.is(value, right[key]));
 };
 
-export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null, paused = false } = {}) => {
+export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null, paused = false, cacheKey = null, persistValues = true } = {}) => {
+  const cached = useMemo(() => cacheKey ? readResourceCache(cacheKey) : null, [cacheKey]);
+  const workspaceActive = useWorkspaceActive();
+  const active = enabled && workspaceActive && !paused;
   const [state, setState] = useState(emptyState);
   const stateRef = useRef(emptyState);
   const [lastUpdate, setLastUpdate] = useState(null);
@@ -214,6 +230,8 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
   const panelValuesRef = useRef({});
   const pendingActionsRef = useRef([]);
   const refreshSeededPanelValuesRef = useRef(false);
+  const revalidating = useRef(true);
+  useEffect(() => { if (active) revalidating.current = true; }, [active, fetchPanels]);
 
   useEffect(() => {
     cursorRef.current = state.cursor;
@@ -224,8 +242,8 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
   }, [state.panelValues]);
 
   useEffect(() => {
-    writeStoredPanelValues(state.sourceId, state.panelValues);
-  }, [state.panelValues, state.sourceId]);
+    if (persistValues) writeStoredPanelValues(state.sourceId, state.panelValues);
+  }, [state.panelValues, state.sourceId, persistValues]);
 
   const poll = useCallback(
     async (signal) => {
@@ -261,21 +279,23 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
               ? receivedPanelSpecs
               : previous.panelSpecs;
           const seededPanelValues = shouldSeedFromStorage
-            ? readStoredPanelValues(nextSourceId)
+            ? persistValues ? readStoredPanelValues(nextSourceId) : {}
             : panelValuesRef.current;
           const panelValues = reconcilePanelValues(seededPanelValues, panelSpecs, resetRequired && !sourceChanged);
           if (shouldSeedFromStorage && Object.keys(panelValues).length > 0) {
             refreshSeededPanelValuesRef.current = true;
           }
           panelValuesRef.current = panelValues;
-          const panelStates = applyUpdates(previous.panelStates, response?.updates, resetRequired);
+          const panelStates = applyUpdates(previous.panelStates, response?.updates, resetRequired || !useCursor);
           const cursor = response?.cursor ?? previous.cursor;
+          const availableSections = response?.available_sections ?? previous.availableSections;
           if (
             previous.sourceId === nextSourceId &&
             previous.panelSpecs === panelSpecs &&
             previous.panelStates === panelStates &&
             previous.panelValues === panelValues &&
             previous.cursor === cursor &&
+            previous.availableSections === availableSections &&
             previous.error == null
           ) {
             return previous;
@@ -287,12 +307,15 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
             panelValues,
             cursor,
             error: null,
+            availableSections,
           };
         })();
         stateRef.current = nextState;
         cursorRef.current = nextState.cursor;
         setState(nextState);
-        setLastUpdate(new Date().toLocaleTimeString());
+        const updated = new Date().toLocaleTimeString();
+        setLastUpdate(updated);
+        writeResourceCache(cacheKey, { state: nextState, lastUpdate: updated });
         if (refreshSeededPanelValuesRef.current) {
           refreshSeededPanelValuesRef.current = false;
           return 1;
@@ -302,26 +325,31 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
         return undefined;
       } catch (err) {
         if (signal.aborted || err?.name === "AbortError") return;
-        const next = { ...stateRef.current, error: err?.message || "Failed to fetch panels" };
+        const invalid = [401,403,404].includes(err?.status);
+        if (invalid) deleteResourceCache(cacheKey);
+        const next = { ...(invalid ? emptyState : stateRef.current), error: err?.message || "Failed to fetch panels" };
         stateRef.current = next;
         setState(next);
       } finally {
-        if (!signal.aborted) setIsFetching(false);
+        if (!signal.aborted) { revalidating.current = false; setIsFetching(false); }
       }
     },
-    [enabled, fetchPanels, useCursor],
+    [enabled, fetchPanels, useCursor, cacheKey, persistValues],
   );
 
   const reset = useCallback(() => {
-    cursorRef.current = null;
-    panelValuesRef.current = {};
+    const saved = cacheKey ? readResourceCache(cacheKey) : null;
+    const restored = saved?.state ?? emptyState;
+    cursorRef.current = restored.cursor;
+    panelValuesRef.current = persistValues && restored.sourceId ? { ...restored.panelValues, ...readStoredPanelValues(restored.sourceId) } : restored.panelValues;
     pendingActionsRef.current = [];
-    stateRef.current = emptyState;
+    stateRef.current = { ...restored, panelValues: panelValuesRef.current, error: null };
     refreshSeededPanelValuesRef.current = false;
-    setState(emptyState);
-    setLastUpdate(null);
+    setState(stateRef.current);
+    setLastUpdate(saved?.lastUpdate ?? null);
     setIsFetching(false);
-  }, []);
+    revalidating.current = true;
+  }, [cacheKey, persistValues]);
 
   const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset, paused });
   useEffect(() => {
@@ -363,24 +391,27 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
     [triggerPoll],
   );
 
+  const displayState = source === fetchPanels ? state : cached?.state ?? emptyState;
+  const displayUpdate = source === fetchPanels ? lastUpdate : cached?.lastUpdate ?? null;
   return useMemo(
     () => ({
-      ...(source === fetchPanels ? state : emptyState),
-      lastUpdate: source === fetchPanels ? lastUpdate : null,
-      isLoading: enabled && (source !== fetchPanels || (!lastUpdate && !state.error)),
+      ...displayState,
+      lastUpdate: displayUpdate,
+      isLoading: enabled && !displayUpdate && !displayState.error,
       isFetching: enabled && (source !== fetchPanels || isFetching),
+      isRevalidating: active && Boolean(displayUpdate) && revalidating.current && (source !== fetchPanels || isFetching),
       setPanelValue,
       invokePanelAction,
     }),
-    [invokePanelAction, setPanelValue, state, lastUpdate, source, fetchPanels, enabled, isFetching],
+    [invokePanelAction, setPanelValue, displayState, displayUpdate, source, fetchPanels, enabled, isFetching, active],
   );
 };
 
-export const usePanelResource = ({ id, pollMs, fetchById, refreshKey }) => {
+export const usePanelResource = ({ id, pollMs, fetchById, refreshKey, cache = false }) => {
   const enabled = id != null;
   const fetchPanels = useCallback(
     (_request, signal) => fetchById(id, signal),
     [fetchById, id],
   );
-  return usePanelSource({ enabled, pollMs, fetchPanels, useCursor: false, refreshKey });
+  return usePanelSource({ enabled, pollMs, fetchPanels, useCursor: false, refreshKey, cacheKey: enabled && cache ? `${fetchById.name}:${id}` : null });
 };

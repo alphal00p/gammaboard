@@ -1,3 +1,4 @@
+import { clearResourceCache } from "./resourceCache";
 const APP_BASE_URL = import.meta.env.BASE_URL || "/";
 const normalizedAppBase = APP_BASE_URL.endsWith("/") ? APP_BASE_URL : `${APP_BASE_URL}/`;
 const API_BASE_URL = `${normalizedAppBase}api`;
@@ -119,9 +120,9 @@ export const fetchSession = async (signal) => apiPost("/auth/session", {}, "Fail
 
 export const fetchSettingsOverview = async (signal) => apiGet("/settings", "Failed to fetch settings", signal);
 
-export const login = async (password, signal) => apiPost("/auth/login", { password }, "Failed to log in", signal);
+export const login = async (password, signal) => { clearResourceCache(); return apiPost("/auth/login", { password }, "Failed to log in", signal); };
 
-export const logout = async (signal) => apiPost("/auth/logout", {}, "Failed to log out", signal);
+export const logout = async (signal) => { clearResourceCache(); return apiPost("/auth/logout", {}, "Failed to log out", signal); };
 
 export const pauseRun = async (runId, signal) => apiPost(`/runs/${runId}/pause`, {}, "Failed to pause run", signal);
 
@@ -155,7 +156,7 @@ const waitForRemovalPoll = (delay, signal) => new Promise((resolve, reject) => {
 export const deleteRun = async (runId, signal) => {
   let operation = await apiDelete(`/runs/${runId}`, "Failed to delete run", signal);
   // Older servers return the completed deletion directly.
-  if (!operation?.operation_id) return operation;
+  if (!operation?.operation_id) { clearResourceCache(); return operation; }
   while (operation.status === "running") {
     await waitForRemovalPoll(operation.poll_after_ms ?? 1000, signal);
     operation = await apiGet(
@@ -167,11 +168,14 @@ export const deleteRun = async (runId, signal) => {
   if (operation.status !== "completed") {
     throw new Error(`Failed to delete run: ${operation.error || "deletion did not complete"}`);
   }
+  clearResourceCache();
   return operation;
 };
 
-export const deleteRunTask = async (runId, taskId, signal) =>
-  apiDelete(`/runs/${runId}/tasks/${taskId}`, "Failed to delete pending task", signal);
+export const deleteRunTask = async (runId, taskId, signal) => {
+  const result = await apiDelete(`/runs/${runId}/tasks/${taskId}`, "Failed to delete pending task", signal);
+  clearResourceCache(); return result;
+};
 
 export const autoAssignRun = async (runId, { maxEvaluators = null } = {}, signal) =>
   apiPost(`/runs/${runId}/auto-assign`, { max_evaluators: maxEvaluators }, "Failed to auto-assign run", signal);
@@ -190,8 +194,11 @@ export const stopNode = async (nodeName, signal) =>
 
 export const stopAllNodes = async (signal) => apiPost("/nodes/stop-all", {}, "Failed to stop all nodes", signal);
 export const stopIdleNodes = async (signal) => apiPost("/nodes/stop-idle", {}, "Failed to stop idle nodes", signal);
+export const fetchOfflineNodes = (signal) => apiGet("/nodes/offline", "Failed to load offline nodes", signal);
+export const updateOfflineNode = (node, action) => apiPost(`/nodes/${encodeURIComponent(node.node_name)}/${action}`,
+  { node_uuid: node.node_uuid }, `Failed to ${action === "release-offline" ? "release assignment" : action} for ${node.node_name}`);
 
-export const restartDatabase = async (signal) => apiPost("/admin/db/restart", {}, "Failed to restart database", signal);
+export const restartDatabase = async (signal) => { clearResourceCache(); return apiPost("/admin/db/restart", {}, "Failed to restart database", signal); };
 
 export const shutdownControlProcess = async (signal) =>
   apiPost("/admin/control/shutdown", {}, "Failed to shut down control process", signal);
@@ -243,7 +250,7 @@ export const fetchRunTasks = async (runId, signal) => {
 export const fetchRunTaskPanels = async (
   runId,
   taskId,
-  { limit = 500, cursor = null, panelState = {}, panelActions = [] } = {},
+  { limit = 256, cursor = null, panelState = {}, panelActions = [], section, phase } = {},
   signal,
 ) =>
   apiPost(
@@ -251,6 +258,8 @@ export const fetchRunTaskPanels = async (
     {
       limit,
       cursor,
+      section,
+      phase,
       panel_state: panelState,
       panel_actions: panelActions,
     },

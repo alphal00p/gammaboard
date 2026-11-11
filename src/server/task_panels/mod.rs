@@ -96,6 +96,7 @@ impl TaskPanelContext<'_> {
 
 pub struct TaskPanelHistoryContext<'a> {
     pub snapshot: &'a TaskOutputSnapshot,
+    pub decoded: std::cell::OnceCell<Result<AccumulatorState, EngineError>>,
 }
 
 pub struct TaskPanelSource {
@@ -211,6 +212,7 @@ fn project_history_panels(
 ) -> Result<Vec<PanelState>, EngineError> {
     projectors
         .iter()
+        .filter(|projector| projector.spec.history != PanelHistoryMode::None)
         .filter_map(|projector| projector.history(ctx).transpose())
         .collect()
 }
@@ -222,7 +224,15 @@ fn project_snapshot_history_panels(
     snapshots
         .iter()
         .rev()
-        .map(|snapshot| project_history_panels(projectors, &TaskPanelHistoryContext { snapshot }))
+        .map(|snapshot| {
+            project_history_panels(
+                projectors,
+                &TaskPanelHistoryContext {
+                    snapshot,
+                    decoded: Default::default(),
+                },
+            )
+        })
         .collect()
 }
 
@@ -756,6 +766,34 @@ impl TaskPanelSource {
             .iter()
             .map(|projector| projector.spec().clone())
             .collect()
+    }
+
+    pub fn select_section(mut self, section: Option<&str>, history_only: bool) -> Self {
+        self.projectors.retain(|projector| {
+            if history_only && projector.spec.history == PanelHistoryMode::None {
+                return false;
+            }
+            let Some(section) = section else {
+                return true;
+            };
+            if matches!(projector.spec.kind, PanelKind::Progress) {
+                return section != "summary";
+            }
+            let group = match projector.spec.panel_id.as_str() {
+                "task_summary" => "summary",
+                "gammaloop_histogram_bundle"
+                | "campaign_histograms"
+                | "discrete_projection_bundle" => "observables",
+                "strata" | "stratum_results" => "strata",
+                "gammaloop_evaluation_diagnostics"
+                | "gammaloop_evaluation_timing"
+                | "max_weight_points"
+                | "max_weight_summary" => "diagnostics",
+                _ => "result",
+            };
+            group == section
+        });
+        self
     }
 
     pub fn needs_history(&self) -> bool {
@@ -1315,7 +1353,7 @@ mod tests {
             ]
         );
         assert!(matches!(specs[0].width, PanelWidth::Half));
-        assert!(matches!(specs[1].width, PanelWidth::Half));
+        assert!(matches!(specs[1].width, PanelWidth::Full));
         assert!(
             specs[2..]
                 .iter()

@@ -352,9 +352,11 @@ pub async fn auto_assign_run(
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} spec not found")))?;
     let resumed_nodes = store.resume_worker_pool(run_id).await?;
     let nodes = store.list_nodes(None).await?;
+    let starting = store.starting_pool_assignments(run_id).await?;
     let existing = nodes
         .iter()
         .filter_map(|node| node.pool_assignment)
+        .chain(starting)
         .filter(|a| a.run_id == run_id)
         .fold((0usize, 0usize), |(s, e), a| match a.role {
             WorkerRole::SamplerAggregator => (s + 1, e),

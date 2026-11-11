@@ -1,4 +1,6 @@
-import { useWorkspaceActive } from "./common/WorkspaceTabs";
+import WorkspaceTabs, { TabLoadingScope, WorkspacePanel, useWorkspaceActive } from "./common/WorkspaceTabs";
+import OfflineNodesPanel, { OfflineNodeActions } from "./OfflineNodesPanel";
+import { useOfflineNodes } from "../hooks/useOfflineNodes";
 import LoadingStatus from "./common/LoadingStatus";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -41,6 +43,8 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
   const [stoppingAllNodes, setStoppingAllNodes] = useState(false);
   const [stoppingIdleNodes, setStoppingIdleNodes] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
+  const [nodeView, setNodeView] = useState("live");
+  const offline = useOfflineNodes({ enabled: nodeView === "offline" });
   const launchRequestsData = useNodeLaunchRequests({ enabled: authenticated });
   const sortedWorkers = useMemo(() => [...workers].sort(compareNodesByName), [workers]);
 
@@ -91,7 +95,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
     && worker.pool_run_id == null && worker.pool_role == null);
 
   return (
-    <>
+    <TabLoadingScope>
       {error ? (
         <Alert severity="error" sx={{ mb: 2 }}>
           Failed to fetch workers.
@@ -107,7 +111,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
           sx={{ mb: 2 }}
         >
           <Typography variant="h6">Node management</Typography>
-          {authenticated ? (
+          {nodeView === "offline" ? <OfflineNodeActions controller={offline} /> : authenticated ? (
             <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
               <Button variant="outlined" disabled={startingNodes} onClick={() => setLaunchOpen(true)}>
                 Request nodes
@@ -178,13 +182,11 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
           ) : null}
         </Stack>
 
-        <Typography variant="subtitle1" gutterBottom>
-          Live nodes
-        </Typography>
-
-        <LoadingStatus loading={isLoading} label="Loading nodes…" />
-        <LoadingStatus loading={startingNodes || stoppingAllNodes || stoppingIdleNodes || unassigningAllNodes}
-          label={startingNodes ? "Requesting worker launch…" : stoppingAllNodes || stoppingIdleNodes ? "Requesting worker shutdown…" : "Removing worker assignments…"} />
+        <WorkspaceTabs id="workers" label="Worker lists" value={nodeView} onChange={setNodeView} level="detail" tabs={[["live", "Live nodes"], ["offline", "Offline / suspended"]]}
+          loading={nodeView === "offline" ? offline.isLoading || Boolean(offline.busy) : isLoading || startingNodes || stoppingAllNodes || stoppingIdleNodes || unassigningAllNodes}
+          loadingLabel={nodeView === "offline" ? offline.busy || "Loading offline workers…" : startingNodes ? "Requesting worker launch…" : stoppingAllNodes || stoppingIdleNodes ? "Requesting worker shutdown…" : unassigningAllNodes ? "Removing worker assignments…" : "Loading nodes…"} />
+        <WorkspacePanel id="workers" value="offline" active={nodeView === "offline"}><OfflineNodesPanel controller={offline} /></WorkspacePanel>
+        <WorkspacePanel id="workers" value="live" active={nodeView === "live"}>
         {isLoading ? null : workers.length === 0 ? (
           <EmptyStateCard
             title="No nodes registered"
@@ -252,6 +254,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
           </Stack>
         )}
 
+        </WorkspacePanel>
         <Box sx={{ mt: 3 }}>
           <Typography variant="subtitle1" gutterBottom>
             Node Startup Queue
@@ -269,11 +272,11 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
         </Box>
       </Paper>
 
-      {selectedWorker ? (
+      {nodeView === "live" && (selectedWorker ? (
         <WorkerDetailsPanel worker={selectedWorker} runs={runs} isConnected={isConnected} />
       ) : (
         <Alert severity="info">Select a node to view assignment and heartbeat details.</Alert>
-      )}
+      ))}
       <Snackbar
         open={active && Boolean(snackbar)}
         autoHideDuration={4000}
@@ -322,7 +325,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
           }
         }}
       />
-    </>
+    </TabLoadingScope>
   );
 };
 

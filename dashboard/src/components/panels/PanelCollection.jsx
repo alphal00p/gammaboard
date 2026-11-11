@@ -1,6 +1,6 @@
 import { useWorkspaceActive } from "../common/WorkspaceTabs";
 import { PanelHeader } from "../common/PanelChrome";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -300,6 +300,31 @@ const buildErrorBarData = (points) =>
     })
     .filter(Boolean);
 
+const useTimeseriesLegend = (panelId, value, onValueChange) => {
+  const [localSelection, setLocalSelection] = useState({});
+  const selected = value?.legendSelected ?? localSelection;
+  const onLegendChanged = useCallback((event) => {
+    if (!event?.selected) return;
+    setLocalSelection(event.selected);
+    onValueChange?.(panelId, { ...value, legendSelected: event.selected }, false);
+  }, [panelId, value, onValueChange]);
+  return { selected, onLegendChanged };
+};
+
+const pointsInXRange = (points, range) => !range ? points : points.filter((point) =>
+  Number.isFinite(Number(point.x)) && point.x >= range.min && point.x <= range.max);
+
+const fitTimeseriesYDomain = (points, range, { mean = true, uncertainty = true, extraValues = [] } = {}) => {
+  const inRange = pointsInXRange(points, range);
+  return fitDomain([
+    ...(inRange.length ? inRange : points).flatMap((point) => [
+      ...(mean ? [point.y] : []),
+      ...(uncertainty ? [point.y_min, point.y_max] : []),
+    ]),
+    ...extraValues,
+  ]);
+};
+
 const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange = null }) => {
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
@@ -311,14 +336,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const estimatorLabel = estimatorCaption(points);
   const meanLabel = estimatorLabel ? `${title} (${estimatorLabel})` : title;
   const errorLabel = estimatorLabel ? `uncertainty (${estimatorLabel})` : "uncertainty";
+  const { selected, onLegendChanged } = useTimeseriesLegend(panelId, value, onValueChange);
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
   const targetValue = Number(state?.target);
   const hasTargetLine = state?.target != null && Number.isFinite(targetValue);
   const errorBarData = buildErrorBarData(points);
-  const domain = fitDomain([
-    ...points.flatMap((point) => [point.y, point.y_min, point.y_max]),
-    ...(hasTargetLine ? [targetValue] : []),
-  ]);
   const xDomain = fitXDomain(points.map((point) => point.x));
   const zoomRange = readZoomFromPanelValue(value, FULL_ZOOM);
   const usesTimestampXAxis = historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME;
@@ -326,18 +348,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const visibleXRange = useMemo(() => visibleXRangeFromZoom(xDomain, zoomRange), [xDomain, zoomRange]);
   const yZoomRange = readYZoomFromPanelValue(value, FULL_ZOOM);
-  const visibleDomain = useMemo(() => {
-    if (!visibleXRange) return domain;
-    const inRangeValues = points
-      .filter((point) => {
-        const x = Number(point?.x);
-        return Number.isFinite(x) && x >= visibleXRange.min && x <= visibleXRange.max;
-      })
-      .flatMap((point) => [point.y, point.y_min, point.y_max]);
-    if (hasTargetLine) inRangeValues.push(targetValue);
-    const fitted = fitDomain(inRangeValues);
-    return inRangeValues.length > 0 ? fitted : domain;
-  }, [domain, hasTargetLine, points, targetValue, visibleXRange]);
+  const visibleDomain = useMemo(() => fitTimeseriesYDomain(points, visibleXRange, {
+    mean: selected[meanLabel || "Value"] !== false,
+    uncertainty: selected[errorLabel] !== false,
+    extraValues: hasTargetLine && selected.target !== false ? [targetValue] : [],
+  }), [hasTargetLine, points, targetValue, visibleXRange, selected, meanLabel, errorLabel]);
   const bandSegments = useMemo(() => {
     const segments = [];
     for (let index = 1; index < points.length; index += 1) {
@@ -378,6 +393,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   }, [isHistoryPanel, onValueChange, panelId, points.length, tailPinned, value, zoomRange]);
   const onDataZoom = useMemo(
     () => ({
+      legendselectchanged: onLegendChanged,
       datazoom: (event) => {
         const next = readDataZoomRanges(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
@@ -395,12 +411,13 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
         );
       },
     }),
-    [isHistoryPanel, onValueChange, panelId, tailPinned, value, yZoomRange, zoomRange],
+    [isHistoryPanel, onValueChange, panelId, tailPinned, value, yZoomRange, zoomRange, onLegendChanged],
   );
   const option = useMemo(
     () => ({
       animation: false,
       legend: {
+        selected,
         show: showLegend,
         top: 0,
         left: "center",
@@ -518,6 +535,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       xDomain,
       yZoomRange,
       zoomRange,
+      selected,
     ],
   );
   if (points.length === 0) return null;
@@ -575,13 +593,15 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
     label: estimateSeriesLabel(item.label, item.points),
     points: remapAndSortTimeseriesPoints(item?.points, historyXAxisMode, nativeAxis),
   }));
+  const { selected, onLegendChanged } = useTimeseriesLegend(panelId, value, onValueChange);
   const data = buildMultiSeriesData(series);
-  const domain = state?.y_range ?? fitDomain(
-    series.flatMap((item) => asArray(item.points).flatMap((point) => [point.y, point.y_min, point.y_max])),
-  );
   const xDomain = state?.x_range ?? fitXDomain(data.map((row) => row.x));
   const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const yZoomRange = useMemo(() => readYZoomFromPanelValue(value, FULL_ZOOM), [value]);
+  const visibleXRange = visibleXRangeFromZoom(xDomain, zoomRange);
+  const visibleSeries = series.filter((item) => selected[item.label] !== false);
+  // Explicit ranges (e.g. worker utilization at 0–100%) remain fixed.
+  const domain = state?.y_range ?? fitTimeseriesYDomain(visibleSeries.flatMap((item) => item.points), visibleXRange);
   const tailPinned = readTailPinnedFromPanelValue(value, isHistoryPanel);
   const usesTimestampXAxis = historyXAxisMode === HISTORY_X_AXIS_MODE_WALL_TIME;
   const xAxisOriginMs = useMemo(() => (usesTimestampXAxis ? Number(xDomain[0]) : 0), [usesTimestampXAxis, xDomain]);
@@ -595,6 +615,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   }, [isHistoryPanel, onValueChange, panelId, data.length, tailPinned, value, zoomRange]);
   const onDataZoom = useMemo(
     () => ({
+      legendselectchanged: onLegendChanged,
       datazoom: (event) => {
         const next = readDataZoomRanges(event);
         if (!next || typeof onValueChange !== "function" || !panelId) return;
@@ -611,12 +632,13 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         );
       },
     }),
-    [isHistoryPanel, onValueChange, panelId, tailPinned, value, yZoomRange, zoomRange],
+    [isHistoryPanel, onValueChange, panelId, tailPinned, value, yZoomRange, zoomRange, onLegendChanged],
   );
   const option = useMemo(
     () => ({
       animation: false,
       legend: {
+        selected,
         top: 0,
         left: "center",
         textStyle: { fontSize: 12 },
@@ -674,7 +696,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         return [buildErrorBarSeries({ name: item.label, data: errorBarData, color }), lineSeries];
       }),
     }),
-    [domain, historyXAxisMode, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, yZoomRange, zoomRange],
+    [domain, historyXAxisMode, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, yZoomRange, zoomRange, selected],
   );
   if (data.length === 0) return null;
   return (

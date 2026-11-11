@@ -66,6 +66,25 @@ stopped. Use `node start-local`, dashboard launch requests, or the cluster launc
 so launch settings are recorded. Manually started `node run` workers cannot be
 automatically recreated. A forced kill cannot save a new shutdown roster.
 
+**System → Workers → Offline / suspended** lists saved worker identities,
+reservations, last-seen times, and launcher availability. **Resume** queues the
+original launch recipe under the same name. **Release assignment** frees the run
+reservation while keeping the launch recipe. **Retire** also cancels automatic
+resumption. Live identities and pending launches cannot be changed through stale
+offline rows. Local resume respects the server's local-launch setting.
+The Offline tab's toolbar offers **Resume all**, **Release all**, and **Retire all**.
+Bulk operations validate each captured worker identity, skip unavailable workers,
+and report individual failures. Release and retirement are safe to repeat.
+Launch reservations are per worker: an old group request still marked `starting`
+does not block a worker that already connected and subsequently stopped. Workers
+still awaiting their first registration for that launch remain protected.
+
+Assigning a fresh sampler to a standalone run atomically releases expired sampler
+reservations that have no pending launch, including their automatic-resume intent.
+Live workers and queued/starting launches retain their slots; auto-assignment
+counts pending launches when planning capacity. Ordinary pool resume re-enables
+only live members; it does not recreate offline processes.
+
 ## Edit and duplicate
 
 The definition editor offers templates, copy/download TOML, and duplication.
@@ -176,13 +195,37 @@ Their top-right information icon opens the estimator and campaign-combination
 notes; import/export errors and omitted-observable warnings stay visible.
 
 Result histories are cumulative accumulator snapshots, not independent batch
-estimates. Active tasks poll every three seconds; hidden workspaces pause polls,
-and completed tasks stop polling. The initial fetch reads only the latest 500
-snapshots and compacts these to approximately 256 plot points. Incremental polls
-merge newer snapshots and the current estimate by sample count. The browser
-retains these appended points for the selected task; zoom settings persist, but
-history data does not survive a reload. Reset view changes the zoom, not the
-initial snapshot window. Full-history backfilling is not currently implemented.
+estimates. Current panels load before history, and Observables is fetched only
+when selected. Active tasks poll every three seconds; hidden sections pause
+polling. Completed tasks refresh once when revisited. The history query selects
+up to 256 snapshot IDs across the entire retained history, keeping the first and
+last, before loading compact moment data. New samples append by sample count;
+large gaps and deleted cursors after recovery trigger a fresh overview. Browser
+history is bounded and retains its endpoints. A rollback cannot recover snapshots
+that were deleted by recovery, and cached pre-rollback history is replaced.
+
+The additive plot-snapshot migration stores compact moments separately from full
+observables, excluding histogram bundles, discrete bins, sample coordinates and
+evaluation diagnostics. Existing rows are projected on demand; migration does
+not rewrite historical payloads. Each selected snapshot is decoded once and only
+history panels are projected. Full observables and recovery state are unchanged.
+
+Result, Observables, and read-only run panels (summary, configurations and queue
+telemetry) use a page-session LRU cache, bounded to 64 entries/64 MiB with a
+30-minute expiry. Returning to a tab displays its cached data immediately with
+a small refresh indicator; a failed refresh keeps the last data with a warning.
+Authentication failures and missing resources invalidate cached data. Login,
+logout, database reset and completed run/task deletions clear the cache. Zoom
+preferences remain in localStorage; result payloads do not survive page reload.
+Settings retain their loaded values and refresh on return. Logs and historical
+performance graphs retain their existing incremental/window caches. Health,
+worker lists, assignments, task queues, permissions and action results continue
+to use fresh requests and server-side validation.
+Loading indicators occupy a fixed slot to the left of the nearest tab row;
+their descriptive labels are available on hover and to assistive technology.
+Single- and multi-series progression plots share automatic vertical range fitting
+to the visible horizontal interval and enabled legend entries. Explicit fixed
+ranges, such as worker utilization percentages, remain fixed.
 Mean uncertainty bands render in one pass with the mean line, avoiding the
 incremental painting delay on long histories. UI snapshots are distinct from
 durable sampler checkpoints: recovery rolls back progress and deletes snapshots

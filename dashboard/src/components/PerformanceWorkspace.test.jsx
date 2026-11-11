@@ -41,7 +41,7 @@ describe("performance measurements", () => {
     useRunPerformancePanels.mockReturnValue({ ...response, panelSpecs: [], panelStates: [], isLoading: true, isFetching: true });
     const { rerender } = render(<PerformanceWorkspace {...props} />);
     act(() => vi.advanceTimersByTime(200));
-    expect(screen.getByRole("status")).toHaveTextContent("Loading measurements");
+    expect(screen.getByRole("status")).toHaveAccessibleName("Loading measurements…");
     useRunPerformancePanels.mockReturnValue({ ...response, isLoading: false, isFetching: false });
     rerender(<PerformanceWorkspace {...props} />);
     expect(screen.queryByRole("status")).not.toBeInTheDocument();

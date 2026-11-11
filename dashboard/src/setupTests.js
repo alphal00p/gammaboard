@@ -1,4 +1,7 @@
 import "@testing-library/jest-dom";
+import { afterEach } from "vitest";
+import { clearResourceCache } from "./services/resourceCache";
+afterEach(clearResourceCache);
 import { TextDecoder, TextEncoder } from "util";
 
 // jsdom has no layout/media queries; these APIs are used by MUI and CodeMirror.

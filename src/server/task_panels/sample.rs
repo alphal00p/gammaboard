@@ -404,7 +404,14 @@ pub(super) fn decode_history_observable(
     ctx: &TaskPanelHistoryContext<'_>,
     accumulator_config: &AccumulatorConfig,
 ) -> Result<Option<AccumulatorState>, EngineError> {
-    decode_aggregate_persisted_accumulator(accumulator_config, &ctx.snapshot.persisted_output)
+    ctx.decoded
+        .get_or_init(|| {
+            decode_aggregate_persisted_accumulator(
+                accumulator_config,
+                &ctx.snapshot.persisted_output,
+            )
+        })
+        .clone()
         .map(Some)
 }
 
@@ -2022,6 +2029,7 @@ mod tests {
                 .unwrap()
                 .history(&TaskPanelHistoryContext {
                     snapshot: &snapshot,
+                    decoded: Default::default(),
                 })
                 .unwrap()
                 .unwrap();
@@ -2117,6 +2125,7 @@ mod tests {
                 let panel = projector
                     .history(&TaskPanelHistoryContext {
                         snapshot: &snapshot,
+                        decoded: Default::default(),
                     })
                     .unwrap()
                     .unwrap();
@@ -2139,6 +2148,7 @@ mod tests {
             let panel = projector
                 .history(&TaskPanelHistoryContext {
                     snapshot: &snapshot,
+                    decoded: Default::default(),
                 })
                 .unwrap()
                 .unwrap();

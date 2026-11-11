@@ -406,8 +406,21 @@ pub(crate) struct AppState {
 struct TaskPanelRequest {
     #[serde(default = "default_limit")]
     limit: i64,
+    #[serde(default)]
+    section: Option<String>,
+    #[serde(default)]
+    phase: TaskOutputPhase,
     #[serde(flatten)]
     request: PanelRequest,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum TaskOutputPhase {
+    #[default]
+    Full,
+    Current,
+    History,
 }
 
 fn default_limit() -> i64 {
@@ -1038,7 +1051,12 @@ async fn get_run_task_output(
     AxumJson(request): AxumJson<TaskPanelRequest>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let limit = clamp_limit(request.limit);
-    let cursor =
+    if request.section.as_deref().is_some_and(|section| {
+        !["result", "observables", "strata", "diagnostics", "summary"].contains(&section)
+    }) {
+        return Err(ApiError::BadRequest("Unknown task output section".into()));
+    }
+    let mut cursor =
         parse_task_panel_cursor(request.request.cursor.as_deref()).map_err(ApiError::BadRequest)?;
     let run = state
         .store
@@ -1046,37 +1064,109 @@ async fn get_run_task_output(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
     let task = load_run_task(&state.store, run_id, task_id).await?;
-    let effective_accumulator_config =
-        if matches!(task.task, crate::core::RunTaskSpec::Sample { .. }) {
+    let sample = matches!(task.task, crate::core::RunTaskSpec::Sample { .. });
+    let compact = sample
+        && (request.phase == TaskOutputPhase::History
+            || matches!(
+                request.section.as_deref(),
+                Some("result" | "strata" | "summary")
+            ));
+    let latest_persisted_snapshot = if compact {
+        state
+            .store
+            .latest_plot_snapshot(run_id, task.id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+    } else {
+        state
+            .store
+            .get_task_output_snapshots(run_id, task.id, None, 1)
+            .await?
+            .into_iter()
+            .next()
+    };
+    let latest_stage_snapshot = if latest_persisted_snapshot.is_none() {
+        state
+            .store
+            .get_latest_task_stage_snapshot(run_id, task.id)
+            .await?
+    } else {
+        None
+    };
+    let current_accumulator = if matches!(task.state, crate::core::RunTaskState::Active)
+        && request.phase != TaskOutputPhase::History
+    {
+        (if compact {
+            state
+                .store
+                .current_plot_observable(run_id)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?
+        } else {
+            state.store.load_current_accumulator(run_id).await?
+        })
+        .map(|current_accumulator| {
+            AccumulatorState::from_json(&current_accumulator)
+                .map_err(|err| ApiError::Internal(err.to_string()))
+        })
+        .transpose()?
+    } else {
+        None
+    };
+    let has_strata = current_accumulator.as_ref().is_some_and(|a| {
+        matches!(a, AccumulatorState::Stratified(_))
+            || a.pooled_vector().is_some_and(|v| v.partition.is_some())
+    }) || latest_persisted_snapshot.as_ref().is_some_and(|s| {
+        s.persisted_output
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("stratified")
+            || s.persisted_output
+                .pointer("/estimate/partition")
+                .is_some_and(|v| !v.is_null())
+            || s.persisted_output
+                .get("partition")
+                .is_some_and(|v| !v.is_null())
+    });
+    // The current/read-model state already records its effective configuration.
+    // Avoid decoding a large predecessor stage merely to recover that metadata.
+    let effective_accumulator_config = if sample {
+        let mut config = task
+            .task
+            .new_accumulator_config()
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .or_else(|| current_accumulator.as_ref().map(AccumulatorState::config));
+        if config.is_none()
+            && let Some(snapshot) = &latest_persisted_snapshot
+        {
+            let value = &snapshot.persisted_output;
+            config = if let Some(saved) = value.get("config") {
+                Some(
+                    serde_json::from_value(saved.clone())
+                        .map_err(|e| ApiError::Internal(e.to_string()))?,
+                )
+            } else if value.get("estimate").is_some() {
+                Some(crate::core::AccumulatorConfig::Gammaloop)
+            } else if value.get("components").is_some() {
+                Some(
+                    AccumulatorState::from_vector_persistent_json(value)
+                        .map_err(|e| ApiError::Internal(e.to_string()))?
+                        .config(),
+                )
+            } else {
+                None
+            };
+        }
+        if config.is_some() {
+            config
+        } else {
             crate::services::stage::try_resolve_effective_sample_accumulator_config(
                 &state.store,
                 run_id,
                 &task,
             )
             .await?
-        } else {
-            None
-        };
-    let latest_persisted_snapshot = state
-        .store
-        .get_task_output_snapshots(run_id, task.id, None, 1)
-        .await?
-        .into_iter()
-        .next();
-    let latest_stage_snapshot = state
-        .store
-        .get_latest_task_stage_snapshot(run_id, task.id)
-        .await?;
-    let current_accumulator = if matches!(task.state, crate::core::RunTaskState::Active) {
-        state
-            .store
-            .load_current_accumulator(run_id)
-            .await?
-            .map(|current_accumulator| {
-                AccumulatorState::from_json(&current_accumulator)
-                    .map_err(|err| ApiError::Internal(err.to_string()))
-            })
-            .transpose()?
+        }
     } else {
         None
     };
@@ -1089,25 +1179,37 @@ async fn get_run_task_output(
     } else {
         TaskPanelSource::new(&task.task, effective_accumulator_config)
             .map_err(|err| ApiError::Internal(err.to_string()))?
-    };
-    let delta_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_some() {
-        state
-            .store
-            .get_task_output_snapshots(run_id, task.id, cursor.snapshot_id, limit)
-            .await?
+    }
+    .select_section(
+        request.section.as_deref(),
+        request.phase == TaskOutputPhase::History,
+    );
+    let history = if panel_source.needs_history() && request.phase != TaskOutputPhase::Current {
+        Some(
+            state
+                .store
+                .plot_history(run_id, task.id, cursor.snapshot_id, limit)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?,
+        )
     } else {
-        Vec::new()
+        None
     };
-    let full_history_snapshots = if panel_source.needs_history() && cursor.snapshot_id.is_none() {
-        state
-            .store
-            .get_task_output_snapshots(run_id, task.id, None, limit)
-            .await?
-    } else {
-        Vec::new()
-    };
-    let latest_sampler_performance = if matches!(task.task, crate::core::RunTaskSpec::Sample { .. })
-    {
+    let history_reset = history.as_ref().is_some_and(|h| h.reset);
+    if history_reset || request.phase == TaskOutputPhase::Current {
+        cursor = Default::default();
+    }
+    let full_history_snapshots = history
+        .as_ref()
+        .filter(|h| h.reset)
+        .map(|h| h.snapshots.as_slice())
+        .unwrap_or(&[]);
+    let delta_history_snapshots = history
+        .as_ref()
+        .filter(|h| !h.reset)
+        .map(|h| h.snapshots.as_slice())
+        .unwrap_or(&[]);
+    let latest_sampler_performance = if sample && request.phase != TaskOutputPhase::History {
         state
             .store
             .get_sampler_performance_history(run_id, 1, None)
@@ -1159,7 +1261,15 @@ async fn get_run_task_output(
 
     let mut payload = panel_source
         .build_response(
-            format!("run:{run_id}:task:{}", task.id),
+            format!(
+                "run:{run_id}:task:{}{}",
+                task.id,
+                request
+                    .section
+                    .as_ref()
+                    .map(|s| format!(":{s}"))
+                    .unwrap_or_default()
+            ),
             cursor,
             &task,
             &request.request.panel_state,
@@ -1170,8 +1280,8 @@ async fn get_run_task_output(
             current_accumulator.as_ref(),
             latest_stage_snapshot.as_ref(),
             latest_persisted_snapshot.as_ref(),
-            &full_history_snapshots,
-            &delta_history_snapshots,
+            full_history_snapshots,
+            delta_history_snapshots,
         )
         .map_err(|err| ApiError::Internal(err.to_string()))?;
 
@@ -1194,7 +1304,18 @@ async fn get_run_task_output(
         }
     }
 
-    json_response(payload)
+    if let Some(history) = history {
+        payload.cursor = Some(format!("{}:0", history.head));
+    }
+    payload.reset_required = history_reset;
+    let mut response =
+        serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?;
+    response["available_sections"] = serde_json::json!(if has_strata {
+        vec!["result", "observables", "strata", "diagnostics", "summary"]
+    } else {
+        vec!["result", "observables", "diagnostics", "summary"]
+    });
+    json_response(response)
 }
 
 async fn load_run_task(
@@ -1544,6 +1665,74 @@ async fn stop_idle_nodes(
         "dashboard action completed"
     );
     json_response(serde_json::json!({ "rows_updated": result.rows_updated }))
+}
+
+#[derive(Deserialize)]
+struct OfflineNodeAction {
+    node_uuid: String,
+}
+
+async fn get_offline_nodes(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    json_response(
+        state
+            .store
+            .offline_nodes()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?,
+    )
+}
+
+async fn resume_offline_node(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    AxumJson(action): AxumJson<OfflineNodeAction>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = state
+        .store
+        .resume_offline_node(&name, &action.node_uuid, state.allow_local_node_spawn)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::Protocol(message) => ApiError::BadRequest(message),
+            e => ApiError::Internal(e.to_string()),
+        })?;
+    crate::api::node_launch::resolve_local_requests(&state.store, &state.runtime).await?;
+    json_response(serde_json::json!({"request_id":id}))
+}
+
+async fn release_offline_node(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    AxumJson(action): AxumJson<OfflineNodeAction>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    update_offline_node(&state, &name, &action.node_uuid, false).await
+}
+async fn retire_offline_node(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    AxumJson(action): AxumJson<OfflineNodeAction>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    update_offline_node(&state, &name, &action.node_uuid, true).await
+}
+async fn update_offline_node(
+    state: &AppState,
+    name: &str,
+    uuid: &str,
+    retire: bool,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let changed = state
+        .store
+        .release_offline_node(name, uuid, retire)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if !changed {
+        return Err(ApiError::BadRequest(
+            "Node became live, changed identity, or has a pending launch. Refresh the node list."
+                .into(),
+        ));
+    }
+    json_response(serde_json::json!({"rows_updated":1}))
 }
 
 async fn auto_run_nodes(

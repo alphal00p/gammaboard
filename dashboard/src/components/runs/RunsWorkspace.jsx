@@ -13,7 +13,7 @@ import { addRunTasks, autoAssignRun, createRun, deleteRun, deleteRunTask, editRu
 import { asArray } from "../../utils/collections";
 import { getCurrentTask } from "../../utils/tasks";
 import RunScopedWorkspace from "../common/RunScopedWorkspace";
-import WorkspaceTabs, { WorkspacePanel, useWorkspaceActive } from "../common/WorkspaceTabs";
+import WorkspaceTabs, { TabLoadingScope, WorkspacePanel, useWorkspaceActive } from "../common/WorkspaceTabs";
 import { ControlBar } from "../common/PanelChrome";
 import StableTaskOutput from "../common/StableTaskOutput";
 
@@ -80,6 +80,9 @@ function WorkerPoolControls({ run, disabled, notify }) {
 
 function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelectRun, navigation, onNavigate, runActions }) {
   const [localView, setLocalView] = useState("tasks");
+  const [localTaskTab, setLocalTaskTab] = useState("result");
+  const taskTab = navigation?.taskTab ?? localTaskTab;
+  const setTaskTab = (taskTab) => onNavigate ? onNavigate({ taskTab }) : setLocalTaskTab(taskTab);
   const view = navigation?.runTab ?? localView;
   const setView = (runTab) => onNavigate ? onNavigate({ runTab }) : setLocalView(runTab);
   const { authenticated } = useAuth();
@@ -96,6 +99,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
   const requestedTask = navigation?.taskId ?? selectedId;
   const selectedTask = taskList.find((task) => String(task.id) === String(requestedTask)) ?? getCurrentTask(taskList);
   const taskOutput = useTaskOutput({ runId: run.run_id, taskId: selectedTask?.id ?? null,
+    section: view === "summary" ? "summary" : taskTab,
     refreshKey: selectedTask?.state, paused: !["tasks", "summary"].includes(view) });
   const selectTask = (taskId) => { setSelectedId(taskId); onNavigate?.({ taskId: String(taskId) }); };
   useEffect(() => {
@@ -139,7 +143,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
     } catch (error) { setError(error.message); }
     finally { setBusy(false); }
   };
-  return <>
+  return <TabLoadingScope>
     <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 2 }}>
       {run.parent_run_id == null && authenticated && <WorkerPoolControls run={run} disabled={disabled} notify={notify} />}
       {run.parent_run_id != null && <Alert severity="info" sx={{ flex: "1 1 400px", minWidth: 0, flexWrap: { xs: "wrap", sm: "nowrap" },
@@ -167,7 +171,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
     {!tasksLoading && (selectedTask || isIntegration) && <StableTaskOutput loading={taskOutput.isLoading} source={selectedTask?.id}>
     <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
       key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} output={taskOutput} onSelectRun={onSelectRun}
-      view={navigation?.taskTab} onViewChange={onNavigate ? (taskTab) => onNavigate({ taskTab }) : undefined} />
+      view={taskTab} onViewChange={setTaskTab} />
     </StableTaskOutput>}
     </WorkspacePanel>
     <WorkspacePanel id="run" value="summary" active={view === "summary"}>
@@ -198,7 +202,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
       onTemplateDeleted={(name) => notify(`Deleted task template "${name}".`)}
       onSubmit={editable ? (toml) => saveTask(toml, editor.taskId ? "save" : "append") : null}
       onDuplicate={editor.taskId && editable ? (toml) => saveTask(toml, "duplicate") : null} />}
-  </>;
+  </TabLoadingScope>;
 }
 
 export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showChildRuns, setShowChildRuns,

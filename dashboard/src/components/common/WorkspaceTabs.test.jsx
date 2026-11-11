@@ -1,9 +1,32 @@
-import { act, render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { WorkspacePanel } from "./WorkspaceTabs";
+import WorkspaceTabs, { TabLoadingScope, WorkspacePanel } from "./WorkspaceTabs";
+import LoadingStatus from "./LoadingStatus";
 import { usePanelSource } from "../../hooks/usePanelSource";
 
 afterEach(() => vi.useRealTimers());
+
+test("descendant loading stays in the fixed tab slot and stops when its workspace is hidden", () => {
+  vi.useFakeTimers();
+  const tree = (loading, active = true) => <TabLoadingScope>
+    <WorkspaceTabs id="test" label="Test views" value="one" onChange={() => {}} tabs={[["one", "One"]]} />
+    <WorkspacePanel id="test" value="one" active={active}>
+      <LoadingStatus loading={loading} label="Refreshing results…" />
+      <div data-testid="content">Retained results</div>
+    </WorkspacePanel>
+  </TabLoadingScope>;
+  const { rerender } = render(tree(false));
+  const tabs = screen.getByRole("tablist");
+  const content = screen.getByTestId("content");
+  rerender(tree(true));
+  act(() => vi.advanceTimersByTime(200));
+  expect(screen.getByRole("status")).toHaveAccessibleName("Refreshing results…");
+  expect(screen.getByRole("status").closest('[data-loading-slot="test"]')).not.toBeNull();
+  expect(screen.getByRole("tablist")).toBe(tabs);
+  expect(screen.getByTestId("content")).toBe(content);
+  rerender(tree(true, false));
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+});
 
 test("inactive workspaces abort polling and retain cursors, history and preferences", async () => {
   vi.useFakeTimers();

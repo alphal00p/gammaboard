@@ -395,7 +395,7 @@ impl ControlPlaneStore for PgStore {
     }
 
     async fn resume_worker_pool(&self, run_id: i32) -> Result<u64, StoreError> {
-        let result = sqlx::query("UPDATE nodes SET desired_run_id=pool_run_id, desired_role=pool_role, updated_at=now() WHERE pool_run_id=worker_pool_root($1) AND desired_run_id IS NULL")
+        let result = sqlx::query("UPDATE nodes SET desired_run_id=pool_run_id, desired_role=pool_role, updated_at=now() WHERE pool_run_id=worker_pool_root($1) AND desired_run_id IS NULL AND lease_expires_at>now()")
             .bind(run_id).execute(&self.pool).await.map_err(map_sqlx)?;
         Ok(result.rows_affected())
     }
@@ -415,6 +415,20 @@ impl ControlPlaneStore for PgStore {
             WHERE desired_run_id=$1 OR pool_run_id=$1
         "#).bind(run_id).execute(&self.pool).await.map_err(map_sqlx)?;
         Ok(result.rows_affected())
+    }
+
+    async fn starting_pool_assignments(
+        &self,
+        run_id: i32,
+    ) -> Result<Vec<crate::core::AssignmentTarget>, StoreError> {
+        let rows: Vec<(i32,String)> = sqlx::query_as("SELECT pool_run_id,pool_role FROM nodes n JOIN node_launch_requests l ON l.id=n.launch_request_id WHERE n.pool_run_id=worker_pool_root($1) AND n.lease_expires_at<=now() AND worker_launch_pending(n.name,n.launch_request_id,n.last_seen)")
+            .bind(run_id).fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|(run_id, role)| {
+                decode_node_assignment(Some(role), Some(run_id), "invalid pool assignment")?
+                    .ok_or_else(|| StoreError::store("missing pool assignment"))
+            })
+            .collect()
     }
 
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError> {

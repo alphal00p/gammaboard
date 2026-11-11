@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import WorkersWorkspace from "./WorkersWorkspace";
-import { stopIdleNodes, stopAllNodes, unassignAllNodes } from "../services/api";
+import { stopIdleNodes, stopAllNodes, unassignAllNodes, fetchOfflineNodes, updateOfflineNode } from "../services/api";
 
 const auth = vi.hoisted(() => ({ authenticated: true }));
 vi.mock("../auth/AuthProvider", () => ({ useAuth: () => auth }));
@@ -9,7 +9,7 @@ vi.mock("../hooks/useNodeLaunchRequests", () => ({ useNodeLaunchRequests: () => 
 vi.mock("./runs/TomlActionDialog", () => ({ default: () => null }));
 vi.mock("./NodeLaunchQueue", () => ({ default: () => null }));
 vi.mock("./WorkerDetailsPanel", () => ({ default: () => null }));
-vi.mock("../services/api", () => ({ stopIdleNodes: vi.fn(), stopAllNodes: vi.fn(), unassignAllNodes: vi.fn(), autoRunNodes: vi.fn() }));
+vi.mock("../services/api", () => ({ stopIdleNodes: vi.fn(), stopAllNodes: vi.fn(), unassignAllNodes: vi.fn(), autoRunNodes: vi.fn(), fetchOfflineNodes: vi.fn(), updateOfflineNode: vi.fn() }));
 
 beforeEach(() => { vi.clearAllMocks(); auth.authenticated = true; });
 const idle = { node_name: "idle", status: "idle" };
@@ -45,4 +45,27 @@ test("pending and pooled nodes are excluded; errors leave the action usable", as
   auth.authenticated = false;
   rerender(<WorkersWorkspace {...props} />);
   expect(screen.queryByRole("button", { name: "Stop Idle nodes" })).not.toBeInTheDocument();
+});
+
+test("offline tab replaces live controls with bulk actions and reports partial failures", async () => {
+  const offline = [
+    { node_name: "old-1", node_uuid: "one", status: "retired", can_resume: true },
+    { node_name: "old-2", node_uuid: "two", status: "suspended", can_resume: true },
+    { node_name: "queued", node_uuid: "three", status: "starting", can_resume: false, launch_pending: true },
+  ];
+  fetchOfflineNodes.mockResolvedValue(offline);
+  updateOfflineNode.mockResolvedValueOnce({ rows_updated: 1 }).mockRejectedValueOnce(new Error("Node became live"));
+  render(<WorkersWorkspace {...props} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Offline / suspended" }));
+  await screen.findByText("old-1");
+  expect(screen.queryByRole("button", { name: "Request nodes" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Stop all nodes" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Resume all" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Release all" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Retire all" }));
+  expect(await screen.findByText(/Retired 1 worker.*Skipped 1 unavailable worker.*old-2: Node became live/)).toBeVisible();
+  expect(updateOfflineNode.mock.calls).toEqual([[offline[0], "retire"], [offline[1], "retire"]]);
+  fireEvent.click(screen.getByRole("tab", { name: "Live nodes" }));
+  expect(screen.getByRole("button", { name: "Request nodes" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Resume all" })).not.toBeInTheDocument();
 });

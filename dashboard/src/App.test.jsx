@@ -9,6 +9,8 @@ vi.mock("./components/common/TomlEditor", () => ({ default: ({ label, value, onC
 vi.mock("./services/api", () => ({
   fetchRuns: vi.fn(),
   fetchNodes: vi.fn(),
+  fetchOfflineNodes: vi.fn().mockResolvedValue([]),
+  updateOfflineNode: vi.fn(),
   fetchSession: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
@@ -161,5 +163,6 @@ test("a deep link resolves a paginated run and keeps task output selection acros
   fireEvent.click(screen.getByRole("tab", { name: "Summary", exact: true }));
   expect(await screen.findByText("Selected task metadata")).toBeVisible();
   expect(screen.getAllByText("Task summary", { exact: true })).toHaveLength(1);
-  expect(api.fetchRunTaskPanels).toHaveBeenCalledTimes(polls);
+  expect(api.fetchRunTaskPanels).toHaveBeenCalledTimes(polls + 1);
+  expect(api.fetchRunTaskPanels.mock.lastCall[2]).toMatchObject({ section: "summary", phase: "current" });
 });

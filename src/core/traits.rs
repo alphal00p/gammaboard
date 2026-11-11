@@ -103,6 +103,12 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn resume_worker_pool(&self, _run_id: i32) -> Result<u64, StoreError> {
         Ok(0)
     }
+    async fn starting_pool_assignments(
+        &self,
+        _run_id: i32,
+    ) -> Result<Vec<AssignmentTarget>, StoreError> {
+        Ok(Vec::new())
+    }
     async fn clear_desired_assignments_for_run(&self, run_id: i32) -> Result<u64, StoreError>;
     /// Return a finished child's assigned workers to its still-active parent pool.
     async fn finish_run_assignments(&self, run_id: i32) -> Result<u64, StoreError> {

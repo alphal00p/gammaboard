@@ -749,3 +749,45 @@ test('unchanged PDF data is not redrawn when its parent refreshes', () => {
   expect(renderChart.mock.calls.length).toBe(draws);
   expect(screen.queryByRole('checkbox', {name:'Show stratum boundaries'})).not.toBeInTheDocument();
 });
+
+test("RSD fits the visible x range and selected components, retaining legend choices on refresh", () => {
+  let refresh;
+  const points = (a, b, c) => [{ x: 0, y: a }, { x: 50, y: b }, { x: 100, y: c }];
+  function Harness() {
+    const [values, setValues] = useState({});
+    const [end, setEnd] = useState(12);
+    refresh = () => setEnd(14);
+    return <PanelCollection panelSpecs={[{ panel_id: "rsd_history", label: "RSD", kind: "multi_timeseries", history: "append" }]}
+      panelStates={[{ panel_id: "rsd_history", kind: "multi_timeseries", x_axis: "completed_samples", series: [
+        { id: "real", label: "Real", points: points(5000, 10, end) },
+        { id: "imag", label: "Imag", points: points(10000, 100, 200) },
+      ] }]} panelValues={values} onPanelValueChange={(id, value) => setValues((prev) => ({ ...prev, [id]: value }))} />;
+  }
+  render(<Harness />);
+  const chart = () => renderChart.mock.lastCall[0];
+  expect(chart().option.yAxis.max).toBeGreaterThan(10000);
+  act(() => chart().onEvents.datazoom({ dataZoomId: "x-slider", start: 50, end: 100 }));
+  expect(chart().option.yAxis.max).toBeLessThan(220);
+  act(() => chart().onEvents.legendselectchanged({ selected: { Real: true, Imag: false } }));
+  expect(chart().option.yAxis.min).toBeCloseTo(9.84);
+  expect(chart().option.yAxis.max).toBeCloseTo(12.16);
+  act(() => refresh());
+  expect(chart().option.legend.selected.Imag).toBe(false);
+  expect(chart().option.yAxis.max).toBeCloseTo(14.32);
+  act(() => chart().onEvents.legendselectchanged({ selected: { Real: true, Imag: true } }));
+  expect(chart().option.yAxis.max).toBeGreaterThan(200);
+  act(() => chart().onEvents.legendselectchanged({ selected: { Real: false, Imag: false } }));
+  expect(chart().option.yAxis.min).toBe("auto");
+  expect(chart().option.yAxis.max).toBe("auto");
+});
+
+test("mean axes exclude hidden target and uncertainty legend entries", () => {
+  renderTimeseries({ panelId: "mean_history", xAxis: "completed_samples", target: 1000,
+    points: [{ x: 0, y: 10, y_min: -100, y_max: 100 }, { x: 100, y: 12, y_min: -80, y_max: 90 }] });
+  const chart = () => renderChart.mock.lastCall[0];
+  act(() => chart().onEvents.legendselectchanged({ selected: { target: false } }));
+  expect(chart().option.yAxis.max).toBe(116);
+  act(() => chart().onEvents.legendselectchanged({ selected: { target: false, uncertainty: false } }));
+  expect(chart().option.yAxis.min).toBeCloseTo(9.84);
+  expect(chart().option.yAxis.max).toBeCloseTo(12.16);
+});

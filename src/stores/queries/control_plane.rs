@@ -69,16 +69,18 @@ async fn clear_expired_assignments<'e>(
         r#"
         UPDATE nodes
         SET
-            pool_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN pool_run_id ELSE NULL END,
-            desired_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_run_id ELSE NULL END,
-            pool_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN pool_role ELSE NULL END,
-            desired_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=launch_request_id AND r.state IN ('pending','starting'))) THEN desired_role ELSE NULL END,
+            pool_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen)) THEN pool_run_id ELSE NULL END,
+            desired_run_id = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen)) THEN desired_run_id ELSE NULL END,
+            pool_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen)) THEN pool_role ELSE NULL END,
+            desired_role = CASE WHEN (resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen)) THEN desired_role ELSE NULL END,
             active_run_id = NULL,
             active_role = NULL,
             updated_at = now()
         WHERE lease_expires_at <= now()
           AND (
-            desired_run_id IS NOT NULL
+            pool_run_id IS NOT NULL
+            OR pool_role IS NOT NULL
+            OR desired_run_id IS NOT NULL
             OR desired_role IS NOT NULL
             OR active_run_id IS NOT NULL
             OR active_role IS NOT NULL
@@ -177,6 +179,21 @@ pub(crate) async fn assign_worker_pool(
     if role == WorkerRole::SamplerAggregator
         && kind.as_deref().unwrap_or("integration") == "integration"
     {
+        // Explicit replacement supersedes expired suspended reservations. Keep
+        // launches already queued, and serialize with resume using the same locks.
+        let live: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM nodes WHERE name=$1 AND lease_expires_at>now())",
+        )
+        .bind(node_name)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !live {
+            return Ok(PoolAssignmentOutcome::NodeNotLive);
+        }
+        sqlx::query(r#"UPDATE nodes SET pool_run_id=NULL,pool_role=NULL,desired_run_id=NULL,desired_role=NULL,resume_requested=false,updated_at=now()
+            WHERE pool_run_id=$1 AND pool_role='sampler_aggregator' AND name<>$2 AND lease_expires_at<=now()
+            AND NOT worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen)"#)
+            .bind(root).bind(node_name).execute(&mut *tx).await?;
         let occupied: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM nodes WHERE pool_run_id=$1 AND pool_role='sampler_aggregator' AND name<>$2)"
         ).bind(root).bind(node_name).fetch_one(&mut *tx).await?;
@@ -201,6 +218,10 @@ pub(crate) async fn assign_worker_pool(
     .bind(role.as_str())
     .execute(&mut *tx)
     .await?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(PoolAssignmentOutcome::NodeNotLive);
+    }
     if role == WorkerRole::SamplerAggregator {
         super::super::connection_budget::check_worker_connection_budget(&mut tx, 0).await?;
     }
@@ -260,22 +281,22 @@ pub(crate) async fn announce_node(
             last_seen = EXCLUDED.last_seen,
             updated_at = EXCLUDED.updated_at,
             pool_run_id = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.pool_run_id
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen) THEN nodes.pool_run_id
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.pool_run_id
             END,
             pool_role = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.pool_role
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen) THEN nodes.pool_role
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.pool_role
             END,
             desired_run_id = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_run_id
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen) THEN nodes.desired_run_id
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_run_id
             END,
             desired_role = CASE
-                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR EXISTS (SELECT 1 FROM node_launch_requests r WHERE r.id=nodes.launch_request_id AND r.state IN ('pending','starting')) THEN nodes.desired_role
+                WHEN nodes.uuid = EXCLUDED.uuid OR nodes.resume_requested OR EXISTS (SELECT 1 FROM runs owned WHERE owned.id=nodes.pool_run_id AND (owned.parent_run_id IS NOT NULL OR owned.integration_params->>'run_kind' IN ('integration_campaign','parameter_scan','hyperparameter_tuning'))) OR worker_launch_pending(nodes.name,nodes.launch_request_id,nodes.last_seen) THEN nodes.desired_role
                 WHEN nodes.lease_expires_at <= now() THEN NULL
                 ELSE nodes.desired_role
             END,

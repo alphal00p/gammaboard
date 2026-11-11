@@ -35,11 +35,11 @@ function RunSummaryPanels({ panelSpecs, panelStates, children }) {
 }
 
 const RunInfo = ({ runId, refreshKey, section = "summary", children }) => {
-  const { panelSpecs, panelStates, error, isLoading } = useRunPanels({ runId, refreshKey });
+  const { panelSpecs, panelStates, error, isLoading, isRevalidating } = useRunPanels({ runId, refreshKey });
 
   if (runId == null) return null;
 
-  if (error) {
+  if (error && !panelStates.length) {
     return (
       <><Box sx={{ mb: 3 }}>
         <Alert severity="error">{error}</Alert>
@@ -51,7 +51,8 @@ const RunInfo = ({ runId, refreshKey, section = "summary", children }) => {
     return <><LoadingStatus loading={isLoading} label="Loading run information…" />{children}</>;
   }
 
-  if (section === "summary") return <RunSummaryPanels panelSpecs={panelSpecs} panelStates={panelStates}>{children}</RunSummaryPanels>;
+  const refresh = <><LoadingStatus loading={isRevalidating} label="Refreshing run information…" />{error && <Alert severity="warning">Could not refresh run information. {error}</Alert>}</>;
+  if (section === "summary") return <>{refresh}<RunSummaryPanels panelSpecs={panelSpecs} panelStates={panelStates}>{children}</RunSummaryPanels></>;
 
   const orderedSpecs = section === "settings" ? [...panelSpecs].sort((left, right) => {
     const rank = (panel) => panel.panel_id.endsWith("_summary") ? 0 : panel.panel_id.endsWith("_config") ? 1 : 2;
@@ -60,7 +61,7 @@ const RunInfo = ({ runId, refreshKey, section = "summary", children }) => {
   const visiblePanelIds = new Set(orderedSpecs.filter((panel) => runPanelSection(panel) === section).map((panel) => panel.panel_id));
   if (!visiblePanelIds.size) return <Alert severity="info">{section === "settings" ? "No effective evaluator or sampler configuration is available yet." : "Live queue measurements are not available yet."}</Alert>;
 
-  return <PanelCollection panelSpecs={orderedSpecs} panelStates={panelStates} visiblePanelIds={visiblePanelIds} />;
+  return <>{refresh}<PanelCollection panelSpecs={orderedSpecs} panelStates={panelStates} visiblePanelIds={visiblePanelIds} /></>;
 };
 
 export default RunInfo;

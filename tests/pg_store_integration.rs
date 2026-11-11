@@ -13,6 +13,230 @@ static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 #[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, _, _) = reliability_fixture(&store, 0).await;
+    let original = store
+        .reserve_worker_launch_with_args(
+            "local",
+            vec![serde_json::json!({"name_prefix":"saved","count":2,"config":{"marker":"kept"}})],
+            serde_json::json!({"custom":"retained"}),
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE node_launch_requests SET state='starting' WHERE id=$1")
+        .bind(original)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET uuid='saved-id',last_seen=now(),resume_requested=true,pool_run_id=$1,pool_role='sampler_aggregator' WHERE name='saved-1'").bind(run).execute(store.pool()).await.unwrap();
+    let node = store
+        .offline_nodes()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|n| n["node_name"] == "saved-1")
+        .unwrap();
+    assert_eq!(node["status"], "suspended");
+    assert_eq!(node["can_resume"], true);
+    assert_eq!(node["launch_pending"], false);
+    let waiting = store
+        .offline_nodes()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|n| n["node_name"] == "saved-2")
+        .unwrap();
+    assert_eq!(waiting["launch_pending"], true);
+    assert!(
+        !store
+            .release_offline_node("saved-2", "", true)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .starting_pool_assignments(run)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .release_offline_node("saved-1", "saved-id", false)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .resume_offline_node("saved-1", "saved-id", false)
+            .await
+            .is_err()
+    );
+    let resumed = store
+        .resume_offline_node("saved-1", "saved-id", true)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .resume_offline_node("saved-1", "saved-id", true)
+            .await
+            .is_err()
+    );
+    assert!(
+        !store
+            .release_offline_node("saved-1", "saved-id", true)
+            .await
+            .unwrap()
+    );
+    let args: serde_json::Value =
+        sqlx::query_scalar("SELECT args FROM node_launch_requests WHERE id=$1")
+            .bind(resumed)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(args["custom"], "retained");
+    assert_eq!(
+        args["groups"][0]["node_names"],
+        serde_json::json!(["saved-1"])
+    );
+    assert_eq!(args["groups"][0]["config"]["marker"], "kept");
+    sqlx::query("UPDATE node_launch_requests SET state='fulfilled' WHERE id=$1")
+        .bind(resumed)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .release_offline_node("saved-1", "saved-id", false)
+            .await
+            .unwrap()
+    );
+    let node = store
+        .offline_nodes()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|n| n["node_name"] == "saved-1")
+        .unwrap();
+    assert!(node["pool_run_id"].is_null());
+    assert_eq!(node["can_resume"], true);
+    assert!(
+        store
+            .release_offline_node("saved-1", "saved-id", true)
+            .await
+            .unwrap()
+    );
+    let node = store
+        .offline_nodes()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|n| n["node_name"] == "saved-1")
+        .unwrap();
+    assert_eq!(node["status"], "retired");
+    assert_eq!(node["resume_requested"], false);
+    store
+        .announce_node("saved-1", "new-id", &Default::default())
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .release_offline_node("saved-1", "saved-id", true)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .resume_offline_node("saved-1", "new-id", true)
+            .await
+            .is_err()
+    );
+    sqlx::query("DELETE FROM nodes")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM runs WHERE id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn offline_sampler_replacement_cancels_stale_intent_but_preserves_queued_launches() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, _, _) = reliability_fixture(&store, 0).await;
+    store
+        .announce_node("old-sampler", "old", &Default::default())
+        .await
+        .unwrap();
+    store
+        .announce_node("fresh-sampler", "fresh", &Default::default())
+        .await
+        .unwrap();
+    store
+        .assign_worker_pool("old-sampler", WorkerRole::SamplerAggregator, run)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 hour',resume_requested=true,desired_run_id=NULL,desired_role=NULL WHERE name='old-sampler'").execute(store.pool()).await.unwrap();
+    store
+        .assign_worker_pool("fresh-sampler", WorkerRole::SamplerAggregator, run)
+        .await
+        .unwrap();
+    let (pool, resume): (Option<i32>, bool) =
+        sqlx::query_as("SELECT pool_run_id,resume_requested FROM nodes WHERE name='old-sampler'")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(pool, None);
+    assert!(!resume);
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 hour',resume_requested=true WHERE name='fresh-sampler'").execute(store.pool()).await.unwrap();
+    assert!(
+        store
+            .assign_worker_pool("missing", WorkerRole::SamplerAggregator, run)
+            .await
+            .is_err()
+    );
+    let reserved: Option<i32> =
+        sqlx::query_scalar("SELECT pool_run_id FROM nodes WHERE name='fresh-sampler'")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(reserved, Some(run));
+    let launch:i64=sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count) VALUES ('pending','local',1) RETURNING id").fetch_one(store.pool()).await.unwrap();
+    sqlx::query(
+        "UPDATE nodes SET launch_request_id=$1,resume_requested=false WHERE name='fresh-sampler'",
+    )
+    .bind(launch)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    store
+        .announce_node("replacement", "replacement", &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(store.starting_pool_assignments(run).await.unwrap().len(), 1);
+    assert!(
+        store
+            .assign_worker_pool("replacement", WorkerRole::SamplerAggregator, run)
+            .await
+            .is_err()
+    );
+    sqlx::query("DELETE FROM nodes")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM runs WHERE id=$1")
+        .bind(run)
+        .execute(store.pool())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
 async fn node_management_stops_only_live_unassigned_nodes_and_counts_live_unassignments() {
     let (_guard, store) = locked_test_store().await;
     let (run, _, _, _) = reliability_fixture(&store, 0).await;

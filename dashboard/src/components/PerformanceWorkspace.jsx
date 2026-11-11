@@ -7,7 +7,7 @@ import EmptyStateCard from "./common/EmptyStateCard";
 import PanelCollection from "./panels/PanelCollection";
 import QueueTuningPanel from "./runs/QueueTuningPanel";
 import RunInfo from "./RunInfo";
-import WorkspaceTabs, { WorkspacePanel } from "./common/WorkspaceTabs";
+import WorkspaceTabs, { TabLoadingScope, WorkspacePanel } from "./common/WorkspaceTabs";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
 import { updateRunTaskQueueTuning } from "../services/api";
 import { asArray } from "../utils/collections";
@@ -105,7 +105,7 @@ const PerformanceWorkspaceContent = (props) => {
       : state);
 
   return (
-    <>
+    <TabLoadingScope>
       <Stack spacing={2}>
         <WorkspaceTabs id="performance" label="Performance view" value={view} onChange={setView} level="detail"
           tabs={[["overview", "Overview"], ["diagnostics", "Diagnostics"], ["graphs", "Graphs"], ["tuning", "Queue tuning"]]}
@@ -124,10 +124,8 @@ const PerformanceWorkspaceContent = (props) => {
         <Typography variant="body2" color="text.secondary">
           {selection?.seconds ? `Latest ${selection.seconds === 30 ? "30 seconds" : "5 minutes"} of recorded history.` : selection ? "Custom recorded interval." : "All recorded history."}
           {" "}Activity and rates share this window across tabs. Worker status, memory and report age are current.
-          <Typography component="span" variant="caption" aria-live="polite" sx={{ display: "block", minHeight: 20 }}>
-            {refreshing && view !== "graphs" ? "Updating… showing the previous interval." : "\u00a0"}
-          </Typography>
         </Typography>
+        <LoadingStatus loading={refreshing && view !== "graphs"} label="Updating… showing the previous interval." />
         </>}
         <div id="performance-content" role="tabpanel" aria-labelledby={`performance-tab-${view}`}>
         {view !== "graphs" && view !== "tuning" && <>
@@ -168,7 +166,7 @@ const PerformanceWorkspaceContent = (props) => {
         </WorkspacePanel>
         </div>
       </Stack>
-    </>
+    </TabLoadingScope>
   );
 };
 

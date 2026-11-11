@@ -54,7 +54,7 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
   const reset = useCallback(() => {
     setData(initialDataRef.current); setError(null); setLastUpdate(null); setIsConnected(false); setIsFetching(false);
   }, []);
-  usePolling({ enabled, intervalMs: pollMs, poll, reset });
+  const refresh = usePolling({ enabled, intervalMs: pollMs, poll, reset });
 
   return useMemo(
     () => ({
@@ -64,7 +64,8 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
       error: source === fetchResource ? error : null,
       isLoading: enabled && (source !== fetchResource || (!lastUpdate && !error)),
       isFetching: enabled && (source !== fetchResource || isFetching),
+      refresh,
     }),
-    [data, error, isConnected, lastUpdate, source, fetchResource, enabled, isFetching],
+    [data, error, isConnected, lastUpdate, source, fetchResource, enabled, isFetching, refresh],
   );
 };

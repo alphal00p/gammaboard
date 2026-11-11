@@ -44,21 +44,26 @@ const SettingsWorkspace = ({ section = "settings" }) => {
   const [shutdownControlOpen, setShutdownControlOpen] = useState(false);
   const [shuttingDownControl, setShuttingDownControl] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
+    setRefreshing(true);
     fetchSettingsOverview(controller.signal)
       .then((payload) => {
+        if (controller.signal.aborted) return;
         setSettings(payload);
         setError(null);
       })
       .catch((err) => {
+        if ([401,403,404].includes(err?.status)) setSettings(null);
         if (err?.name !== "AbortError") setError(err?.message || "Failed to load settings.");
-      });
+      }).finally(() => { if (!controller.signal.aborted) setRefreshing(false); });
     return () => controller.abort();
-  }, []);
+  }, [active]);
 
-  if (error) {
+  if (error && !settings) {
     return <Alert severity="error">{error}</Alert>;
   }
 
@@ -77,6 +82,8 @@ const SettingsWorkspace = ({ section = "settings" }) => {
 
   return (
     <Stack spacing={2}>
+      <LoadingStatus loading={refreshing} label="Refreshing settings…" />
+      {error && <Alert severity="warning">Could not refresh settings. {error}</Alert>}
       <LoadingStatus loading={restartingDb || shuttingDownControl} label={restartingDb ? "Restarting database…" : "Requesting shutdown…"} />
       {section === "settings" && <>
       <SettingsCard title="Repository">

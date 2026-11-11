@@ -2,6 +2,79 @@ use super::PgStore;
 use serde_json::{Value, json};
 
 impl PgStore {
+    pub async fn offline_nodes(&self) -> Result<Vec<Value>, sqlx::Error> {
+        sqlx::query_scalar(r#"
+            SELECT jsonb_build_object(
+                'node_name',n.name,'node_uuid',n.uuid,'last_seen',n.last_seen,
+                'pool_run_id',n.pool_run_id,'pool_run_name',r.name,'pool_role',n.pool_role,
+                'resume_requested',n.resume_requested,'backend',l.backend,
+                'launch_state',l.state,'launch_pending',p.pending,
+                'can_resume',n.launch_group IS NOT NULL AND l.id IS NOT NULL AND NOT p.pending,
+                'status',CASE WHEN p.pending THEN 'starting'
+                    WHEN n.resume_requested THEN 'suspended'
+                    WHEN n.shutdown_requested_at IS NOT NULL THEN 'retired' ELSE 'offline' END)
+            FROM nodes n LEFT JOIN runs r ON r.id=n.pool_run_id
+            LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id
+            CROSS JOIN LATERAL (SELECT worker_launch_pending(n.name,n.launch_request_id,n.last_seen) AS pending) p
+            WHERE n.lease_expires_at<=now() ORDER BY n.name
+        "#).fetch_all(self.pool()).await
+    }
+
+    /// Queue one saved worker recipe without changing its name or assignments.
+    pub async fn resume_offline_node(
+        &self,
+        name: &str,
+        uuid: &str,
+        allow_local: bool,
+    ) -> Result<i64, sqlx::Error> {
+        let mut tx = self.pool().begin().await?;
+        super::connection_budget::lock(&mut tx).await?;
+        let row: Option<(Option<Value>, Option<String>, Option<Value>, bool)> = sqlx::query_as(
+            "SELECT n.launch_group,l.backend,l.args,worker_launch_pending(n.name,n.launch_request_id,n.last_seen) FROM nodes n LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id WHERE n.name=$1 AND n.uuid=$2 AND n.lease_expires_at<=now() FOR UPDATE OF n"
+        ).bind(name).bind(uuid).fetch_optional(&mut *tx).await?;
+        let Some((Some(group), Some(backend), Some(mut args), pending)) = row else {
+            return Err(sqlx::Error::Protocol("Node is live, changed identity, or has no saved launch recipe. Refresh the node list.".into()));
+        };
+        if pending {
+            return Err(sqlx::Error::Protocol(
+                "This worker already has a pending launch.".into(),
+            ));
+        }
+        if backend == "local" && !allow_local {
+            return Err(sqlx::Error::Protocol(
+                "Local worker launch is disabled on this server.".into(),
+            ));
+        }
+        super::connection_budget::check_worker_connection_budget(&mut tx, 1).await?;
+        args["groups"] = json!([group]);
+        let id: i64 = sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count,args) VALUES ('pending',$1,1,$2) RETURNING id")
+            .bind(backend).bind(args).fetch_one(&mut *tx).await?;
+        sqlx::query("UPDATE nodes SET resume_requested=false,launch_request_id=$2,shutdown_requested_at=NULL,updated_at=now() WHERE name=$1")
+            .bind(name).bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn release_offline_node(
+        &self,
+        name: &str,
+        uuid: &str,
+        retire: bool,
+    ) -> Result<bool, sqlx::Error> {
+        let mut tx = self.pool().begin().await?;
+        super::connection_budget::lock(&mut tx).await?;
+        let changed = sqlx::query(r#"
+            UPDATE nodes SET pool_run_id=NULL,pool_role=NULL,desired_run_id=NULL,desired_role=NULL,
+                active_run_id=NULL,active_role=NULL,
+                resume_requested=CASE WHEN $3 THEN false ELSE resume_requested END,
+                shutdown_requested_at=CASE WHEN $3 THEN now() ELSE shutdown_requested_at END,updated_at=now()
+            WHERE name=$1 AND uuid=$2 AND lease_expires_at<=now()
+              AND NOT worker_launch_pending(name,launch_request_id,last_seen)
+        "#).bind(name).bind(uuid).bind(retire).execute(&mut *tx).await?.rows_affected();
+        tx.commit().await?;
+        Ok(changed > 0)
+    }
+
     /// Reserve names and persist their complete launch recipe before either backend runs.
     pub async fn reserve_worker_launch(
         &self,

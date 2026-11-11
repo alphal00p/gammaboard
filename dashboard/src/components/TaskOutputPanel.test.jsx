@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import TaskOutputPanel from "./TaskOutputPanel";
 import { fetchRunTaskPanels } from "../services/api";
@@ -45,11 +46,15 @@ test.each([
   });
   let finishInitial;
   let finishRefresh;
-  fetchRunTaskPanels.mockImplementationOnce(() => new Promise((resolve) => { finishInitial = resolve; }))
+  fetchRunTaskPanels.mockResolvedValue(response(2)).mockImplementationOnce(() => new Promise((resolve) => { finishInitial = resolve; }))
     .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
-  render(<TaskOutputPanel runId={1} task={{ id: "1", name: "sample", state: "active" }} />);
+  function Output() {
+    const [view,setView] = useState("observables");
+    return <TaskOutputPanel runId={1} task={{ id: "1", name: "sample", state: "active" }} view={view} onViewChange={setView} />;
+  }
+  render(<Output />);
   await act(async () => vi.advanceTimersByTime(200));
-  expect(screen.getByRole("status")).toHaveTextContent("Loading task output");
+  expect(screen.getByRole("status")).toHaveAccessibleName("Loading task output…");
   await act(async () => finishInitial(response()));
   fireEvent.click(screen.getByRole("tab", { name: "Observables", exact: true }));
   expect(valueSeries().data).toEqual([[0, 1], [1, 1], [1, 2], [2, 2], [2, 3], [3, 3]]);
@@ -67,7 +72,7 @@ test.each([
   expect(valueSeries().data).toEqual([[0, 3], [2, 3], [2, 3], [3, 3]]);
   fireEvent.change(input, { target: { value: "3" } });
   expect(valueSeries().data).toEqual([[0, 6], [3, 6]]);
-  await act(async () => finishRefresh(response(2, true)));
+  await act(async () => finishRefresh(response(2)));
   expect(input).toHaveValue(3);
   expect(valueSeries().data).toEqual([[0, 12], [3, 12]]);
 
@@ -81,9 +86,9 @@ test.each([
   expect(JSON.parse(localStorage.getItem("gammaboard.panel-values.v1.task:1"))[panelId]
     .histogram_view.rebin_factors['["energy",null,null]']).toBe(3);
 
-  fireEvent.click(screen.getByRole("tab", { name: "Diagnostics", exact: true }));
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Diagnostics", exact: true })));
   expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("tab", { name: "Observables", exact: true }));
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Observables", exact: true })));
   expect(screen.getByRole("spinbutton", { name: "Merge adjacent bins", exact: true })).toHaveValue(3);
   expect(screen.getByRole("spinbutton", { name: "Merge bins: reference.json / energy", exact: true })).toHaveValue(2);
   expect(valueSeries("reference.json: energy").data).toEqual([[0, 3], [2, 3], [2, 3], [3, 3]]);
@@ -108,13 +113,13 @@ test("task output routes diagnostics and strata while retaining unknown result p
   expect(screen.queryByText("Task metadata data")).not.toBeInTheDocument();
   expect(screen.getByText("Future scan result data")).toBeVisible();
   expect(screen.queryByText("Extreme points data")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("tab", { name: "Diagnostics" }));
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Diagnostics" })));
   for (const label of ["Timing", "Extreme points"]) expect(screen.getByText(`${label} data`)).toBeVisible();
   expect(screen.queryByText("Estimate data")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("tab", { name: "Stratum output" }));
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Stratum output" })));
   expect(screen.getByText("Stratum history data")).toBeVisible();
   expect(screen.getByText("Stratum values data")).toBeVisible();
-  expect(fetchRunTaskPanels).toHaveBeenCalledTimes(1);
+  expect(fetchRunTaskPanels).toHaveBeenCalledTimes(3);
 });
 
 test("stratum tabs require output, and a retained stratum selection falls back to Result when absent", async () => {
