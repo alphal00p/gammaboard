@@ -12,6 +12,7 @@ const state = { panel_id: "estimate_summary", entries: [
   { key: "component_real_rsd", label: "Real RSD", value: 0.05 },
   { key: "component_imag_rsd", label: "Imag RSD", value: 0.01 },
   { key: "ess", label: "Normalized training ESS", value: 0.8 },
+  { key: "training_projection", label: "Training projection", value: "imag" },
   { key: "diagnostics_basis", label: "Diagnostics", value: "old combined definition" },
 ] };
 
@@ -33,6 +34,12 @@ test("components keep mean, target and RSD together with field-specific definiti
   expect(screen.queryByText(/Normalized training ESS =/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Normalized training ESS" }));
   expect(screen.getByText(/Normalized training ESS =/)).toBeVisible();
+  const essField = screen.getByRole("button", { name: "Normalized training ESS" }).closest("[data-disclosure-field]").parentElement;
+  const projectionField = screen.getByRole("button", { name: "Training projection" }).closest("[data-disclosure-field]").parentElement;
+  expect(projectionField.previousElementSibling).toBe(essField);
+  expect(screen.getByRole("button", { name: "Training projection" })).toHaveTextContent("imag");
+  fireEvent.click(screen.getByRole("button", { name: "Training projection" }));
+  expect(screen.getByText(/Projection used to train the sampler/)).toBeVisible();
   expect(screen.queryByText("old combined definition")).not.toBeInTheDocument();
 });
 

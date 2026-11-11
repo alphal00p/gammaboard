@@ -1,6 +1,8 @@
+import DisclosureField from "../common/DisclosureField";
+import PanelInfo from "../common/PanelInfo";
 import { PanelHeader, ControlBar } from "../common/PanelChrome";
 import { useMemo, useRef, useState } from "react";
-import { Alert, Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Card, CardContent, FormControl, MenuItem, Select, Stack, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
 import { asArray } from "../../utils/collections";
 import { formatScientific, numberOrNaN } from "../../utils/formatters";
 import RebinControl from "./RebinControl";
@@ -98,6 +100,7 @@ const HistogramPanel = ({
   const echartsRef = useRef(null);
   const panelId = state?.panel_id || null;
   const sourcePanelId = state?.source_panel_id || panelId;
+  const displayTitle = state?.title || (state?.source_panel_id ? state?.name : title) || title;
   const isBundleControlled = controlledView || Boolean(sourcePanelId && sourcePanelId !== panelId);
   const currentHistogramName = typeof state?.name === "string" ? state.name : null;
   const defaultYScale = inferDefaultHistogramYScale();
@@ -121,7 +124,7 @@ const HistogramPanel = ({
     Boolean(histogramControlDefault(controls, "default_relative_error", true)),
   );
   const [localHistogramMode, setLocalHistogramMode] = useState(HISTOGRAM_MODE_PDF);
-  const [localShowRatio, setLocalShowRatio] = useState(false);
+  const [localShowRatio, setLocalShowRatio] = useState(true);
   const yScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "y", defaultYScale) : localYScale;
   const xScale = isBundleControlled ? readHistogramScaleFromPanelValue(value, "x", defaultXScale) : localXScale;
   const zoomRange = isBundleControlled
@@ -139,10 +142,9 @@ const HistogramPanel = ({
     else setLocalView(next);
   };
   const baseRebinKey = seriesKey(currentHistogramName);
-  const rebinFactor = view.rebin_factors?.[baseRebinKey] ?? 1;
   const showRelativeErrors = isBundleControlled ? view.show_relative_error !== false : localShowRelativeErrors;
   const histogramMode = isBundleControlled ? normalizeHistogramMode(view.display_mode) : localHistogramMode;
-  const showRatio = isBundleControlled ? view.show_ratio === true : localShowRatio;
+  const showRatio = isBundleControlled ? view.show_ratio !== false : localShowRatio;
   const showScaleControls = histogramControlEnabled(controls, "scale", true);
   const showXScaleControl = histogramControlEnabled(controls, "x_scale", true);
   const showPdfCdfControl = histogramControlEnabled(controls, "pdf_cdf", true);
@@ -169,7 +171,29 @@ const HistogramPanel = ({
       ? sortHistogramBinsByMode(baseCanonicalBins, requestedSortMode)
       : baseCanonicalBins.slice().sort((left, right) => Number(left?.start) - Number(right?.start));
   }, [baseCanonicalBins, requestedSortMode]);
-  const canRebin = (!state?.selection || state.selection.display === "estimate") && !hasDeclaredViews && !state?.overlay_histograms?.length && !state?.discrete_ordering && !histogramIsDiscrete(state);
+  // Detect discrete histograms: presence of bin labels/bin_id or explicit discrete ordering
+  const isDiscrete = useMemo(() => {
+    if (!Array.isArray(state?.bins)) return false;
+    if (state?.discrete_ordering) return true;
+    return state.bins.some((b) => b && (b.label != null || b.bin_id != null));
+  }, [state]);
+
+  const comparedBundleSelections = useMemo(
+    () =>
+      asArray(uploadedBundles).map((bundle) => ({
+        bundle,
+        selectionState: normalizeHistogramSelectionState(bundle, currentHistogramName, { histogramTitle: state?.title, isDiscrete }),
+      })),
+    [currentHistogramName, state?.title, isDiscrete, uploadedBundles],
+  );
+  const canRebin = (!state?.selection || ["estimate", "compare_estimates"].includes(state.selection.display)) && !hasDeclaredViews && !state?.discrete_ordering && !histogramIsDiscrete(state);
+  const mergeLimit = Math.max(1, Math.min(sortedBaseBins.length,
+    ...asArray(state?.overlay_histograms).filter((overlay) => overlay.bins?.length).map((overlay) => overlay.bins.length),
+    ...comparedBundleSelections.flatMap(({ bundle, selectionState }) => selectionState.selectedHistograms
+      .filter((name) => histogramSupportsComparison(bundle.histograms?.[name], isDiscrete))
+      .map((name) => bundle.histograms[name].bins.length))));
+  const requestedRebinFactor = view.rebin_factors?.[baseRebinKey] ?? 1;
+  const rebinFactor = canRebin ? Math.min(requestedRebinFactor, mergeLimit) : 1;
   const rebinned = useMemo(() => canRebin ? rebinView(sortedBaseBins, rebinFactor) : { bins: sortedBaseBins },
     [canRebin, sortedBaseBins, rebinFactor]);
   const bins = useMemo(
@@ -178,12 +202,6 @@ const HistogramPanel = ({
   );
   const stepData = useMemo(() => buildHistogramRenderData(bins, yScale), [bins, yScale]);
   const relativeErrorData = useMemo(() => buildRelativeErrorStepData(bins), [bins]);
-  // Detect discrete histograms: presence of bin labels/bin_id or explicit discrete ordering
-  const isDiscrete = useMemo(() => {
-    if (!Array.isArray(state?.bins)) return false;
-    if (state?.discrete_ordering) return true;
-    return state.bins.some((b) => b && (b.label != null || b.bin_id != null));
-  }, [state]);
 
   const categories = useMemo(() => {
     if (!isDiscrete) return null;
@@ -245,14 +263,6 @@ const HistogramPanel = ({
       return Number.isFinite(index) ? index : -1;
     });
   }, [baseCanonicalBins, sortedBaseBins, isDiscrete]);
-  const comparedBundleSelections = useMemo(
-    () =>
-      asArray(uploadedBundles).map((bundle) => ({
-        bundle,
-        selectionState: normalizeHistogramSelectionState(bundle, currentHistogramName),
-      })),
-    [currentHistogramName, uploadedBundles],
-  );
   const comparedOverlaySeries = useMemo(
     () =>
       comparedBundleSelections
@@ -327,7 +337,7 @@ const HistogramPanel = ({
               };
             }
             const key = seriesKey(currentHistogramName, bundle.label, selectedName);
-            const factor = view.rebin_factors?.[key] ?? 1;
+            const factor = rebinFactor;
             const rebinnedOverlay = rebinView(buildHistogramData(histogram.bins), factor, view.density_inputs?.[key] === true);
             const overlayCanonicalBins = rebinnedOverlay.bins;
             const displayOverlayBins = histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
@@ -353,7 +363,7 @@ const HistogramPanel = ({
       rebinned.bins,
       rebinned.error,
       currentHistogramName,
-      view.rebin_factors,
+      rebinFactor,
       view.density_inputs,
       comparedBundleSelections,
       discreteBaseKeys,
@@ -425,9 +435,9 @@ const HistogramPanel = ({
               ratioData: buildOneMinusRatioPoints(bins, displayOverlayBins, true, effectiveXScale),
             };
           }
-          const overlayCanonicalBins = buildHistogramData(overlayBins).sort(
-            (left, right) => Number(left?.start) - Number(right?.start),
-          );
+          const originalOverlayBins = buildHistogramData(overlayBins).sort((left, right) => Number(left?.start) - Number(right?.start));
+          const mergedOverlay = canRebin ? rebinView(originalOverlayBins, rebinFactor) : { bins: originalOverlayBins };
+          const overlayCanonicalBins = mergedOverlay.bins;
           const displayOverlayBins =
             histogramMode === HISTOGRAM_MODE_CDF ? buildCdfBins(overlayCanonicalBins) : overlayCanonicalBins;
           const useSharedEdges = state?.overlay_alignment === "shared_edges" && binsShareEdges(bins, displayOverlayBins);
@@ -442,6 +452,7 @@ const HistogramPanel = ({
             id: `embedded-overlay-${overlayIndex}`,
             name: overlayName,
             color: overlayColor,
+            rebinError: mergedOverlay.error,
             suppressErrorBars: overlay?.suppress_error_bars === true,
             valueStep: projected.valueStep,
             relativeStep: projected.relativeStep,
@@ -455,7 +466,7 @@ const HistogramPanel = ({
           };
         })
         .filter(Boolean),
-    [bins, discreteBaseKeys, effectiveXScale, histogramMode, isDiscrete, state?.overlay_alignment, state?.overlay_histograms, yScale],
+    [bins, canRebin, rebinFactor, discreteBaseKeys, effectiveXScale, histogramMode, isDiscrete, state?.overlay_alignment, state?.overlay_histograms, yScale],
   );
   const overlaySeries = useMemo(
     () => [...comparedOverlaySeries, ...embeddedOverlaySeries],
@@ -689,7 +700,7 @@ const HistogramPanel = ({
   if (renderPlots) return renderPlots({
     histogramOption, relativeOption: showRelativeErrors ? relativeOption : null,
     ratioOption: showRatio ? ratioOption : null, bins,
-    errors: [rebinned.error, ...comparedOverlaySeries.map((series) => series.rebinError)].filter(Boolean),
+    errors: [rebinned.error, ...overlaySeries.map((series) => series.rebinError)].filter(Boolean),
     approximateErrors: rebinFactor > 1 || comparedOverlaySeries.some((series) => series.merged),
     cumulativeErrorsUnavailable: histogramMode === HISTOGRAM_MODE_CDF,
     unmatchedComparison: comparedOverlaySeries.some((series) => series.unmatched),
@@ -698,11 +709,11 @@ const HistogramPanel = ({
   return (
     <Card variant="outlined">
       <CardContent>
-        <PanelHeader title={<>{title}{state?.name ? ` (${state.name})` : ""}</>}>
+        <PanelHeader title={displayTitle}>
           {showExportAction || showResetViewAction ? (
             <FigureExportActions
               baseName={state?.panel_id || state?.name || title || "histogram"}
-              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state: { ...state, bins }, comparison_series: comparedOverlaySeries, histogram_mode: histogramMode, rebin_factor: rebinFactor, comparison_rebin_factors: view.rebin_factors, comparison_density_inputs: view.density_inputs, uncertainty_note: "Merged-bin errors assume uncorrelated bins. Cumulative errors are unavailable without covariance.", xScale: effectiveXScale, yScale }}
+              payload={{ panel_id: state?.panel_id ?? null, kind: "histogram", state: { ...state, bins }, comparison_series: comparedOverlaySeries, histogram_mode: histogramMode, rebin_factor: rebinFactor, comparison_density_inputs: view.density_inputs, uncertainty_note: "Merged-bin errors assume uncorrelated bins. Cumulative errors are unavailable without covariance.", xScale: effectiveXScale, yScale }}
               elementRef={figureRef}
               onResetView={
                 showResetViewAction ? () => {
@@ -712,10 +723,16 @@ const HistogramPanel = ({
               }
             />
           ) : null}
+          <PanelInfo title={displayTitle} notes={[
+            "Merge bins applies the same grouping to the result and every selected comparison, limited by the shortest selected histogram. It changes the display only; a smaller final group is retained.",
+            "Merged-bin errors use an uncorrelated-bin approximation; cross-bin covariance is unavailable.",
+            "Cumulative uncertainties are unavailable without covariance between bins.",
+            "The comparison plot shows 1 − result / reference, with agreement at zero. Matching intervals or exact sums of finer bins are required.",
+          ]} />
         </PanelHeader>
         <ControlBar sx={{ mb: 2 }}>
           {extraControls}
-          {canRebin && <RebinControl value={rebinFactor} max={sortedBaseBins.length}
+          {canRebin && <RebinControl value={rebinFactor} max={mergeLimit}
             onChange={(factor) => changeRebinView({ rebinFactors: { [baseRebinKey]: factor } })} />}
           {declaredViews.length > 1 ? (
             <FormControl size="small" sx={{ minWidth: 152 }}>
@@ -745,9 +762,56 @@ const HistogramPanel = ({
               </Select>
             </FormControl>
           ) : null}
+          {showPdfCdfControl && <ToggleButtonGroup size="small" exclusive aria-label="Histogram display" value={histogramMode}
+            onChange={(_, next) => {
+              if (!next) return;
+              if (isBundleControlled && onValueChange) onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { histogramMode: next }), false);
+              else setLocalHistogramMode(next);
+            }}>
+            <ToggleButton value={HISTOGRAM_MODE_PDF}>Histogram</ToggleButton>
+            <ToggleButton value={HISTOGRAM_MODE_CDF}>Cumulative</ToggleButton>
+          </ToggleButtonGroup>}
+          {showRatioControl && ratioOption ? (
+          <Button
+            size="small"
+            aria-pressed={showRatio}
+            variant={showRatio ? "contained" : "outlined"}
+            onClick={() => {
+              const next = !showRatio;
+              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRatio: next }), false);
+                return;
+              }
+              setLocalShowRatio(next);
+            }}
+          >
+            Comparison
+          </Button>
+          ) : null}
+          {showRelativeErrorControl ? (
+          <Button
+            size="small"
+            aria-pressed={showRelativeErrors}
+            variant={showRelativeErrors ? "contained" : "outlined"}
+            onClick={() => {
+              const next = !showRelativeErrors;
+              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
+                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRelativeError: next }), false);
+                return;
+              }
+              setLocalShowRelativeErrors(next);
+            }}
+          >
+            Relative error
+          </Button>
+          ) : null}
+        </ControlBar>
+        {(showXScaleControl || showScaleControls || (isDiscrete && showSortControl)) && <DisclosureField section label="Axes and ordering" sx={{ mb: 1 }}>
+          <ControlBar>
           {showXScaleControl ? (
           <FormControl size="small" sx={{ minWidth: 128 }}>
             <Select
+              inputProps={{ "aria-label": "X scale" }}
               value={effectiveXScale}
               disabled={isDiscrete}
               onChange={(event) => {
@@ -771,6 +835,7 @@ const HistogramPanel = ({
           {showScaleControls ? (
           <FormControl size="small" sx={{ minWidth: 128 }}>
             <Select
+              inputProps={{ "aria-label": "Y scale" }}
               value={yScale}
               onChange={(event) => {
                 const next = event.target.value;
@@ -786,38 +851,6 @@ const HistogramPanel = ({
               <MenuItem value="log">Y log</MenuItem>
             </Select>
           </FormControl>
-          ) : null}
-          {showPdfCdfControl ? (
-          <Button
-            size="small"
-            variant={histogramMode === HISTOGRAM_MODE_CDF ? "contained" : "outlined"}
-            onClick={() => {
-              const next = histogramMode === HISTOGRAM_MODE_CDF ? HISTOGRAM_MODE_PDF : HISTOGRAM_MODE_CDF;
-              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { histogramMode: next }), false);
-                return;
-              }
-              setLocalHistogramMode(next);
-            }}
-          >
-            {histogramMode === HISTOGRAM_MODE_CDF ? "CDF" : "PDF"}
-          </Button>
-          ) : null}
-          {showRatioControl && ratioOption ? (
-          <Button
-            size="small"
-            variant={showRatio ? "contained" : "outlined"}
-            onClick={() => {
-              const next = !showRatio;
-              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRatio: next }), false);
-                return;
-              }
-              setLocalShowRatio(next);
-            }}
-          >
-            Ratio
-          </Button>
           ) : null}
           {isDiscrete && showSortControl ? (
             <FormControl size="small" sx={{ minWidth: 156 }}>
@@ -850,42 +883,18 @@ const HistogramPanel = ({
               </Select>
             </FormControl>
           ) : null}
-          {showRelativeErrorControl ? (
-          <Button
-            size="small"
-            variant={showRelativeErrors ? "contained" : "outlined"}
-            onClick={() => {
-              const next = !showRelativeErrors;
-              if (isBundleControlled && sourcePanelId && typeof onValueChange === "function") {
-                onValueChange(sourcePanelId, writeHistogramBundlePanelValue(value, { showRelativeError: next }), false);
-                return;
-              }
-              setLocalShowRelativeErrors(next);
-            }}
-          >
-            Relative error
-          </Button>
-          ) : null}
-        </ControlBar>
+          </ControlBar>
+        </DisclosureField>}
         {caption && <Box sx={{ mb: 1 }}>{caption}</Box>}
-        {histogramMode === HISTOGRAM_MODE_CDF && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-            Cumulative uncertainties are unavailable without covariance between bins.
-          </Typography>
-        )}
         {rebinned.error && <Alert severity="error">{rebinned.error} Original bins are shown.</Alert>}
-        {comparedOverlaySeries.filter((series) => series.rebinError).map((series) =>
+        {overlaySeries.filter((series) => series.rebinError).map((series) =>
           <Alert severity="error" key={series.id}>{series.name}: {series.rebinError} Original bins are shown.</Alert>)}
-        {(rebinFactor > 1 || comparedOverlaySeries.some((series) => series.merged)) &&
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-            Merged-bin errors use an uncorrelated-bin approximation; cross-bin covariance is unavailable.
-            Merging changes the display only. A smaller final group is retained.
-          </Typography>}
         {comparedOverlaySeries.some((series) => series.unmatched) && <Alert severity="info" sx={{ mb: 1 }}>
           Comparisons use their own bin edges. Ratios are shown only for matching intervals or exact sums of finer bins.
         </Alert>}
         {comparedBundleSelections.length > 0 ? (
-          <Box sx={{ mb: 1.5, display: "grid", gap: 1 }}>
+          <DisclosureField section label="Comparisons" value={`${comparedOverlaySeries.length} selected from ${comparedBundleSelections.length} bundle${comparedBundleSelections.length === 1 ? "" : "s"}`} sx={{ mb: 1.5 }}>
+          <Box sx={{ display: "grid", gap: 1 }}>
             {comparedBundleSelections.map(({ bundle, selectionState }) => {
               const histogramNames = Object.keys(bundle.histograms || {}).filter(
                 (name) => histogramSupportsComparison(bundle.histograms?.[name], isDiscrete),
@@ -935,7 +944,7 @@ const HistogramPanel = ({
                           display: "grid",
                           gridTemplateColumns: {
                             xs: "1fr auto",
-                            sm: isDiscrete ? "minmax(0, 200px) 150px 150px auto" : "minmax(0, 220px) 180px 180px auto",
+                            sm: isDiscrete ? "minmax(0, 200px) 150px 150px auto" : "minmax(0, 1fr) 180px auto",
                           },
                           gap: 0.75,
                           alignItems: "center",
@@ -943,6 +952,7 @@ const HistogramPanel = ({
                       >
                         <FormControl size="small">
                           <Select
+                            inputProps={{ "aria-label": `Comparison histogram: ${bundle.label} / ${comparedIndex + 1}` }}
                             value={comparedName}
                             onChange={(event) => {
                               const nextSelectedHistograms = selectionState.selectedHistograms.slice();
@@ -984,10 +994,6 @@ const HistogramPanel = ({
                           </Select>
                         </FormControl>
                         {!isDiscrete && <>
-                          <RebinControl label={`Merge bins: ${bundle.label} / ${comparedName}`}
-                            value={view.rebin_factors?.[seriesKey(currentHistogramName, bundle.label, comparedName)] ?? 1}
-                            max={bundle.histograms[comparedName]?.bins.length ?? 1}
-                            onChange={(factor) => changeRebinView({ rebinFactors: { [seriesKey(currentHistogramName, bundle.label, comparedName)]: factor } })} />
                           <FormControl size="small">
                             <Select inputProps={{ "aria-label": `Input values: ${bundle.label} / ${comparedName}` }}
                               value={view.density_inputs?.[seriesKey(currentHistogramName, bundle.label, comparedName)] ? "density" : "integral"}
@@ -1057,7 +1063,7 @@ const HistogramPanel = ({
                           variant="text"
                           color="error"
                           onClick={() =>
-                            onRemoveComparedHistogram?.(sourcePanelId, bundle.id, currentHistogramName, comparedIndex)
+                            onRemoveComparedHistogram?.(sourcePanelId, bundle.id, currentHistogramName, comparedIndex, state?.title, isDiscrete)
                           }
                         >
                           Remove
@@ -1069,6 +1075,7 @@ const HistogramPanel = ({
               );
             })}
           </Box>
+          </DisclosureField>
         ) : null}
         <Box ref={figureRef} sx={{ width: "100%", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2 }}>
           <Box sx={{ width: "100%", height: 280 }}>
@@ -1085,7 +1092,7 @@ const HistogramPanel = ({
           {showRelativeErrors && relativeOption ? (
             <Box>
               <Typography variant="caption" color="text.secondary">
-                Relative Error Shape
+                Relative error
               </Typography>
               <Box sx={{ width: "100%", height: 168 }}>
                 <LazyChart
@@ -1102,7 +1109,7 @@ const HistogramPanel = ({
           {showRatio && ratioOption ? (
             <Box>
               <Typography variant="caption" color="text.secondary">
-                Histogram Mismatch: 1 - value / comparison, agreement at 0
+                Comparison: 1 − result / reference · agreement at 0
               </Typography>
               <Box sx={{ width: "100%", height: 188 }}>
                 <LazyChart

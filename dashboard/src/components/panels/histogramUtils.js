@@ -464,7 +464,7 @@ export const sortHistogramBinsByMode = (bins, sortMode) => {
     .map((entry) => entry.bin);
 };
 
-export const normalizeHistogramSelectionState = (bundle, histogramName) => {
+export const normalizeHistogramSelectionState = (bundle, histogramName, { histogramTitle, isDiscrete } = {}) => {
   const key = histogramSelectionKey(histogramName);
   const stored = isObject(bundle?.selectionsByHistogram) ? bundle.selectionsByHistogram[key] : null;
   if (isObject(stored)) {
@@ -487,10 +487,15 @@ export const normalizeHistogramSelectionState = (bundle, histogramName) => {
       : Object.fromEntries(selectedHistograms.map((name) => [name, HISTOGRAM_SORT_CANONICAL]));
     return { key, selectedHistograms, discreteAlignmentByHistogram, sortModeByHistogram };
   }
-  const fallbackSelection =
-    typeof histogramName === "string" && isObject(bundle?.histograms) && isObject(bundle.histograms[histogramName])
-      ? [histogramName]
-      : [];
+  const compatibleNames = Object.keys(bundle?.histograms || {}).filter((name) =>
+    isDiscrete == null || histogramSupportsComparison(bundle.histograms[name], isDiscrete));
+  const titleMatches = compatibleNames.filter((name) => histogramTitle && bundle.histograms[name]?.title === histogramTitle);
+  // Use identity/title matches only; an unrelated first histogram is not a
+  // meaningful default reference. An explicitly empty selection stays empty.
+  const candidate = compatibleNames.includes(histogramTitle) ? histogramTitle
+    : compatibleNames.includes(histogramName) ? histogramName
+    : titleMatches.length === 1 ? titleMatches[0] : null;
+  const fallbackSelection = candidate == null ? [] : [candidate];
   return {
     key,
     selectedHistograms: fallbackSelection,

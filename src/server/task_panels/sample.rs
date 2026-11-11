@@ -557,6 +557,35 @@ fn training_ess(accumulator: &AccumulatorState) -> Option<f64> {
     }
 }
 
+fn training_projection_label(accumulator: &AccumulatorState) -> String {
+    let gammaloop = match accumulator {
+        AccumulatorState::Gammaloop(state) => Some(state),
+        AccumulatorState::Stratified(state) => state.pooled.as_deref(),
+        _ => None,
+    };
+    if let Some(state) = gammaloop {
+        use crate::evaluation::evaluator::gammaloop::TrainingProjection;
+        return match state.training_projection {
+            Some(TrainingProjection::Real) => "real",
+            Some(TrainingProjection::Imag) => "imag",
+            Some(TrainingProjection::Abs) => "abs",
+            Some(TrainingProjection::AbsSq) => "abs_sq",
+            None => "unrecorded (abs fallback)",
+        }
+        .into();
+    }
+    match accumulator.config() {
+        AccumulatorConfig::Vector {
+            training_projection,
+            ..
+        } => match training_projection {
+            crate::core::TrainingProjection::Component { name } => name,
+            crate::core::TrainingProjection::Norm => "norm".into(),
+        },
+        _ => "unavailable".into(),
+    }
+}
+
 fn rsd_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     if accumulator.sample_count() < MIN_BATCH_SIZE as i64 {
         return None;
@@ -881,6 +910,11 @@ fn base_estimate_summary_entries(
             training_ess(accumulator)
                 .map(JsonValue::from)
                 .unwrap_or_else(|| json!("unavailable")),
+        ));
+        entries.push(key_value(
+            "training_projection",
+            "Training projection",
+            training_projection_label(accumulator),
         ));
         entries.push(key_value("diagnostics_basis", "Diagnostics", if stratified {
             "RSD = sqrt(N) × stratified standard error / |signed estimate|. ESS is the attempt-weighted average of per-stratum training ESS."
@@ -1998,6 +2032,9 @@ mod tests {
                     < 1e-14
             );
             assert!((value("ess").as_f64().unwrap() - ess).abs() < 1e-14);
+            assert_eq!(value("training_projection"), &json!(projection));
+            let ess_index = entries.iter().position(|entry| entry.key == "ess").unwrap();
+            assert_eq!(entries[ess_index + 1].key, "training_projection");
             assert_eq!(value("count"), 16);
             assert!(
                 !entries.iter().any(|entry| entry.key.starts_with("stratum_")
@@ -2053,6 +2090,7 @@ mod tests {
         }
         let unknown =
             fixture_with_training_projection(complex_samples(), Some(TrainingProjection::AbsSq));
+        assert_eq!(training_projection_label(&unknown), "abs_sq");
         assert!(rsd_history_panel(unknown.clone()).is_some());
         assert!(ess_history_panel(unknown).is_none());
     }
@@ -2089,6 +2127,21 @@ mod tests {
                     .unwrap();
             }
             let entries = base_estimate_summary_entries(&accumulator, None);
+            let projection = entries
+                .iter()
+                .find(|entry| entry.key == "training_projection")
+                .unwrap();
+            assert_eq!(
+                projection.value,
+                match &config {
+                    AccumulatorConfig::Vector {
+                        training_projection: crate::core::TrainingProjection::Component { name },
+                        ..
+                    } => json!(name),
+                    AccumulatorConfig::Vector { .. } => json!("norm"),
+                    _ => json!("unrecorded (abs fallback)"),
+                }
+            );
             let ess = entries
                 .iter()
                 .find(|entry| entry.key.ends_with("ess"))
@@ -2320,6 +2373,7 @@ mod stratification_panels {
             }
         }
         let accumulator = AccumulatorState::Stratified(Box::new(state.clone()));
+        assert_eq!(training_projection_label(&accumulator), "imag");
         let Some(PanelState::ScalarTimeseries { points, .. }) =
             real_estimate_history_panel(accumulator.clone())
         else {

@@ -1,5 +1,6 @@
 // Definitions live with the field that owns the value, including in table cells.
 export function fieldHelp(key = "", label = "", panelId = "") {
+  if (key === "training_projection") return "Projection used to train the sampler and calculate training ESS for these samples. GammaLoop uses real, imag, abs (complex magnitude), or abs_sq (squared magnitude). Vector estimators use a named component or norm (Euclidean norm). Older GammaLoop snapshots without a recorded projection use abs for ESS and are labeled as an unrecorded fallback.";
   if (key.endsWith("_mean_abs")) return "Mean of absolute weighted component values, including zero contributions. Stratified estimates sum conditional absolute means and their independent variances. This is not the absolute value of the signed mean. Older snapshots lacking absolute moments show unavailable.";
   const name = `${key} ${label}`.toLowerCase();
   if (/\brsd\b|_rsd\b/.test(name)) return "RSD = sqrt(N) × SE(estimate) / |estimate|. It uses the signed component and the primary estimator's standard error, including stratified uncertainty where applicable. It stays roughly constant during inference with a fixed proposal. A zero estimate gives infinity for nonzero error; 0/0 is undefined.";

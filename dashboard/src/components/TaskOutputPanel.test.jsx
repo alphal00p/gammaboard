@@ -79,18 +79,18 @@ test.each([
   await act(async () => fireEvent.change(screen.getByLabelText("Upload histogram bundle"), { target: { files: [{
     name: "reference.json", text: async () => JSON.stringify({ histograms: { energy: histogram } }),
   }] } }));
-  const reference = screen.getByRole("spinbutton", { name: "Merge bins: reference.json / energy", exact: true });
-  fireEvent.change(reference, { target: { value: "2" } });
+  expect(valueSeries("reference.json: energy").data).toEqual([[0, 6], [3, 6]]);
+  fireEvent.change(input, { target: { value: "2" } });
   expect(valueSeries("reference.json: energy").data).toEqual([[0, 3], [2, 3], [2, 3], [3, 3]]);
-  expect(valueSeries().data).toEqual([[0, 12], [3, 12]]);
+  expect(valueSeries().data).toEqual([[0, 6], [2, 6], [2, 6], [3, 6]]);
   expect(JSON.parse(localStorage.getItem("gammaboard.panel-values.v1.task:1"))[panelId]
-    .histogram_view.rebin_factors['["energy",null,null]']).toBe(3);
+    .histogram_view.rebin_factors['["energy",null,null]']).toBe(2);
 
   await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Diagnostics", exact: true })));
   expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
   await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Observables", exact: true })));
-  expect(screen.getByRole("spinbutton", { name: "Merge adjacent bins", exact: true })).toHaveValue(3);
-  expect(screen.getByRole("spinbutton", { name: "Merge bins: reference.json / energy", exact: true })).toHaveValue(2);
+  expect(screen.getAllByRole("spinbutton", { name: "Merge adjacent bins", exact: true })).toHaveLength(1);
+  expect(screen.getByRole("spinbutton", { name: "Merge adjacent bins", exact: true })).toHaveValue(2);
   expect(valueSeries("reference.json: energy").data).toEqual([[0, 3], [2, 3], [2, 3], [3, 3]]);
 
   fireEvent.click(screen.getByRole("button", { name: "Reset view", exact: true }));

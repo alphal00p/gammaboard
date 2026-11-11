@@ -68,7 +68,7 @@ test("keeps expanded campaign observables before Task Summary", () => {
     } },
     { panel_id: "task_summary", kind: "key_value", entries: [{ key: "state", label: "State", value: "active" }] },
   ]} />);
-  const observable = screen.getByText(/^Combined Observable\s+\(energy\)$/);
+  const observable = screen.getByText("energy", { selector: "h6" });
   expect(screen.getByText("Combined Observables").compareDocumentPosition(observable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(observable.compareDocumentPosition(screen.getByText("Task Summary")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
@@ -104,11 +104,11 @@ describe.each([
       ...(hasMatch ? { energy: { title: "Different observable", bins }, [title]: { title: "Unrelated metadata", bins } } : {}),
     };
     render(<ObservableBundleHarness panelId={panelId} label={label} histogramTitle={title} />);
-    fireEvent.click(screen.getByRole("cell", { name: title, exact: true }));
     fireEvent.change(screen.getByLabelText("Upload histogram bundle"), { target: { files: [{
       name: "reference.json", text: async () => JSON.stringify({ histograms }),
     }] } });
     await screen.findByRole("button", { name: "Remove reference.json", exact: true });
+    fireEvent.click(screen.getByRole("button", { name: "Comparisons", exact: true }));
     // Clear any automatic selection so Add Histogram must choose a new entry.
     const remove = screen.queryByRole("button", { name: "Remove", exact: true });
     if (remove) fireEvent.click(remove);
@@ -129,8 +129,8 @@ describe.each([
     await screen.findByRole("button", { name: "Remove reference.json", exact: true });
     fireEvent.change(input, { target: { files: [file] } });
     await screen.findByRole("button", { name: "Remove reference.json (2)", exact: true });
-    expect(screen.getByRole("spinbutton", { name: "Merge bins: reference.json / energy", exact: true })).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Merge bins: reference.json (2) / energy", exact: true })).toBeInTheDocument();
+    expect(screen.getAllByRole("spinbutton", { name: "Merge adjacent bins", exact: true })).toHaveLength(1);
+    expect(renderChart.mock.calls.at(-1)[0].option.series.some((series) => series.name.includes("reference.json (2)"))).toBe(true);
     const text = vi.fn();
     fireEvent.change(input, { target: { files: [{ name: "large.hwu", size: 16 * 1024 * 1024 + 1, text }] } });
     expect(await screen.findByText("Histogram bundles must be at most 16 MiB.")).toBeInTheDocument();
@@ -161,7 +161,7 @@ describe.each([
     expect(screen.getByRole("button", { name: "Upload Bundle" })).toBeEnabled();
   });
 
-  test("merges display bins independently, keeps view settings on refresh, and resets from originals", async () => {
+  test("shares display bin merging with references, keeps it on refresh, and resets from originals", async () => {
     const bins = [{ start: 0, stop: 1, value: 1, error: 0.3 }, { start: 1, stop: 2, value: 2, error: 0.4 }];
     const { rerender } = render(<ObservableBundleHarness panelId={panelId} label={label} bins={bins} />);
     const merge = screen.getByRole("spinbutton", { name: "Merge adjacent bins", exact: true });
@@ -169,21 +169,18 @@ describe.each([
     fireEvent.change(merge, { target: { value: "2" } });
     const chart = renderChart.mock.calls.find(([props]) => props.option.series.some((s) => s.name === "value"))?.[0];
     expect(chart.option.series.find((s) => s.name === "value").data).toEqual([[0, 3], [2, 3]]);
-    expect(screen.getByText(/uncorrelated-bin approximation/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "energy information" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(/uncorrelated-bin approximation/);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     fireEvent.change(screen.getByLabelText("Upload histogram bundle"), { target: { files: [{
       name: "reference.json", text: async () => JSON.stringify({ histograms: { energy: { bins } } }),
     }] } });
     await screen.findByRole("button", { name: "Remove reference.json" });
-    const overlayMerge = screen.getByRole("spinbutton", { name: "Merge bins: reference.json / energy" });
-    expect(overlayMerge).toHaveValue(1);
-    fireEvent.change(overlayMerge, { target: { value: "2" } });
-    fireEvent.blur(overlayMerge);
+    expect(renderChart.mock.calls.some(([props]) => props.option.series.some((series) => series.name === "reference.json: energy" && JSON.stringify(series.data) === JSON.stringify([[0, 3], [2, 3]])))).toBe(true);
     rerender(<ObservableBundleHarness panelId={panelId} label={label} bins={bins.map((bin) => ({ ...bin, value: bin.value * 2 }))} />);
     expect(merge).toHaveValue(2);
-    expect(overlayMerge).toHaveValue(2);
     fireEvent.click(screen.getByRole("button", { name: "Reset view", exact: true }));
     expect(merge).toHaveValue(1);
-    expect(overlayMerge).toHaveValue(1);
     expect(bins.map((bin) => bin.value)).toEqual([1, 2]);
   });
 
@@ -208,6 +205,7 @@ describe.each([
       props.option.series.some((series) => series.name === "reference.json: energy"),
     )).toBe(true);
 
+    fireEvent.click(screen.getByRole("button", { name: "Comparisons", exact: true }));
     const selection = screen.getAllByRole("combobox").find((select) => select.textContent === "energy");
     fireEvent.mouseDown(selection);
     renderChart.mockClear();
@@ -790,4 +788,100 @@ test("mean axes exclude hidden target and uncertainty legend entries", () => {
   act(() => chart().onEvents.legendselectchanged({ selected: { target: false, uncertainty: false } }));
   expect(chart().option.yAxis.min).toBeCloseTo(9.84);
   expect(chart().option.yAxis.max).toBeCloseTo(12.16);
+});
+
+test("matched references and the comparison plot appear by default; explicit removal survives revisiting", async () => {
+  const bins = [{ start: 0, stop: 1, value: 2, error: .1 }, { start: 1, stop: 2, value: 4, error: .2 }];
+  function Harness() {
+    const [values, setValues] = useState({});
+    return <PanelCollection panelSpecs={[{ panel_id: "obs", label: "Observables", kind: "table" }]}
+      panelStates={[{ panel_id: "obs", kind: "table", columns: ["Name"], rows: [["energy"], ["angle"]], row_keys: ["energy", "angle"],
+        payload: { expands_to: { kind: "histogram", source: "selected_row" }, actions: { upload_bundle: true },
+          histograms: { energy: { title: "Energy", bins }, angle: { title: "Angle", bins } } } }]}
+      panelValues={values} onPanelValueChange={(id, value) => setValues((previous) => ({ ...previous, [id]: value }))} />;
+  }
+  render(<Harness />);
+  expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "Observable" })).toHaveValue("Energy");
+  fireEvent.change(screen.getByLabelText("Upload histogram bundle"), { target: { files: [{ name: "reference.json", text: async () => JSON.stringify({
+    histograms: { different_key: { title: "Energy", bins }, Angle: { bins } },
+  }) }] } });
+  await screen.findByRole("button", { name: "Remove reference.json" });
+  expect(screen.getByRole("button", { name: "Comparison", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText("Comparison: 1 − result / reference · agreement at 0")).toBeVisible();
+  expect(renderChart.mock.calls.some(([props]) => props.option.series.some((series) => series.name === "reference.json: different_key"))).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Comparison", exact: true }));
+  expect(screen.queryByText("Comparison: 1 − result / reference · agreement at 0")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Comparisons", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Next observable" }));
+  expect(screen.getByRole("combobox", { name: "Observable" })).toHaveValue("Angle");
+  expect(screen.getByRole("button", { name: "Comparison", exact: true })).toHaveAttribute("aria-pressed", "false");
+  renderChart.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Previous observable" }));
+  expect(screen.getByRole("combobox", { name: "Observable" })).toHaveValue("Energy");
+  expect(screen.queryByRole("button", { name: "Comparison", exact: true })).not.toBeInTheDocument();
+  expect(renderChart.mock.calls.some(([props]) => props.option.series.some((series) => series.name?.startsWith("reference.json:")))).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "All observables (2)" }));
+  expect(screen.getByRole("table")).toBeVisible();
+  fireEvent.click(screen.getByRole("cell", { name: "angle", exact: true }));
+  expect(screen.getByRole("combobox", { name: "Observable" })).toHaveValue("Angle");
+});
+
+test("shared bin merging respects the shortest comparison and density input without changing originals", async () => {
+  const bins = [0, 1, 2, 3].map((start) => ({ start, stop: start + 1, value: 1, error: .1 }));
+  render(<ObservableBundleHarness panelId="obs" label="Observables" bins={bins} />);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Merge adjacent bins" }), { target: { value: "4" } });
+  const comparisonBins = [{ start: 0, stop: 2, value: 2, error: .2 }, { start: 2, stop: 4, value: 3, error: .3 }];
+  fireEvent.change(screen.getByLabelText("Upload histogram bundle"), { target: { files: [{ name: "density.json", text: async () => JSON.stringify({ histograms: { energy: { bins: comparisonBins } } }) }] } });
+  await screen.findByRole("button", { name: "Remove density.json" });
+  const merge = screen.getByRole("spinbutton", { name: "Merge adjacent bins" });
+  await waitFor(() => expect(merge).toHaveValue(2));
+  expect(merge).toHaveAttribute("max", "2");
+  fireEvent.click(screen.getByRole("button", { name: "Comparisons", exact: true }));
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Input values: density.json / energy" }));
+  renderChart.mockClear();
+  fireEvent.click(screen.getByRole("option", { name: "Density per unit x" }));
+  expect(renderChart.mock.calls.some(([props]) => props.option.series.some((series) => series.name === "density.json: energy" && JSON.stringify(series.data) === JSON.stringify([[0, 10], [4, 10]])))).toBe(true);
+  expect(comparisonBins.map((bin) => bin.value)).toEqual([2, 3]);
+});
+
+test("observable search survives polling, blur, result selection and table selection", () => {
+  let poll;
+  const changes = vi.fn();
+  function Harness() {
+    const [values, setValues] = useState({});
+    const [revision, setRevision] = useState(0);
+    poll = () => setRevision((value) => value + 1);
+    return <PanelCollection panelSpecs={[{ panel_id: "obs", label: "Observables", kind: "table" }]}
+      panelStates={[{ panel_id: "obs", kind: "table", columns: ["Name", "Samples"], rows: [["Energy", revision], ["Angle", revision]], row_keys: ["energy", "angle"],
+        payload: { histograms: { energy: { title: "Energy", bins: [] }, angle: { title: "Angle", bins: [] } } } }]}
+      panelValues={values} onPanelValueChange={(id, value) => { changes(value.selected_histogram); setValues((previous) => ({ ...previous, [id]: value })); }} />;
+  }
+  render(<Harness />);
+  const search = screen.getByRole("combobox", { name: "Observable" });
+  expect(search).toHaveValue("Energy");
+  act(() => search.focus());
+  fireEvent.change(search, { target: { value: "ang" } });
+  expect(changes).not.toHaveBeenCalled();
+  act(() => poll());
+  expect(search).toHaveValue("ang");
+  act(() => search.blur());
+  expect(search).toHaveValue("Energy");
+  act(() => search.focus());
+  expect(search).toHaveValue("ang");
+  fireEvent.keyDown(search, { key: "ArrowDown" });
+  fireEvent.click(screen.getByRole("option", { name: /Angle/ }));
+  expect(changes).toHaveBeenLastCalledWith("angle");
+  expect(search).toHaveValue("Angle");
+  act(() => search.focus());
+  expect(search).toHaveValue("ang");
+  act(() => search.blur());
+  fireEvent.click(screen.getByRole("button", { name: "All observables (2)" }));
+  fireEvent.click(screen.getByRole("cell", { name: "Energy", exact: true }));
+  expect(search).toHaveValue("Energy");
+  act(() => search.focus());
+  expect(search).toHaveValue("ang");
+  act(() => poll());
+  expect(search).toHaveValue("ang");
 });

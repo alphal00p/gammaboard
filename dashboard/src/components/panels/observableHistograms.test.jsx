@@ -43,7 +43,7 @@ test("histogram selectors default to one combined curve and compare errors witho
   expect(series("Basic error").data[0][1]).toBe(1);
   expect(lastChart().yAxis.min).toBe(0);
   expect(lastChart().series.every((s) => s.type !== "custom")).toBe(true);
-  expect(screen.queryByRole("button", { name: "PDF" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Histogram" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Relative error" })).not.toBeInTheDocument();
   expect(screen.getAllByTestId("chart")).toHaveLength(1);
   fireEvent.change(screen.getByRole("combobox", { name: "Stratum" }), { target: { value: "1,3" } });
@@ -81,7 +81,7 @@ test("selectors are persisted with other histogram preferences and survive switc
   expect(changes.mock.calls.at(-1)[0]).toBe("observable");
   expect(changes.mock.calls.at(-1)[1].histogram_view.zoom).toEqual([10,80]);
   chooseDisplay("Estimate");
-  expect(screen.getByRole("button", { name: "CDF" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Cumulative" })).toHaveAttribute("aria-pressed", "true");
   expect(series("Stratified").data.at(-1)[1]).toBe(2);
   expect(observableHistogramView(state, { stratum: "9,9", display: "removed" }).selection).toEqual({stratum:"combined",display:"estimate"});
 });
@@ -128,4 +128,18 @@ test("uploaded combined references are retained without comparing incompatible p
   fireEvent.click(screen.getByRole("option", {name:"(1,3)"}));
   expect(series("Independent run: energy")).toBeUndefined();
   expect(screen.getByText(/Uploaded reference curves are shown/)).toBeInTheDocument();
+});
+
+test("bin merging also groups the basic-estimator comparison while error views retain original bins", () => {
+  render(<ObservableHistogramPanel title="Observable" state={state} />);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Merge adjacent bins" }), { target: { value: "2" } });
+  expect(series("Stratified").data).toEqual([[0, 1], [2, 1], [2, 1], [3, 1]]);
+  chooseDisplay("Compare estimates");
+  expect(screen.getByRole("spinbutton", { name: "Merge adjacent bins" })).toHaveValue(2);
+  expect(series("Basic (unstratified)").data).toEqual([[0, 1], [2, 1], [2, 2], [3, 2]]);
+  chooseDisplay("Compare errors");
+  expect(screen.queryByRole("spinbutton", { name: "Merge adjacent bins" })).not.toBeInTheDocument();
+  expect(series("Stratified error").data[0][1]).toBe(.25);
+  chooseDisplay("Estimate");
+  expect(screen.getByRole("spinbutton", { name: "Merge adjacent bins" })).toHaveValue(2);
 });

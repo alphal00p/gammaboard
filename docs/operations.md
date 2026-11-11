@@ -179,6 +179,9 @@ places. Each component's absolute mean and its own uncertainty appear beneath
 its RSD. Absolute means use the primary estimator, including per-stratum
 allocation; older stratified snapshots without absolute sums show unavailable.
 There is no separate absolute-mean RSD or progression plot.
+The training projection recorded with the samples appears beside normalized
+training ESS. Historical GammaLoop snapshots that omit it are explicitly marked
+as unrecorded, with the absolute-magnitude fallback used by their ESS calculation.
 Per-stratum estimates, counts, coverage, probabilities, and ESS live under
 Stratum output. Optional moment fields preserve compatibility with old snapshots;
 ESS remains unavailable when the needed historical training moments are missing.
@@ -189,10 +192,28 @@ or configuration children. RSD and ESS each carry their own definitions. Table
 cells put the same triangle directly before the value; sortable headers and
 editable controls retain their usual interactions. Expanded configuration trees
 preserve nested objects, arrays, indentation, and expansion state across refreshes.
-Observable tables keep Upload Bundle on the left and JSON/HwU/PDF exports on the
-right of the same action row.
+Observables use a searchable picker with previous/next navigation; the full table
+is available under **All observables**. Upload Bundle stays on the left and
+JSON/HwU/PDF exports on the right of the same action row.
+The picker remembers the typed query across refreshes and focus changes. While
+unfocused it displays the selected observable; focusing restores the query.
+Typing filters results without changing the selection. Choosing a result, a
+table row, or a navigation arrow changes the selected observable.
 Their top-right information icon opens the estimator and campaign-combination
 notes; import/export errors and omitted-observable warnings stay visible.
+Matching uploaded references and the **Comparison** plot appear by default.
+Matches use a compatible histogram name or an unambiguous title, and explicit
+empty selections or hidden comparison plots are retained. Reference selection,
+density inputs, and discrete matching live under **Comparisons**; axis scales
+and discrete ordering live under **Axes and ordering**.
+One **Merge adjacent bins** control applies the same grouping to the result and
+all selected references (and the basic estimator in Compare estimates). The
+largest permitted factor is limited by the shortest selected histogram. This is
+a display transformation of the original bins; merged errors retain the
+uncorrelated-bin approximation. Error/error-ratio views retain their original
+bins. PDF plots use the same selections and grouping as the dashboard.
+The merge-factor up/down buttons each occupy half of the input's height;
+keyboard arrow keys and direct entry remain available.
 
 Result histories are cumulative accumulator snapshots, not independent batch
 estimates. Current panels load before history, and Observables is fetched only

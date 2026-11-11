@@ -5,23 +5,16 @@ import { svg2pdf } from "svg2pdf.js";
 import { echarts } from "../../lib/echarts";
 import ObservableHistogramPanel from "./ObservableHistogramPanel";
 import { registerPdfFont } from "./pdfFont";
-import { histogramSelectionKey, histogramSupportsComparison, histogramIsDiscrete,
+import { histogramSelectionKey, normalizeHistogramSelectionState, histogramIsDiscrete,
   buildHistogramData, normalizeGammaLoopHistogramBins } from "./histogramUtils";
 
 // Preserve configured selections (including an intentionally empty list). For
-// unvisited observables, use the same visible-title match as Add Histogram.
+// unvisited observables, use the same identity/title match as the dashboard.
 export const pdfComparisonBundles = (bundles, name, histogram) => bundles.map((bundle) => {
   const key = histogramSelectionKey(name);
   if (Object.hasOwn(bundle.selectionsByHistogram || {}, key)) return bundle;
-  const names = Object.keys(bundle.histograms).filter((entry) =>
-    histogramSupportsComparison(bundle.histograms[entry], histogramIsDiscrete(histogram)));
-  const selected = names.includes(histogram.title) ? histogram.title : names[0];
-  return { ...bundle, selectionsByHistogram: { ...bundle.selectionsByHistogram, [key]: {
-    selectedHistograms: selected == null ? [] : [selected],
-    discreteAlignmentByHistogram: selected == null ? {} : {
-      [selected]: bundle.histograms[selected].source_format === "hwu" ? "by_index" : "by_key",
-    },
-  } } };
+  const selection = normalizeHistogramSelectionState(bundle, name, { histogramTitle: histogram.title, isDiscrete: histogramIsDiscrete(histogram) });
+  return { ...bundle, selectionsByHistogram: { ...bundle.selectionsByHistogram, [key]: selection } };
 });
 
 function CapturePlots({ plots, onReady }) {

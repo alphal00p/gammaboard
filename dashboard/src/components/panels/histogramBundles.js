@@ -115,13 +115,13 @@ export const useHistogramBundles = () => {
     [],
   );
 
-  const removeComparedHistogram = useCallback((panelId, bundleId, histogramName, comparedIndex) => {
+  const removeComparedHistogram = useCallback((panelId, bundleId, histogramName, comparedIndex, histogramTitle, isDiscrete) => {
     if (!panelId || !bundleId || !Number.isInteger(comparedIndex)) return;
     setHistogramBundlesByPanel((current) => ({
       ...current,
       [panelId]: asArray(current?.[panelId]).map((bundle) => {
         if (bundle?.id !== bundleId) return bundle;
-        const selection = normalizeHistogramSelectionState(bundle, histogramName);
+        const selection = normalizeHistogramSelectionState(bundle, histogramName, { histogramTitle, isDiscrete });
         const nextSelectedHistograms = selection.selectedHistograms.filter((_, index) => index !== comparedIndex);
         return {
           ...bundle,
@@ -152,7 +152,7 @@ export const useHistogramBundles = () => {
       ...current,
       [panelId]: asArray(current?.[panelId]).map((bundle) => {
         if (bundle?.id !== bundleId) return bundle;
-        const selection = normalizeHistogramSelectionState(bundle, histogramName);
+        const selection = normalizeHistogramSelectionState(bundle, histogramName, { histogramTitle, isDiscrete: currentHistogramIsDiscrete });
         const histogramNames = Object.keys(bundle?.histograms || {}).filter(
           (name) => histogramSupportsComparison(bundle?.histograms?.[name], Boolean(currentHistogramIsDiscrete)),
         );

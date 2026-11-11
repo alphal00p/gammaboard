@@ -1,5 +1,9 @@
 import {
   Alert,
+  Autocomplete,
+  IconButton,
+  TextField,
+  Tooltip,
   Box,
   Button,
   Card,
@@ -18,6 +22,8 @@ import {
   Switch,
   Typography,
 } from "@mui/material";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { useEffect, useRef, useState } from "react";
 import LoadingStatus from "../common/LoadingStatus";
 import { apiUrl } from "../../services/api";
@@ -155,6 +161,8 @@ const TablePanel = ({
   const [includeComparisons, setIncludeComparisons] = useState(false);
   const [includeChildren, setIncludeChildren] = useState(false);
   const [pdfProgress, setPdfProgress] = useState(null);
+  const [observableQuery, setObservableQuery] = useState("");
+  const [observableSearchActive, setObservableSearchActive] = useState(false);
   const pdfRequest = useRef(null);
   useEffect(() => () => pdfRequest.current?.abort(), []);
   const payload = state?.payload;
@@ -203,6 +211,15 @@ const TablePanel = ({
   const errorIndex = columnKeys.findIndex((column) => column === "dy" || column === "error");
   const selectableRows = rowKeys.length === rows.length;
   const rowsSelectRuns = typeof onSelectRun === "function" && rowActionColumnIndex >= 0;
+
+  const observableOptions = Object.entries(isHistogramBundle ? payload.histograms : {}).map(([name, histogram]) => ({
+    name, label: histogram.title || name,
+  }));
+  const requestedObservable = readHistogramBundleSelectedValue(state?.selected_value) ?? payload?.primary_histogram_name;
+  const selectedObservable = observableOptions.find((option) => option.name === requestedObservable) ?? observableOptions[0] ?? null;
+  const observableIndex = observableOptions.indexOf(selectedObservable);
+  const selectObservable = (name) => state?.onValueChange?.(state.panel_id,
+    writeHistogramBundlePanelValue(state.selected_value, { selectedHistogram: name }), false);
 
   const handleDownload = async (format) => {
     if (!isHistogramBundle || exporting) return;
@@ -285,6 +302,105 @@ const TablePanel = ({
     </DisclosureField>;
   };
 
+  const table = !hasRows ? <Alert severity="info">No observables available.</Alert> : <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
+          <MuiTable size="small" stickyHeader sx={payload?.sortable ? { "& .MuiTableCell-root": { px: 1, whiteSpace: "nowrap" } } : undefined}>
+            <TableHead>
+              <TableRow>
+                {payload?.row_numbers ? <TableCell sx={{ fontWeight: 600 }}>#</TableCell> : null}
+                {visibleColumnIndices.map((columnIndex) => (
+                  <TableCell
+                    key={`${columns[columnIndex]}-${columnIndex}`}
+                    sortDirection={payload?.sortable && sort?.column === columnIndex ? sort.direction : false}
+                    sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
+                  >
+                    {payload?.sortable ? (
+                      <TableSortLabel
+                        active={sort?.column === columnIndex}
+                        direction={sort?.column === columnIndex ? sort.direction : "desc"}
+                        onClick={() => setSort((previous) => ({
+                          column: columnIndex,
+                          direction: previous?.column === columnIndex && previous.direction === "desc" ? "asc" : "desc",
+                        }))}
+                      >
+                        {columns[columnIndex]}
+                      </TableSortLabel>
+                    ) : columns[columnIndex]}
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {displayRows.map(({ row, rowIndex }, position) => {
+                const rowTone = rowTones[rowIndex] || null;
+                return (
+                  <TableRow
+                  key={`row-${rowIndex}`}
+                  hover={selectableRows}
+                  selected={
+                    selectableRows &&
+                    String(rowKeys[rowIndex] ?? "") ===
+                      String(
+                        isHistogramBundle
+                          ? selectedObservable?.name
+                          : state?.selected_value,
+                      )
+                  }
+                  sx={{
+                    cursor: selectableRows || rowsSelectRuns ? "pointer" : "default",
+                    ...rowToneStyle(rowTone),
+                  }}
+                  onClick={
+                    selectableRows
+                      ? () =>
+                          state?.onValueChange?.(
+                            state?.panel_id,
+                            isHistogramBundle
+                              ? writeHistogramBundlePanelValue(state?.selected_value, {
+                                  selectedHistogram: rowKeys[rowIndex],
+                                })
+                              : rowKeys[rowIndex],
+                          )
+                      : rowsSelectRuns
+                        ? () => {
+                            const runId = Number(row?.[rowActionColumnIndex]);
+                            if (Number.isFinite(runId)) onSelectRun(runId);
+                          }
+                      : undefined
+                  }
+                  >
+                  {payload?.row_numbers ? <TableCell>{position + 1}</TableCell> : null}
+                  {visibleColumnIndices.map((columnIndex) => (
+                    <TableCell
+                      key={`${rowIndex}-${columnIndex}`}
+                      sx={{
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        verticalAlign: "top",
+                      }}
+                    >
+                      {columnIndex === visibleColumnIndices[0] && rowTone ? (
+                        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }}>
+                          <Box component="span">{renderTableCell(row, columnIndex)}</Box>
+                          <Chip
+                            size="small"
+                            color={rowToneChipColor(rowTone)}
+                            label={rowToneLabels[rowTone] || rowTone}
+                            sx={{ height: 20, fontSize: 11 }}
+                          />
+                        </Stack>
+                      ) : (
+                        renderTableCell(row, columnIndex)
+                      )}
+                    </TableCell>
+                  ))}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </MuiTable>
+        </TableContainer>;
+
   const bundleExports = supportsBundleExport && hasRows ? (
     <>
       {actions.export_json !== false && <Button size="small" variant="outlined" disabled={Boolean(exporting)} onClick={() => handleDownload("json")}>
@@ -343,104 +459,40 @@ const TablePanel = ({
             omitted from the combined result.
           </Alert>
         ) : null}
-        {!hasRows ? <Alert severity="info">No observables available.</Alert> : <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
-          <MuiTable size="small" stickyHeader sx={payload?.sortable ? { "& .MuiTableCell-root": { px: 1, whiteSpace: "nowrap" } } : undefined}>
-            <TableHead>
-              <TableRow>
-                {payload?.row_numbers ? <TableCell sx={{ fontWeight: 600 }}>#</TableCell> : null}
-                {visibleColumnIndices.map((columnIndex) => (
-                  <TableCell
-                    key={`${columns[columnIndex]}-${columnIndex}`}
-                    sortDirection={payload?.sortable && sort?.column === columnIndex ? sort.direction : false}
-                    sx={{ fontWeight: 600, whiteSpace: "nowrap" }}
-                  >
-                    {payload?.sortable ? (
-                      <TableSortLabel
-                        active={sort?.column === columnIndex}
-                        direction={sort?.column === columnIndex ? sort.direction : "desc"}
-                        onClick={() => setSort((previous) => ({
-                          column: columnIndex,
-                          direction: previous?.column === columnIndex && previous.direction === "desc" ? "asc" : "desc",
-                        }))}
-                      >
-                        {columns[columnIndex]}
-                      </TableSortLabel>
-                    ) : columns[columnIndex]}
-                  </TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {displayRows.map(({ row, rowIndex }, position) => {
-                const rowTone = rowTones[rowIndex] || null;
-                return (
-                  <TableRow
-                  key={`row-${rowIndex}`}
-                  hover={selectableRows}
-                  selected={
-                    selectableRows &&
-                    String(rowKeys[rowIndex] ?? "") ===
-                      String(
-                        isHistogramBundle
-                          ? readHistogramBundleSelectedValue(state?.selected_value)
-                          : state?.selected_value,
-                      )
-                  }
-                  sx={{
-                    cursor: selectableRows || rowsSelectRuns ? "pointer" : "default",
-                    ...rowToneStyle(rowTone),
-                  }}
-                  onClick={
-                    selectableRows
-                      ? () =>
-                          state?.onValueChange?.(
-                            state?.panel_id,
-                            isHistogramBundle
-                              ? writeHistogramBundlePanelValue(state?.selected_value, {
-                                  selectedHistogram: rowKeys[rowIndex],
-                                })
-                              : rowKeys[rowIndex],
-                          )
-                      : rowsSelectRuns
-                        ? () => {
-                            const runId = Number(row?.[rowActionColumnIndex]);
-                            if (Number.isFinite(runId)) onSelectRun(runId);
-                          }
-                      : undefined
-                  }
-                  >
-                  {payload?.row_numbers ? <TableCell>{position + 1}</TableCell> : null}
-                  {visibleColumnIndices.map((columnIndex) => (
-                    <TableCell
-                      key={`${rowIndex}-${columnIndex}`}
-                      sx={{
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        verticalAlign: "top",
-                      }}
-                    >
-                      {columnIndex === visibleColumnIndices[0] && rowTone ? (
-                        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }}>
-                          <Box component="span">{renderTableCell(row, columnIndex)}</Box>
-                          <Chip
-                            size="small"
-                            color={rowToneChipColor(rowTone)}
-                            label={rowToneLabels[rowTone] || rowTone}
-                            sx={{ height: 20, fontSize: 11 }}
-                          />
-                        </Stack>
-                      ) : (
-                        renderTableCell(row, columnIndex)
-                      )}
-                    </TableCell>
-                  ))}
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </MuiTable>
-        </TableContainer>}
+        {isHistogramBundle && observableOptions.length > 0 ? <>
+          {selectedObservable && <Stack direction="row" spacing={1} alignItems="center" sx={{ my: 1.5, minWidth: 0 }}>
+            <Autocomplete size="small" disableClearable blurOnSelect clearOnBlur={false} selectOnFocus={false}
+              options={observableOptions} value={selectedObservable}
+              inputValue={observableSearchActive ? observableQuery : selectedObservable.label}
+              onFocus={() => setObservableSearchActive(true)}
+              onBlur={() => setObservableSearchActive(false)}
+              onInputChange={(_, input, reason) => {
+                // A poll replaces option objects, making Autocomplete emit a
+                // reset. Only actual typing changes the remembered query.
+                if (reason === "input" || reason === "clear") {
+                  setObservableQuery(input);
+                  setObservableSearchActive(true);
+                }
+              }}
+              getOptionLabel={(option) => option.label} getOptionKey={(option) => option.name}
+              isOptionEqualToValue={(a, b) => a.name === b.name}
+              filterOptions={(options) => options.filter((option) => `${option.label} ${option.name}`.toLowerCase().includes(observableQuery.trim().toLowerCase()))}
+              onChange={(_, option) => selectObservable(option.name)}
+              renderInput={(params) => <TextField {...params} label="Observable" />}
+              renderOption={(props, option) => {
+                const { key, ...rest } = props;
+                return <li key={key} {...rest}><Box><Typography variant="body2">{option.label}</Typography>
+                  {option.name !== option.label && <Typography variant="caption" color="text.secondary">{option.name}</Typography>}
+                </Box></li>;
+              }} sx={{ flex: 1, minWidth: 0 }} />
+            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>{observableIndex + 1} / {observableOptions.length}</Typography>
+            <Tooltip title="Previous observable"><span><IconButton size="small" aria-label="Previous observable" disabled={observableIndex <= 0}
+              onClick={() => selectObservable(observableOptions[observableIndex - 1].name)}><ChevronLeftIcon /></IconButton></span></Tooltip>
+            <Tooltip title="Next observable"><span><IconButton size="small" aria-label="Next observable" disabled={observableIndex >= observableOptions.length - 1}
+              onClick={() => selectObservable(observableOptions[observableIndex + 1].name)}><ChevronRightIcon /></IconButton></span></Tooltip>
+          </Stack>}
+          <DisclosureField section label={`All observables (${observableOptions.length})`}>{table}</DisclosureField>
+        </> : table}
       </CardContent>
     </Card>
   );

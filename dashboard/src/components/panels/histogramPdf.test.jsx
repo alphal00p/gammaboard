@@ -29,9 +29,9 @@ test.each([false, true])("exports every observable on one page with display rebi
   });
   await waitFor(() => expect(result).toBeDefined());
   await promise;
-  expect(convert).toHaveBeenCalledTimes(2);
+  expect(convert).toHaveBeenCalledTimes(includeComparisons ? 4 : 2);
   expect(options[0].series.find((series) => series.name === "value").data).toEqual([[0, 3], [2, 3]]);
-  const names = options.map((option) => option.series.map((series) => series.name));
+  const names = options.filter((option) => option.series.some((series) => series.name === "value")).map((option) => option.series.map((series) => series.name));
   expect(names[0].includes("reference.json: Energy")).toBe(includeComparisons);
   expect(names[1].includes("reference.json: fallback")).toBe(includeComparisons);
   const pdf = await new Promise((resolve) => {
