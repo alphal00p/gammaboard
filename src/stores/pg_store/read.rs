@@ -1,6 +1,18 @@
 use super::{PgStore, queries};
 use crate::core::{RunReadStore, StoreError};
 
+impl PgStore {
+    pub async fn search_runs_page(
+        &self,
+        limit: usize,
+        offset: usize,
+        include_children: bool,
+        search: &str,
+    ) -> Result<Vec<crate::stores::RunProgress>, StoreError> {
+        Ok(queries::search_runs_page(&self.pool, limit, offset, include_children, search).await?)
+    }
+}
+
 #[async_trait::async_trait]
 impl RunReadStore for PgStore {
     async fn health_check(&self) -> Result<(), StoreError> {

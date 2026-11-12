@@ -19,8 +19,19 @@ use tokio::sync::Notify;
 type RecordedInserts = Arc<Mutex<Vec<(f64, Vec<i64>)>>>;
 type RecordedInsertAttempts = Arc<Mutex<Vec<(Vec<i64>, Vec<Vec<u8>>, bool)>>>;
 
+#[derive(Default)]
+pub(crate) struct CheckpointRecording {
+    pub saved: Vec<(
+        crate::core::SamplerAggregatorCheckpoint,
+        Option<RunStageSnapshot>,
+    )>,
+    pub errors: std::collections::VecDeque<StoreError>,
+    pub events: Vec<&'static str>,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct RecordingStore {
+    pub checkpoints: Arc<Mutex<Option<CheckpointRecording>>>,
     pub(crate) campaign_allowance: Arc<Mutex<Option<i64>>>,
     pub(crate) nodes: Option<Vec<RegisteredNode>>,
     pub(crate) assignment_update_result: Option<bool>,
@@ -40,6 +51,16 @@ pub(crate) struct RecordingStore {
 }
 
 impl RecordingStore {
+    fn record_checkpoint_step(&self, step: &'static str) {
+        self.checkpoints
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("checkpoint recording is not enabled")
+            .events
+            .push(step);
+    }
+
     pub(crate) fn block_first_insert(&mut self) -> Arc<Notify> {
         let gate = Arc::new(Notify::new());
         self.first_insert_gate = Some(gate.clone());
@@ -107,7 +128,8 @@ impl WorkQueueStore for RecordingStore {
         _task_id: Option<i64>,
         _completed_after_batch_id: Option<i64>,
     ) -> Result<BatchQueueCounts, StoreError> {
-        unreachable!("unused in test")
+        self.record_checkpoint_step("counts");
+        Ok(BatchQueueCounts::default())
     }
 
     async fn get_queue_blocker(
@@ -167,7 +189,8 @@ impl WorkQueueStore for RecordingStore {
         &self,
         _snapshot: &SamplerAggregatorPerformanceSnapshot,
     ) -> Result<(), StoreError> {
-        unreachable!("unused in test")
+        self.record_checkpoint_step("performance");
+        Ok(())
     }
 
     async fn fail_batch(
@@ -218,11 +241,13 @@ impl WorkQueueStore for RecordingStore {
         _up_to_batch_id: i64,
         _limit: usize,
     ) -> Result<u64, StoreError> {
-        unreachable!("unused in test")
+        self.record_checkpoint_step("cleanup");
+        Ok(0)
     }
 
     async fn reclaim_abandoned_batches(&self, _run_id: i32) -> Result<u64, StoreError> {
-        unreachable!("unused in test")
+        self.record_checkpoint_step("reclaim");
+        Ok(0)
     }
 }
 
@@ -289,16 +314,24 @@ impl AggregationStore for RecordingStore {
         _persisted_observable: Option<&JsonValue>,
         _delta_batches_completed: i32,
     ) -> Result<(), StoreError> {
-        unreachable!("unused in test")
+        self.record_checkpoint_step("aggregation");
+        Ok(())
     }
 
     async fn save_sampler_checkpoint(
         &self,
         _run_id: i32,
-        _checkpoint: &crate::core::SamplerAggregatorCheckpoint,
-        _stage: Option<&crate::core::RunStageSnapshot>,
+        checkpoint: &crate::core::SamplerAggregatorCheckpoint,
+        stage: Option<&crate::core::RunStageSnapshot>,
     ) -> Result<(), StoreError> {
-        unreachable!("unused in test")
+        let mut guard = self.checkpoints.lock().unwrap();
+        let recording = guard.as_mut().expect("checkpoint recording is not enabled");
+        recording.events.push("checkpoint");
+        if let Some(error) = recording.errors.pop_front() {
+            return Err(error);
+        }
+        recording.saved.push((checkpoint.clone(), stage.cloned()));
+        Ok(())
     }
 
     async fn save_run_sample_progress(
@@ -308,7 +341,8 @@ impl AggregationStore for RecordingStore {
         _nr_completed_samples: i64,
         _sampler_runner_uptime_ms: f64,
     ) -> Result<(), StoreError> {
-        unreachable!("unused in test")
+        self.record_checkpoint_step("run_progress");
+        Ok(())
     }
 
     async fn save_run_stage_snapshot(
@@ -384,7 +418,8 @@ impl RunTaskStore for RecordingStore {
         _nr_produced_samples: i64,
         _nr_completed_samples: i64,
     ) -> Result<(), StoreError> {
-        unreachable!("unused in test")
+        self.record_checkpoint_step("task_progress");
+        Ok(())
     }
 
     async fn set_run_task_spawn_origin(

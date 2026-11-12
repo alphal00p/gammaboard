@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::BatchQueueCounts;
+use crate::core::{BatchQueueCounts, RunTaskSpec};
 use crate::test_support::RecordingStore;
 use crate::utils::domain::Domain;
 
@@ -381,5 +381,175 @@ fn generation_limit_defaults_and_validation() {
     assert!(queue.try_into::<SamplerQueueConfig>().is_err());
     assert!(
         serde_json::from_value::<SamplerQueueTuning>(json!({"max_generation_size": 0})).is_err()
+    );
+}
+
+#[test]
+fn periodic_checkpoint_defaults_and_task_local_thresholds() {
+    let mut run = runner(0, 100, 1000);
+    let policy = run.task.task.checkpoint_policy().unwrap();
+    assert_eq!(policy.interval_seconds, 3600.0);
+    assert_eq!(policy.interval_samples, 0);
+    run.runtime_state.sampler_uptime_ms_accumulated = 100.0 * 3600.0 * 1000.0;
+    run.task.nr_completed_samples = 900;
+    assert!(
+        !run.periodic_checkpoint_due(),
+        "prior uptime or sample volume cannot trigger the default time-only policy"
+    );
+    run.last_checkpoint_at = Instant::now() - Duration::from_secs(3601);
+    assert!(run.periodic_checkpoint_due());
+    if let RunTaskSpec::Sample { checkpoint, .. } = &mut run.task.task {
+        checkpoint.interval_seconds = 0.0;
+        checkpoint.interval_samples = 100;
+    }
+    run.last_checkpoint_samples = 850;
+    assert!(!run.periodic_checkpoint_due());
+    run.task.nr_completed_samples = 950;
+    assert!(run.periodic_checkpoint_due());
+    run.last_checkpoint_samples = 950;
+    assert!(
+        !run.periodic_checkpoint_due(),
+        "threshold counts newly completed task samples"
+    );
+    if let RunTaskSpec::Sample { checkpoint, .. } = &mut run.task.task {
+        checkpoint.interval_samples = 0;
+    }
+    assert!(
+        !run.periodic_checkpoint_due(),
+        "both triggers can be disabled"
+    );
+}
+
+#[test]
+fn periodic_checkpoint_config_roundtrips_and_rejects_invalid_thresholds() {
+    let mut task = runner(0, 100, 1000).task.task;
+    for value in [
+        json!({}),
+        json!({"interval_seconds":0.25,"interval_samples":7}),
+        json!({"interval_seconds":0,"interval_samples":0}),
+    ] {
+        let mut encoded = serde_json::to_value(&task).unwrap();
+        encoded["checkpoint"] = value;
+        task = serde_json::from_value(encoded).unwrap();
+        task.validate().unwrap();
+        let input = crate::core::RunTaskInput {
+            name: Some("sample".into()),
+            task: task.clone(),
+        };
+        let text = crate::core::canonical_task_toml(&input).unwrap();
+        let document: toml::Value = toml::from_str(&text).unwrap();
+        let restored: crate::core::RunTaskInput = document["task"].clone().try_into().unwrap();
+        assert_eq!(restored.task.checkpoint_policy(), task.checkpoint_policy());
+    }
+    for seconds in [-1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+        assert!(
+            crate::core::CheckpointPolicy {
+                interval_seconds: seconds,
+                interval_samples: 0
+            }
+            .validate()
+            .is_err()
+        );
+    }
+    assert!(
+        crate::core::CheckpointPolicy {
+            interval_seconds: 3600.,
+            interval_samples: u64::MAX
+        }
+        .validate()
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn periodic_checkpoint_flushes_pending_draws_and_does_not_create_a_stage() {
+    let mut run = runner(20_000, 20_000, 40_000);
+    *run.store.checkpoints.lock().unwrap() = Some(Default::default());
+    run.save_initial_checkpoint().await.unwrap();
+    run.produce(BatchQueueCounts::default()).await.unwrap();
+    assert!(run.runtime_state.generation.has_pending());
+    let pending = run.runtime_state.generation.pending_samples();
+    run.last_checkpoint_at = Instant::now() - Duration::from_secs(3601);
+    run.maybe_checkpoint().await.unwrap();
+    assert!(!run.periodic_checkpoint_due());
+    let guard = run.store.checkpoints.lock().unwrap();
+    let recorded = guard.as_ref().unwrap();
+    assert_eq!(recorded.saved.len(), 2);
+    let (saved, stage) = recorded.saved.last().unwrap();
+    assert!(
+        stage.is_none(),
+        "periodic checkpoints replace active recovery state, not named stages"
+    );
+    assert_eq!(saved.runtime_state.generation.pending_samples(), pending);
+    assert_eq!(saved.produced_samples(), run.task.nr_produced_samples);
+    assert_eq!(saved.completed_samples, 0);
+    assert!(
+        !run.store.recorded_inserts().is_empty(),
+        "pending insert work was committed before saving"
+    );
+    let checkpoint = recorded
+        .events
+        .iter()
+        .rposition(|e| *e == "checkpoint")
+        .unwrap();
+    for step in [
+        "aggregation",
+        "performance",
+        "task_progress",
+        "run_progress",
+    ] {
+        assert!(
+            recorded.events[..checkpoint].contains(&step),
+            "{step} precedes the recovery boundary"
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_periodic_checkpoint_keeps_the_last_boundary_and_retries_with_backoff() {
+    let mut run = runner(0, 100, 1000);
+    *run.store.checkpoints.lock().unwrap() = Some(Default::default());
+    run.save_initial_checkpoint().await.unwrap();
+    run.last_checkpoint_at = Instant::now() - Duration::from_secs(3601);
+    let previous = run.last_checkpoint_at;
+    run.store
+        .checkpoints
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .errors
+        .push_back(StoreError::RetryableTransaction {
+            sqlstate: "55P03".into(),
+            message: "lock timeout".into(),
+        });
+    run.maybe_checkpoint().await.unwrap();
+    assert_eq!(run.last_checkpoint_at, previous);
+    assert!(run.periodic_checkpoint_due());
+    run.maybe_checkpoint().await.unwrap();
+    assert_eq!(
+        run.store
+            .checkpoints
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .saved
+            .len(),
+        1
+    );
+    run.last_checkpoint_attempt_at = Some(Instant::now() - CHECKPOINT_RETRY_INTERVAL);
+    run.maybe_checkpoint().await.unwrap();
+    assert!(!run.periodic_checkpoint_due());
+    assert_eq!(
+        run.store
+            .checkpoints
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .saved
+            .len(),
+        2
     );
 }

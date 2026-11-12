@@ -81,6 +81,8 @@ where
             by_label.insert(child.name.clone(), created.run_id);
         }
 
+        self.store.apply_campaign_queue_tuning(self.task.id).await?;
+
         let previous_output = self
             .task
             .controller_output
@@ -177,9 +179,8 @@ where
                 WorkerRole::Evaluator => worker_counts.1 += 1,
             }
         }
-        let capacity = allocation
-            .max_active_runs
-            .min(worker_counts.0)
+        let capacity = worker_counts
+            .0
             .min(worker_counts.1 / allocation.min_evaluators_per_run);
         let grants = self
             .store
@@ -544,7 +545,11 @@ fn schedule_children(
     selected.extend(
         candidates
             .into_iter()
-            .take(capacity.saturating_sub(selected.len()))
+            .take(
+                capacity
+                    .min(allocation.max_active_runs)
+                    .saturating_sub(selected.len()),
+            )
             .map(|c| c.run_id),
     );
     selected
@@ -759,6 +764,7 @@ mod tests {
     #[test]
     fn quanta_switch_independently_and_ties_keep_the_incumbent() {
         let allocation = IntegrationCampaignAllocationSpec {
+            max_active_runs: 2,
             min_samples_per_child: 0,
             algorithm: IntegrationCampaignAllocationAlgorithm::LargestVariance,
             ..Default::default()
@@ -868,6 +874,42 @@ mod tests {
         assert_eq!(imag.sample_count, 30);
     }
 
+    #[test]
+    fn lower_concurrency_drains_incumbents_without_granting_new_slots() {
+        let states = vec![
+            child(1, 1.0, 1.0, 0.1, 10),
+            child(2, 1.0, 1.0, 0.1, 10),
+            child(3, 1.0, 1.0, 0.1, 0),
+        ];
+        let eligible = [1, 2, 3].into_iter().collect();
+        let allocation = IntegrationCampaignAllocationSpec {
+            max_active_runs: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            schedule_children(
+                &states,
+                &[(1, 20), (2, 20)].into_iter().collect(),
+                &[1, 2],
+                &eligible,
+                &allocation,
+                2
+            ),
+            vec![1, 2]
+        );
+        assert_eq!(
+            schedule_children(
+                &states,
+                &[(1, 10), (2, 20)].into_iter().collect(),
+                &[1, 2],
+                &eligible,
+                &allocation,
+                2
+            ),
+            vec![2]
+        );
+    }
+
     fn select_children(
         states: &[ChildState],
         algorithm: IntegrationCampaignAllocationAlgorithm,
@@ -886,6 +928,7 @@ mod tests {
             &IntegrationCampaignAllocationSpec {
                 algorithm,
                 min_samples_per_child: minimum,
+                max_active_runs: limit,
                 ..Default::default()
             },
             limit,

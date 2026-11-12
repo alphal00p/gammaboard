@@ -4,6 +4,8 @@ import { fetchRunPerformanceGraphs } from "../services/api";
 import PanelCollection from "./panels/PanelCollection";
 import { readZoomFromPanelValue } from "./panels/panelView";
 import { useWorkspaceActive } from "./common/WorkspaceTabs";
+import { usePageVisible } from "../hooks/usePageVisible";
+import { readResourceCache, writeResourceCache } from "../services/resourceCache";
 import LoadingStatus from "./common/LoadingStatus";
 import PanelInfo from "./common/PanelInfo";
 
@@ -36,17 +38,22 @@ export const mergeHistoryDetail = (full, detail) => full.states.map((state) => {
   }) };
 });
 
-const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
-  const active = useWorkspaceActive();
+const PerformanceGraphs = ({ runId, selection = null, onSelectionChange, pollMs = 5000 }) => {
+  const workspaceActive = useWorkspaceActive();
+  const visible = usePageVisible();
+  const active = workspaceActive && visible;
+  const cacheKey = `performance-graphs:${runId}:${JSON.stringify(selection)}`;
   const [yViews, setYViews] = useState({});
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(() => readResourceCache(cacheKey));
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const cache = useRef(null);
   const boundsRef = useRef(null);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || runId == null) return;
+    const saved = readResourceCache(cacheKey);
+    if (saved) setData(saved);
     const controller = new AbortController();
     let timer;
     const load = async () => {
@@ -67,20 +74,21 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
         if (controller.signal.aborted) return;
         boundsRef.current = full.bounds;
         setData({ full, detail });
+        writeResourceCache(cacheKey, { full, detail });
         setError(null);
       } catch (err) {
         if (!controller.signal.aborted) setError(err.message || "History could not be refreshed.");
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
-          timer = setTimeout(load, 5000);
+          timer = setTimeout(load, pollMs);
         }
       }
     };
     // Debounce navigation; retain the graphs while the new detail loads.
     timer = setTimeout(load, selection ? 150 : 0);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [runId, selection, active]);
+  }, [runId, selection, active, pollMs, cacheKey]);
 
   const changeView = useCallback((id, value) => {
     if (value?.yZoom) setYViews((previous) => ({ ...previous, [id]: value.yZoom }));
@@ -119,7 +127,7 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
         "Lines are interval averages across reporting workers. No smoothing is applied; gaps are unavailable. Zoom in to resolve pauses.",
       ]} />
     </Stack>
-    <LoadingStatus loading={loading && !data} label="Loading performance history…" />
+    <LoadingStatus loading={loading} label="Loading performance history…" />
     {error && <Alert severity="warning">{error} Displaying the last loaded history.</Alert>}
     {full?.bounds ? <>
       <PanelCollection panelSpecs={full.panels} panelStates={states} panelValues={values} onPanelValueChange={changeView} />

@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs } from "./api";
+import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs, fetchCampaign } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -76,7 +76,7 @@ test("session startup uses POST so same-origin browsers send their Origin", asyn
 });
 
 
-test("summary and graph APIs encode identical rolling, all and custom ranges", async () => {
+test("summary, graph and campaign APIs encode identical rolling, all and custom ranges", async () => {
   const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
   vi.stubGlobal("fetch", fetch);
   for (const [selection, query] of [
@@ -90,5 +90,7 @@ test("summary and graph APIs encode identical rolling, all and custom ranges", a
     expect(fetch.mock.lastCall[0]).toBe(`/api/runs/1/performance${query ? `?${query}` : ""}`);
     await fetchRunPerformanceGraphs(1, selection);
     expect(fetch.mock.lastCall[0]).toBe(`/api/runs/1/performance/graphs${query ? `?${query}` : ""}`);
+    await fetchCampaign(1, "2", { section: "overview", selection });
+    expect(fetch.mock.lastCall[0]).toBe(`/api/runs/1/tasks/2/campaign?section=overview${query ? `&${query}` : ""}`);
   }
 });

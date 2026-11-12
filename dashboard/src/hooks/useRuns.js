@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchRuns } from "../services/api";
+import { fetchRuns, fetchRunSummary } from "../services/api";
 import { usePolledResource } from "./usePolledResource";
 
 const useRunCatalog = ({ refreshInterval, includeChildren, paused = false }) => {
@@ -48,21 +48,30 @@ const useRunCatalog = ({ refreshInterval, includeChildren, paused = false }) => 
   return { runs, isConnected, isLoadingRuns: isLoading, isFetchingRuns: isFetching, hasMoreRuns: nextOffset != null, loadMoreRuns: loadMore, isLoadingMoreRuns: isLoadingMore };
 };
 
-export const useRuns = ({ refreshInterval = 2000, includeChildren = false } = {}) => {
+export const useRuns = ({ refreshInterval = 2000, includeChildren = false, selectedRun = null } = {}) => {
   // The root catalog owns selection and pagination. Showing children augments
   // it instead of replacing it with a temporarily empty request result.
   const roots = useRunCatalog({ refreshInterval, includeChildren: false });
   const children = useRunCatalog({ refreshInterval, includeChildren: true, paused: !includeChildren });
-  const runs = useMemo(() => includeChildren
+  const catalogRuns = useMemo(() => includeChildren
     ? [...roots.runs, ...children.runs.filter((run) => run.parent_run_id != null)] : roots.runs,
   [roots.runs, children.runs, includeChildren]);
+  const catalogLoading = roots.isLoadingRuns || (includeChildren && children.isLoadingRuns);
+  const needsSelectedRun = selectedRun != null && !roots.isLoadingRuns && !catalogRuns.some((run) => run.run_id === selectedRun);
+  const fetchSelected = useCallback((signal) => fetchRunSummary(selectedRun, signal), [selectedRun]);
+  const selected = usePolledResource({ enabled: needsSelectedRun, pollMs: refreshInterval,
+    initialData: null, fetchResource: fetchSelected });
+  const selectedVisible = selected.data && (includeChildren || selected.data.parent_run_id == null);
+  const selectedRunMissing = Boolean(needsSelectedRun && (selected.error?.status === 404 || (selected.data && !selectedVisible)));
+  const runs = useMemo(() => needsSelectedRun && selectedVisible
+    ? [...catalogRuns, selected.data] : catalogRuns, [catalogRuns, needsSelectedRun, selectedVisible, selected.data]);
   const loadMoreRuns = useCallback(() => Promise.all([
     roots.loadMoreRuns(), ...(includeChildren ? [children.loadMoreRuns()] : []),
   ]), [roots.loadMoreRuns, children.loadMoreRuns, includeChildren]);
   return {
-    runs, loadMoreRuns,
+    runs, loadMoreRuns, selectedRunMissing,
     isConnected: roots.isConnected && (!includeChildren || children.isConnected),
-    isLoadingRuns: roots.isLoadingRuns || (includeChildren && children.isLoadingRuns),
+    isLoadingRuns: catalogLoading || (needsSelectedRun && selected.isLoading),
     isFetchingRuns: roots.isFetchingRuns || (includeChildren && children.isFetchingRuns),
     hasMoreRuns: roots.hasMoreRuns || (includeChildren && children.hasMoreRuns),
     isLoadingMoreRuns: roots.isLoadingMoreRuns || (includeChildren && children.isLoadingMoreRuns),

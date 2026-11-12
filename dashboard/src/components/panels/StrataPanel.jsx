@@ -65,7 +65,7 @@ export const uncertaintyBand = (name, points, color) => ({
 const PercentRow = ({ label, values, rows }) => (
   <Box>
     <DisclosureField section label={label}>
-      <Typography variant="caption">{fieldHelp("", label)}</Typography>
+      <Typography variant="caption">{fieldHelp("", label, "strata")}</Typography>
     </DisclosureField>
     <Box
       sx={{

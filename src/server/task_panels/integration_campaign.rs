@@ -9,7 +9,7 @@ use crate::server::panels::{
     table_panel_with_payload_and_options,
 };
 use serde_json::{Value as JsonValue, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const PROGRESS_ID: &str = "campaign_progress";
 const SUMMARY_ID: &str = "campaign_combined_result";
@@ -22,17 +22,21 @@ pub(super) fn projectors() -> Vec<TaskPanelProjector> {
 
 pub(super) fn projectors_for_workers(
     workers: &[crate::core::RegisteredNode],
+    publishing_core_hours: BTreeMap<i32, f64>,
 ) -> Vec<TaskPanelProjector> {
-    projectors_with_workers(Some(CampaignWorkers::from_live_nodes(workers)))
+    let mut runtime = CampaignRuntime::from_live_nodes(workers);
+    runtime.publishing_core_hours = publishing_core_hours;
+    projectors_with_workers(Some(runtime))
 }
 
 #[derive(Default)]
-struct CampaignWorkers {
+struct CampaignRuntime {
     desired_samplers: BTreeSet<i32>,
     active_samplers: BTreeSet<i32>,
+    publishing_core_hours: BTreeMap<i32, f64>,
 }
 
-impl CampaignWorkers {
+impl CampaignRuntime {
     // ControlPlaneStore::list_nodes excludes expired leases.
     fn from_live_nodes(workers: &[crate::core::RegisteredNode]) -> Self {
         let sampler_run = |assignment: Option<&crate::core::AssignmentTarget>| {
@@ -49,6 +53,7 @@ impl CampaignWorkers {
                 .iter()
                 .filter_map(|node| sampler_run(node.current_assignment.as_ref()))
                 .collect(),
+            publishing_core_hours: BTreeMap::new(),
         }
     }
 
@@ -63,7 +68,7 @@ impl CampaignWorkers {
     }
 }
 
-fn projectors_with_workers(workers: Option<CampaignWorkers>) -> Vec<TaskPanelProjector> {
+fn projectors_with_workers(workers: Option<CampaignRuntime>) -> Vec<TaskPanelProjector> {
     vec![
         progress_projector(
             PROGRESS_ID,
@@ -254,7 +259,7 @@ fn summary_projector() -> TaskPanelProjector {
     )
 }
 
-fn children_projector(workers: Option<CampaignWorkers>) -> TaskPanelProjector {
+fn children_projector(workers: Option<CampaignRuntime>) -> TaskPanelProjector {
     panel_projector(
         sized_panel_spec(
             CHILDREN_ID,
@@ -310,13 +315,19 @@ fn children_projector(workers: Option<CampaignWorkers>) -> TaskPanelProjector {
             payload["sortable"] = json!(true);
             payload["row_numbers"] = json!(true);
             let mut formats = serde_json::Map::new();
+            let mut precision = serde_json::Map::new();
             for columns in [&columns, &absolute_columns] {
                 for index in 0..result_keys.len() {
                     formats.insert(columns[4 + 3 * index].clone(), json!("scientific"));
                     formats.insert(columns[5 + 3 * index].clone(), json!("scientific"));
+                    precision.insert(columns[4 + 3 * index].clone(), json!(4));
+                    precision.insert(columns[5 + 3 * index].clone(), json!(4));
+                    formats.insert(columns[6 + 3 * index].clone(), json!("comparison_decimal"));
                 }
             }
+            formats.insert("var ctrb (%)".into(), json!("comparison_decimal"));
             payload["column_formats"] = json!(formats);
+            payload["column_precision"] = json!(precision);
             if result_keys
                 .iter()
                 .any(|key| key.0 == crate::core::AccumulatorMetricName::Mean)
@@ -367,6 +378,7 @@ fn child_columns(result_keys: &[ResultKey], absolute: bool) -> Vec<String> {
     columns.extend([
         "var ctrb (%)".to_string(),
         "samples".to_string(),
+        "core-hours".to_string(),
         "estimator".to_string(),
     ]);
     columns
@@ -415,7 +427,7 @@ fn child_row(
     result_keys: &[ResultKey],
     total_variance: Option<f64>,
     absolute: bool,
-    workers: Option<&CampaignWorkers>,
+    workers: Option<&CampaignRuntime>,
 ) -> Vec<JsonValue> {
     let status = if campaign_stopped
         && matches!(
@@ -496,6 +508,12 @@ fn child_row(
             .max()
             .map_or(JsonValue::Null, |samples| json!(samples)),
     );
+    row.push(json!(
+        child
+            .child
+            .child_run_id
+            .and_then(|id| workers?.publishing_core_hours.get(&id).copied())
+    ));
     row.push(
         results
             .first()
@@ -578,7 +596,7 @@ mod tests {
             last_seen: None,
         };
         let status = |child: &IntegrationCampaignChildOutput, stopped, nodes: &[RegisteredNode]| {
-            let workers = CampaignWorkers::from_live_nodes(nodes);
+            let workers = CampaignRuntime::from_live_nodes(nodes);
             child_row(child, stopped, &[], None, false, Some(&workers))[1].clone()
         };
         assert_eq!(status(&child, false, &[]), json!("waiting"));
@@ -623,8 +641,9 @@ mod tests {
         let variance = child_variance(&children[0]).unwrap();
         let row = child_row(&children[0], false, &keys, Some(variance), false, None);
 
-        assert_eq!(row.len(), 13);
-        assert_eq!(row[12], json!("pooled"));
+        assert_eq!(row.len(), 14);
+        assert_eq!(row[13], json!("pooled"));
+        assert!(row[12].is_null());
         assert_eq!(row[1], json!("running"));
         assert_eq!(row[4], json!(3.0));
         assert_eq!(row[5], json!(0.4));
@@ -634,6 +653,22 @@ mod tests {
         assert_eq!(row[9], json!(10.0));
         assert_eq!(row[10], json!(100.0));
         assert_eq!(row[11], json!(10));
+    }
+
+    #[test]
+    fn child_core_hours_are_identical_for_signed_and_absolute_results() {
+        let child = child(Some(complex_measurement((3.0, 0.4), (-2.0, 0.2), 10)));
+        let keys = campaign_result_keys(std::slice::from_ref(&child));
+        let runtime = CampaignRuntime {
+            publishing_core_hours: [(2, 1.75123456789)].into(),
+            ..Default::default()
+        };
+        for absolute in [false, true] {
+            let columns = child_columns(&keys, absolute);
+            let index = columns.iter().position(|c| c == "core-hours").unwrap();
+            let row = child_row(&child, false, &keys, Some(0.8), absolute, Some(&runtime));
+            assert_eq!(row[index], json!(1.75123456789));
+        }
     }
 
     #[test]
@@ -711,6 +746,7 @@ mod tests {
                 "imag err (%)",
                 "var ctrb (%)",
                 "samples",
+                "core-hours",
                 "estimator"
             ]
         );

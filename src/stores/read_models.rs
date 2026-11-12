@@ -50,6 +50,8 @@ pub struct RunProgress {
     pub run_toml: Option<String>,
     pub provenance: serde_json::Value,
     pub parent_run_id: Option<i32>,
+    #[serde(default)]
+    pub parent_run_name: Option<String>,
     pub parent_task_id: Option<String>,
     pub spawn_kind: Option<String>,
     pub spawn_label: Option<String>,

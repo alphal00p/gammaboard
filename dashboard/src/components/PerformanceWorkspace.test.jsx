@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { useCampaign } from "../hooks/useCampaign";
 import PerformanceWorkspace from "./PerformanceWorkspace";
 import { useRunPerformancePanels } from "../hooks/useRunPerformancePanels";
 import { updateRunTaskQueueTuning } from "../services/api";
 
 vi.mock("../auth/AuthProvider", () => ({ useAuth: () => ({ authenticated: true }) }));
 vi.mock("../services/api", () => ({ updateRunTaskQueueTuning: vi.fn() }));
+vi.mock("../hooks/useCampaign", () => ({ useCampaign: vi.fn() }));
 vi.mock("../hooks/useRunPerformancePanels", () => ({ useRunPerformancePanels: vi.fn() }));
 vi.mock("./RunInfo", () => ({ default: () => <div>Live queue and batch</div> }));
 vi.mock("./PerformanceGraphs", () => ({ default: ({ onSelectionChange }) => <button onClick={() => onSelectionChange({ start: 1000, end: 2000, follow: false })}>Historical graphs</button> }));
@@ -16,6 +18,7 @@ const props = { runs: [{ run_id: 1, queue_tuning_defaults: defaults }], workers:
 const activeTask = { id: "1", name: "train", is_sample: true, state: "active" };
 let response;
 beforeEach(() => {
+  useCampaign.mockReturnValue({ data: null, isFetching: false, error: null });
   response = {
     panelSpecs: ["performance_overview", "busy_rates", "measurement_window", "queue_diagnostics"].map((panel_id) => ({ panel_id })),
     panelStates: [
@@ -124,15 +127,27 @@ describe("performance measurements", () => {
     expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { seconds: 30 } }));
   });
 
-  test("hides retained values on a failed or missing refresh", () => {
+  test("retains cached values with a warning on a failed or missing refresh", () => {
     vi.useFakeTimers();
     const { rerender } = render(<PerformanceWorkspace {...props} />);
     act(() => vi.advanceTimersByTime(10001));
-    expect(screen.queryByTestId("measurements")).not.toBeInTheDocument();
+    expect(screen.getByTestId("measurements")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("unavailable");
     useRunPerformancePanels.mockReturnValue({ ...response, error: "Refresh failed" });
     rerender(<PerformanceWorkspace {...props} />);
     expect(screen.getByRole("alert")).toHaveTextContent("Refresh failed");
-    expect(screen.queryByTestId("measurements")).not.toBeInTheDocument();
+    expect(screen.getByTestId("measurements")).toBeInTheDocument();
   });
+});
+
+test("campaign diagnostics retain their chosen child when scheduling rotates", () => {
+  window.sessionStorage.clear();
+  const metadata={children:[{label:"A",run_id:2},{label:"B",run_id:3}],controller_output:{selected_child_run_ids:[2]}};
+  useCampaign.mockReturnValue({data:metadata,isFetching:false,error:null});
+  const campaignProps={...props,runs:[{run_id:1,kind:"integration_campaign"}],tasks:[{id:"10",task_kind:"integration_campaign"}],view:"diagnostics"};
+  const {rerender}=render(<PerformanceWorkspace {...campaignProps} />);
+  expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({runId:2,pollMs:10000}));
+  useCampaign.mockReturnValue({data:{...metadata,controller_output:{selected_child_run_ids:[3]}},isFetching:false,error:null});
+  rerender(<PerformanceWorkspace {...campaignProps} />);
+  expect(useRunPerformancePanels).toHaveBeenLastCalledWith(expect.objectContaining({runId:2}));
 });

@@ -1,4 +1,8 @@
+import { useCampaign } from "../hooks/useCampaign";
+import { CampaignPanelResponse } from "./runs/CampaignPanels";
+import CampaignQueueTuning from "./runs/CampaignQueueTuning";
 import LoadingStatus from "./common/LoadingStatus";
+import StableTaskOutput from "./common/StableTaskOutput";
 import { Alert, FormControl, MenuItem, Select, Stack, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
@@ -33,21 +37,38 @@ const PerformanceWorkspaceContent = (props) => {
   const [queueTuningStatus, setQueueTuningStatus] = useState(null);
   const [expired, setExpired] = useState(false);
   const currentRun = asArray(runs).find((entry) => entry?.run_id === selectedRun) ?? null;
+  const campaignTask = asArray(tasks).find((task) => task.task_kind === "integration_campaign");
+  const campaign = currentRun?.kind === "integration_campaign";
+  const campaignData = useCampaign({ runId: campaign ? selectedRun : null, taskId: campaignTask?.id,
+    section: view === "overview" ? "overview" : "settings", selection: view === "overview" ? selection : null });
+  const childRuns = campaignData.data?.children?.filter((child) => child.run_id != null) ?? [];
+  const [chosenChild, setChosenChild] = useState(() => window.sessionStorage.getItem(`campaign-child:${selectedRun}`));
+  const scheduled = campaignData.data?.controller_output?.selected_child_run_ids ?? [];
+  const childRun = childRuns.find((child) => String(child.run_id) === chosenChild)
+    ?? childRuns.find((child) => scheduled.includes(child.run_id)) ?? childRuns[0];
+  useEffect(() => {
+    // Choose once when the list arrives; later scheduler rotations must not
+    // redirect an open diagnostic view to another child.
+    if (campaign && childRun && !childRuns.some((child) => String(child.run_id) === chosenChild)) {
+      const id = String(childRun.run_id); setChosenChild(id); window.sessionStorage.setItem(`campaign-child:${selectedRun}`, id);
+    }
+  }, [campaign, childRun, childRuns, chosenChild, selectedRun]);
+  const performanceRun = campaign ? childRun?.run_id : selectedRun;
   const sampleTask = asArray(tasks).find((task) => task.state === "active" && task.is_sample) ?? null;
   const tuningStatus = queueTuningStatus?.taskId === sampleTask?.id ? queueTuningStatus : null;
   const evaluators = useMemo(() => asArray(workers)
-    .filter((worker) => worker?.current_run_id === selectedRun && worker?.current_role === "evaluator")
-    .sort(compareNodesByName), [workers, selectedRun]);
+    .filter((worker) => worker?.current_run_id === performanceRun && worker?.current_role === "evaluator")
+    .sort(compareNodesByName), [workers, performanceRun]);
   const evaluatorNodeName = selectedNode || null;
-  const performance = useRunPerformancePanels({ runId: selectedRun, selection, pollMs: 5000, paused: view === "graphs" || view === "tuning" });
+  const performance = useRunPerformancePanels({ runId: performanceRun, selection, pollMs: campaign ? 10000 : 5000, paused: view === "graphs" || view === "tuning" || (campaign && view === "overview") });
   const { panelSpecs, panelStates, panelValues, setPanelValue, error, refreshing, isLoading } = performance;
 
   useEffect(() => {
     setExpired(false);
     if (!panelStates.length) return undefined;
-    const timeout = setTimeout(() => setExpired(true), 10000);
+    const timeout = setTimeout(() => setExpired(true), campaign ? 30000 : 10000);
     return () => clearTimeout(timeout);
-  }, [panelStates]);
+  }, [panelStates, campaign]);
 
   const saveQueueTuning = useCallback(async (payload) => {
     if (!selectedRun || !sampleTask?.id) return false;
@@ -97,7 +118,7 @@ const PerformanceWorkspaceContent = (props) => {
       <Stack spacing={1}>
         <WorkspaceTabs id="performance" label="Performance view" value={view} onChange={setView} level="detail"
           tabs={[["overview", "Overview"], ["diagnostics", "Diagnostics"], ["graphs", "Graphs"], ["tuning", "Queue tuning"]]}
-          disabledTabs={sampleTask ? {} : { tuning: "Queue tuning requires an active sampling task." }}
+          disabledTabs={campaign || sampleTask ? {} : { tuning: "Queue tuning requires an active sampling task." }}
           panelId="performance-content" actions={view !== "tuning" &&
           <ToggleButtonGroup size="small" exclusive aria-label="Measurement window"
             value={selection?.seconds ?? (selection ? "custom" : "all")}
@@ -108,22 +129,27 @@ const PerformanceWorkspaceContent = (props) => {
             {selection && selection.seconds == null && <ToggleButton value="custom">Custom</ToggleButton>}
           </ToggleButtonGroup>
           } />
+        {campaign && ["diagnostics", "graphs"].includes(view) && <Stack direction="row" spacing={1} alignItems="center">
+          <Typography component="label" id="performance-child-label">Child run</Typography>
+          <FormControl size="small" sx={{ minWidth: 240, maxWidth: "100%" }}>
+            <Select labelId="performance-child-label" value={childRun?.run_id ?? ""} onChange={(event) => {
+              const id = String(event.target.value); setChosenChild(id); setSelectedNode(""); window.sessionStorage.setItem(`campaign-child:${selectedRun}`, id);
+            }}>
+              {childRuns.map((child) => <MenuItem key={child.run_id} value={child.run_id}>{child.label} · {child.run_name} #{child.run_id}</MenuItem>)}
+            </Select>
+          </FormControl>
+          {campaignData.error && <Alert severity="error">{campaignData.error.message}</Alert>}
+        </Stack>}
         {view !== "tuning" && <>
         <Typography variant="body2" color="text.secondary">
           {selection?.seconds ? `Latest ${selection.seconds === 30 ? "30 seconds" : "5 minutes"} of recorded history.` : selection ? "Custom recorded interval." : "All recorded history."}
           {" "}Activity and rates share this window across tabs. Worker status, memory and report age are current.
         </Typography>
-        <LoadingStatus loading={refreshing && view !== "graphs"} label="Updating… showing the previous interval." />
+        <LoadingStatus loading={refreshing && view !== "graphs" && !(campaign && view === "overview")} label="Updating… showing the previous interval." />
         </>}
+        <StableTaskOutput source={`${performanceRun}:${view}:${evaluatorNodeName ?? "all"}`}>
         <div id="performance-content" role="tabpanel" aria-labelledby={`performance-tab-${view}`}>
-        {view !== "graphs" && view !== "tuning" && <>
-          <LoadingStatus loading={isLoading} label="Loading measurements…" />
-          {unavailable ? <Alert severity="warning">{error || "Measurements are unavailable until the next successful refresh."}</Alert>
-            : displayStates.length ? <PanelCollection
-                panelSpecs={visibleSpecs} panelStates={displayStates}
-                panelValues={panelValues} onPanelValueChange={setPanelValue} />
-              : !isLoading && <EmptyStateCard title="Waiting for measurements" message="Current coverage and measurements will appear after the next refresh." />}
-        </>}
+        {campaign && view === "overview" && <CampaignPanelResponse resource={campaignData} />}
         {view === "diagnostics" && <Stack direction="row" alignItems="center" spacing={1.5} useFlexGap flexWrap="wrap">
           <Typography component="label" id="performance-evaluator-label" htmlFor="performance-evaluator-select" variant="body2">Evaluator detail</Typography>
           <FormControl size="small" sx={{ minWidth: 220, maxWidth: "100%" }}>
@@ -134,11 +160,19 @@ const PerformanceWorkspaceContent = (props) => {
             </Select>
           </FormControl>
         </Stack>}
+        {view !== "graphs" && view !== "tuning" && !(campaign && view === "overview") && <>
+          <LoadingStatus loading={isLoading} label="Loading measurements…" />
+          {unavailable && <Alert severity="warning">{error || "Measurements are unavailable until the next successful refresh."}{displayStates.length ? " Showing previously loaded data." : ""}</Alert>}
+          {displayStates.length ? <PanelCollection
+                panelSpecs={visibleSpecs} panelStates={displayStates}
+                panelValues={panelValues} onPanelValueChange={setPanelValue} />
+              : !isLoading && <EmptyStateCard title="Waiting for measurements" message="Current coverage and measurements will appear after the next refresh." />}
+        </>}
         <WorkspacePanel id="performance" value="graphs" active={view === "graphs"}>
-          <PerformanceGraphs runId={selectedRun} selection={selection} onSelectionChange={setSelection} />
+          <PerformanceGraphs key={performanceRun} runId={performanceRun} pollMs={campaign ? 10000 : 5000} selection={selection} onSelectionChange={setSelection} />
         </WorkspacePanel>
         <WorkspacePanel id="performance" value="tuning" active={view === "tuning"}>
-          {sampleTask ? <>
+          {campaign ? <CampaignQueueTuning runId={selectedRun} taskId={campaignTask?.id} resource={campaignData} /> : sampleTask ? <>
           <Typography variant="body2" sx={{ mb: 1 }}>Active task: <strong>{sampleTask.name}</strong></Typography>
           <LoadingStatus loading={Boolean(tuningStatus?.busy)} label="Saving queue tuning…" />
           {tuningStatus?.message && <Alert severity={tuningStatus.message.severity}>{tuningStatus.message.text}</Alert>}
@@ -149,6 +183,7 @@ const PerformanceWorkspaceContent = (props) => {
           </> : <Alert severity="info">No active sampling task. Queue tuning becomes available when sampling starts.</Alert>}
         </WorkspacePanel>
         </div>
+        </StableTaskOutput>
       </Stack>
     </TabLoadingScope>
   );

@@ -39,6 +39,7 @@ use thiserror::Error;
 
 const MAX_BATCH_SIZE_DOWN_FACTOR: f64 = 0.25;
 const TASK_CONFIG_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+const CHECKPOINT_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Integrand-coordinate marginals sum disjoint joint queries over every stratum
 /// prefix. Prefix lengths may differ, so there is no single dimension offset.
@@ -111,6 +112,7 @@ struct SamplerWindowState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CheckpointKind {
     Initial,
+    Periodic,
     Stage,
 }
 
@@ -150,6 +152,9 @@ pub struct SamplerAggregatorRunner<S> {
     last_snapshot_at: Instant,
     last_frontend_sync_at: Instant,
     last_progress_sync_at: Instant,
+    last_checkpoint_at: Instant,
+    last_checkpoint_samples: i64,
+    last_checkpoint_attempt_at: Option<Instant>,
     pending_aggregation_flush: Option<PendingAggregationFlushTask>,
     runtime_state: SamplerProgress,
     completed_samples_per_second: f64,
@@ -395,6 +400,9 @@ where
         run_progress: RunSampleProgress,
         resume_snapshot: Option<SamplerAggregatorCheckpoint>,
     ) -> Result<Self, StoreError> {
+        if let Some(policy) = task.task.checkpoint_policy() {
+            policy.validate().map_err(StoreError::invalid_input)?;
+        }
         evaluator_config
             .validate_accumulator_config(&observable_state.config())
             .map_err(|e| StoreError::store(e.to_string()))?;
@@ -469,6 +477,11 @@ where
             last_snapshot_at: now,
             last_frontend_sync_at: now,
             last_progress_sync_at: now,
+            // Recovery starts at the saved boundary. Prior-stage uptime and
+            // accumulator samples must not shorten this task's first interval.
+            last_checkpoint_at: now,
+            last_checkpoint_samples: nr_completed_samples,
+            last_checkpoint_attempt_at: None,
             pending_aggregation_flush: None,
             runtime_state,
             completed_samples_per_second: 0.0,
@@ -805,12 +818,65 @@ where
             .performance_sync_ms
             .observe_duration(publication_time);
         crate::runners::activity::set("waiting");
-        self.check_tick_terminal_state(
+        let finished = self.check_tick_terminal_state(
             queue_before_produce,
             ingest_stats.completed_batches,
             produced_batches,
             sampler_wants_to_produce,
-        )
+        )?;
+        // Completion publishes its own final checkpoint. Otherwise snapshot
+        // between ticks, with sampler mutation suspended until the save ends.
+        if !finished {
+            self.maybe_checkpoint().await?;
+        }
+        Ok(finished)
+    }
+
+    fn periodic_checkpoint_due(&self) -> bool {
+        let Some(policy) = self.task.task.checkpoint_policy() else {
+            return false;
+        };
+        let completed = self
+            .task
+            .nr_completed_samples
+            .saturating_sub(self.last_checkpoint_samples)
+            .max(0) as u64;
+        (policy.interval_seconds > 0.0
+            && self.last_checkpoint_at.elapsed().as_secs_f64() >= policy.interval_seconds)
+            || (policy.interval_samples > 0 && completed >= policy.interval_samples)
+    }
+
+    async fn maybe_checkpoint(&mut self) -> Result<(), RunnerError> {
+        if !self.periodic_checkpoint_due()
+            || self
+                .last_checkpoint_attempt_at
+                .is_some_and(|at| at.elapsed() < CHECKPOINT_RETRY_INTERVAL)
+        {
+            return Ok(());
+        }
+        self.last_checkpoint_attempt_at = Some(Instant::now());
+        match self
+            .persist_sampler_checkpoint(CheckpointKind::Periodic)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    run_id = self.run_id,
+                    task_id = self.task.id,
+                    completed_samples = self.task.nr_completed_samples,
+                    "periodic recovery checkpoint saved"
+                );
+                self.cleanup_after_checkpoint().await?;
+            }
+            Err(RunnerError::Store(error)) if error.is_database_error() => {
+                // Retain the last successful baseline and let sampling continue.
+                // Only committed checkpoints can authorize consumed-row cleanup.
+                tracing::warn!(run_id=self.run_id,task_id=self.task.id,error=%error,"periodic checkpoint failed; retrying after 30 seconds");
+            }
+            Err(error) => return Err(error),
+        }
+        crate::runners::activity::set("waiting");
+        Ok(())
     }
 
     fn check_tick_terminal_state(
@@ -859,19 +925,20 @@ where
         )
     }
 
-    /// One save lifecycle for activation, pause and task completion. The initial
-    /// checkpoint precedes production; subsequent saves also publish a branchable stage.
+    /// One save lifecycle for activation, periodic recovery, pause and completion.
+    /// Periodic saves replace the active recovery boundary without adding stages.
     async fn persist_sampler_checkpoint(
         &mut self,
         kind: CheckpointKind,
     ) -> Result<(), RunnerError> {
         crate::runners::activity::set("saving checkpoint");
         self.store.record_checkpoint_status(self.run_id, &json!({
-            "state":"saving", "task_id":self.task.id, "save_started_at":chrono::Utc::now(), "error":null
+            "state":"saving", "task_id":self.task.id, "save_started_at":chrono::Utc::now(), "error":null,
+            "trigger":match kind { CheckpointKind::Initial=>"initial", CheckpointKind::Periodic=>"periodic", CheckpointKind::Stage=>"stage" }
         })).await?;
         let result: Result<(), RunnerError> = async {
             self.queue.flush().await?;
-            if kind == CheckpointKind::Stage {
+            if kind != CheckpointKind::Initial {
                 self.drain_local_work_on_stop().await?;
                 self.flush_aggregation(true).await?;
                 self.flush_performance_snapshot(true).await?;
@@ -915,6 +982,9 @@ where
             self.store
                 .save_sampler_checkpoint(self.run_id, &checkpoint, stage.as_ref())
                 .await?;
+            self.last_checkpoint_at = Instant::now();
+            self.last_checkpoint_samples = checkpoint.completed_samples;
+            self.last_checkpoint_attempt_at = None;
             Ok(())
         }
         .await;
@@ -946,6 +1016,10 @@ where
         }
         self.persist_sampler_checkpoint(CheckpointKind::Stage)
             .await?;
+        self.cleanup_after_checkpoint().await
+    }
+
+    async fn cleanup_after_checkpoint(&mut self) -> Result<(), RunnerError> {
         // Cleanup is bounded maintenance after durable publication, not part of saving.
         if let Some(duration) = self.queue.cleanup_completed_batches().await? {
             self.window_state

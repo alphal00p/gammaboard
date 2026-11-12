@@ -795,7 +795,7 @@ fn json_number_or_na(value: Option<f64>) -> JsonValue {
     }
 }
 
-fn point_value(point: Option<&crate::evaluation::batch::DiagnosticSample>) -> JsonValue {
+pub(crate) fn point_value(point: Option<&crate::evaluation::batch::DiagnosticSample>) -> JsonValue {
     match point {
         Some(point) => json!({
             "kind": "sample_point",
@@ -1691,7 +1691,7 @@ fn gammaloop_evaluation_diagnostics_panel(accumulator: AccumulatorState) -> Opti
     ))
 }
 
-fn gammaloop_diagnostics_entries(
+pub(crate) fn gammaloop_diagnostics_entries(
     diagnostics: &GammaLoopDiagnostics,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     vec![
@@ -1783,6 +1783,10 @@ fn gammaloop_diagnostics_entries(
 fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     let state = accumulator.gammaloop()?;
     let diagnostics = &state.diagnostics;
+    gammaloop_timing_panel(diagnostics)
+}
+
+pub(crate) fn gammaloop_timing_panel(diagnostics: &GammaLoopDiagnostics) -> Option<PanelState> {
     let total_eval_ms = diagnostics.avg_eval_time_ms();
     if !total_eval_ms.is_finite() || total_eval_ms <= 0.0 {
         return None;

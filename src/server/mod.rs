@@ -17,6 +17,7 @@ async fn get_run_metrics(
 #[cfg(test)]
 use crate::api::node_launch::resolve_node_launch_groups;
 mod auth;
+mod campaign;
 mod config_panels;
 mod histogram_export;
 mod histogram_import;
@@ -365,6 +366,7 @@ pub async fn serve(
         node_templates_dir: PathBuf::from(&config.node_templates_dir),
         runtime: runtime.clone(),
         run_removals: run_removals::RunRemovals::default(),
+        campaign_cache: campaign::CampaignCache::default(),
     };
 
     let app = routes::build_app(state);
@@ -400,6 +402,7 @@ pub(crate) struct AppState {
     node_templates_dir: PathBuf,
     runtime: RuntimeContext,
     run_removals: run_removals::RunRemovals,
+    campaign_cache: campaign::CampaignCache,
 }
 
 #[derive(Deserialize)]
@@ -508,6 +511,7 @@ struct RunsQuery {
     include_children: bool,
     limit: Option<usize>,
     offset: Option<usize>,
+    search: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -522,6 +526,7 @@ struct RunSummaryResponse {
     run_id: i32,
     run_name: String,
     parent_run_id: Option<i32>,
+    parent_run_name: Option<String>,
     spawn_label: Option<String>,
     lifecycle_state: RunLifecycleState,
     nr_completed_samples_including_children: i64,
@@ -544,6 +549,7 @@ impl From<RunProgress> for RunSummaryResponse {
             run_id: run.run_id,
             run_name: run.run_name,
             parent_run_id: run.parent_run_id,
+            parent_run_name: run.parent_run_name,
             spawn_label: run.spawn_label,
             lifecycle_state: run.lifecycle_state,
             nr_completed_samples_including_children: run.nr_completed_samples_including_children,
@@ -755,13 +761,30 @@ async fn get_runs(
     let offset = params.offset.unwrap_or(0);
     let runs = state
         .store
-        .get_runs_page(limit, offset, params.include_children)
+        .search_runs_page(
+            limit,
+            offset,
+            params.include_children,
+            params.search.as_deref().unwrap_or_default(),
+        )
         .await?;
     let next_offset = (runs.len() == limit).then_some(offset + runs.len());
     json_response(RunPage {
         items: runs.into_iter().map(RunSummaryResponse::from).collect(),
         next_offset,
     })
+}
+
+async fn get_run_summary(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i32>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let run = state
+        .store
+        .get_run_progress(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run {id}")))?;
+    json_response(RunSummaryResponse::from(run))
 }
 
 async fn get_nodes(
@@ -1175,7 +1198,17 @@ async fn get_run_task_output(
         crate::core::RunTaskSpec::IntegrationCampaign { .. }
     ) {
         let workers = crate::core::ControlPlaneStore::list_nodes(&state.store, None).await?;
-        TaskPanelSource::for_campaign(&workers)
+        let publishing_core_hours = if request.phase != TaskOutputPhase::History
+            && matches!(request.section.as_deref(), None | Some("result"))
+        {
+            state
+                .store
+                .campaign_publishing_core_hours(run_id, task.id)
+                .await?
+        } else {
+            Default::default()
+        };
+        TaskPanelSource::for_campaign(&workers, publishing_core_hours)
     } else {
         TaskPanelSource::new(&task.task, effective_accumulator_config)
             .map_err(|err| ApiError::Internal(err.to_string()))?
@@ -1311,6 +1344,9 @@ async fn get_run_task_output(
     payload.reset_required = history_reset;
     let mut response =
         serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?;
+    if matches!(task.task, RunTaskSpec::IntegrationCampaign { .. }) {
+        response["poll_after_ms"] = serde_json::json!(10000);
+    }
     response["available_sections"] = serde_json::json!(available_sections);
     json_response(response)
 }

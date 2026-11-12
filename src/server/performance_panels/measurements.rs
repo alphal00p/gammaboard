@@ -66,11 +66,19 @@ impl Worker {
 pub(super) struct Measurements {
     pub busy: [Mean; 4],
     pub rate: Mean,
+    accepted_samples: f64,
     pub workers: BTreeMap<(bool, String), Worker>,
     pub timings: BTreeMap<&'static str, (u64, f64)>,
 }
 
 impl Measurements {
+    pub(super) fn campaign_rate(&mut self, seconds: f64) {
+        if self.rate.weight > 0.0 {
+            self.rate.total = self.accepted_samples;
+            self.rate.weight = seconds;
+        }
+    }
+
     pub(super) fn observe(&mut self, interval: &Interval<'_>, fraction: f64, whole: bool) {
         let evaluator = interval.evaluator;
         let worker = self
@@ -111,6 +119,7 @@ impl Measurements {
                     .map(|(total, delta)| total + delta * fraction);
             }
         } else {
+            self.accepted_samples += count.unwrap_or(0.0) * fraction;
             self.rate.add(count.map(|n| n / interval.seconds), seconds);
             // These are reset-on-publication observations, not cumulative counters.
             // Only include complete reporting intervals; never invent fractional operations.

@@ -300,6 +300,36 @@ Restore replaces database contents; `--yes` acknowledges replacement in scripts.
 Backups must match the current schema/model format. A database backup does not
 include external model files or generated physics states.
 
+Sample tasks checkpoint automatically once per hour by default. Configure the
+policy inside a `[[task_queue]]` sample task (or a standalone sample-task card):
+
+```toml
+checkpoint = { interval_seconds = 3600.0, interval_samples = 0 }
+```
+
+Zero disables that trigger. Set `interval_samples = 10_000_000` to also checkpoint
+after ten million newly completed task samples; either threshold triggers a save.
+For sample-only checkpoints, set `interval_seconds = 0`. Setting both to zero
+disables periodic saves; activation, pause and completion checkpoints remain.
+
+The first interval starts at the task's initial/restored recovery boundary. A new
+task built from an earlier sampler/accumulator starts its own interval. Resuming
+an active task starts from the restored checkpoint's sample count and gets a new
+hour of execution; downtime and inherited run uptime do not trigger an immediate
+save. Both thresholds restart only after a successful checkpoint commit. Samples
+are completed task samples, including zero contributions, rather than generated
+or inherited accumulator samples.
+
+Saves run between sampler ticks, so a long generation/feedback call can delay a
+trigger until that operation finishes. Pending inserts, aggregation and progress
+writes are flushed before the sampler, accumulator, generation/feedback buffers
+and queue cursors are committed together. Evaluators can continue working during
+the save. Periodic saves replace the active checkpoint without adding named stage
+snapshots. Consumed queue rows are eligible for cleanup only behind a committed
+recovery boundary. Database save failures retain the last successful checkpoint
+and retry after 30 seconds while sampling continues. External sampler artifact
+requirements remain unchanged.
+
 Check **Checkpoint recovery** or `run inspect` for the last committed checkpoint.
 Graceful pause/stop saves sampler state, accumulator, pending feedback, and progress
 together. A crash restores that boundary and replays later work: live progress may
@@ -324,3 +354,38 @@ submission transaction releases its locks after a fixed 30-second idle timeout.
 Default logs: `resources/logs/nodes/`, `resources/db/logfile` (offset suffix when
 used), and `logs/slurm/` on UBELIX. For live measurements:
 `gammaboard --json run performance RUN --duration 60s --interval 1s`.
+
+
+### Campaign dashboard
+
+Campaign Overview combines accepted progress and allocated core-hours across child
+runs. Activity is weighted by reporting worker-time; throughput sums accepted
+counter changes over one shared interval. Performance Diagnostics and Graphs use
+a remembered child selection.
+
+Task Diagnostics gathers the latest usable publishing-stage accumulator for each
+child. Evaluation counters and times combine before fractions are calculated.
+Retained extrema are ranked by their contribution to the combined estimate,
+including child coefficients and stratum attempt counts. Compatibility groups and
+missing-child coverage are explicit; absent diagnostics are not treated as zero.
+
+Campaign panels load when selected, refresh ten seconds after the preceding
+request completes, and stop polling when their dashboard or browser tab is hidden.
+The dashboard retains a bounded page-session cache and shows the previous result
+while refreshing. The server shares concurrent requests and briefly caches the
+finished response. Scientific aggregation required by the controller continues
+independently of dashboard viewers.
+
+Queue tuning defaults to all children and unfinished sample tasks. The selector
+can restrict child names and publishing/non-publishing stages or a named task.
+Only edited fields are applied. Durable rules also apply to children created later;
+completed and failed tasks are skipped. A later edit takes precedence per field.
+Clearing the fixed-size override restores that child's run default.
+
+Task queue → Scheduling edits concurrency, evaluator requirements, allocation
+windows, pilot minima, and stopping conditions. Changes serialize with the
+controller and reject stale forms. Reduced concurrency drains selected children's
+outstanding grants; resource loss can still interrupt a placement. A sample cap
+cannot be lowered below already produced or reserved work. Scheduling edits are
+included when exporting the campaign definition; queue-tuning rules are runtime
+database settings and are not copied by exporting a run card.

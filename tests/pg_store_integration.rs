@@ -1103,6 +1103,7 @@ async fn active_task_accumulates_declared_cpu_time() {
                     sampler: None,
                     accumulator: None,
                     queue_tuning: None,
+                    checkpoint: Default::default(),
                     batch_transforms: None,
                 },
             }],
@@ -1389,6 +1390,7 @@ async fn task_measurement_output_round_trips() {
                     sampler: None,
                     accumulator: None,
                     queue_tuning: None,
+                    checkpoint: Default::default(),
                     batch_transforms: None,
                 },
             }],
@@ -3985,4 +3987,355 @@ async fn plot_history_uses_only_preceding_reports_from_the_same_task() {
     assert_eq!(snapshots[0].sampler_uptime_ms, Some(1000.));
     assert_eq!(snapshots[1].sampler_uptime_ms, None);
     store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn run_search_matches_parent_names_and_labels_before_pagination() {
+    let (_guard, store) = locked_test_store().await;
+    let name = unique_id("Search-Campaign_100%");
+    let parent: i32 =
+        sqlx::query_scalar("INSERT INTO runs(name,point_spec) VALUES($1,'{}') RETURNING id")
+            .bind(&name)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    let child: i32 = sqlx::query_scalar(
+        "INSERT INTO runs(name,parent_run_id,spawn_label,point_spec) VALUES($1,$2,'GL00','{}') RETURNING id",
+    )
+    .bind("distinct child")
+    .bind(parent)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    let first = store
+        .search_runs_page(1, 0, true, &name.to_uppercase())
+        .await
+        .unwrap();
+    let second = store.search_runs_page(1, 1, true, &name).await.unwrap();
+    assert_eq!(first[0].run_id, child);
+    assert_eq!(first[0].parent_run_name.as_deref(), Some(name.as_str()));
+    assert_eq!(second[0].run_id, parent);
+    let roots = store.search_runs_page(100, 0, false, &name).await.unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].run_id, parent);
+    assert_eq!(
+        store.search_runs_page(100, 0, true, "gl00").await.unwrap()[0].run_id,
+        child
+    );
+    assert_eq!(
+        store
+            .search_runs_page(100, 0, true, &format!("#{child}"))
+            .await
+            .unwrap()[0]
+            .run_id,
+        child
+    );
+    // SQL wildcard characters are literal search text, not patterns.
+    assert!(
+        store
+            .search_runs_page(100, 0, true, &name.replace('_', "x"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let loaded = store.get_run_progress(child).await.unwrap().unwrap();
+    assert_eq!(loaded.parent_run_name.as_deref(), Some(name.as_str()));
+    store.remove_run(parent).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn campaign_dashboard_edits_preserve_grants_and_apply_only_selected_fields() {
+    use gammaboard::core::{IntegrationCampaignAllocationSpec, IntegrationCampaignStopCondition};
+    use serde_json::{Value, json};
+    let (_guard, store) = locked_test_store().await;
+    let (parent, parent_task, _, _) = reliability_fixture(&store, 0).await;
+    let (left, left_task, _, _) = reliability_fixture(&store, 0).await;
+    let (right, right_task, _, _) = reliability_fixture(&store, 0).await;
+    let spec: RunTaskSpec=serde_json::from_value(json!({"kind":"integration_campaign","children":[
+        {"name":"A","run":"name='a'"},{"name":"B","run":"name='b'"},{"name":"C","run":"name='c'"}],
+        "allocation":{"max_active_runs":2,"min_evaluators_per_run":1,"allocation_window_samples":100,"min_samples_per_child":2},
+        "stop_condition":{"max_total_samples":1000}})).unwrap();
+    sqlx::query("UPDATE run_tasks SET task=$2 WHERE id=$1")
+        .bind(parent_task)
+        .bind(serde_json::to_value(&spec).unwrap())
+        .execute(store.pool())
+        .await
+        .unwrap();
+    for (run, label) in [(left, "A"), (right, "B")] {
+        sqlx::query("UPDATE runs SET parent_run_id=$2,parent_task_id=$3,spawn_kind='integration_campaign',spawn_label=$4 WHERE id=$1").bind(run).bind(parent).bind(parent_task).bind(label).execute(store.pool()).await.unwrap();
+    }
+    sqlx::query("UPDATE run_tasks SET task=jsonb_set(task,'{publish_result}','true') WHERE id=$1")
+        .bind(left_task)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.complete_run_task(right_task).await.unwrap();
+    let result = store
+        .update_campaign_queue_tuning(
+            parent,
+            parent_task,
+            &["A".into(), "B".into(), "C".into()],
+            "all",
+            json!({"max_batch_size":64}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["updated"].as_array().unwrap().len(), 1);
+    assert_eq!(result["skipped"].as_array().unwrap().len(), 1);
+    assert!(
+        store
+            .load_run_task(right_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .task
+            .sample_queue_tuning()
+            .is_none()
+    );
+    store
+        .update_campaign_queue_tuning(
+            parent,
+            parent_task,
+            &["A".into()],
+            "publishing",
+            json!({"max_batch_size":128}),
+        )
+        .await
+        .unwrap();
+    store
+        .update_campaign_queue_tuning(
+            parent,
+            parent_task,
+            &["A".into()],
+            "all",
+            json!({"target_batch_eval_ms":333.0}),
+        )
+        .await
+        .unwrap();
+    let tuned = store.load_run_task(left_task).await.unwrap().unwrap();
+    let tuning = tuned.task.sample_queue_tuning().unwrap();
+    assert_eq!(
+        tuning.max_batch_size,
+        Some(128),
+        "editing a duration must preserve the later stage batch override"
+    );
+    assert_eq!(tuning.target_batch_eval_ms, Some(333.0));
+    assert!(
+        store
+            .update_campaign_queue_tuning(
+                parent,
+                parent_task,
+                &["A".into()],
+                "all",
+                json!({"fixed_batch_size":200})
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .update_campaign_queue_tuning(
+                parent,
+                parent_task,
+                &["A".into(), "outsider".into()],
+                "all",
+                json!({"max_batch_size":256})
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .load_run_task(left_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .task
+            .sample_queue_tuning()
+            .unwrap()
+            .max_batch_size,
+        Some(128)
+    );
+    let rules: i64=sqlx::query_scalar("SELECT count(*) FROM campaign_queue_tuning_rules WHERE campaign_task_id=$1 AND patch ? 'fixed_batch_size'").bind(parent_task).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(rules, 0, "invalid bulk edits roll back their rules too");
+
+    let (future, future_task, _, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("UPDATE runs SET parent_run_id=$2,parent_task_id=$3,spawn_kind='integration_campaign',spawn_label='C' WHERE id=$1").bind(future).bind(parent).bind(parent_task).execute(store.pool()).await.unwrap();
+    store
+        .apply_campaign_queue_tuning(parent_task)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load_run_task(future_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .task
+            .sample_queue_tuning()
+            .unwrap()
+            .max_batch_size,
+        Some(64)
+    );
+
+    // Once applied, a controller tick must not acquire child task-row locks.
+    let mut writer = store.pool().begin().await.unwrap();
+    sqlx::query("SELECT id FROM run_tasks WHERE id=$1 FOR UPDATE")
+        .bind(future_task)
+        .fetch_one(&mut *writer)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        store.apply_campaign_queue_tuning(parent_task),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    writer.rollback().await.unwrap();
+
+    store
+        .allocate_campaign_samples(parent_task, &[(left, 400)])
+        .await
+        .unwrap();
+    let value = serde_json::to_value(&spec).unwrap();
+    let expected =
+        json!({"allocation":value["allocation"],"stop_condition":value["stop_condition"]});
+    let allocation = IntegrationCampaignAllocationSpec {
+        max_active_runs: 1,
+        allocation_window_samples: 50,
+        ..serde_json::from_value(value["allocation"].clone()).unwrap()
+    };
+    let mut stop = IntegrationCampaignStopCondition {
+        max_total_samples: Some(300),
+        ..Default::default()
+    };
+    assert!(
+        store
+            .update_campaign_scheduling(
+                parent,
+                parent_task,
+                expected.clone(),
+                allocation.clone(),
+                stop.clone()
+            )
+            .await
+            .is_err()
+    );
+    stop.max_total_samples = Some(800);
+    store
+        .update_campaign_scheduling(
+            parent,
+            parent_task,
+            expected.clone(),
+            allocation.clone(),
+            stop.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .allocate_campaign_samples(parent_task, &[])
+            .await
+            .unwrap()[&left],
+        400
+    );
+    assert!(
+        store
+            .update_campaign_scheduling(parent, parent_task, expected, allocation, stop)
+            .await
+            .is_err(),
+        "stale form cannot overwrite a newer edit"
+    );
+    let toml: String = sqlx::query_scalar("SELECT task_toml FROM run_tasks WHERE id=$1")
+        .bind(parent_task)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert!(toml.contains("max_active_runs = 1"));
+    let recorded: Value = sqlx::query_scalar("SELECT task FROM run_tasks WHERE id=$1")
+        .bind(parent_task)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(recorded["stop_condition"]["max_total_samples"], 800);
+    store.complete_run_task(parent_task).await.unwrap();
+    assert!(
+        store
+            .update_campaign_queue_tuning(
+                parent,
+                parent_task,
+                &["A".into()],
+                "all",
+                json!({"max_batch_size":64})
+            )
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 minute'")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(parent).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn campaign_core_hours_count_only_publishing_sample_tasks() {
+    use serde_json::json;
+    let (_guard, store) = locked_test_store().await;
+    let parent: i32 = sqlx::query_scalar(
+        "INSERT INTO runs(name,point_spec) VALUES('cpu-campaign','{}') RETURNING id",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    let task:i64=sqlx::query_scalar("INSERT INTO run_tasks(run_id,name,sequence_nr,task,task_toml) VALUES($1,'campaign',0,'{\"kind\":\"integration_campaign\",\"stop_condition\":{}}','') RETURNING id").bind(parent).fetch_one(store.pool()).await.unwrap();
+    let mut children = vec![];
+    for label in ["mixed", "training-only", "other-campaign-task"] {
+        let child:i32=sqlx::query_scalar("INSERT INTO runs(name,point_spec,parent_run_id,parent_task_id,spawn_kind,spawn_label) VALUES($1,'{}',$2,$3,'integration_campaign',$1) RETURNING id")
+            .bind(label).bind(parent).bind(if label=="other-campaign-task" {task+1} else {task}).fetch_one(store.pool()).await.unwrap();
+        children.push(child);
+    }
+    for (index, (child, kind, publish, state, seconds)) in [
+        (children[0], "sample", Some(false), "completed", 36_000.),
+        (children[0], "sample", Some(true), "completed", 3_600.),
+        (children[0], "sample", None, "active", 1_800.), // omitted flag defaults to publishing
+        (children[0], "set_accumulator", None, "completed", 7_200.),
+        (children[1], "sample", Some(false), "completed", 18_000.),
+        (children[2], "sample", Some(true), "completed", 72_000.),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut spec = json!({"kind":kind});
+        if kind == "sample" {
+            spec["stop_condition"] = json!({"max_samples":100});
+        }
+        if let Some(publish) = publish {
+            spec["publish_result"] = json!(publish);
+        }
+        let id:i64=sqlx::query_scalar("INSERT INTO run_tasks(run_id,name,sequence_nr,task,task_toml,state,cpu_seconds) VALUES($1,$2,$3,$4,'',$5,$6) RETURNING id")
+            .bind(child).bind(format!("stage-{index}")).bind(index as i32).bind(spec).bind(state).bind(seconds).fetch_one(store.pool()).await.unwrap();
+        if state == "active" {
+            sqlx::query("INSERT INTO task_worker_cpu_time(task_id,node_uuid,cpu_seconds) VALUES($1,'cpu-test-worker',900)").bind(id).execute(store.pool()).await.unwrap();
+        }
+    }
+    let hours = store
+        .campaign_publishing_core_hours(parent, task)
+        .await
+        .unwrap();
+    assert_eq!(hours.len(), 2);
+    assert_eq!(
+        hours[&children[0]], 1.75,
+        "completed + active publishing tasks, including live worker accounting"
+    );
+    assert_eq!(
+        hours[&children[1]], 0.0,
+        "training-only child is a real zero"
+    );
+    assert!(!hours.contains_key(&children[2]));
+    store.remove_run(parent).await.unwrap();
 }

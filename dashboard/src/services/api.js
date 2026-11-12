@@ -96,12 +96,13 @@ export const importHwuBundle = (contents, signal) =>
     method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, body: contents,
   });
 
-export const fetchRuns = async ({ includeChildren = false, limit = 100, offset = 0 } = {}, signal) => {
+export const fetchRuns = async ({ includeChildren = false, limit = 100, offset = 0, search = "" } = {}, signal) => {
   const data = await apiGet(
     `/runs${buildQueryString([
       ["include_children", includeChildren ? "true" : null],
       ["limit", limit],
       ["offset", offset],
+      ["search", search],
     ])}`,
     "Failed to fetch runs",
     signal,
@@ -111,6 +112,8 @@ export const fetchRuns = async ({ includeChildren = false, limit = 100, offset =
     nextOffset: data.next_offset,
   };
 };
+
+export const fetchRunSummary = (runId, signal) => apiGet(`/runs/${runId}`, "Failed to fetch run", signal);
 
 export const fetchServerStatus = async (signal) => apiGet("/health", "Failed to fetch server status", signal);
 
@@ -334,3 +337,10 @@ export const fetchRunPerformance = (runId, selection = null, evaluatorNodeName =
     "Failed to fetch run performance",
     signal,
   );
+
+export const fetchCampaign = (runId, taskId, { section = "settings", group, selection } = {}, signal) =>
+  apiGet(`/runs/${runId}/tasks/${taskId}/campaign${buildQueryString([
+    ["section", section], ["group", group], ...performanceRangeQuery(selection),
+  ])}`, "Failed to fetch campaign", signal);
+export const updateCampaignScheduling = (runId, taskId, payload) => apiPost(`/runs/${runId}/tasks/${taskId}/campaign/scheduling`, payload, "Failed to update campaign scheduling");
+export const updateCampaignTuning = (runId, taskId, payload) => apiPost(`/runs/${runId}/tasks/${taskId}/campaign/queue-tuning`, payload, "Failed to update campaign queue tuning");

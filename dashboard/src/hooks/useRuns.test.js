@@ -1,13 +1,33 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { useRuns } from "./useRuns";
-import { fetchRuns } from "../services/api";
+import { fetchRuns, fetchRunSummary } from "../services/api";
 
-vi.mock("../services/api", () => ({ fetchRuns: vi.fn() }));
+vi.mock("../services/api", () => ({ fetchRuns: vi.fn(), fetchRunSummary: vi.fn() }));
 afterEach(() => vi.resetAllMocks());
 const root = { run_id: 1, run_name: "Root" };
 const older = { run_id: 2, run_name: "Older root" };
 const child = { run_id: 3, run_name: "Child", parent_run_id: 1 };
+
+test("an older selected run remains available while the child catalog loads", async () => {
+  let finishChildren;
+  fetchRuns.mockImplementation(({ includeChildren }) => includeChildren
+    ? new Promise((resolve) => { finishChildren = resolve; })
+    : Promise.resolve({ items: [root], nextOffset: 100 }));
+  fetchRunSummary.mockResolvedValue(older);
+  const { result, rerender } = renderHook(({ includeChildren }) =>
+    useRuns({ includeChildren, selectedRun: older.run_id, refreshInterval: 60000 }),
+  { initialProps: { includeChildren: false } });
+  await waitFor(() => expect(result.current.runs).toEqual([root, older]));
+  rerender({ includeChildren: true });
+  expect(result.current.runs).toEqual([root, older]);
+  await act(async () => finishChildren({ items: [root, child], nextOffset: null }));
+  expect(result.current.runs).toEqual([root, child, older]);
+  rerender({ includeChildren: false });
+  expect(result.current.runs).toEqual([root, older]);
+  expect(fetchRunSummary).toHaveBeenCalledTimes(1);
+  expect(fetchRuns.mock.calls.every(([params]) => params.offset == null)).toBe(true);
+});
 
 test("child visibility preserves roots and their loaded pages while the child catalog refreshes", async () => {
   let finishChildren;

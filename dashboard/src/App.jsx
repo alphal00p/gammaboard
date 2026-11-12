@@ -76,7 +76,7 @@ function AppContent() {
   const [navigation, navigate] = useDashboardNavigation();
   const { workspace: mode, runId: selectedRun, children: showChildRuns } = navigation;
   const setShowChildRuns = (value) => navigate({ children: value });
-  const { runs, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns, isLoadingRuns } = useRuns({ includeChildren: showChildRuns });
+  const { runs, hasMoreRuns, loadMoreRuns, isLoadingMoreRuns, isLoadingRuns, selectedRunMissing } = useRuns({ includeChildren: showChildRuns, selectedRun });
   const serverStatus = useServerStatus(3000);
   const workersData = useWorkersData({ runId: null, pollMs: 3000 });
   const [pendingRunSelection, setPendingRunSelection] = useState(null);
@@ -85,15 +85,15 @@ function AppContent() {
   useEffect(() => {
     if (isLoadingRuns) return;
     if (runList.length === 0) {
-      if (selectedRun != null && !hasMoreRuns) navigate({ runId: null, taskId: null }, { replace: true });
+      if (selectedRun != null && selectedRunMissing) navigate({ runId: null, taskId: null }, { replace: true });
       return;
     }
 
     if (!selectedRun || !runList.some((run) => run.run_id === selectedRun)) {
-      if (selectedRun && hasMoreRuns) { if (!isLoadingMoreRuns) loadMoreRuns(); return; }
+      if (selectedRun && !selectedRunMissing) return;
       navigate({ runId: runList[0].run_id, taskId: null }, { replace: true });
     }
-  }, [runList, selectedRun, isLoadingRuns, hasMoreRuns, isLoadingMoreRuns, loadMoreRuns, navigate]);
+  }, [runList, selectedRun, isLoadingRuns, selectedRunMissing, navigate]);
 
   useEffect(() => {
     if (pendingRunSelection == null) return;

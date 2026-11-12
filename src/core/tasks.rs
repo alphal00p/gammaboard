@@ -856,6 +856,38 @@ fn default_publish_result() -> bool {
     true
 }
 
+/// Durable recovery cadence for one sample task. Zero disables that trigger;
+/// when both are enabled, the first threshold reached requests a checkpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct CheckpointPolicy {
+    pub interval_seconds: f64,
+    pub interval_samples: u64,
+}
+
+impl Default for CheckpointPolicy {
+    fn default() -> Self {
+        Self {
+            interval_seconds: 3600.0,
+            interval_samples: 0,
+        }
+    }
+}
+
+impl CheckpointPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        if std::time::Duration::try_from_secs_f64(self.interval_seconds).is_err() {
+            return Err("checkpoint.interval_seconds must be finite, non-negative and representable as a duration".into());
+        }
+        if self.interval_samples > i64::MAX as u64 {
+            return Err(
+                "checkpoint.interval_samples must fit in a signed 64-bit sample count".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -868,6 +900,8 @@ pub enum RunTaskSpec {
         estimator: crate::core::Estimator,
         #[serde(default = "default_publish_result")]
         publish_result: bool,
+        #[serde(default)]
+        checkpoint: CheckpointPolicy,
         stop_condition: SampleStopCondition,
         measurement: Option<TaskMeasurementSpec>,
         evaluator: Option<EvaluatorSourceSpec>,
@@ -937,6 +971,13 @@ fn default_hyperparameter_tuning_max_concurrent_trials() -> usize {
 }
 
 impl RunTaskSpec {
+    pub fn checkpoint_policy(&self) -> Option<&CheckpointPolicy> {
+        match self {
+            Self::Sample { checkpoint, .. } => Some(checkpoint),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::SetAccumulator { accumulator } => accumulator.validate(),
@@ -958,9 +999,11 @@ impl RunTaskSpec {
                 sampler,
                 accumulator,
                 queue_tuning,
+                checkpoint,
                 ..
             } => {
                 stop_condition.validate()?;
+                checkpoint.validate()?;
                 if let Some(measurement) = measurement {
                     measurement.validate()?;
                 }
@@ -1903,6 +1946,7 @@ mod tests {
             }),
             accumulator: Some(AccumulatorSourceSpec::Latest("latest".to_string())),
             queue_tuning: None,
+            checkpoint: Default::default(),
             batch_transforms: None,
         };
 
@@ -2205,6 +2249,7 @@ max = 1.0
                 sampler: None,
                 accumulator: None,
                 queue_tuning: None,
+                checkpoint: Default::default(),
                 batch_transforms: None,
             },
         };
@@ -2230,6 +2275,7 @@ max = 1.0
             sampler: None,
             accumulator: None,
             queue_tuning: None,
+            checkpoint: Default::default(),
             batch_transforms: None,
         };
         assert!(missing.validate().is_ok());
@@ -2246,6 +2292,7 @@ max = 1.0
             sampler: Some(SamplerSourceSpec::Latest("latest".to_string())),
             accumulator: None,
             queue_tuning: None,
+            checkpoint: Default::default(),
             batch_transforms: None,
         };
         assert!(both.validate().is_ok());
@@ -2271,6 +2318,7 @@ max = 1.0
             }),
             accumulator: None,
             queue_tuning: None,
+            checkpoint: Default::default(),
             batch_transforms: None,
         };
         assert!(task.validate().is_err());

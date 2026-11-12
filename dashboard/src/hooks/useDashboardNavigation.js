@@ -6,7 +6,7 @@ export const DEFAULT_NAVIGATION = Object.freeze({
 });
 const choices = {
   workspace: ["runs", "system", "logs"], runTab: ["tasks", "summary", "performance", "settings"],
-  taskTab: ["result", "observables", "strata", "diagnostics"],
+  taskTab: ["result", "observables", "strata", "diagnostics", "scheduling"],
   performanceTab: ["overview", "diagnostics", "graphs", "tuning"], systemTab: ["workers", "database", "settings"],
 };
 export function readNavigation(hash = window.location.hash) {

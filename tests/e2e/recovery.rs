@@ -71,12 +71,22 @@ struct Recovery {
 
 impl Recovery {
     async fn new(seed: u64, training: bool) -> anyhow::Result<Self> {
+        Self::new_with_checkpoint(seed, training, Default::default()).await
+    }
+
+    async fn new_with_checkpoint(
+        seed: u64,
+        training: bool,
+        checkpoint: gammaboard::core::CheckpointPolicy,
+    ) -> anyhow::Result<Self> {
         let mut harness = FullStackHarness::new().await?;
         let python =
             std::env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into());
         let fixture =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recovery_sampler.py");
         let offset = (seed % 16) as i64 * 4096;
+        let checkpoint_seconds = checkpoint.interval_seconds;
+        let checkpoint_samples = checkpoint.interval_samples;
         let config = format!(
             r#"
 name = "recovery"
@@ -98,6 +108,7 @@ completed_batch_fetch_limit = 2
 name = "sample"
 kind = "sample"
 stop_condition = {{ max_samples = {SAMPLES} }}
+checkpoint = {{ interval_seconds = {checkpoint_seconds}, interval_samples = {checkpoint_samples} }}
 accumulator = {{ config = "full_vector" }}
 [task_queue.sampler.config]
 kind = "process_sampler"
@@ -518,6 +529,89 @@ async fn recovery_state_machine() -> anyhow::Result<()> {
             result?;
             cleanup?;
         }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires PostgreSQL and the Python process SDK"]
+async fn periodic_checkpoints_recover_active_training_and_inference() -> anyhow::Result<()> {
+    for (training, policy) in [
+        (
+            true,
+            gammaboard::core::CheckpointPolicy {
+                interval_seconds: 0.5,
+                interval_samples: 0,
+            },
+        ),
+        (
+            false,
+            gammaboard::core::CheckpointPolicy {
+                interval_seconds: 0.,
+                interval_samples: 255,
+            },
+        ),
+    ] {
+        let mut test = Recovery::new_with_checkpoint(17, training, policy).await?;
+        test.harness.wait_for("periodic checkpoint while task is active",Duration::from_secs(30),||async {
+            let (samples,state):(i64,String)=sqlx::query_as("SELECT (c.sampler_checkpoint->>'completed_samples')::bigint,t.state FROM run_sampler_checkpoints c JOIN run_tasks t ON t.id=c.task_id WHERE c.run_id=$1")
+                .bind(test.run).fetch_one(&test.harness.pool).await?;
+            anyhow::ensure!(state!="failed","task failed before periodic save");
+            Ok(samples>=255 && state=="active")
+        }).await?;
+        test.check().await?;
+        let stages: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM run_stage_snapshots WHERE task_id=$1")
+                .bind(test.task)
+                .fetch_one(&test.harness.pool)
+                .await?;
+        anyhow::ensure!(stages == 0, "periodic save created a task stage");
+        let saved = test
+            .harness
+            .run_sampler_checkpoint(test.run)
+            .await?
+            .unwrap();
+        let count = saved["completed_samples"].as_i64().unwrap();
+        anyhow::ensure!(count < SAMPLES, "checkpoint was only made on completion");
+        if training {
+            anyhow::ensure!(
+                saved["runtime_state"]["generation"]["training_groups"]
+                    .as_array()
+                    .is_some_and(|groups| !groups.is_empty()),
+                "training checkpoint lost outstanding feedback"
+            );
+        }
+        test.harness.kill_child("s").await?;
+        test.harness.expire_node("s").await?;
+        test.harness.start_node("s").await?;
+        test.resume().await?;
+        test.wait_progress(count + 17).await?;
+        test.check().await?;
+        wait_for_task_state(
+            &test.harness,
+            test.run,
+            "completed",
+            Duration::from_secs(120),
+        )
+        .await?;
+        test.check().await?;
+        let final_state = test
+            .harness
+            .run_sampler_checkpoint(test.run)
+            .await?
+            .unwrap();
+        let checkpoint: SamplerAggregatorCheckpoint = serde_json::from_value(final_state.clone())?;
+        anyhow::ensure!(
+            check_prefix(&checkpoint.observable_state.to_json()?, test.offset)? == SAMPLES as usize,
+            "periodic recovery lost or duplicated samples"
+        );
+        anyhow::ensure!(
+            final_state["sampler_snapshot"]["state"]["accepted"]
+                == if training { SAMPLES } else { 0 },
+            "feedback changed across periodic recovery"
+        );
+        test.harness.cleanup().await?;
     }
     Ok(())
 }

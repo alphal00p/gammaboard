@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
+import { usePageVisible } from "./usePageVisible";
 import { useWorkspaceActive } from "../components/common/WorkspaceTabs";
 
 export const usePolling = ({ enabled = true, intervalMs, poll, reset = null, paused = false }) => {
   const workspaceActive = useWorkspaceActive();
-  const active = workspaceActive && !paused;
+  const pageVisible = usePageVisible();
+  const active = workspaceActive && !paused && pageVisible;
   const resetSource = useRef(null);
   const timeoutRef = useRef(null);
   const controllerRef = useRef(null);

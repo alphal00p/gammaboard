@@ -2,8 +2,9 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Box } from "@mui/material";
 import { useWorkspaceActive } from "./WorkspaceTabs";
 
-// Keep the document tall enough during task replacement, without showing the
-// previous task's data under the new selection or forcing scroll restoration.
+// Keep the document tall enough during panel/run replacement, without showing
+// another selection's data or forcing scroll restoration. Also handles a shorter
+// completed result or local filter: spare space is released on upward scrolling.
 export default function StableTaskOutput({ loading, source, children }) {
   const outer = useRef(null);
   const content = useRef(null);

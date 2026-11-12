@@ -494,6 +494,27 @@ pub async fn export_run_definition(
             toml::from_str(raw).map_err(|err| ApiError::Internal(err.to_string()))?;
         if let Some(table) = document.as_table_mut() {
             table.remove("gammaboard");
+            if run.kind() == "integration_campaign" {
+                for task in store.list_run_tasks(run_id).await? {
+                    if let crate::core::RunTaskSpec::IntegrationCampaign {
+                        allocation,
+                        stop_condition,
+                        ..
+                    } = task.task
+                    {
+                        table.insert(
+                            "allocation".into(),
+                            toml::Value::try_from(allocation)
+                                .map_err(|e| ApiError::Internal(e.to_string()))?,
+                        );
+                        table.insert(
+                            "stop_condition".into(),
+                            toml::Value::try_from(stop_condition)
+                                .map_err(|e| ApiError::Internal(e.to_string()))?,
+                        );
+                    }
+                }
+            }
         }
         return toml::to_string_pretty(&document)
             .map_err(|err| ApiError::Internal(err.to_string()));
@@ -1748,6 +1769,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
                 }),
                 accumulator,
                 queue_tuning: None,
+                checkpoint: Default::default(),
                 batch_transforms: None,
             },
         }
@@ -1958,6 +1980,7 @@ discrete_dims = 0
                         config: AccumulatorConfig::scalar(),
                     }),
                     queue_tuning: None,
+                    checkpoint: Default::default(),
                     batch_transforms: None,
                 },
             }])

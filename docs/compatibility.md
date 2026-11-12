@@ -24,7 +24,11 @@ persisted data; they are not adapters for older formats. The single baseline
 `202610080001_initial_schema.sql` includes campaign reservations, durable external
 launch leases/receipts, and deployment/build fencing. It is for fresh databases;
 previous migration checksums and older model databases are intentionally unsupported.
-No incremental migration or compatibility adapter is retained.
+Model 8 databases accept additive migrations. The plot read model and campaign
+dashboard migrations preserve existing runs and snapshots; they do not backfill
+large histories. Campaign dashboard data is derived on demand, and missing fields
+in retained snapshots remain unavailable. This does not add compatibility with
+databases from earlier models.
 
 Use matching server, worker, SDK, and integration revisions. Stop all components
 before an incompatible upgrade. Preserve the old executable, environments,

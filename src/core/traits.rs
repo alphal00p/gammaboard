@@ -348,6 +348,10 @@ pub enum TaskQueueChange {
 
 #[async_trait]
 pub trait RunTaskStore: Send + Sync {
+    /// Apply durable campaign overrides before any child receives new work.
+    async fn apply_campaign_queue_tuning(&self, _task_id: i64) -> Result<(), StoreError> {
+        Ok(())
+    }
     /// Durable per-child reservations. Requested totals include all child stages.
     async fn allocate_campaign_samples(
         &self,

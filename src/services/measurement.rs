@@ -355,6 +355,7 @@ mod tests {
                 sampler: None,
                 accumulator: None,
                 queue_tuning: None,
+                checkpoint: Default::default(),
                 batch_transforms: None,
             },
             spawned_from_snapshot_id: None,

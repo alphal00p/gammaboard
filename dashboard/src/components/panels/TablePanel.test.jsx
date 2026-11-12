@@ -70,7 +70,8 @@ describe("Campaign Sub-runs", () => {
     payload: {
       sortable: true, row_numbers: true,
       row_action: { kind: "select_run", column: "run" },
-      column_formats: { real: "scientific", "real err": "scientific", "abs real": "scientific", "abs real err": "scientific" },
+      column_formats: { real: "scientific", "real err": "scientific", "abs real": "scientific", "abs real err": "scientific", "real err (%)": "comparison_decimal" },
+      column_precision: { real: 4, "real err": 4, "abs real": 4, "abs real err": 4 },
       absolute_components: {
         columns: ["name", "status", "run", "coeff", "abs real", "abs real err", "real err (%)"],
         rows: rows.map((row, index) => index === 0 ? [...row.slice(0, 4), 200, 0.1, 0.05] : row),
@@ -90,7 +91,7 @@ describe("Campaign Sub-runs", () => {
     expect(onSelectRun).toHaveBeenCalledWith(12);
     fireEvent.click(screen.getByRole("button", { name: "real", exact: true }));
     expect(body().map((row) => row[1])).toEqual(["graph-a", "graph-d", "graph-b", "graph-c"]);
-    expect(body()[0].slice(4)).toEqual(["-2.000000e+0", "2.500000e-1", "12.5"]);
+    expect(body()[0].slice(4)).toEqual(["-2.0000e+0", "2.5000e-1", "12.5"]);
     rerender(<TablePanel title="Campaign Sub-runs" state={{ ...state, rows: rows.map((row) => [...row]) }} onSelectRun={onSelectRun} />);
     expect(body().map((row) => row[1])).toEqual(["graph-a", "graph-d", "graph-b", "graph-c"]);
     // A new column starts descending, including textual columns.
@@ -103,7 +104,7 @@ describe("Campaign Sub-runs", () => {
     fireEvent.click(screen.getByRole("button", { name: "real", exact: true }));
     fireEvent.click(screen.getByRole("switch", { name: "Absolute components" }));
     expect(body().map((row) => row[1])).toEqual(["graph-a", "graph-b", "graph-d", "graph-c"]);
-    expect(body()[0].slice(4)).toEqual(["2.000000e+2", "1.000000e-1", "0.05"]);
+    expect(body()[0].slice(4)).toEqual(["2.0000e+2", "1.0000e-1", "0.050"]);
     expect(screen.getByRole("columnheader", { name: "abs real", exact: true })).toHaveAttribute("aria-sort", "descending");
     rerender(<TablePanel title="Campaign Sub-runs" state={{ ...state }} />);
     expect(screen.getByRole("switch", { name: "Absolute components" })).toBeChecked();
@@ -131,4 +132,21 @@ test("stratum estimates use estimate formatting and preserve unavailable errors"
   expect(cells[0]).toHaveTextContent("stratified");
   expect(cells[0].textContent).not.toContain('"kind"');
   expect(cells[1]).toHaveTextContent("unavailable");
+});
+
+test("campaign collapsed precision preserves full disclosures and raw values", () => {
+  const values = [123456789, 0.000123456789, 12.3456789, 0.0023456789, 1.75123456789];
+  const columns = ["real", "real err", "real err (%)", "var ctrb (%)", "core-hours"];
+  render(<TablePanel title="Campaign Sub-runs" state={{ panel_id:"campaign_children", columns, rows:[values], payload:{
+    column_formats:{real:"scientific","real err":"scientific","real err (%)":"comparison_decimal","var ctrb (%)":"comparison_decimal"},
+    column_precision:{real:4,"real err":4},
+  } }} />);
+  const cells = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+  expect(cells.map((cell)=>cell.textContent.replaceAll("▸",""))).toEqual(["1.2346e+8","1.2346e-4","12.3","0.002","1.7512"]);
+  for (let i=0;i<values.length;i++) {
+    fireEvent.click(within(cells[i]).getByRole("button",{name:`${columns[i]} details`}));
+    expect(cells[i]).toHaveTextContent(values[i].toExponential(16));
+  }
+  expect(cells[4]).toHaveTextContent("publish_result = true");
+  expect(values).toEqual([123456789,0.000123456789,12.3456789,0.0023456789,1.75123456789]);
 });

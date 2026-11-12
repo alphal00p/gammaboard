@@ -15,7 +15,7 @@ pub(super) fn build_app(state: AppState) -> Router {
     let protected = Router::new()
         .route("/settings", get(settings::get_settings_overview))
         .route("/runs", get(get_runs).post(create_run))
-        .route("/runs/:id", delete(delete_run))
+        .route("/runs/:id", get(get_run_summary).delete(delete_run))
         .route("/run-removals/:id", get(get_run_removal))
         .route("/runs/:id/pause", post(pause_run))
         .route("/runs/:id/definition", get(get_run_definition))
@@ -30,6 +30,15 @@ pub(super) fn build_app(state: AppState) -> Router {
             get(get_task_definition),
         )
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
+        .route("/runs/:id/tasks/:task_id/campaign", get(campaign::get))
+        .route(
+            "/runs/:id/tasks/:task_id/campaign/scheduling",
+            post(campaign::scheduling),
+        )
+        .route(
+            "/runs/:id/tasks/:task_id/campaign/queue-tuning",
+            post(campaign::tuning),
+        )
         .route(
             "/runs/:id/tasks/:task_id/queue-tuning",
             post(update_run_task_queue_tuning),

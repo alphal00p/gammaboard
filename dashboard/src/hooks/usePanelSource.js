@@ -216,7 +216,9 @@ const panelValueEquals = (left, right) => {
   return leftEntries.every(([key, value]) => Object.is(value, right[key]));
 };
 
-export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null, paused = false, cacheKey = null, persistValues = true } = {}) => {
+export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, useCursor = true, refreshKey = null, paused = false, cacheKey = null, persistValues = true, retainOnCacheChange = false } = {}) => {
+  const resetSourceRef = useRef(null);
+  const lastUpdateRef = useRef(null);
   const cached = useMemo(() => cacheKey ? readResourceCache(cacheKey) : null, [cacheKey]);
   const workspaceActive = useWorkspaceActive();
   const active = enabled && workspaceActive && !paused;
@@ -314,6 +316,7 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
         cursorRef.current = nextState.cursor;
         setState(nextState);
         const updated = new Date().toLocaleTimeString();
+        lastUpdateRef.current = updated;
         setLastUpdate(updated);
         writeResourceCache(cacheKey, { state: nextState, lastUpdate: updated });
         if (refreshSeededPanelValuesRef.current) {
@@ -339,17 +342,21 @@ export const usePanelSource = ({ enabled = true, pollMs = 2000, fetchPanels, use
 
   const reset = useCallback(() => {
     const saved = cacheKey ? readResourceCache(cacheKey) : null;
-    const restored = saved?.state ?? emptyState;
+    const retain = retainOnCacheChange && resetSourceRef.current === fetchPanels;
+    resetSourceRef.current = fetchPanels;
+    const restored = saved?.state ?? (retain ? stateRef.current : emptyState);
     cursorRef.current = restored.cursor;
     panelValuesRef.current = persistValues && restored.sourceId ? { ...restored.panelValues, ...readStoredPanelValues(restored.sourceId) } : restored.panelValues;
     pendingActionsRef.current = [];
     stateRef.current = { ...restored, panelValues: panelValuesRef.current, error: null };
     refreshSeededPanelValuesRef.current = false;
     setState(stateRef.current);
-    setLastUpdate(saved?.lastUpdate ?? null);
+    const updated = saved?.lastUpdate ?? (retain ? lastUpdateRef.current : null);
+    lastUpdateRef.current = updated;
+    setLastUpdate(updated);
     setIsFetching(false);
     revalidating.current = true;
-  }, [cacheKey, persistValues]);
+  }, [cacheKey, persistValues, retainOnCacheChange, fetchPanels]);
 
   const triggerPoll = usePolling({ enabled, intervalMs: pollMs, poll, reset, paused });
   useEffect(() => {

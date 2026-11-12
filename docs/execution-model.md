@@ -359,7 +359,11 @@ contain all private RNG/adaptation state required by future `generate` and
 configuration is stored separately. `persisted_output()` is optional task output;
 it is not a replacement for `snapshot()`.
 
-Initial activation, graceful pause, and task completion save checkpoints. Recovery
+Initial activation, periodic task thresholds, graceful pause, and task completion
+save checkpoints. Sample tasks default to a periodic save every 3600 seconds;
+`checkpoint.interval_samples` optionally adds a completed-sample threshold.
+Either enabled trigger is sufficient. Periodic saves update the active recovery
+boundary without publishing a named stage or completing the task. Recovery
 validates the saved boundary, removes later speculative work, rolls back live
 progress, and replays retained work consistently. Completed task/stage history is
 separate from the live accumulator. A new publishing stage cannot reuse a previous

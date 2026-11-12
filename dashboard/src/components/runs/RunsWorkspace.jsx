@@ -106,9 +106,11 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
   const taskList = asArray(tasks);
   const requestedTask = navigation?.taskId ?? selectedId;
   const selectedTask = taskList.find((task) => String(task.id) === String(requestedTask)) ?? getCurrentTask(taskList);
+  const campaignView = run.kind === "integration_campaign" && ["diagnostics", "scheduling"].includes(taskTab);
   const taskOutput = useTaskOutput({ runId: run.run_id, taskId: selectedTask?.id ?? null,
-    section: view === "summary" ? "summary" : taskTab,
-    refreshKey: selectedTask?.state, paused: !["tasks", "summary"].includes(view) });
+    section: view === "summary" ? "summary" : campaignView || (taskTab === "scheduling" && run.kind !== "integration_campaign") ? "result" : taskTab,
+    pollMs: run.kind === "integration_campaign" ? 10000 : 3000,
+    refreshKey: selectedTask?.state, paused: !["tasks", "summary"].includes(view) || (view === "tasks" && campaignView) });
   const selectTask = (taskId) => { setSelectedId(taskId); onNavigate?.({ taskId: String(taskId) }); };
   useEffect(() => {
     if (!tasksLoading && selectedTask && String(requestedTask) !== String(selectedTask.id)) {
@@ -176,7 +178,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
         editable={editable && task.state === "pending"} disabled={disabled || busy} onOpen={() => openTask(task)}
         deleteLabel={`Delete task ${task.name}`} onDelete={authenticated ? () => removeTask(task) : null}
         deleteReason={!editable ? "This queue is managed by its parent run." : task.state !== "pending" ? "Only pending tasks can be deleted." : null} />} />}
-    {!tasksLoading && (selectedTask || isIntegration) && <StableTaskOutput loading={taskOutput.isLoading} source={selectedTask?.id}>
+    {!tasksLoading && (selectedTask || isIntegration) && <StableTaskOutput loading={taskOutput.isLoading && !campaignView} source={selectedTask?.id}>
     <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
       key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} output={taskOutput} onSelectRun={onSelectRun}
       view={taskTab} onViewChange={setTaskTab} />
@@ -277,11 +279,13 @@ export default function RunsWorkspace({ runs, selectedRun, setSelectedRun, showC
       </Box>}>
       <LoadingStatus loading={busy && !editor} label="Loading run definition…" />
       {deleting && <Alert severity="info" sx={{ mb: 2 }}>Deleting this run and its child runs. Large histories can take several minutes.</Alert>}
+      <StableTaskOutput loading={isLoadingRuns} source={selectedRun}>
       {run && <RunContent key={run.run_id} run={run} disabled={busy || deleting} notify={notify}
         onSelectRun={onSelectRun} runs={runs} workers={workers} isConnected={isConnected} navigation={navigation} onNavigate={onNavigate}
         runActions={<DefinitionButtons openLabel="Open run definition" onOpen={loadDefinition} disabled={busy || deleting}
           deleteLabel="Delete run" onDelete={authenticated ? remove : null}
           deleteReason={run.parent_run_id != null ? "Delete managed children through their parent run." : null} />} />}
+      </StableTaskOutput>
     </RunScopedWorkspace>
     {editor && <TomlActionDialog open title={editor.title} label="Run TOML"
       submitLabel={editor.duplicate ? editor.standalone ? "Create standalone run" : "Create duplicate run" : "Create run"}

@@ -1,5 +1,6 @@
 //! Postgres-backed implementations of store contracts.
 
+pub(crate) mod campaign;
 mod external_launch;
 mod read;
 mod run_spec;
@@ -1220,6 +1221,9 @@ impl AggregationStore for PgStore {
 
 #[async_trait::async_trait]
 impl RunTaskStore for PgStore {
+    async fn apply_campaign_queue_tuning(&self, task_id: i64) -> Result<(), StoreError> {
+        self.apply_campaign_tuning_rules(task_id).await
+    }
     async fn allocate_campaign_samples(
         &self,
         task_id: i64,

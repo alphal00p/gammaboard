@@ -8,6 +8,7 @@ vi.mock("../services/api", async (original) => ({ ...await original(), fetchRunT
 vi.mock("./panels/LazyChart", () => ({
   default: ({ option }) => <div data-testid="chart">{JSON.stringify(option.series)}</div>,
 }));
+vi.mock("./runs/CampaignPanels", () => ({ default: () => <div>Campaign diagnostics</div> }));
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -23,6 +24,7 @@ test.each([
   ["gammaloop_histogram_bundle", "Observables"],
   ["campaign_histograms", "Combined Observables"],
 ])("%s merges immediately and retains the view through task-output polling", async (panelId, label) => {
+  const campaign = panelId === "campaign_histograms";
   const histogram = {
     sample_count: 10,
     bins: [
@@ -32,7 +34,8 @@ test.each([
     ],
   };
   const response = (scale = 1, incremental = false) => ({
-    source_id: "task:1", cursor: "1:0", poll_after_ms: 2000,
+    source_id: "task:1", cursor: "1:0", poll_after_ms: campaign ? 10000 : 2000,
+    available_sections: campaign ? ["result", "observables"] : ["result", "observables", "diagnostics"],
     panels: incremental ? [] : [{ panel_id: panelId, kind: "table", label, width: "full" }],
     updates: [{ mode: "replace", panel: {
       panel_id: panelId, kind: "table", columns: ["Observable"], rows: [["energy"]], row_keys: ["energy"],
@@ -50,7 +53,7 @@ test.each([
     .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
   function Output() {
     const [view,setView] = useState("observables");
-    return <TaskOutputPanel runId={1} task={{ id: "1", name: "sample", state: "active" }} view={view} onViewChange={setView} />;
+    return <TaskOutputPanel runId={1} task={{ id: "1", name: "sample", state: "active", task_kind: campaign ? "integration_campaign" : "sample" }} view={view} onViewChange={setView} />;
   }
   render(<Output />);
   await act(async () => vi.advanceTimersByTime(200));
@@ -60,7 +63,7 @@ test.each([
   expect(valueSeries().data).toEqual([[0, 1], [1, 1], [1, 2], [2, 2], [2, 3], [3, 3]]);
 
   // Change the view while a poll with the old preferences is in flight.
-  await act(async () => vi.advanceTimersByTime(2200));
+  await act(async () => vi.advanceTimersByTime(campaign ? 10200 : 2200));
   const input = screen.getByRole("spinbutton", { name: "Merge adjacent bins", exact: true });
   fireEvent.focus(input);
   fireEvent.change(input, { target: { value: "2" } });
@@ -87,6 +90,10 @@ test.each([
     .histogram_view.rebin_factors['["energy",null,null]']).toBe(2);
 
   await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Diagnostics", exact: true })));
+  if (campaign) {
+    expect(screen.getByText("Campaign diagnostics")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Scheduling" })).toBeEnabled();
+  }
   expect(screen.queryByTestId("chart")).not.toBeInTheDocument();
   await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Observables", exact: true })));
   expect(screen.getAllByRole("spinbutton", { name: "Merge adjacent bins", exact: true })).toHaveLength(1);

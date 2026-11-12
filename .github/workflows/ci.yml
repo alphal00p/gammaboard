@@ -47,9 +47,11 @@ jobs:
           done
           cargo test --locked --test pg_store_integration -- --ignored
           cargo test --locked --test cluster_store -- --ignored --test-threads=2
-      - name: Test compact plot history and recovery
-        # This PostgreSQL regression lives in the library, not the integration suites.
-        run: cargo test --locked --lib stores::plot_history::tests::compact_history_covers_both_ends_and_resets_after_recovery -- --ignored --exact
+      - name: Test PostgreSQL dashboard read models
+        # These PostgreSQL regressions live in the library, not the integration suites.
+        run: |
+          cargo test --locked --lib stores::plot_history::tests::compact_history_covers_both_ends_and_resets_after_recovery -- --ignored --exact
+          cargo test --locked --lib server::campaign::tests::campaign_views_read_existing_live_and_saved_children_without_new_snapshots -- --ignored --exact
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

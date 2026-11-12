@@ -6,7 +6,7 @@ use super::{
 use crate::PgStore;
 use crate::api::ApiError;
 
-#[derive(Default, serde::Deserialize)]
+#[derive(Default, serde::Deserialize, serde::Serialize)]
 pub(in crate::server) struct RangeQuery {
     pub window_seconds: Option<f64>,
     pub start_ms: Option<i64>,
@@ -15,7 +15,7 @@ pub(in crate::server) struct RangeQuery {
 }
 
 impl RangeQuery {
-    pub(super) fn validate(&self) -> Result<(), ApiError> {
+    pub(in crate::server) fn validate(&self) -> Result<(), ApiError> {
         if self.start_ms.is_some() != self.end_ms.is_some()
             || self.start_ms.zip(self.end_ms).is_some_and(|(a, b)| a >= b)
             || self.window_seconds.is_some_and(|seconds| {
@@ -40,6 +40,13 @@ pub(in crate::server) struct History {
 }
 
 impl History {
+    pub(in crate::server) fn campaign_measurements(&self) -> Value {
+        let m = &self.graphs.measurements;
+        json!({"rate":m.rate.value(), "busy":m.busy.iter().map(|v| v.value()).collect::<Vec<_>>(),
+            "selection":self.selection, "worker_seconds":m.workers.values().map(|w|w.seconds).sum::<f64>(),
+            "reporting_workers":m.workers.len()})
+    }
+
     pub(in crate::server) fn performance_response(
         &self,
         snapshot: &PerformanceSnapshot,
@@ -72,19 +79,29 @@ pub(in crate::server) async fn load(
     range: &RangeQuery,
     diagnostics: bool,
 ) -> Result<History, ApiError> {
+    load_many(store, &[run_id], range, diagnostics, false).await
+}
+
+pub(in crate::server) async fn load_many(
+    store: &PgStore,
+    run_ids: &[i32],
+    range: &RangeQuery,
+    diagnostics: bool,
+    campaign: bool,
+) -> Result<History, ApiError> {
     range.validate()?;
     let bounds: (Option<DateTime<Utc>>, Option<DateTime<Utc>>) = sqlx::query_as(
         r#"
         SELECT min(first), max(last) FROM (
             SELECT min(created_at) AS first, max(created_at) AS last
-            FROM evaluator_performance_history WHERE run_id=$1
+            FROM evaluator_performance_history WHERE run_id=ANY($1)
             UNION ALL
             SELECT min(created_at), max(created_at)
-            FROM sampler_aggregator_performance_history WHERE run_id=$1
+            FROM sampler_aggregator_performance_history WHERE run_id=ANY($1)
         ) bounds
     "#,
     )
-    .bind(run_id)
+    .bind(run_ids)
     .fetch_one(store.pool())
     .await
     .map_err(crate::core::StoreError::from)?;
@@ -135,8 +152,13 @@ pub(in crate::server) async fn load(
         } else {
             ", 'sampler', metrics->'sampler', 'queue', jsonb_build_object('rolling', metrics->'queue'->'rolling')".to_owned()
         };
+        let worker_key = if campaign {
+            "run_id::text || ':' || worker_id"
+        } else {
+            "worker_id"
+        };
         let payload = format!(
-            r#"jsonb_build_object('worker_id', worker_id, 'created_at', created_at,
+            r#"jsonb_build_object('worker_id', {worker_key}, 'created_at', created_at,
             'metrics', jsonb_build_object('epoch', metrics->'epoch',
             'node_uuid', metrics->'node_uuid',
             'task_id', metrics->'task_id', 'busy', metrics->'busy',
@@ -145,10 +167,10 @@ pub(in crate::server) async fn load(
         );
         // Boundary neighbors preserve intervals when zooming below the reporting cadence.
         let query = format!(
-            "SELECT payload FROM (SELECT DISTINCT ON (worker_id) created_at, {payload} AS payload FROM {table} WHERE run_id=$1 AND created_at < $2 ORDER BY worker_id, created_at DESC, id DESC) r ORDER BY created_at"
+            "SELECT payload FROM (SELECT DISTINCT ON (run_id, worker_id) created_at, {payload} AS payload FROM {table} WHERE run_id=ANY($1) AND created_at < $2 ORDER BY run_id, worker_id, created_at DESC, id DESC) r ORDER BY created_at"
         );
         for row in sqlx::query_scalar::<_, Value>(&query)
-            .bind(run_id)
+            .bind(run_ids)
             .bind(since)
             .fetch_all(store.pool())
             .await
@@ -157,12 +179,12 @@ pub(in crate::server) async fn load(
             graphs.observe(row, evaluator);
         }
         let query = format!(
-            "SELECT created_at, id, {payload} FROM {table} WHERE run_id=$1 AND created_at >= $2 AND created_at <= $3 AND (created_at,id) > ($4,$5) ORDER BY created_at,id LIMIT 4096"
+            "SELECT created_at, id, {payload} FROM {table} WHERE run_id=ANY($1) AND created_at >= $2 AND created_at <= $3 AND (created_at,id) > ($4,$5) ORDER BY created_at,id LIMIT 4096"
         );
         let mut cursor = (since, i64::MIN);
         loop {
             let page: Vec<(DateTime<Utc>, i64, Value)> = sqlx::query_as(&query)
-                .bind(run_id)
+                .bind(run_ids)
                 .bind(since)
                 .bind(until)
                 .bind(cursor.0)
@@ -180,10 +202,10 @@ pub(in crate::server) async fn load(
             }
         }
         let query = format!(
-            "SELECT payload FROM (SELECT DISTINCT ON (worker_id) created_at, {payload} AS payload FROM {table} WHERE run_id=$1 AND created_at > $2 ORDER BY worker_id, created_at, id) r ORDER BY created_at"
+            "SELECT payload FROM (SELECT DISTINCT ON (run_id, worker_id) created_at, {payload} AS payload FROM {table} WHERE run_id=ANY($1) AND created_at > $2 ORDER BY run_id, worker_id, created_at, id) r ORDER BY created_at"
         );
         for row in sqlx::query_scalar::<_, Value>(&query)
-            .bind(run_id)
+            .bind(run_ids)
             .bind(until)
             .fetch_all(store.pool())
             .await
@@ -191,6 +213,11 @@ pub(in crate::server) async fn load(
         {
             graphs.observe(row, evaluator);
         }
+    }
+    if campaign {
+        graphs
+            .measurements
+            .campaign_rate((end - start) as f64 / 1000.0);
     }
     Ok(History {
         bounds: Some(bounds),

@@ -325,3 +325,19 @@ fn range_modes_reject_ambiguous_or_invalid_requests() {
         );
     }
 }
+
+#[test]
+fn campaign_throughput_sums_concurrent_samplers_over_a_common_window() {
+    let (_, _, samplers) = fixture();
+    let mut history = graphs::Graphs::new([50000.0, 98000.0]);
+    for name in ["a", "b"] {
+        for sample in &samplers {
+            let mut row = sample.clone();
+            row["worker_id"] = json!(name);
+            history.observe(row, false);
+        }
+    }
+    history.measurements.campaign_rate(48.0);
+    assert_eq!(history.measurements.rate.value(), Some(20.0));
+    assert_eq!(history.measurements.busy[2].value(), Some(50.0));
+}

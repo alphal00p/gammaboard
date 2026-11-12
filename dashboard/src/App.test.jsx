@@ -8,6 +8,7 @@ vi.mock("./components/common/TomlEditor", () => ({ default: ({ label, value, onC
 
 vi.mock("./services/api", () => ({
   fetchRuns: vi.fn(),
+  fetchRunSummary: vi.fn(),
   fetchNodes: vi.fn(),
   fetchOfflineNodes: vi.fn().mockResolvedValue([]),
   updateOfflineNode: vi.fn(),
@@ -166,13 +167,14 @@ describe("App Component", () => {
 
 });
 
-test("a deep link resolves a paginated run and keeps task output selection across workspaces", async () => {
+test("a deep link resolves an older run directly and keeps task output selection across workspaces", async () => {
   vi.clearAllMocks();
   window.history.replaceState(null, "", "/#run=2&task=9007199254740993&taskTab=observables&children=1");
   api.fetchSession.mockResolvedValue({ authenticated: true });
   api.fetchRuns.mockImplementation(async ({ offset = 0 }) => offset
     ? { items: [{ run_id: 2, run_name: "older run", kind: "integration" }], nextOffset: null }
     : { items: [{ run_id: 1, run_name: "new run", kind: "integration" }], nextOffset: 100 });
+  api.fetchRunSummary.mockResolvedValue({ run_id: 2, run_name: "older run", kind: "integration" });
   api.fetchNodes.mockResolvedValue([]);
   api.fetchServerStatus.mockResolvedValue({ status: "ok" });
   api.fetchNodeLaunchRequests.mockResolvedValue([]);
@@ -180,7 +182,8 @@ test("a deep link resolves a paginated run and keeps task output selection acros
   api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task:2", panels: [{ panel_id: "gammaloop_histogram_bundle", kind: "table", label: "Observables" }, { panel_id: "task_summary", kind: "text", label: "Task summary" }], updates: [{ mode: "replace", panel: { panel_id: "task_summary", kind: "text", text: "Selected task metadata" } }] });
   render(<App />);
   expect(await screen.findByRole("tab", { name: "Observables", selected: true })).toBeInTheDocument();
-  expect(api.fetchRuns).toHaveBeenCalledWith(expect.objectContaining({ offset: 100, includeChildren: true }), expect.any(AbortSignal));
+  expect(api.fetchRunSummary).toHaveBeenCalledWith(2, expect.any(AbortSignal));
+  expect(api.fetchRuns.mock.calls.every(([params]) => !params.offset)).toBe(true);
   expect(api.fetchRunTaskPanels.mock.calls.every(([run]) => run === 2)).toBe(true);
   fireEvent.click(screen.getByRole("tab", { name: "System", exact: true }));
   expect(await screen.findByRole("tab", { name: "Workers", selected: true })).toBeVisible();

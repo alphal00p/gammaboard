@@ -8,7 +8,7 @@ mod integration_campaign;
 mod observable;
 mod parameter_scan;
 mod pdf_adaptation;
-mod sample;
+pub(crate) mod sample;
 mod strata;
 
 use crate::core::{
@@ -746,8 +746,12 @@ fn plot_accumulator_label(kind: &crate::core::PlotAccumulatorKind) -> &'static s
 }
 
 impl TaskPanelSource {
-    pub fn for_campaign(workers: &[crate::core::RegisteredNode]) -> Self {
-        let mut projectors = integration_campaign::projectors_for_workers(workers);
+    pub fn for_campaign(
+        workers: &[crate::core::RegisteredNode],
+        publishing_core_hours: std::collections::BTreeMap<i32, f64>,
+    ) -> Self {
+        let mut projectors =
+            integration_campaign::projectors_for_workers(workers, publishing_core_hours);
         projectors.push(task_summary_projector(None));
         Self { projectors }
     }
@@ -1179,6 +1183,7 @@ mod tests {
             sampler: None,
             accumulator: None,
             queue_tuning: None,
+            checkpoint: Default::default(),
             batch_transforms: None,
         }
     }
@@ -1240,7 +1245,7 @@ mod tests {
             source.available_sections(true),
             vec!["result", "strata", "diagnostics", "summary"]
         );
-        let source = TaskPanelSource::for_campaign(&[]);
+        let source = TaskPanelSource::for_campaign(&[], Default::default());
         assert_eq!(
             source.available_sections(true),
             vec!["result", "observables", "summary"]

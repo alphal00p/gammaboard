@@ -28,10 +28,11 @@ pub use run_spec::{
     TrainingProjection,
 };
 pub use tasks::{
-    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, ControllerChildOutput,
-    ControllerChildState, ControllerTaskOutput, DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS,
-    DiscreteProjectionConfig, DiscreteProjectionNormalization, EgoboxInfillStrategy,
-    EgoboxOptimizerParams, EgoboxQeiStrategy, EvaluatorSourceSpec, HyperparameterTrialOutput,
+    AccumulatorMetricName, AccumulatorMetricSelector, AccumulatorSourceSpec, CheckpointPolicy,
+    ControllerChildOutput, ControllerChildState, ControllerTaskOutput,
+    DEFAULT_DISCRETE_PROJECTION_MAX_TOTAL_BINS, DiscreteProjectionConfig,
+    DiscreteProjectionNormalization, EgoboxInfillStrategy, EgoboxOptimizerParams,
+    EgoboxQeiStrategy, EvaluatorSourceSpec, HyperparameterTrialOutput,
     HyperparameterTuningCategoricalDomain, HyperparameterTuningFloatDomain,
     HyperparameterTuningIntegerDomain, HyperparameterTuningOptimizerSpec,
     HyperparameterTuningOutput, HyperparameterTuningParameterDomain, ImageDisplayMode,

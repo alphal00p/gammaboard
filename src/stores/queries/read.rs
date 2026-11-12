@@ -37,6 +37,7 @@ struct RunProgressBaseRow {
     run_toml: Option<String>,
     provenance: JsonValue,
     parent_run_id: Option<i32>,
+    parent_run_name: Option<String>,
     parent_task_id: Option<i64>,
     spawn_kind: Option<String>,
     spawn_label: Option<String>,
@@ -93,6 +94,7 @@ impl RunProgressBaseRow {
             run_toml: self.run_toml,
             provenance: self.provenance,
             parent_run_id: self.parent_run_id,
+            parent_run_name: self.parent_run_name,
             parent_task_id: self.parent_task_id.map(id_text),
             spawn_kind: self.spawn_kind,
             spawn_label: self.spawn_label,
@@ -363,6 +365,7 @@ fn run_progress_sql(run_where_clause: &str) -> String {
         SELECT
             r.id as run_id,
             r.name as run_name,
+            (SELECT parent.name FROM runs parent WHERE parent.id = r.parent_run_id) AS parent_run_name,
             r.run_toml,
             r.provenance,
             r.parent_run_id,
@@ -504,18 +507,32 @@ pub(crate) async fn get_runs_page(
     offset: usize,
     include_children: bool,
 ) -> Result<Vec<RunProgress>, sqlx::Error> {
+    search_runs_page(pool, limit, offset, include_children, "").await
+}
+
+pub(crate) async fn search_runs_page(
+    pool: &PgPool,
+    limit: usize,
+    offset: usize,
+    include_children: bool,
+    search: &str,
+) -> Result<Vec<RunProgress>, sqlx::Error> {
     let run_ids = sqlx::query_scalar::<_, i32>(
         r#"
-        SELECT id
-        FROM runs
-        WHERE $1 OR parent_run_id IS NULL
-        ORDER BY started_at DESC, id DESC
+        SELECT r.id
+        FROM runs r
+        LEFT JOIN runs parent ON parent.id = r.parent_run_id
+        WHERE ($1 OR r.parent_run_id IS NULL)
+          AND ($4 = '' OR strpos(lower(concat_ws(' ', r.name, '#' || r.id,
+                r.spawn_label, parent.name, '#' || parent.id)), lower($4)) > 0)
+        ORDER BY r.started_at DESC, r.id DESC
         LIMIT $2 OFFSET $3
         "#,
     )
     .bind(include_children)
     .bind(limit as i64)
     .bind(offset as i64)
+    .bind(search.trim())
     .fetch_all(pool)
     .await?;
     load_run_progress_for_targets(pool, &run_ids).await
