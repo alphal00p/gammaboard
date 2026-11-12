@@ -208,20 +208,24 @@ bundle that has not already been added. HwU cannot recover original
 sample counts, raw moments or category labels. Integer unit-width bins can be
 compared to discrete observables by index; review the selected matching mode.
 
-**Merge adjacent bins** changes only the display of continuous histograms. Set
-an integer factor separately for the run histogram and each comparison; valid
-changes apply immediately while editing or using the input arrows. Bins are
-merged in coordinate order, preserving a smaller final group. Overlaps and merges
-across gaps are rejected. Underflow and overflow remain separate. Values are bin
-integrals and are summed; for an imported differential density, select **Density
-per unit x** to multiply its values and errors by bin width before merging.
+**Merge adjacent bins** changes only the display of continuous histograms. One
+integer factor applies to the result and all selected comparisons, including the
+basic estimator in Compare estimates. The maximum factor is limited by the
+shortest selected histogram. Valid changes apply immediately while editing or
+using the input arrows; error and error-ratio views keep their original bins.
+Bins are merged in coordinate order, preserving a smaller final group. Overlaps
+and merges across gaps are rejected. Underflow and overflow remain separate.
+Values are bin integrals and are summed; for an imported differential density,
+select **Density per unit x** to multiply its values and errors by bin width
+before merging.
 
 Merged-bin uncertainties use quadrature, an **uncorrelated-bin approximation**.
 Cumulative uncertainties remain unavailable: GammaLoop histogram snapshots do
 not retain cross-bin covariance.
 Missing errors stay unavailable. Comparisons draw their own edges; ratios use only
 matching intervals or exact sums of finer reference bins, never midpoint sampling
-of a wider bin. Use appropriate merge factors to align coarser comparisons.
+of a wider bin. Shared grouping does not guarantee aligned edges when the
+original binnings differ.
 
 Factors persist as panel view preferences across refreshes. **Reset** restores the
 original binning and zoom; the input value convention stays selected. Bundle
