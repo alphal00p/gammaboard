@@ -5,6 +5,7 @@ import PanelCollection from "./panels/PanelCollection";
 import { readZoomFromPanelValue } from "./panels/panelView";
 import { useWorkspaceActive } from "./common/WorkspaceTabs";
 import LoadingStatus from "./common/LoadingStatus";
+import PanelInfo from "./common/PanelInfo";
 
 const IDS = ["busy_history", "accepted_rate_history"];
 const seconds = (value) => `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 })} s`;
@@ -53,11 +54,12 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
       try {
         // Full history is only a bounded navigation overview. Refresh it less
         // often while inspecting a fixed past interval.
-        let full = cache.current?.data;
-        if (!full || !selection || selection.seconds != null || selection.follow || Date.now() - cache.current.at > 30000) {
+        let full = cache.current?.runId === runId ? cache.current.data : null;
+        const overviewAge = !selection || selection.seconds != null || selection.follow ? 5000 : 30000;
+        if (!full || Date.now() - cache.current.at >= overviewAge) {
           full = await fetchRunPerformanceGraphs(runId, null, controller.signal);
           if (controller.signal.aborted) return;
-          cache.current = { data: full, at: Date.now() };
+          cache.current = { runId, data: full, at: Date.now() };
         }
         const range = selectedBounds(selection, full.bounds);
         const detail = selection && range?.[0] < range?.[1]
@@ -112,12 +114,12 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
       <Typography variant="body2" color="text.secondary">
         {selection ? (selection.follow || selection.seconds != null ? "Following latest recorded data" : "Selected interval") : "All recorded history"}
       </Typography>
+      <PanelInfo title="Performance graphs" notes={[
+        "Drag the time slider handles to zoom; drag its selection to pan. Overview, Diagnostics and Graphs share the range. Select the right edge to follow new data. Zooming loads finer detail.",
+        "Lines are interval averages across reporting workers. No smoothing is applied; gaps are unavailable. Zoom in to resolve pauses.",
+      ]} />
     </Stack>
     <LoadingStatus loading={loading && !data} label="Loading performance history…" />
-    <Typography variant="body2" color="text.secondary">
-      Drag the time slider handles to zoom; drag its selection to pan. All three tabs share the range.
-      Select the right edge to follow new data. Zooming loads finer detail.
-    </Typography>
     {error && <Alert severity="warning">{error} Displaying the last loaded history.</Alert>}
     {full?.bounds ? <>
       <PanelCollection panelSpecs={full.panels} panelStates={states} panelValues={values} onPanelValueChange={changeView} />
@@ -125,10 +127,6 @@ const PerformanceGraphs = ({ runId, selection = null, onSelectionChange }) => {
         Display bins: {seconds(measured.bin_seconds)}. Observed report spacing: {measured.cadence.map((cadence, index) =>
           `${index === 0 ? "evaluators" : "sampler"} ${cadence.intervals ? `${seconds(cadence.total_seconds / cadence.intervals)} average` : "unavailable"}`,
         ).join("; ")}.
-      </Typography>
-      <Typography variant="body2" color="text.secondary">
-        Lines are interval averages. No smoothing is applied; gaps are unavailable.
-        Historical averages cover reporting workers. Zoom in to resolve pauses.
       </Typography>
     </> : !loading && <Alert severity="info">No recorded performance history yet.</Alert>}
   </Stack>;

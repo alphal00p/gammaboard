@@ -21,4 +21,7 @@ test("navigation keeps sibling views and restores browser history", () => {
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
   expect(result.current[0]).toMatchObject({ workspace: "runs", runId: 1, runTab: "performance", performanceTab: "graphs" });
+  const unchanged = result.current[0];
+  act(() => result.current[1]({ workspace: "runs" }));
+  expect(result.current[0]).toBe(unchanged);
 });

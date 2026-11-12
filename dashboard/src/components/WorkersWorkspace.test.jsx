@@ -15,6 +15,15 @@ beforeEach(() => { vi.clearAllMocks(); auth.authenticated = true; });
 const idle = { node_name: "idle", status: "idle" };
 const props = { runs: [], isConnected: true, workers: [idle, { node_name: "working", status: "active", current_run_id: 1, current_role: "evaluator" }] };
 
+test("unassign all requires a pool, pending assignment or draining current role", () => {
+  const { rerender } = render(<WorkersWorkspace {...props} workers={[idle]} />);
+  expect(screen.getByRole("button", { name: "Unassign all" })).toBeDisabled();
+  for (const assignment of [{ pool_run_id: 1 }, { desired_run_id: 1 }, { current_run_id: 1 }]) {
+    rerender(<WorkersWorkspace {...props} workers={[{ ...idle, ...assignment }]} />);
+    expect(screen.getByRole("button", { name: "Unassign all" })).toBeEnabled();
+  }
+});
+
 test("stop idle uses the atomic endpoint and displays its actual affected count", async () => {
   let finish;
   stopIdleNodes.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));

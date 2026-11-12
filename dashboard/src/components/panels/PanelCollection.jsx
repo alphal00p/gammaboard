@@ -1,6 +1,6 @@
 import { useWorkspaceActive } from "../common/WorkspaceTabs";
 import { PanelHeader } from "../common/PanelChrome";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -8,7 +8,7 @@ import {
   CardContent,
   Typography,
 } from "@mui/material";
-import { formatScientific } from "../../utils/formatters";
+import { formatDecimalSignificant, formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 import {
   EmptyPlotPanel,
@@ -173,7 +173,8 @@ const formatTimeseriesXAxisValue = (value, mode, isTimestamp, originMs) => {
   if (mode === HISTORY_X_AXIS_MODE_COMPLETED_SAMPLES) return formatAxisValue(numeric);
   return isTimestamp ? formatElapsedTime(numeric - originMs) : formatAxisValue(numeric);
 };
-const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs, sources = []) => (params) => {
+const formatActivityPercent = (value) => `${formatDecimalSignificant(value, 3)}%`;
+const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs, sources = [], formatValue = formatScientific) => (params) => {
   const seen = new Set();
   const entries = asArray(params).filter((entry) => {
     // ECharts axis tooltips can include silent custom series (range/error bars).
@@ -195,7 +196,7 @@ const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs, sources = 
           : escapeXml(formatAxisValue(axisValue));
   const lines = entries.map((entry) => {
     const rawValue = Array.isArray(entry?.value) ? entry.value[1] : entry?.value;
-    const label = `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${rawValue != null && Number.isFinite(Number(rawValue)) ? formatScientific(Number(rawValue), 6) : "n/a"}`;
+    const label = `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${rawValue != null && Number.isFinite(Number(rawValue)) ? formatValue(Number(rawValue)) : "n/a"}`;
     const source = sources.find((item) => item.label === entry.seriesName);
     const point = asArray(source?.points).findLast((p) => Number(p.x) === axisValue);
     if (!point?.estimator) return label;
@@ -581,6 +582,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
   const figureRef = useRef(null);
   const echartsRef = useRef(null);
   const panelId = state?.panel_id || null;
+  const percentAxis = panelId === "busy_history";
   const isHistoryPanel = useMemo(() => String(panelId || "").includes("_history"), [panelId]);
   const nativeAxis = state?.x_axis || "numeric";
   const historyXAxisMode = resolveTimeseriesXAxisMode(
@@ -663,11 +665,11 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         type: "value",
         min: domain[0],
         max: domain[1],
-        axisLabel: baseAxisLabel,
+        axisLabel: percentAxis ? { ...baseAxisLabel, formatter: formatActivityPercent } : baseAxisLabel,
       },
       tooltip: {
         trigger: "axis",
-        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs, series),
+        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs, series, percentAxis ? formatActivityPercent : formatScientific),
       },
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: series.flatMap((item, index) => {
@@ -696,7 +698,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
         return [buildErrorBarSeries({ name: item.label, data: errorBarData, color }), lineSeries];
       }),
     }),
-    [domain, historyXAxisMode, panelId, series, usesTimestampXAxis, xAxisOriginMs, xDomain, yZoomRange, zoomRange, selected],
+    [domain, historyXAxisMode, panelId, percentAxis, series, usesTimestampXAxis, xAxisOriginMs, xDomain, yZoomRange, zoomRange, selected],
   );
   if (data.length === 0) return null;
   return (
@@ -846,7 +848,7 @@ const PanelRenderer = ({
   }
 };
 
-const PanelCollection = ({
+const PanelCollectionContent = ({
   title = null,
   panelSpecs,
   panelStates,
@@ -855,7 +857,6 @@ const PanelCollection = ({
   onSelectRun = null,
   visiblePanelIds = null,
 }) => {
-  const active = useWorkspaceActive();
   const {
     histogramBundlesByPanel,
     histogramBundleUploadErrors,
@@ -906,8 +907,6 @@ const PanelCollection = ({
     [onPanelValueChange, panelValues, sharedHistoryPanelIdSet, sharedHistoryPanelIds],
   );
 
-  // Keep upload and view state alive while unmounting expensive hidden charts.
-  if (!active) return null;
   const displayedPanels = visiblePanelIds == null ? renderablePanels : renderablePanels.filter(({ descriptor, state }) =>
     visiblePanelIds.has(state?.source_panel_id || descriptor.panel_id));
 
@@ -961,4 +960,8 @@ const PanelCollection = ({
   );
 };
 
+// Keep disclosures, tables and canvases mounted across tab switches. Hidden
+// collections retain their last render; polling remains paused by the workspace.
+const RetainedPanelCollection = memo(PanelCollectionContent, (_previous, next) => !next.active);
+const PanelCollection = (props) => <RetainedPanelCollection {...props} active={useWorkspaceActive()} />;
 export default PanelCollection;

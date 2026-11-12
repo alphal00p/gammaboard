@@ -302,7 +302,7 @@ const TablePanel = ({
     </DisclosureField>;
   };
 
-  const table = !hasRows ? <Alert severity="info">No observables available.</Alert> : <TableContainer sx={{ maxHeight: 440, overflowX: "auto" }}>
+  const table = !hasRows ? <Alert severity="info">No observables available.</Alert> : <TableContainer role="region" aria-label={`${title} table`} tabIndex={0} sx={{ maxHeight: 440, overflowX: "auto" }}>
           <MuiTable size="small" stickyHeader sx={payload?.sortable ? { "& .MuiTableCell-root": { px: 1, whiteSpace: "nowrap" } } : undefined}>
             <TableHead>
               <TableRow>
@@ -373,6 +373,7 @@ const TablePanel = ({
                     <TableCell
                       key={`${rowIndex}-${columnIndex}`}
                       sx={{
+                        minWidth: typeof row?.[columnIndex] === "string" ? `${Math.min(row[columnIndex].length, 16) + 8}ch` : undefined,
                         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace",
                         whiteSpace: "pre-wrap",
                         wordBreak: "break-word",

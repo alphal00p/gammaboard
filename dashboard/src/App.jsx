@@ -110,9 +110,10 @@ function AppContent() {
   }, [navigate]);
 
   const selectRun = useCallback((runId) => {
+    if (runId === selectedRun) return;
     setPendingRunSelection(null);
     navigate({ runId, taskId: null });
-  }, [navigate]);
+  }, [navigate, selectedRun]);
 
   return (
     <Container maxWidth="xl" sx={{ py: 2 }}>

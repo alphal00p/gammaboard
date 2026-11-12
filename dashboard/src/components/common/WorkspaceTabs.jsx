@@ -38,6 +38,10 @@ export default function WorkspaceTabs({ id, label, value, onChange, tabs, disabl
   const height = primary ? 44 : 36;
   const scope = useContext(TabLoadingContext);
   const labels = [...new Set([...(loading ? [loadingLabel] : []), ...Object.values(scope?.statuses ?? {})])];
+  // A retained view can become unavailable (e.g. sampling completes). Keep
+  // keyboard entry on an enabled tab without changing the displayed panel.
+  const entryKey = tabs.find(([key]) => key === value && !disabledTabs[key])?.[0]
+    ?? tabs.find(([key]) => !disabledTabs[key])?.[0];
   return <Box data-tab-row={id} sx={{ display: "grid", gridTemplateColumns: primary
     ? { xs: "minmax(0, 1fr) 24px", sm: "minmax(24px, 1fr) minmax(0, max-content) minmax(24px, 1fr)" }
     : actions ? { xs: "minmax(0, 1fr) 24px", md: "minmax(0, 1fr) 24px auto" } : "minmax(0, 1fr) 24px",
@@ -60,6 +64,7 @@ export default function WorkspaceTabs({ id, label, value, onChange, tabs, disabl
       },
     }}>
     {tabs.map(([key, text]) => <Tab key={key} value={key} label={text} disabled={Boolean(disabledTabs[key])} title={disabledTabs[key] || undefined}
+      tabIndex={key === entryKey ? 0 : -1}
       id={`${id}-tab-${key}`} aria-controls={panelId || `${id}-panel-${key}`} />)}
   </Tabs>{actions && <Box sx={{ gridColumn: { xs: "1 / -1", md: 3 }, justifySelf: "end" }}>{actions}</Box>}</Box>;
 }

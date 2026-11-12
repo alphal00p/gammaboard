@@ -119,6 +119,33 @@ describe("App Component", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  test("showing children preserves the selected root's panels and disclosure state", async () => {
+    let finishChildren;
+    const root = { run_id: 1, run_name: "Parent", kind: "integration" };
+    api.fetchRuns.mockImplementation(({ includeChildren }) => includeChildren
+      ? new Promise((resolve) => { finishChildren = resolve; })
+      : Promise.resolve({ items: [root], nextOffset: null }));
+    api.fetchRunTasks.mockResolvedValue([{ id: "1", name: "inference", state: "completed", task_kind: "sample" }]);
+    api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task", poll_after_ms: null,
+      panels: [{ panel_id: "estimate_summary", kind: "key_value", label: "Result" }],
+      updates: [{ mode: "replace", panel: { panel_id: "estimate_summary", kind: "key_value", entries: [{ key: "mean", label: "Mean", value: 1.25 }] } }],
+    });
+    await renderApp();
+    const mean = await screen.findByRole("button", { name: "Mean", exact: true });
+    const queue = screen.getByRole("button", { name: "Task queue" });
+    fireEvent.click(mean);
+    fireEvent.click(queue);
+    const polls = api.fetchRunTaskPanels.mock.calls.length;
+    fireEvent.click(screen.getByRole("switch", { name: "Show child runs" }));
+    expect(screen.getByRole("button", { name: "Mean", exact: true })).toBe(mean);
+    expect(mean).toHaveAttribute("aria-expanded", "true");
+    expect(queue).toHaveAttribute("aria-expanded", "false");
+    await act(async () => finishChildren({ items: [root, { run_id: 2, run_name: "Child", parent_run_id: 1 }], nextOffset: null }));
+    expect(screen.getByRole("button", { name: "Mean", exact: true })).toBe(mean);
+    expect(api.fetchRunTaskPanels).toHaveBeenCalledTimes(polls);
+    expect(window.location.hash).toContain("run=1");
+  });
+
   test.each(["integration", "integration_campaign", "parameter_scan", "hyperparameter_tuning"])("only integrations expose queue controls: %s", async (kind) => {
     api.fetchSession.mockResolvedValue({ authenticated: true });
     api.fetchRuns.mockResolvedValue({ items: [{ run_id: 1, run_name: "example", kind }], nextOffset: null });
@@ -153,7 +180,7 @@ test("a deep link resolves a paginated run and keeps task output selection acros
   api.fetchRunTaskPanels.mockResolvedValue({ source_id: "task:2", panels: [{ panel_id: "gammaloop_histogram_bundle", kind: "table", label: "Observables" }, { panel_id: "task_summary", kind: "text", label: "Task summary" }], updates: [{ mode: "replace", panel: { panel_id: "task_summary", kind: "text", text: "Selected task metadata" } }] });
   render(<App />);
   expect(await screen.findByRole("tab", { name: "Observables", selected: true })).toBeInTheDocument();
-  expect(api.fetchRuns).toHaveBeenCalledWith(expect.objectContaining({ offset: 100, includeChildren: true }));
+  expect(api.fetchRuns).toHaveBeenCalledWith(expect.objectContaining({ offset: 100, includeChildren: true }), expect.any(AbortSignal));
   expect(api.fetchRunTaskPanels.mock.calls.every(([run]) => run === 2)).toBe(true);
   fireEvent.click(screen.getByRole("tab", { name: "System", exact: true }));
   expect(await screen.findByRole("tab", { name: "Workers", selected: true })).toBeVisible();

@@ -13,6 +13,7 @@ import {
   Paper,
   Select,
   Snackbar,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
@@ -21,6 +22,7 @@ import PanelCollection from "./panels/PanelCollection";
 import { useNodePanels } from "../hooks/useNodePanels";
 import { assignNode, stopNode, unassignNode } from "../services/api";
 import { ControlBar } from "./common/PanelChrome";
+import { hasWorkerAssignment, workerAssignmentReason } from "../utils/workerActions";
 
 const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   const nodeName = worker?.node_name || null;
@@ -36,6 +38,8 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
   const [confirmStopOpen, setConfirmStopOpen] = useState(false);
 
   const runOptions = useMemo(() => runs.filter((run) => run?.parent_run_id == null && Number.isFinite(Number(run?.run_id))), [runs]);
+  const assignReason = workerAssignmentReason(runOptions.find((run) => run.run_id === selectedRunId));
+  const removeReason = hasWorkerAssignment(worker) ? "" : "This worker has no pool or assignment.";
 
   useEffect(() => {
     setSelectedRunId(worker?.pool_run_id ?? "");
@@ -69,7 +73,8 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
                 onChange={(event) => setSelectedRunId(Number(event.target.value))}
               >
                 {runOptions.map((run) => (
-                  <MenuItem key={run.run_id} value={run.run_id}>
+                  <MenuItem key={run.run_id} value={run.run_id} disabled={Boolean(workerAssignmentReason(run))}
+                    title={workerAssignmentReason(run) || undefined}>
                     {run.run_name || "Unnamed run"}
                   </MenuItem>
                 ))}
@@ -88,9 +93,10 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
               </Select>
             </FormControl>
             <ControlBar>
+              <Tooltip title={assignReason}><span>
               <Button
                 variant="contained"
-                disabled={busy || !selectedRunId}
+                disabled={busy || Boolean(assignReason)}
                 onClick={async () => {
                   setBusy(true);
                   try {
@@ -105,8 +111,10 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
               >
                 Assign
               </Button>
+              </span></Tooltip>
+              <Tooltip title={removeReason}><span>
               <Button
-                disabled={busy}
+                disabled={busy || Boolean(removeReason)}
                 onClick={async () => {
                   setBusy(true);
                   try {
@@ -121,6 +129,7 @@ const WorkerDetailsPanel = ({ worker, runs = [] }) => {
               >
                 Remove from pool
               </Button>
+              </span></Tooltip>
               <Button color="error" disabled={busy} onClick={() => setConfirmStopOpen(true)}>
                 Stop node
               </Button>

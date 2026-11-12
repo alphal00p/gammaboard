@@ -25,6 +25,7 @@ import EmptyStateCard from "./common/EmptyStateCard";
 import StatusChip from "./common/StatusChip";
 import { formatDateTime } from "../utils/formatters";
 import { compareNodesByName, nodeNameOf } from "../utils/nodes";
+import { hasWorkerAssignment } from "../utils/workerActions";
 import { useAuth } from "../auth/AuthProvider";
 import { useNodeLaunchRequests } from "../hooks/useNodeLaunchRequests";
 import { autoRunNodes, stopAllNodes, stopIdleNodes, unassignAllNodes } from "../services/api";
@@ -90,9 +91,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
     [workers],
   );
   const hasIdleNodes = workers.some((worker) => worker.status === "idle"
-    && worker.current_run_id == null && worker.current_role == null
-    && worker.desired_run_id == null && worker.desired_role == null
-    && worker.pool_run_id == null && worker.pool_role == null);
+    && !hasWorkerAssignment(worker));
 
   return (
     <TabLoadingScope>
@@ -118,7 +117,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
               </Button>
               <Button
                 variant="outlined"
-                disabled={unassigningAllNodes || stoppingIdleNodes || stoppingAllNodes || workers.length === 0}
+                disabled={unassigningAllNodes || stoppingIdleNodes || stoppingAllNodes || !workers.some(hasWorkerAssignment)}
                 onClick={async () => {
                   setUnassigningAllNodes(true);
                   try {

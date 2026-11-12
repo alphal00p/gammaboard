@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchRuntimeLogPage } from "../services/api";
 import { useWorkspaceActive } from "../components/common/WorkspaceTabs";
 import { asArray } from "../utils/collections";
@@ -24,6 +24,9 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
   const [isLoading, setIsLoading] = useState(false);
   const [loadedFilters, setLoadedFilters] = useState(null);
   const [error, setError] = useState(null);
+  const requestRef = useRef(null);
+  const completed = useRef(null);
+  const previousRun = useRef(runId);
 
   const workerOptions = useMemo(() => {
     const selectedRunId = filters.runId === "" ? null : Number(filters.runId);
@@ -42,6 +45,8 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
   }, [workers, items, filters.runId, filters.nodeName]);
 
   useEffect(() => {
+    if (previousRun.current === runId) return;
+    previousRun.current = runId;
     setItems([]);
     setCursor(null);
     setHasMoreOlder(false);
@@ -53,7 +58,12 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
   }, [runId]);
 
   const loadPage = useCallback(
-    async ({ beforeId = null, append = false, signal } = {}) => {
+    async ({ beforeId = null, append = false } = {}) => {
+      requestRef.current?.abort();
+      const request = new AbortController();
+      const { signal } = request;
+      requestRef.current = request;
+      if (!append) completed.current = { filters: completed.current?.filters, retry: true };
       setIsLoading(true);
       try {
         const selectedRunId = filters.runId === "" ? null : Number(filters.runId);
@@ -76,15 +86,17 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
         setCursor(page.next_before_id ?? null);
         setHasMoreOlder(page.has_more_older === true);
         setError(null);
+        completed.current = { filters, retry: false };
       } catch (err) {
         if (signal?.aborted || err?.name === "AbortError") return;
         setError(err);
-        if (!append) {
+        if (!append && completed.current?.filters !== filters) {
           setItems([]);
           setCursor(null);
           setHasMoreOlder(false);
         }
       } finally {
+        if (requestRef.current === request) requestRef.current = null;
         if (!signal?.aborted) {
           setLoadedFilters(filters);
           setIsLoading(false);
@@ -96,20 +108,19 @@ export const useWorkerLogs = ({ runId = null, workers = [], limit = 100 } = {}) 
 
   useEffect(() => {
     if (!active) return;
-    const controller = new AbortController();
-    loadPage({ beforeId: null, append: false, signal: controller.signal });
-    return () => controller.abort();
+    // Returning to Logs preserves loaded older pages. Refresh is explicit;
+    // Changed filters and interrupted/failed first-page requests still reload.
+    if (completed.current?.filters !== filters || completed.current.retry) loadPage();
+    return () => { requestRef.current?.abort(); requestRef.current = null; setIsLoading(false); };
   }, [active, filters, loadPage]);
 
   const refresh = useCallback(() => {
-    const controller = new AbortController();
-    loadPage({ beforeId: null, append: false, signal: controller.signal });
+    loadPage();
   }, [loadPage]);
 
   const loadOlder = useCallback(() => {
-    if (!cursor || isLoading) return;
-    const controller = new AbortController();
-    loadPage({ beforeId: cursor, append: true, signal: controller.signal });
+    if (!cursor || isLoading || requestRef.current) return;
+    loadPage({ beforeId: cursor, append: true });
   }, [cursor, isLoading, loadPage]);
 
   return {

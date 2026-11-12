@@ -34,6 +34,7 @@ export function useDashboardNavigation() {
   const navigate = useCallback((patch, { replace = false } = {}) => {
     const next = { ...current.current, ...patch };
     const hash = navigationHash(next);
+    if (hash === navigationHash(current.current)) return;
     if (hash !== window.location.hash) window.history[replace ? "replaceState" : "pushState"](null, "", `${window.location.pathname}${window.location.search}${hash}`);
     current.current = next;
     setNavigation(next);

@@ -45,7 +45,8 @@ test("graph navigation fetches detail, synchronizes ranges, and can restore full
   expect(values.accepted_rate_history.zoom).toEqual(values.busy_history.zoom);
   fireEvent.click(screen.getByText("All"));
   await act(async () => vi.advanceTimersByTimeAsync(1));
-  expect(fetchRunPerformanceGraphs).toHaveBeenLastCalledWith(12, null, expect.any(AbortSignal));
+  expect(fetchRunPerformanceGraphs).toHaveBeenCalledTimes(2);
+  expect(renderPanels.mock.lastCall[0].panelValues.busy_history.zoom).toEqual({ start: 0, end: 100 });
 });
 
 test("fixed past selection stays anchored while follow mode preserves its duration", () => {

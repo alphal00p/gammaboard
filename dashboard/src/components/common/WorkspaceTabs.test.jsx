@@ -1,10 +1,28 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import WorkspaceTabs, { TabLoadingScope, WorkspacePanel } from "./WorkspaceTabs";
 import LoadingStatus from "./LoadingStatus";
 import { usePanelSource } from "../../hooks/usePanelSource";
 
 afterEach(() => vi.useRealTimers());
+
+test("an unavailable selected view keeps keyboard entry on the first enabled tab", () => {
+  const change = vi.fn();
+  const tabs = [["overview", "Overview"], ["graphs", "Graphs"], ["tuning", "Queue tuning"]];
+  const tree = (disabledTabs) => <WorkspaceTabs id="test" label="Views" value="tuning" onChange={change} tabs={tabs} disabledTabs={disabledTabs} />;
+  const { rerender } = render(tree({}));
+  expect(screen.getByRole("tab", { name: "Queue tuning" })).toHaveAttribute("tabindex", "0");
+  rerender(tree({ tuning: "No active sampling task." }));
+  const overview = screen.getByRole("tab", { name: "Overview" });
+  expect(overview).toHaveAttribute("tabindex", "0");
+  expect(screen.getByRole("tab", { name: "Queue tuning" })).toBeDisabled();
+  expect(change).not.toHaveBeenCalled();
+  overview.focus();
+  fireEvent.keyDown(overview, { key: "ArrowRight" });
+  expect(screen.getByRole("tab", { name: "Graphs" })).toHaveFocus();
+  rerender(tree({ tuning: "No active sampling task.", overview: "Unavailable" }));
+  expect(screen.getByRole("tab", { name: "Graphs" })).toHaveAttribute("tabindex", "0");
+});
 
 test("descendant loading stays in the fixed tab slot and stops when its workspace is hidden", () => {
   vi.useFakeTimers();

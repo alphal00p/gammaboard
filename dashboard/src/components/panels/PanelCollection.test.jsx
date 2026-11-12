@@ -2,6 +2,7 @@ import { useState } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import PanelCollection from "./PanelCollection";
+import { WorkspacePanel } from "../common/WorkspaceTabs";
 
 const { renderChart } = vi.hoisted(() => ({ renderChart: vi.fn() }));
 
@@ -26,6 +27,24 @@ afterEach(() => {
 
 const imageSpec = { panel_id: "pdf_adaptation_pdf", label: "Sampler PDF", kind: "image2d" };
 const histogramSpec = { panel_id: "pdf_histogram", label: "PDF Histogram", kind: "histogram" };
+
+test("hiding a workspace preserves panel instances and disclosures without rendering changed data", () => {
+  const tree = (active, value) => <WorkspacePanel id="test" value="details" active={active}>
+    <PanelCollection panelSpecs={[{ panel_id: "values", kind: "key_value", label: "Values" }]}
+      panelStates={[{ panel_id: "values", kind: "key_value", entries: [{ key: "value", label: "Measured value", value }] }]} />
+  </WorkspacePanel>;
+  const { rerender } = render(tree(true, 1.25));
+  const disclosure = screen.getByRole("button", { name: "Measured value" });
+  fireEvent.click(disclosure);
+  rerender(tree(false, 2.5));
+  expect(disclosure).toBeInTheDocument();
+  expect(disclosure).not.toBeVisible();
+  expect(disclosure).toHaveTextContent("1.25");
+  rerender(tree(true, 2.5));
+  expect(screen.getByRole("button", { name: "Measured value" })).toBe(disclosure);
+  expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  expect(disclosure).toHaveTextContent("2.5");
+});
 
 test("image controls share the progress card and preserve their panel action", () => {
   const change = vi.fn();

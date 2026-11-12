@@ -12,6 +12,7 @@ import { addRunTasks, autoAssignRun, createRun, deleteRun, deleteRunTask, editRu
   fetchNodes, fetchRunDefinition, fetchTaskDefinition, pauseRun, unassignNode } from "../../services/api";
 import { asArray } from "../../utils/collections";
 import { getCurrentTask } from "../../utils/tasks";
+import { workerAssignmentReason } from "../../utils/workerActions";
 import RunScopedWorkspace from "../common/RunScopedWorkspace";
 import WorkspaceTabs, { TabLoadingScope, WorkspacePanel, useWorkspaceActive } from "../common/WorkspaceTabs";
 import { ControlBar } from "../common/PanelChrome";
@@ -44,9 +45,8 @@ function WorkerPoolControls({ run, workers, disabled, notify }) {
   const [busy, setBusy] = useState(false);
   const [operation, setOperation] = useState("");
   const [count, setCount] = useState(() => window.localStorage.getItem("runs.evaluator_count") || "");
-  const terminal = ["completed", "failed"].includes(run.lifecycle_state);
   const pool = asArray(workers).filter((worker) => worker.pool_run_id === run.run_id);
-  const assignReason = terminal ? "Append new tasks before assigning workers to this run." : "";
+  const assignReason = workerAssignmentReason(run);
   const removeReason = pool.some((worker) => worker.pool_role === "evaluator") ? "" : "No evaluators in this run's pool.";
   const pauseReason = ["paused", "pausing"].includes(run.lifecycle_state) ? "This run is already paused or pausing."
     : pool.length ? "" : "No workers in this run's pool.";

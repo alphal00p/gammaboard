@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import LazyChart from "./LazyChart";
 import { createTheme, ThemeProvider } from "@mui/material/styles";
+import { WorkspacePanel } from "../common/WorkspaceTabs";
 
 const { events } = vi.hoisted(() => ({ events: [] }));
 
@@ -15,6 +16,7 @@ vi.mock("echarts-for-react", async () => {
         return {
           isDisposed: () => false,
           clear: () => events.push("clear"),
+          resize: () => events.push("resize"),
           getOption: () => ({ legend: [{ selected: { Target: false } }], dataZoom: [{ start: 20, end: 70 }] }),
         };
       }
@@ -52,4 +54,18 @@ test("changing theme updates chart options without disposing the chart", async (
   expect(chart).toHaveAttribute("data-background", dark.palette.background.paper);
   expect(ref.current).toBe(instance);
   expect(events).toEqual([]);
+});
+
+test("returning to a hidden chart resizes its existing instance", async () => {
+  events.length = 0;
+  const tree = (active) => <WorkspacePanel id="test" value="chart" active={active}><LazyChart option={{}} /></WorkspacePanel>;
+  const { rerender } = render(tree(true));
+  const chart = await screen.findByTestId("chart");
+  rerender(tree(false));
+  expect(chart).toBeInTheDocument();
+  expect(chart).not.toBeVisible();
+  expect(events).toEqual([]);
+  rerender(tree(true));
+  expect(screen.getByTestId("chart")).toBe(chart);
+  expect(events).toEqual(["resize"]);
 });

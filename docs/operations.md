@@ -8,6 +8,10 @@ ambiguity when several runs share a name.
 The header shows the connection status and last successful server-status update
 across all tabs. The persistent tabs are **Runs**, **System**, and **Logs**. Runs shares one run
 selector across **Tasks**, **Summary**, **Performance**, and **Settings**.
+The run selector searches loaded runs by name, ID, lifecycle state or parent ID.
+Child labels and status remain visible; use **Load more runs** to include older entries.
+Showing children augments the root catalog without reloading the selected parent
+or discarding loaded root pages. Hiding children pauses their catalog polling.
 Top-level navigation is centered on wider screens; section and view tabs align
 with the left edge of their content. Nested tabs use progressively quieter styles.
 Tasks separates the selected task's Result, Observables, Stratum output,
@@ -17,6 +21,8 @@ selection displays Result. Collapse the queue to give the output more space;
 the selected task's name, state, and kind remain above its output.
 Worker actions remain visible but disabled when inapplicable, with hover explanations.
 Completed runs cannot receive workers, but remaining pool members can still be removed.
+System worker controls use the same assignment rules; completed/failed pools remain
+listed but disabled, and unassign actions require an existing assignment.
 Sample progress is an unlabeled bar with ETA; sample counts remain in the task table.
 Campaign progress retains a full-width bordered panel, with its label and sample
 count on the same row.
@@ -37,7 +43,10 @@ is disabled. Task changes reset the form and discard unsaved edits. Live Queue a
 Batch panels appear only for the active sampling task. Managed child tasks remain
 read-only. System contains Workers, Database (runtime/server details and
 destructive controls), and Settings (configuration paths and documentation).
-Logs retains its own run and worker filters.
+Logs retains its own run and worker filters and loaded older pages across tab
+switches. Use **Refresh** for the latest log page; changing filters loads a new list.
+Performance graph navigation instructions are available from the information button
+beside the current history/following status.
 
 **GammaLoop time per sample** in task Diagnostics measures elapsed time inside
 GammaLoop, averaged over the task's evaluated samples. It excludes GammaBoard's
@@ -55,7 +64,8 @@ from the notification count.
 
 The URL records the selected run, task, and tabs for refresh, bookmarks, and
 browser Back/Forward. Switching tabs keeps drafts, imported comparisons, and view
-preferences while pausing inactive polling and chart rendering. Imported
+preferences while pausing inactive polling and chart updates. Open panels and
+canvases remain mounted, and resize when shown again. Imported
 comparisons and unsaved drafts remain browser-session state, not saved run data.
 
 ## Manage work

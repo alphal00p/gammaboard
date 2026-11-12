@@ -31,3 +31,19 @@ test("failures end initial loading and expose the error", async () => {
   expect(result.current.isLoading).toBe(false);
   expect(result.current.isFetching).toBe(false);
 });
+
+test("pausing a catalog retains its data while a resumed request refreshes it", async () => {
+  let finish;
+  const fetchResource = vi.fn().mockResolvedValueOnce(["saved"])
+    .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const { result, rerender } = renderHook(({ paused }) => usePolledResource({ initialData: [], fetchResource, paused, pollMs: 60000 }),
+    { initialProps: { paused: false } });
+  await waitFor(() => expect(result.current.data).toEqual(["saved"]));
+  rerender({ paused: true });
+  expect(result.current.data).toEqual(["saved"]);
+  rerender({ paused: false });
+  expect(result.current.data).toEqual(["saved"]);
+  expect(result.current.isLoading).toBe(false);
+  await act(async () => finish(["updated"]));
+  expect(result.current.data).toEqual(["updated"]);
+});

@@ -3,7 +3,7 @@ import { usePolling } from "./usePolling";
 
 const formatTime = () => new Date().toLocaleTimeString(undefined, { hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchResource, onError = null } = {}) => {
+export const usePolledResource = ({ enabled = true, paused = false, pollMs, initialData, fetchResource, onError = null } = {}) => {
   const [data, setData] = useState(initialData);
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
@@ -54,7 +54,7 @@ export const usePolledResource = ({ enabled = true, pollMs, initialData, fetchRe
   const reset = useCallback(() => {
     setData(initialDataRef.current); setError(null); setLastUpdate(null); setIsConnected(false); setIsFetching(false);
   }, []);
-  const refresh = usePolling({ enabled, intervalMs: pollMs, poll, reset });
+  const refresh = usePolling({ enabled, paused, intervalMs: pollMs, poll, reset });
 
   return useMemo(
     () => ({

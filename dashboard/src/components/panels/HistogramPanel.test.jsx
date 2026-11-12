@@ -6,7 +6,7 @@ import HistogramPanel from "./HistogramPanel";
 vi.mock("echarts-for-react", () => ({
   default: forwardRef(function MockECharts(props, ref) {
     useImperativeHandle(ref, () => ({
-      getEchartsInstance: () => ({ isDisposed: () => false, clear: () => {} }),
+      getEchartsInstance: () => ({ isDisposed: () => false, clear: () => {}, resize: () => {} }),
     }), []);
     return (
       <div data-testid="echarts-mock">

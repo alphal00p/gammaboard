@@ -1,6 +1,10 @@
-import { Box, Button, FormControl, FormControlLabel, MenuItem, Select, Switch, Typography } from "@mui/material";
+import { useState } from "react";
+import { Autocomplete, Box, Button, createFilterOptions, FormControlLabel, Switch, TextField, Typography } from "@mui/material";
 import { formatRunLabel, formatRunSecondaryLabel, orderRunsForSelector } from "../utils/runs";
 import StatusChip from "./common/StatusChip";
+
+const filterRuns = createFilterOptions({ stringify: (run) =>
+  `${formatRunLabel(run)} #${run.run_id} ${run.lifecycle_state || ""} ${run.parent_run_id != null ? `child of #${run.parent_run_id}` : ""}` });
 
 const RunSelector = ({
   runs,
@@ -13,6 +17,7 @@ const RunSelector = ({
   isLoadingMoreRuns = false,
   actions = null,
 }) => {
+  const [query, setQuery] = useState(null);
   if (runs.length === 0) return null;
   const orderedRuns = orderRunsForSelector(runs);
   const selected = runs.find((run) => run.run_id === selectedRun);
@@ -35,36 +40,38 @@ const RunSelector = ({
           label="Show child runs"
         />
       </Box>
-      <FormControl fullWidth variant="outlined" size="small" sx={{ gridArea: "selector", minWidth: 0 }}>
-        <Select
-          inputProps={{ "aria-label": "Select run" }}
-          value={selectedRun || ""}
-          onChange={(e) => onRunChange(Number(e.target.value))}
-          renderValue={() => selected && (
-            <Box title={`${formatRunLabel(selected)} · ${formatRunSecondaryLabel(selected)}`}
-              sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0, pl: selected.parent_run_id != null ? 2 : 0 }}>
-              <Typography component="span" noWrap sx={{ fontSize: "0.875rem", fontWeight: 500 }}>
-                {formatRunLabel(selected)}
+      <Autocomplete size="small" disableClearable openOnFocus blurOnSelect clearOnBlur={false}
+        sx={{ gridArea: "selector", minWidth: 0 }} options={orderedRuns} value={selected || null}
+        inputValue={query ?? (selected ? formatRunLabel(selected) : "")}
+        getOptionLabel={formatRunLabel} getOptionKey={(run) => run.run_id}
+        isOptionEqualToValue={(left, right) => left.run_id === right.run_id}
+        filterOptions={(options, state) => filterRuns(options, { ...state, inputValue: query ?? "" })}
+        noOptionsText={hasMoreRuns ? "No matching loaded runs. Load more runs to search older entries." : "No matching runs."}
+        onInputChange={(_, value, reason) => {
+          // Polling replaces option objects; only typing changes the search.
+          if (reason === "input" || reason === "clear") setQuery(value);
+        }}
+        onBlur={() => setQuery(null)}
+        onChange={(_, run) => { setQuery(null); if (run) onRunChange?.(run.run_id); }}
+        renderInput={(params) => <TextField {...params} placeholder="Search runs by name, ID or status"
+          inputProps={{ ...params.inputProps, "aria-label": "Select run" }}
+          InputProps={{ ...params.InputProps, endAdornment: <>
+            {query == null && selected && <StatusChip status={selected.lifecycle_state} sx={{ mr: 1, flexShrink: 0 }} />}
+            {params.InputProps.endAdornment}
+          </> }} />}
+        renderOption={(props, run) => {
+          const { key, ...rest } = props;
+          return <Box component="li" key={key} {...rest}
+            sx={{ pl: run.parent_run_id != null ? "32px !important" : "16px !important" }}
+            aria-label={`${formatRunLabel(run)} · #${run.run_id} · ${formatRunSecondaryLabel(run)}`}>
+            <Box sx={{ minWidth: 0, py: 0.25, whiteSpace: "normal", overflowWrap: "anywhere" }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>{formatRunLabel(run)}</Typography>
+              <Typography variant="caption" component="span" display="block" color="text.secondary">
+                #{run.run_id} · {formatRunSecondaryLabel(run)}
               </Typography>
-              <StatusChip status={selected.lifecycle_state} />
             </Box>
-          )}
-          MenuProps={{ PaperProps: { sx: { maxWidth: "calc(100vw - 32px)" } } }}
-        >
-          {orderedRuns.map((run) => (
-            <MenuItem key={run.run_id} value={run.run_id} sx={{ pl: run.parent_run_id != null ? 4 : 2 }} aria-label={`${formatRunLabel(run)} · ${formatRunSecondaryLabel(run)}`}>
-              <Box sx={{ minWidth: 0, py: 0.25, whiteSpace: "normal", overflowWrap: "anywhere" }}>
-                <Typography component="span" sx={{ fontSize: "0.875rem", fontWeight: 500 }}>
-                  {formatRunLabel(run)}
-                </Typography>
-                <Typography variant="caption" component="span" display="block" color="text.secondary">
-                  {formatRunSecondaryLabel(run)}
-                </Typography>
-              </Box>
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+          </Box>;
+        }} />
       {hasMoreRuns && (
         <Box sx={{ gridArea: "more", display: "flex", justifyContent: "flex-end" }}>
           <Button size="small" onClick={onLoadMoreRuns} disabled={isLoadingMoreRuns}>

@@ -6,7 +6,7 @@ import { compareNodesByName } from "../utils/nodes";
 
 export const useOfflineNodes = ({ enabled = true } = {}) => {
   const { authenticated, allowLocalNodeSpawn = true } = useAuth();
-  const resource = usePolledResource({ enabled, pollMs: 3000, initialData: [], fetchResource: fetchOfflineNodes });
+  const resource = usePolledResource({ paused: !enabled, pollMs: 3000, initialData: [], fetchResource: fetchOfflineNodes });
   const { data, error, isLoading, refresh } = resource;
   const [busy, setBusy] = useState(null);
   const busyRef = useRef(false);

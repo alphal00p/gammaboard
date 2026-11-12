@@ -18,6 +18,7 @@ import {
   formatDateTime,
   formatEstimateDisplay,
   formatComparisonDecimal,
+  formatDecimalSignificant,
   formatF64Full,
   formatScientific,
   normalizeTimeUnit,
@@ -384,7 +385,7 @@ export const TickBreakdownPanel = ({ title, state }) => {
         return [
           `<rect x="0" y="${y - 10}" width="10" height="10" fill="${escapeXml(segment.color || "#0f766e")}" />`,
           `<text x="16" y="${y - 1}" font-size="12" font-family="monospace" fill="${palette.text.primary}">${escapeXml(segment.label || segment.key)}</text>`,
-          `<text x="${width}" y="${y - 1}" text-anchor="end" font-size="12" font-family="monospace" fill="${palette.text.secondary}">${escapeXml(`${formatScientific(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatScientific(percent, 3)}%)`)}</text>`,
+          `<text x="${width}" y="${y - 1}" text-anchor="end" font-size="12" font-family="monospace" fill="${palette.text.secondary}">${escapeXml(`${formatDecimalSignificant(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatDecimalSignificant(percent, 3)}%)`)}</text>`,
         ].join("");
       })
       .join("");
@@ -393,7 +394,7 @@ export const TickBreakdownPanel = ({ title, state }) => {
       `<title>${escapeXml(title || "Timing breakdown")}</title>`,
       ...(description ? [`<desc>${escapeXml(description)}</desc>`] : []),
       `<rect width="100%" height="100%" fill="${palette.background.paper}" />`,
-      `<text x="0" y="60" font-size="12" font-family="monospace" fill="${palette.text.secondary}">${gammaLoopTiming ? "GammaLoop average / sample:" : "total"} ${escapeXml(formatScientific(displayTotal, 4))} ${displayTimeUnit}</text>`,
+      `<text x="0" y="60" font-size="12" font-family="monospace" fill="${palette.text.secondary}">${gammaLoopTiming ? "GammaLoop average / sample:" : "total"} ${escapeXml(formatDecimalSignificant(displayTotal, 4))} ${displayTimeUnit}</text>`,
       bars,
       legend,
       "</svg>",
@@ -411,7 +412,7 @@ export const TickBreakdownPanel = ({ title, state }) => {
           ]} />}
           <FigureExportActions baseName={state?.panel_id || title || "tick_breakdown"} payload={{ panel_id: state?.panel_id ?? null, kind: "tick_breakdown", state }} svgBuilder={buildTickBreakdownSvg} />
           <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
-            total {formatScientific(displayTotal, 4)} {displayTimeUnit}
+            total {formatDecimalSignificant(displayTotal, 4)} {displayTimeUnit}
           </Typography>
         </PanelHeader>
         {description && <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>{description}</Typography>}
@@ -420,14 +421,14 @@ export const TickBreakdownPanel = ({ title, state }) => {
             const percent = (segment.valueMs / normalizedTotal) * 100;
             const showInlineLabel = percent >= 10;
             return (
-              <Box key={segment.key} title={`${segment.label}: ${formatScientific(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatScientific(percent, 3)}%)`} sx={{ width: `${Math.max(percent, 1.5)}%`, minWidth: 0, px: showInlineLabel ? 1 : 0, py: 0.75, display: "flex", alignItems: "center", justifyContent: showInlineLabel ? "space-between" : "center", gap: 1, color: "#fff", backgroundColor: segment.color || "#0f766e" }}>
+              <Box key={segment.key} title={`${segment.label}: ${formatDecimalSignificant(displayValueForSegment(segment), 4)} ${displayTimeUnit} (${formatDecimalSignificant(percent, 3)}%)`} sx={{ width: `${Math.max(percent, 1.5)}%`, minWidth: 0, px: showInlineLabel ? 1 : 0, py: 0.75, display: "flex", alignItems: "center", justifyContent: showInlineLabel ? "space-between" : "center", gap: 1, color: "#fff", backgroundColor: segment.color || "#0f766e" }}>
                 {showInlineLabel ? (
                   <>
                     <Typography variant="caption" sx={{ fontWeight: 600, color: "inherit", lineHeight: 1.15 }}>
                       {segment.label}
                     </Typography>
                     <Typography variant="caption" sx={{ color: "inherit", opacity: 0.95, lineHeight: 1.15 }}>
-                      {formatScientific(displayValueForSegment(segment), 3)} {displayTimeUnit}
+                      {formatDecimalSignificant(displayValueForSegment(segment), 4)} {displayTimeUnit}
                     </Typography>
                   </>
                 ) : null}
@@ -445,7 +446,7 @@ export const TickBreakdownPanel = ({ title, state }) => {
                   {segment.label}
                 </Typography>
                 <Typography variant="caption" sx={{ ml: "auto", fontFamily: "monospace", color: "text.secondary", whiteSpace: "nowrap" }}>
-                  {formatScientific(displayValueForSegment(segment), 4)} {displayTimeUnit} ({formatScientific(percent, 3)}%)
+                  {formatDecimalSignificant(displayValueForSegment(segment), 4)} {displayTimeUnit} ({formatDecimalSignificant(percent, 3)}%)
                 </Typography>
               </Box>
             );
