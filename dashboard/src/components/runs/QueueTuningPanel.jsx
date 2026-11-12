@@ -1,8 +1,6 @@
 import DisclosureField from "../common/DisclosureField";
 import { Alert, Box, Button, Card, CardContent, Stack, TextField, Typography } from "@mui/material";
-import { useEffect, useMemo, useRef, useState } from "react";
-
-const FORM_REFRESH_HOLD_MS = 5000;
+import { useEffect, useRef, useState } from "react";
 
 const QUEUE_TUNING_FIELDS = [
   { key: "target_batch_eval_ms", label: "Target Evaluation Time (ms)", kind: "float", help: "Adaptive evaluator batches aim for this evaluation duration. Queue and database waits are measured separately." },
@@ -12,6 +10,8 @@ const QUEUE_TUNING_FIELDS = [
 ];
 
 const valueText = (value) => (value == null ? "" : String(value));
+const queueForm = (defaults = {}, override = {}) => Object.fromEntries(QUEUE_TUNING_FIELDS
+  .map(({ key }) => [key, valueText(override?.[key] ?? defaults?.[key])]));
 
 const parseFieldValue = (value, kind) => {
   const text = String(value ?? "").trim();
@@ -33,34 +33,20 @@ const QueueTuningPanel = ({
 }) => {
   const isSampleTask = task?.is_sample === true;
   const managedByParent = run?.parent_run_id != null;
-  const editableState = task?.state == null || ["pending", "active"].includes(task.state);
+  const editableState = task?.state === "active";
 
-  const initialForm = useMemo(() => {
-    const defaults = run?.queue_tuning_defaults ?? {};
-    const override = isSampleTask ? task?.queue_tuning ?? null : null;
-    const next = {};
-    for (const field of QUEUE_TUNING_FIELDS) {
-      const value = override?.[field.key] ?? defaults?.[field.key];
-      next[field.key] = valueText(value);
-    }
-    return next;
-  }, [isSampleTask, run, task]);
-
+  // Compare values, not polling object identities: an identical stale response
+  // must not overwrite the form immediately after a successful save.
+  const serverForm = JSON.stringify(queueForm(run?.queue_tuning_defaults, isSampleTask ? task?.queue_tuning : null));
   const dirty = useRef(false);
-  const [form, setForm] = useState(initialForm);
+  const [form, setForm] = useState(() => JSON.parse(serverForm));
   const [error, setError] = useState(null);
-  const [refreshHoldUntilMs, setRefreshHoldUntilMs] = useState(0);
-  const [skipNextExternalRefreshes, setSkipNextExternalRefreshes] = useState(0);
 
   useEffect(() => {
-    if (dirty.current || Date.now() < refreshHoldUntilMs) return;
-    if (skipNextExternalRefreshes > 0) {
-      setSkipNextExternalRefreshes((count) => Math.max(0, count - 1));
-      return;
-    }
-    setForm(initialForm);
+    if (dirty.current) return;
+    setForm(JSON.parse(serverForm));
     setError(null);
-  }, [initialForm, refreshHoldUntilMs, skipNextExternalRefreshes]);
+  }, [serverForm]);
 
   const disabled = busy || !authenticated || managedByParent || !editableState || runId == null || !task?.id || !isSampleTask;
 
@@ -87,6 +73,7 @@ const QueueTuningPanel = ({
     setError(null);
     if (await onClear() === false) return false;
     dirty.current = false;
+    setForm(queueForm(run?.queue_tuning_defaults));
     return true;
   };
 
@@ -101,7 +88,7 @@ const QueueTuningPanel = ({
               </Typography>
             </Box>
             {!task ? (
-              <Alert severity="info">Select a task to tune queue settings.</Alert>
+              <Alert severity="info">No active sampling task.</Alert>
             ) : !isSampleTask ? (
               <Alert severity="info">Queue tuning is only supported for sample tasks.</Alert>
             ) : !authenticated ? (
@@ -109,7 +96,7 @@ const QueueTuningPanel = ({
             ) : managedByParent ? (
               <Alert severity="info">This task queue is managed by its parent run.</Alert>
             ) : !editableState ? (
-              <Alert severity="info">Queue tuning can only change pending or active tasks.</Alert>
+              <Alert severity="info">Queue tuning is available only for the active sampling task.</Alert>
             ) : (
               <>
                 <Box
@@ -136,7 +123,6 @@ const QueueTuningPanel = ({
                             ? raw.replace(/[^\d]/g, "")
                             : raw.replace(/[^0-9.-]/g, "");
                         dirty.current = true;
-                        setRefreshHoldUntilMs(Date.now() + FORM_REFRESH_HOLD_MS);
                         setForm((prev) => ({ ...prev, [field.key]: nextValue }));
                       }}
                     />
@@ -156,13 +142,7 @@ const QueueTuningPanel = ({
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                   <Button
                     variant="contained"
-                    onClick={async () => {
-                      const applied = await handleSave();
-                      if (applied) {
-                        setSkipNextExternalRefreshes(1);
-                        setRefreshHoldUntilMs(0);
-                      }
-                    }}
+                    onClick={handleSave}
                     disabled={disabled}
                   >
                     Apply
@@ -170,13 +150,7 @@ const QueueTuningPanel = ({
                   <Button
                     variant="outlined"
                     color="warning"
-                    onClick={async () => {
-                      const cleared = await handleClear();
-                      if (cleared) {
-                        setSkipNextExternalRefreshes(1);
-                        setRefreshHoldUntilMs(0);
-                      }
-                    }}
+                    onClick={handleClear}
                     disabled={disabled}
                   >
                     Clear Task Override

@@ -7,10 +7,16 @@ ambiguity when several runs share a name.
 
 The header shows the connection status and last successful server-status update
 across all tabs. The persistent tabs are **Runs**, **System**, and **Logs**. Runs shares one run
-selector across **Task queue**, **Summary**, **Performance**, and **Settings**.
-Task queue separates the selected task's Result, Observables, Stratum output,
-and Diagnostics. Stratum output is hidden until the task provides stratum data;
-if unavailable, a retained selection displays Result. Collapse the queue to give the output more space.
+selector across **Tasks**, **Summary**, **Performance**, and **Settings**.
+Top-level navigation is centered on wider screens; section and view tabs align
+with the left edge of their content. Nested tabs use progressively quieter styles.
+Tasks separates the selected task's Result, Observables, Stratum output,
+and Diagnostics. Unsupported output tabs remain visible but disabled; Stratum output
+becomes available once the task provides stratum data. An unavailable retained
+selection displays Result. Collapse the queue to give the output more space;
+the selected task's name, state, and kind remain above its output.
+Worker actions remain visible but disabled when inapplicable, with hover explanations.
+Completed runs cannot receive workers, but remaining pool members can still be removed.
 Sample progress is an unlabeled bar with ETA; sample counts remain in the task table.
 Campaign progress retains a full-width bordered panel, with its label and sample
 count on the same row.
@@ -22,14 +28,24 @@ its source stage, with evaluator/sampler summaries before their configuration tr
 Run definition and deletion actions sit at the right of the worker-assignment
 row below the run selector; child-run worker information occupies the same row.
 Child runs retain their dash and an extra indent
-in run-selection menus. New run and Show child runs share the row above the selector.
+in run-selection menus. New run and Show child runs sit beside the selector on wider screens.
 
 Performance provides Overview, Diagnostics, Graphs, and Queue tuning. Queue tuning
-names the sampling task being edited; only pending/active tasks in a standalone
-run can be changed. Live Queue and Batch panels appear here only for pending or
-active sampling tasks. System contains Workers, Database (runtime/server details and
+automatically follows the active sampling task, independently of the task selected
+for viewing results. There is no task selector; when sampling is not active the tab
+is disabled. Task changes reset the form and discard unsaved edits. Live Queue and
+Batch panels appear only for the active sampling task. Managed child tasks remain
+read-only. System contains Workers, Database (runtime/server details and
 destructive controls), and Settings (configuration paths and documentation).
 Logs retains its own run and worker filters.
+
+**GammaLoop time per sample** in task Diagnostics measures elapsed time inside
+GammaLoop, averaged over the task's evaluated samples. It excludes GammaBoard's
+queue/database work, sampler work and observable aggregation. Mapping is
+GammaLoop's sampling map and channel partition, not the strata. Generated
+evaluator calls and event processing are subsets of integrand time; Other integrand
+work excludes both. Unclassified GammaLoop time is the residual after subtracting
+mapping and inclusive integrand time from the total, not a separately timed operation.
 
 Node management's **Stop Idle nodes** requests shutdown only for live nodes with
 no current role, pending assignment, or pool membership. Eligibility is checked

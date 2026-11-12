@@ -4,7 +4,7 @@ import QueueTuningPanel from "./QueueTuningPanel";
 
 const defaults = { target_batch_eval_ms: 2000, max_batch_size: 100000, max_generation_size: 262144 };
 const props = { run: { queue_tuning_defaults: defaults }, runId: 1,
-  task: { id: 2, is_sample: true }, authenticated: true };
+  task: { id: 2, is_sample: true, state: "active" }, authenticated: true };
 
 describe("queue tuning", () => {
   test("preserves an advanced fixed batch override when changing the target", async () => {
@@ -36,13 +36,11 @@ describe("queue tuning", () => {
   });
 });
 
-test("an unsaved queue draft survives polling after the input refresh hold expires", () => {
+test("an unsaved queue draft survives polling", () => {
   const { rerender } = render(<QueueTuningPanel {...props} />);
   fireEvent.change(screen.getByLabelText("Target Evaluation Time (ms)"), { target: { value: "750" } });
-  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60000);
   rerender(<QueueTuningPanel {...props} run={{ queue_tuning_defaults: { ...defaults, target_batch_eval_ms: 3000 } }} />);
   expect(screen.getByLabelText("Target Evaluation Time (ms)")).toHaveValue("750");
-  clock.mockRestore();
 });
 
 test("clearing an override releases the draft so later server settings can refresh", async () => {

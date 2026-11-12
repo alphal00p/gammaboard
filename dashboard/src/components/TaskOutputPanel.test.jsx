@@ -122,7 +122,7 @@ test("task output routes diagnostics and strata while retaining unknown result p
   expect(fetchRunTaskPanels).toHaveBeenCalledTimes(3);
 });
 
-test("stratum tabs require output, and a retained stratum selection falls back to Result when absent", async () => {
+test("stratum tabs remain visible but disabled without output, and a retained selection falls back to Result", async () => {
   const task = { id: "1", name: "sample", state: "active" };
   const result = { panel_id: "result", kind: "text", text: "Result data" };
   const panelSpecs = [{ panel_id: "result", kind: "text", label: "Result" },
@@ -130,7 +130,7 @@ test("stratum tabs require output, and a retained stratum selection falls back t
     { panel_id: "stratum_results", kind: "table", label: "Stratum results" }];
   const tree = (states) => <TaskOutputPanel task={task} view="strata" output={{ panelSpecs, panelStates: [result, ...states] }} />;
   const { rerender } = render(tree([]));
-  expect(screen.queryByRole("tab", { name: "Stratum output" })).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Stratum output" })).toBeDisabled();
   expect(screen.getByRole("tab", { name: "Result" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByText("Result data")).toBeVisible();
   expect(screen.getAllByText("Result", { exact: true })).toHaveLength(2); // Tab and panel, no collection heading.
@@ -138,6 +138,25 @@ test("stratum tabs require output, and a retained stratum selection falls back t
   expect(screen.getByRole("tab", { name: "Stratum output" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByText("Stratum results")).toBeVisible();
   await act(async () => rerender(tree([{ panel_id: "stratum_results", kind: "table", rows: [] }, { panel_id: "strata", kind: "strata", frames: [] }])));
-  expect(screen.queryByRole("tab", { name: "Stratum output" })).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Stratum output" })).toBeDisabled();
+  expect(screen.getByRole("tab", { name: "Result" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("unsupported sections are disabled and stale navigation recovers only after availability loads", () => {
+  const onViewChange = vi.fn();
+  const task = { id: "3", name: "complex-phase", state: "completed", task_kind: "image" };
+  const tree = (loaded) => <TaskOutputPanel task={task} view="observables" onViewChange={onViewChange}
+    output={{ panelSpecs: [], panelStates: [], isLoading: !loaded, availableSections: loaded ? ["result", "summary"] : undefined }} />;
+  const { rerender } = render(tree(false));
+  expect(onViewChange).not.toHaveBeenCalled();
+  rerender(tree(true));
+  expect(onViewChange).toHaveBeenCalledWith("result", { replace: true });
+  expect(screen.getByRole("group", { name: "Selected task" })).toHaveTextContent("complex-phaseCompletedimage");
+  for (const name of ["Observables", "Stratum output", "Diagnostics"]) {
+    const tab = screen.getByRole("tab", { name });
+    expect(tab).toBeDisabled();
+    fireEvent.click(tab);
+  }
+  expect(onViewChange).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("tab", { name: "Result" })).toHaveAttribute("aria-selected", "true");
 });

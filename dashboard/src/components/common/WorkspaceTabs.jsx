@@ -33,25 +33,33 @@ export function WorkspacePanel({ id, value, active, children }) {
   </Box>;
 }
 
-export default function WorkspaceTabs({ id, label, value, onChange, tabs, level = "section", panelId, loading = false, loadingLabel = "Updating…" }) {
+export default function WorkspaceTabs({ id, label, value, onChange, tabs, disabledTabs = {}, actions, level = "section", panelId, loading = false, loadingLabel = "Updating…" }) {
   const primary = level === "primary";
+  const height = primary ? 44 : 36;
   const scope = useContext(TabLoadingContext);
   const labels = [...new Set([...(loading ? [loadingLabel] : []), ...Object.values(scope?.statuses ?? {})])];
-  return <Box data-tab-row={id} sx={{ display: "grid", gridTemplateColumns: "minmax(24px, 1fr) minmax(0, max-content) minmax(24px, 1fr)", alignItems: "center", mb: 2 }}>
-    <Box data-loading-slot={id} sx={{ display: "flex", justifyContent: "flex-start", overflow: "hidden", minWidth: 0 }}><LoadingStatus compact loading={labels.length > 0} label={labels.join(" ")} /></Box>
+  return <Box data-tab-row={id} sx={{ display: "grid", gridTemplateColumns: primary
+    ? { xs: "minmax(0, 1fr) 24px", sm: "minmax(24px, 1fr) minmax(0, max-content) minmax(24px, 1fr)" }
+    : actions ? { xs: "minmax(0, 1fr) 24px", md: "minmax(0, 1fr) 24px auto" } : "minmax(0, 1fr) 24px",
+    alignItems: "center", mb: 1, gap: actions ? 0.5 : 0,
+    borderBottom: level === "section" ? 1 : 0, borderColor: "divider" }}>
+    <Box data-loading-slot={id} sx={{ gridRow: 1, gridColumn: primary ? { xs: 2, sm: 1 } : 2,
+      display: "flex", overflow: "hidden", minWidth: 0 }}><LoadingStatus compact loading={labels.length > 0} label={labels.join(" ")} /></Box>
     <Tabs value={value} onChange={(_, next) => onChange(next)} aria-label={label}
     variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile
-    sx={{ minHeight: primary ? 56 : 48, minWidth: 0, maxWidth: "100%",
-      borderBottom: level === "section" ? 1 : 0, borderColor: "divider",
-      "& .MuiTabs-flexContainer": { width: "max-content", minWidth: "100%", justifyContent: "center", gap: primary ? 1 : 0 },
+    sx={{ gridRow: 1, gridColumn: primary ? { xs: 1, sm: 2 } : 1, minHeight: height, minWidth: 0, maxWidth: "100%",
+      "& .MuiTabs-flexContainer": { width: "max-content", minWidth: "100%", justifyContent: primary ? { xs: "flex-start", sm: "center" } : "flex-start", gap: primary ? 1 : 0 },
       "& .MuiTabs-indicator": { display: level === "section" ? "block" : "none" },
-      "& .MuiTab-root": { minWidth: 0, px: { xs: 1.5, sm: 2.5 }, textTransform: "none",
+      "& .MuiTab-root": { minWidth: 0, minHeight: height, py: 0.75, px: { xs: 1.25, sm: 2 }, textTransform: "none",
         fontSize: primary ? "1rem" : "0.875rem", borderRadius: level === "section" ? 0 : 1,
+        "&.Mui-disabled": { pointerEvents: "auto", cursor: "default" },
+        "&.Mui-focusVisible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
         "&.Mui-selected": primary ? { bgcolor: "primary.main", color: "primary.contrastText" }
           : level === "detail" ? { bgcolor: "action.selected", color: "text.primary" } : {},
+        "&.Mui-selected.Mui-disabled": { color: "text.disabled", bgcolor: "action.hover" },
       },
     }}>
-    {tabs.map(([key, text]) => <Tab key={key} value={key} label={text}
+    {tabs.map(([key, text]) => <Tab key={key} value={key} label={text} disabled={Boolean(disabledTabs[key])} title={disabledTabs[key] || undefined}
       id={`${id}-tab-${key}`} aria-controls={panelId || `${id}-panel-${key}`} />)}
-  </Tabs><Box aria-hidden="true" /></Box>;
+  </Tabs>{actions && <Box sx={{ gridColumn: { xs: "1 / -1", md: 3 }, justifySelf: "end" }}>{actions}</Box>}</Box>;
 }

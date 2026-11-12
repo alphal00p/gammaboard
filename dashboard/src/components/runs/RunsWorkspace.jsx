@@ -40,10 +40,16 @@ function DefinitionButtons({ openLabel, onOpen, editable, disabled, onDelete, de
   </Box>;
 }
 
-function WorkerPoolControls({ run, disabled, notify }) {
+function WorkerPoolControls({ run, workers, disabled, notify }) {
   const [busy, setBusy] = useState(false);
   const [operation, setOperation] = useState("");
   const [count, setCount] = useState(() => window.localStorage.getItem("runs.evaluator_count") || "");
+  const terminal = ["completed", "failed"].includes(run.lifecycle_state);
+  const pool = asArray(workers).filter((worker) => worker.pool_run_id === run.run_id);
+  const assignReason = terminal ? "Append new tasks before assigning workers to this run." : "";
+  const removeReason = pool.some((worker) => worker.pool_role === "evaluator") ? "" : "No evaluators in this run's pool.";
+  const pauseReason = ["paused", "pausing"].includes(run.lifecycle_state) ? "This run is already paused or pausing."
+    : pool.length ? "" : "No workers in this run's pool.";
   const act = async (action) => {
     setOperation(action === "pause" ? "Requesting pause…" : action === "remove" ? "Removing evaluators…" : "Assigning workers…");
     setBusy(true);
@@ -70,11 +76,13 @@ function WorkerPoolControls({ run, disabled, notify }) {
   };
   return <ControlBar>
     <LoadingStatus loading={busy} label={operation} />
-    <TextField size="small" value={count} placeholder="all" inputProps={{ "aria-label": "Evaluator node count" }} sx={{ width: 150 }}
+    <TextField size="small" label="Evaluators" value={count} placeholder="all" InputLabelProps={{ shrink: true }} disabled={disabled || busy || Boolean(assignReason && removeReason)} inputProps={{ "aria-label": "Evaluator node count" }} sx={{ width: 104 }}
       onChange={(event) => setCount(event.target.value.replace(/[^\d]/g, ""))} />
-    <Button variant="contained" disabled={disabled || busy} onClick={() => act("assign")}>Assign / resume</Button>
-    <Button variant="outlined" color="warning" disabled={disabled || busy} onClick={() => act("remove")}>Remove evaluators</Button>
-    <Button variant="outlined" color="warning" disabled={disabled || busy} onClick={() => act("pause")}>Pause run</Button>
+    {[["assign", "Assign / resume", assignReason], ["remove", "Remove evaluators", removeReason], ["pause", "Pause run", pauseReason]].map(([action, label, reason]) =>
+      <Tooltip key={action} title={reason}><span>
+        <Button variant={action === "assign" ? "contained" : "outlined"} color={action === "assign" ? "primary" : "warning"}
+          disabled={disabled || busy || Boolean(reason)} onClick={() => act(action)}>{label}</Button>
+      </span></Tooltip>)}
   </ControlBar>;
 }
 
@@ -82,7 +90,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
   const [localView, setLocalView] = useState("tasks");
   const [localTaskTab, setLocalTaskTab] = useState("result");
   const taskTab = navigation?.taskTab ?? localTaskTab;
-  const setTaskTab = (taskTab) => onNavigate ? onNavigate({ taskTab }) : setLocalTaskTab(taskTab);
+  const setTaskTab = (taskTab, options) => onNavigate ? onNavigate({ taskTab }, options) : setLocalTaskTab(taskTab);
   const view = navigation?.runTab ?? localView;
   const setView = (runTab) => onNavigate ? onNavigate({ runTab }) : setLocalView(runTab);
   const { authenticated } = useAuth();
@@ -144,8 +152,8 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
     finally { setBusy(false); }
   };
   return <TabLoadingScope>
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 2 }}>
-      {run.parent_run_id == null && authenticated && <WorkerPoolControls run={run} disabled={disabled} notify={notify} />}
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 1 }}>
+      {run.parent_run_id == null && authenticated && <WorkerPoolControls run={run} workers={workers} disabled={disabled} notify={notify} />}
       {run.parent_run_id != null && <Alert severity="info" sx={{ flex: "1 1 400px", minWidth: 0, flexWrap: { xs: "wrap", sm: "nowrap" },
         "& .MuiAlert-message": { flex: 1, minWidth: 0 },
         "& .MuiAlert-action": { width: { xs: "100%", sm: "auto" }, justifyContent: "flex-end", ml: { xs: 0, sm: "auto" } },
@@ -155,7 +163,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
       <Box sx={{ ml: "auto", display: "flex", justifyContent: "flex-end" }}>{runActions}</Box>
     </Box>
     <WorkspaceTabs id="run" label="Run sections" value={view} onChange={setView}
-      tabs={[["tasks", "Task queue"], ["summary", "Summary"], ["performance", "Performance"], ["settings", "Settings"]]} />
+      tabs={[["tasks", "Tasks"], ["summary", "Summary"], ["performance", "Performance"], ["settings", "Settings"]]} />
     <WorkspacePanel id="run" value="tasks" active={view === "tasks"}>
     <LoadingStatus loading={tasksLoading} label="Loading task queue…" />
     <LoadingStatus loading={busy && !editor} label="Loading task definition…" />

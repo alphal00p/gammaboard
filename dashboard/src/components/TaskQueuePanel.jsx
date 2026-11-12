@@ -18,8 +18,8 @@ const TaskQueuePanel = ({ tasks = [], selectedTaskId = null, onSelectTask = null
       <DisclosureField section label={`${tasks.length} task${tasks.length === 1 ? "" : "s"}`}
         ariaLabel="Task queue" actions={actions} defaultOpen>
       <Card id="task-queue-table">
-        <CardContent>
-          <TableContainer role="region" aria-label="Task queue table" tabIndex={0} sx={{ maxHeight: 280, overflow: "auto" }}>
+        <CardContent sx={{ p: 1, "&:last-child": { pb: 1 } }}>
+          <TableContainer role="region" aria-label="Task queue table" tabIndex={0} sx={{ maxHeight: 240, overflow: "auto" }}>
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>

@@ -351,7 +351,7 @@ fn gammaloop_evaluation_diagnostics_projector() -> TaskPanelProjector {
 fn gammaloop_evaluation_timing_projector() -> TaskPanelProjector {
     gammaloop_panel_projector(
         "gammaloop_evaluation_timing",
-        "Evaluation Timing Breakdown",
+        "GammaLoop time per sample",
         PanelKind::TickBreakdown,
         gammaloop_evaluation_timing_panel,
     )
@@ -1812,21 +1812,26 @@ fn gammaloop_evaluation_timing_panel(accumulator: AccumulatorState) -> Option<Pa
     let segments = vec![
         timing_segment(
             "parameterization",
-            "Mapping & partition",
+            "Sampling map & channel partition",
             parameterization,
             "#0a9396",
         ),
         timing_segment(
             "integrand_core",
-            "Physical evaluation (other)",
+            "Other integrand work",
             integrand_core,
             "#ca6702",
         ),
-        timing_segment("evaluator", "Evaluator Call", evaluator, "#bb3e03"),
-        timing_segment("events", "Event Processing", events, "#6d597a"),
+        timing_segment(
+            "evaluator",
+            "Generated evaluator calls",
+            evaluator,
+            "#bb3e03",
+        ),
+        timing_segment("events", "Event processing", events, "#6d597a"),
         timing_segment(
             "other",
-            "Other evaluation overhead",
+            "Unclassified GammaLoop time",
             remaining_after_parameterization - integrand,
             "#64748b",
         ),

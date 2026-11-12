@@ -82,7 +82,7 @@ describe("definition editors", () => {
     expect(screen.queryByRole("button", { name: "Add tasks" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Settings", exact: true }));
     expect(screen.getByRole("button", { name: "Delete run" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("tab", { name: "Task queue", exact: true }));
+    fireEvent.click(screen.getByRole("tab", { name: "Tasks", exact: true }));
     expect(screen.getByRole("button", { name: "Delete task train" })).toBeDisabled();
     await openTask();
     expect(await screen.findByLabelText("Task TOML")).not.toHaveAttribute("readonly");
@@ -217,6 +217,21 @@ test("separate delete button keeps deletion busy and errors visible until dismis
   fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
   await act(async () => { await vi.advanceTimersByTimeAsync(500); });
   expect(screen.queryByText("Database could not finish deletion")).not.toBeInTheDocument();
+});
+
+test("worker controls stay visible when unavailable, allow cleanup after completion and resume paused pools", () => {
+  const tree = (state, workers = []) => <RunsWorkspace runs={[{ ...runs[2], lifecycle_state: state }]}
+    selectedRun={3} workers={workers} />;
+  const { rerender } = render(tree("completed"));
+  for (const name of ["Assign / resume", "Remove evaluators", "Pause run"]) expect(screen.getByRole("button", { name })).toBeDisabled();
+  rerender(tree("completed", [{ pool_run_id: 3, pool_role: "evaluator" }]));
+  expect(screen.getByRole("button", { name: "Assign / resume" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Remove evaluators" })).toBeEnabled();
+  rerender(tree("paused", [{ pool_run_id: 3, pool_role: "evaluator" }]));
+  expect(screen.getByRole("button", { name: "Assign / resume" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Pause run" })).toBeDisabled();
+  rerender(tree("running", [{ pool_run_id: 3, pool_role: "evaluator" }]));
+  for (const name of ["Assign / resume", "Remove evaluators", "Pause run"]) expect(screen.getByRole("button", { name })).toBeEnabled();
 });
 
 test("a run-definition draft survives temporarily hiding its workspace", async () => {

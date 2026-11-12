@@ -18,8 +18,10 @@ const RunSelector = ({
   const selected = runs.find((run) => run.run_id === selectedRun);
 
   return (
-    <Box sx={{ mb: 2 }}>
-      <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 1, mb: 1 }}>
+    <Box sx={{ mb: 1.5, display: "grid", alignItems: "center", gap: 1,
+      gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "minmax(0, 1fr) auto" },
+      gridTemplateAreas: { xs: '"actions" "selector" "more"', md: '"selector actions" "more more"' } }}>
+      <Box sx={{ gridArea: "actions", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 1 }}>
         {actions}
         <FormControlLabel
           sx={{ ml: "auto", mr: 0 }}
@@ -33,7 +35,7 @@ const RunSelector = ({
           label="Show child runs"
         />
       </Box>
-      <FormControl fullWidth variant="outlined">
+      <FormControl fullWidth variant="outlined" size="small" sx={{ gridArea: "selector", minWidth: 0 }}>
         <Select
           inputProps={{ "aria-label": "Select run" }}
           value={selectedRun || ""}
@@ -64,7 +66,7 @@ const RunSelector = ({
         </Select>
       </FormControl>
       {hasMoreRuns && (
-        <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
+        <Box sx={{ gridArea: "more", display: "flex", justifyContent: "flex-end" }}>
           <Button size="small" onClick={onLoadMoreRuns} disabled={isLoadingMoreRuns}>
             {isLoadingMoreRuns ? "Loading" : "Load more runs"}
           </Button>

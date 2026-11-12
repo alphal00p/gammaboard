@@ -30,6 +30,7 @@ import DisclosureField from "../common/DisclosureField";
 import ConfigurationTree from "./ConfigurationTree";
 import { fieldHelp } from "./fieldHelp";
 import { PanelHeader } from "../common/PanelChrome";
+import PanelInfo from "../common/PanelInfo";
 
 const isIsoDateTime = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
 
@@ -345,6 +346,10 @@ export const SvgPanel = ({ title, state }) => {
 
 export const TickBreakdownPanel = ({ title, state }) => {
   const { palette } = useTheme();
+  const gammaLoopTiming = state?.panel_id === "gammaloop_evaluation_timing";
+  const description = gammaLoopTiming
+    ? "Average time per sample inside GammaLoop. Excludes GammaBoard scheduling, I/O and observable aggregation."
+    : null;
   const totalMs = Number(state?.total_ms);
   const segments = asArray(state?.segments)
     .map((segment) => ({ ...segment, valueMs: Number(segment?.value_ms) }))
@@ -385,8 +390,10 @@ export const TickBreakdownPanel = ({ title, state }) => {
       .join("");
     return [
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<title>${escapeXml(title || "Timing breakdown")}</title>`,
+      ...(description ? [`<desc>${escapeXml(description)}</desc>`] : []),
       `<rect width="100%" height="100%" fill="${palette.background.paper}" />`,
-      `<text x="0" y="60" font-size="12" font-family="monospace" fill="${palette.text.secondary}">total ${escapeXml(formatScientific(displayTotal, 4))} ${displayTimeUnit}</text>`,
+      `<text x="0" y="60" font-size="12" font-family="monospace" fill="${palette.text.secondary}">${gammaLoopTiming ? "GammaLoop average / sample:" : "total"} ${escapeXml(formatScientific(displayTotal, 4))} ${displayTimeUnit}</text>`,
       bars,
       legend,
       "</svg>",
@@ -397,11 +404,17 @@ export const TickBreakdownPanel = ({ title, state }) => {
     <Card variant="outlined">
       <CardContent>
         <PanelHeader title={title}>
+          {gammaLoopTiming && <PanelInfo title={title} notes={[
+            "Elapsed-time averages over this task's evaluated samples, not CPU utilization or total run duration. The displayed parts sum to the total.",
+            "Sampling map & channel partition is GammaLoop's own coordinate mapping and channel partition, not GammaBoard's strata. Generated evaluator calls and event processing are shown separately and subtracted from Other integrand work.",
+            "Unclassified GammaLoop time = total evaluation time − mapping time − inclusive integrand time. This residual includes work outside the narrower timers, such as stability checks and result handling. These measurements cannot identify which operation dominates it.",
+          ]} />}
           <FigureExportActions baseName={state?.panel_id || title || "tick_breakdown"} payload={{ panel_id: state?.panel_id ?? null, kind: "tick_breakdown", state }} svgBuilder={buildTickBreakdownSvg} />
           <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace" }}>
             total {formatScientific(displayTotal, 4)} {displayTimeUnit}
           </Typography>
         </PanelHeader>
+        {description && <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>{description}</Typography>}
         <Box sx={{ display: "flex", width: "100%", minHeight: 44, borderRadius: 1.5, overflow: "hidden", border: "1px solid", borderColor: "divider", backgroundColor: "action.hover" }}>
           {segments.map((segment) => {
             const percent = (segment.valueMs / normalizedTotal) * 100;

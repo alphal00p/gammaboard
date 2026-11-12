@@ -1179,8 +1179,9 @@ async fn get_run_task_output(
     } else {
         TaskPanelSource::new(&task.task, effective_accumulator_config)
             .map_err(|err| ApiError::Internal(err.to_string()))?
-    }
-    .select_section(
+    };
+    let available_sections = panel_source.available_sections(has_strata);
+    let panel_source = panel_source.select_section(
         request.section.as_deref(),
         request.phase == TaskOutputPhase::History,
     );
@@ -1310,11 +1311,7 @@ async fn get_run_task_output(
     payload.reset_required = history_reset;
     let mut response =
         serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?;
-    response["available_sections"] = serde_json::json!(if has_strata {
-        vec!["result", "observables", "strata", "diagnostics", "summary"]
-    } else {
-        vec!["result", "observables", "diagnostics", "summary"]
-    });
+    response["available_sections"] = serde_json::json!(available_sections);
     json_response(response)
 }
 

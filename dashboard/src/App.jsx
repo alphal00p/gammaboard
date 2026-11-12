@@ -35,21 +35,23 @@ const DashboardHeader = ({ serverStatus }) => {
   const { authenticated, authEnabled = true, busy, ready, requestLogin, logout } = useAuth();
 
   return (
-    <Box component="header" sx={{ mb: 2, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
+    <Box component="header" sx={{ mb: 1, display: "grid", alignItems: "center", columnGap: 2, rowGap: 0.5,
+      gridTemplateColumns: { xs: "minmax(0, 1fr) minmax(0, 1fr)", sm: "180px minmax(0, 1fr)", lg: "180px minmax(0, 1fr) auto" },
+      gridTemplateAreas: { xs: '"logo connection" "auth auth"', sm: '"logo connection" "logo auth"', lg: '"logo connection auth"' } }}>
       <Box
         role="img"
         aria-label="GammaBoard"
         // Inline only this trusted, bundled SVG so it inherits the theme colours.
         dangerouslySetInnerHTML={{ __html: gammaboardLogo }}
-        sx={(theme) => ({ width: { xs: 180, sm: 220 }, maxWidth: "100%",
+        sx={(theme) => ({ gridArea: "logo", width: { xs: 150, sm: 180 }, maxWidth: "100%",
           color: theme.palette.mode === "dark" ? theme.palette.common.white : theme.palette.common.black,
           "--logo-background": theme.palette.background.default,
           "& svg": { display: "block", width: "100%", height: "auto" } })}
       />
-      <Box sx={{ flex: "1 1 320px", minWidth: 0, pl: { xs: 0, sm: 1 } }}>
+      <Box sx={{ gridArea: "connection", minWidth: 0 }}>
         <ConnectionStatus {...serverStatus} />
       </Box>
-      <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ flexWrap: "wrap", ml: "auto" }}>
+      <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ gridArea: "auth", flexWrap: "wrap", justifyContent: "flex-end", minWidth: 0 }}>
         <ThemeToggle />
         <Chip
           color={authenticated ? "success" : "default"}

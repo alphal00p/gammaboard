@@ -768,6 +768,19 @@ impl TaskPanelSource {
             .collect()
     }
 
+    pub fn available_sections(&self, has_strata: bool) -> Vec<&'static str> {
+        ["result", "observables", "strata", "diagnostics", "summary"]
+            .into_iter()
+            .filter(|section| {
+                (*section != "strata" || has_strata)
+                    && self.projectors.iter().any(|p| {
+                        !matches!(p.spec.kind, PanelKind::Progress)
+                            && task_panel_section(&p.spec.panel_id) == *section
+                    })
+            })
+            .collect()
+    }
+
     pub fn select_section(mut self, section: Option<&str>, history_only: bool) -> Self {
         self.projectors.retain(|projector| {
             if history_only && projector.spec.history == PanelHistoryMode::None {
@@ -779,19 +792,7 @@ impl TaskPanelSource {
             if matches!(projector.spec.kind, PanelKind::Progress) {
                 return section != "summary";
             }
-            let group = match projector.spec.panel_id.as_str() {
-                "task_summary" => "summary",
-                "gammaloop_histogram_bundle"
-                | "campaign_histograms"
-                | "discrete_projection_bundle" => "observables",
-                "strata" | "stratum_results" => "strata",
-                "gammaloop_evaluation_diagnostics"
-                | "gammaloop_evaluation_timing"
-                | "max_weight_points"
-                | "max_weight_summary" => "diagnostics",
-                _ => "result",
-            };
-            group == section
+            task_panel_section(&projector.spec.panel_id) == section
         });
         self
     }
@@ -869,6 +870,21 @@ impl TaskPanelSource {
                 None
             },
         ))
+    }
+}
+
+fn task_panel_section(panel_id: &str) -> &'static str {
+    match panel_id {
+        "task_summary" => "summary",
+        "gammaloop_histogram_bundle" | "campaign_histograms" | "discrete_projection_bundle" => {
+            "observables"
+        }
+        "strata" | "stratum_results" => "strata",
+        "gammaloop_evaluation_diagnostics"
+        | "gammaloop_evaluation_timing"
+        | "max_weight_points"
+        | "max_weight_summary" => "diagnostics",
+        _ => "result",
     }
 }
 
@@ -1210,6 +1226,28 @@ mod tests {
     }
 
     #[test]
+    fn available_sections_follow_projectors_and_stratum_output() {
+        let source = TaskPanelSource::new(
+            &inherited_vector_sample_task(),
+            Some(AccumulatorConfig::scalar()),
+        )
+        .unwrap();
+        assert_eq!(
+            source.available_sections(false),
+            vec!["result", "diagnostics", "summary"]
+        );
+        assert_eq!(
+            source.available_sections(true),
+            vec!["result", "strata", "diagnostics", "summary"]
+        );
+        let source = TaskPanelSource::for_campaign(&[]);
+        assert_eq!(
+            source.available_sections(true),
+            vec!["result", "observables", "summary"]
+        );
+    }
+
+    #[test]
     fn campaign_combined_result_compares_real_and_imaginary_targets() {
         let mut task = run_task(RunTaskSpec::IntegrationCampaign {
             children: vec![],
@@ -1477,6 +1515,7 @@ mod tests {
         };
         for task in tasks {
             let source = TaskPanelSource::new(&task, None).expect("PDF panel source");
+            assert_eq!(source.available_sections(true), vec!["result", "summary"]);
             for state in [RunTaskState::Active, RunTaskState::Completed] {
                 let mut run_task = run_task_with_state(task.clone(), state);
                 run_task.nr_produced_samples = 4;
