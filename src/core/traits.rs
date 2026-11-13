@@ -150,7 +150,7 @@ pub trait ControlPlaneStore: Send + Sync {
     async fn request_node_shutdown(&self, node_name: &str) -> Result<u64, StoreError>;
     async fn request_all_nodes_shutdown(&self) -> Result<u64, StoreError>;
     async fn request_idle_nodes_shutdown(&self) -> Result<u64, StoreError>;
-    async fn consume_node_shutdown_request(&self, node_uuid: &str) -> Result<bool, StoreError>;
+    async fn node_shutdown_requested(&self, node_uuid: &str) -> Result<bool, StoreError>;
     async fn expire_node_lease(&self, node_uuid: &str) -> Result<(), StoreError>;
 
     async fn create_run(
@@ -160,6 +160,7 @@ pub trait ControlPlaneStore: Send + Sync {
         provenance: &serde_json::Value,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
+        target_error: Option<&JsonValue>,
         domain: &Domain,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskInput],

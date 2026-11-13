@@ -88,6 +88,9 @@ where
             .controller_output
             .as_ref()
             .and_then(ControllerTaskOutput::integration_campaign);
+        let scheduling =
+            serde_json::json!({"allocation": allocation, "stop_condition": stop_condition});
+        let settings_changed = previous_output.is_none_or(|o| o.applied_scheduling != scheduling);
         let mut previous_selected = previous_output
             .map(|output| output.selected_child_run_ids.clone())
             .unwrap_or_default();
@@ -236,8 +239,9 @@ where
         });
         // Finish granted work before publishing a terminal estimate. After draining,
         // recheck the error target against all accepted samples before deciding to stop.
-        let draining =
-            outstanding && (target_reached || previous_output.is_some_and(|o| o.draining));
+        let draining = outstanding
+            && (target_reached
+                || (!settings_changed && previous_output.is_some_and(|o| o.draining)));
         if target_reached && !outstanding {
             let mut output = build_output(
                 &states,
@@ -305,6 +309,7 @@ where
             &eligible,
             allocation,
             capacity,
+            settings_changed,
         );
         let requests = if can_allocate {
             selected
@@ -341,11 +346,16 @@ where
                 .allocate_campaign_samples(self.task.id, &requests)
                 .await?;
         }
-        apply_controller_assignment_plan(
+        if !apply_controller_assignment_plan(
             &self.store,
             ControllerAssignmentPlan::new(self.run_id, selected.clone()),
         )
-        .await?;
+        .await?
+        {
+            // Leave the previous settings marker intact so a concurrent worker
+            // change retries the forced selection on the next controller tick.
+            return Ok(false);
+        }
         let mut output = build_output(
             &states,
             &selected,
@@ -372,10 +382,20 @@ where
     }
 
     async fn persist_output(&self, output: &IntegrationCampaignOutput) -> Result<(), StoreError> {
+        let mut output = output.clone();
+        if let RunTaskSpec::IntegrationCampaign {
+            allocation,
+            stop_condition,
+            ..
+        } = &self.task.task
+        {
+            output.applied_scheduling =
+                serde_json::json!({"allocation": allocation, "stop_condition": stop_condition});
+        }
         self.store
             .persist_task_controller_output(
                 self.task.id,
-                &ControllerTaskOutput::IntegrationCampaign(output.clone()),
+                &ControllerTaskOutput::IntegrationCampaign(output),
             )
             .await
     }
@@ -492,7 +512,7 @@ impl ChildState {
     }
 }
 
-/// Retain unfinished quanta; reconsider only slots whose own work drained.
+/// Retain unfinished quanta unless settings changed; enforce capacity on every check.
 /// The durable grant also identifies an interrupted quantum after controller recovery.
 fn schedule_children(
     states: &[ChildState],
@@ -501,17 +521,19 @@ fn schedule_children(
     eligible: &BTreeSet<i32>,
     allocation: &IntegrationCampaignAllocationSpec,
     capacity: usize,
+    settings_changed: bool,
 ) -> Vec<i32> {
     let mut selected = incumbents
         .iter()
         .copied()
         .filter(|id| {
-            eligible.contains(id)
+            !settings_changed
+                && eligible.contains(id)
                 && states.iter().any(|child| {
                     child.run_id == *id && grants.get(id).copied().unwrap_or(0) > child.work_samples
                 })
         })
-        .take(capacity)
+        .take(capacity.min(allocation.max_active_runs))
         .collect::<Vec<_>>();
     let mut candidates = states
         .iter()
@@ -523,8 +545,8 @@ fn schedule_children(
         let unfinished = |child: &ChildState| {
             grants.get(&child.run_id).copied().unwrap_or(0) > child.work_samples
         };
-        unfinished(b)
-            .cmp(&unfinished(a))
+        (!settings_changed && unfinished(b))
+            .cmp(&(!settings_changed && unfinished(a)))
             .then_with(|| b_pilot.cmp(&a_pilot))
             .then_with(|| {
                 if a_pilot {
@@ -565,33 +587,33 @@ fn combine_measurements(states: &[ChildState]) -> Option<Vec<MeasurementResult>>
         let mut value = 0.0;
         let mut variance = 0.0;
         let mut sample_count = 0i64;
-        let mut basic_mean = 0.0;
-        let mut basic_variance = Some(0.0);
-        let mut has_basic = false;
+        let mut pooled_mean = 0.0;
+        let mut pooled_variance = Some(0.0);
+        let mut has_pooled = false;
         for child in states {
             let result = child.results()?.iter().find(|result| {
                 result.name == template.name && result.component == template.component
             })?;
             value += child.coefficient * result.value;
-            let (mean, error) = match &result.basic {
-                Some(basic) => {
-                    has_basic = true;
-                    (basic.mean, basic.error)
+            let (mean, error) = match &result.pooled {
+                Some(pooled) => {
+                    has_pooled = true;
+                    (pooled.mean, pooled.error)
                 }
                 None => (result.value, result.uncertainty),
             };
-            basic_mean += child.coefficient * mean;
-            basic_variance = basic_variance
+            pooled_mean += child.coefficient * mean;
+            pooled_variance = pooled_variance
                 .zip(error)
                 .map(|(sum, e)| sum + child.coefficient.powi(2) * e.powi(2));
             variance += child.coefficient.powi(2) * result.uncertainty?.powi(2);
             sample_count = sample_count.saturating_add(result.sample_count);
         }
         combined.push(MeasurementResult {
-            estimator: crate::core::EstimateKind::Combined,
-            basic: (has_basic && basic_mean.is_finite()).then(|| crate::core::BasicEstimate {
-                mean: basic_mean,
-                error: basic_variance.filter(|v| v.is_finite()).map(f64::sqrt),
+            estimator: crate::core::EstimateKind::IndependentSum,
+            pooled: (has_pooled && pooled_mean.is_finite()).then(|| crate::core::MeanEstimate {
+                mean: pooled_mean,
+                error: pooled_variance.filter(|v| v.is_finite()).map(f64::sqrt),
             }),
             name: template.name,
             component: template.component.clone(),
@@ -645,6 +667,7 @@ fn build_output(
 ) -> IntegrationCampaignOutput {
     let selected = selected.iter().copied().collect::<BTreeSet<_>>();
     IntegrationCampaignOutput {
+        applied_scheduling: serde_json::Value::Null,
         completed_children: states
             .iter()
             .filter(|child| child.task_state == RunTaskState::Completed)
@@ -716,7 +739,7 @@ mod tests {
             measurement: Some(TaskMeasurementOutput::Completed {
                 results: vec![MeasurementResult {
                     estimator: crate::core::EstimateKind::Pooled,
-                    basic: None,
+                    pooled: None,
                     name: AccumulatorMetricName::Mean,
                     component: None,
                     value,
@@ -740,7 +763,7 @@ mod tests {
             results: vec![
                 MeasurementResult {
                     estimator: crate::core::EstimateKind::Pooled,
-                    basic: None,
+                    pooled: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("real".to_string()),
                     value: real.0,
@@ -749,7 +772,7 @@ mod tests {
                 },
                 MeasurementResult {
                     estimator: crate::core::EstimateKind::Pooled,
-                    basic: None,
+                    pooled: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("imag".to_string()),
                     value: imag.0,
@@ -777,17 +800,41 @@ mod tests {
         let grants = [(1, 100), (2, 100), (3, 100)].into();
         let eligible = [1, 2, 3].into();
         assert_eq!(
-            schedule_children(&states, &grants, &[1, 2], &eligible, &allocation, 2),
+            schedule_children(&states, &grants, &[1, 2], &eligible, &allocation, 2, false),
             vec![2, 3],
             "B retains its unfinished quantum while C replaces A"
         );
         states[2] = child(3, 1., 1., 1., 100);
         assert_eq!(
-            schedule_children(&states, &grants, &[1, 2], &eligible, &allocation, 2),
+            schedule_children(&states, &grants, &[1, 2], &eligible, &allocation, 2, false),
             vec![2, 1],
             "equal score does not restart A"
         );
-        assert!(schedule_children(&states, &grants, &[1, 2], &eligible, &allocation, 0).is_empty());
+        assert!(
+            schedule_children(&states, &grants, &[1, 2], &eligible, &allocation, 0, false)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn settings_change_reconsiders_unfinished_grants_using_new_priority() {
+        let allocation = IntegrationCampaignAllocationSpec {
+            max_active_runs: 1,
+            min_samples_per_child: 0,
+            algorithm: IntegrationCampaignAllocationAlgorithm::LargestVariance,
+            ..Default::default()
+        };
+        let states = vec![child(1, 1., 1., 0.1, 20), child(2, 1., 1., 10., 100)];
+        let grants = [(1, 100), (2, 100)].into();
+        let eligible = [1, 2].into();
+        assert_eq!(
+            schedule_children(&states, &grants, &[1], &eligible, &allocation, 1, false),
+            vec![1]
+        );
+        assert_eq!(
+            schedule_children(&states, &grants, &[1], &eligible, &allocation, 1, true),
+            vec![2]
+        );
     }
 
     #[test]
@@ -804,7 +851,8 @@ mod tests {
                 &[],
                 &[1, 2].into(),
                 &allocation,
-                1
+                1,
+                false
             ),
             vec![1]
         );
@@ -835,11 +883,14 @@ mod tests {
         assert_eq!(results[0].value, 5.0);
         assert!((results[0].uncertainty.unwrap() - 0.73_f64.sqrt()).abs() < 1e-12);
         assert_eq!(results[0].sample_count, 30);
-        assert_eq!(results[0].estimator, crate::core::EstimateKind::Combined);
+        assert_eq!(
+            results[0].estimator,
+            crate::core::EstimateKind::IndependentSum
+        );
         let mut children = [child(1, 2.0, 3.0, 0.4, 10), child(2, -1.0, 1.0, 0.3, 20)];
         if let Some(TaskMeasurementOutput::Completed { results }) = &mut children[0].measurement {
             results[0].estimator = crate::core::EstimateKind::Stratified;
-            results[0].basic = Some(crate::core::BasicEstimate {
+            results[0].pooled = Some(crate::core::MeanEstimate {
                 mean: 10.0,
                 error: Some(0.1),
             });
@@ -847,9 +898,9 @@ mod tests {
         let compared = combine_measurements(&children).unwrap();
         assert_eq!(compared[0].value, results[0].value);
         assert_eq!(compared[0].uncertainty, results[0].uncertainty);
-        assert_eq!(compared[0].basic.as_ref().unwrap().mean, 19.0);
+        assert_eq!(compared[0].pooled.as_ref().unwrap().mean, 19.0);
         assert!(
-            (compared[0].basic.as_ref().unwrap().error.unwrap() - 0.13_f64.sqrt()).abs() < 1e-12
+            (compared[0].pooled.as_ref().unwrap().error.unwrap() - 0.13_f64.sqrt()).abs() < 1e-12
         );
     }
 
@@ -875,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_concurrency_drains_incumbents_without_granting_new_slots() {
+    fn lower_concurrency_immediately_limits_incumbents() {
         let states = vec![
             child(1, 1.0, 1.0, 0.1, 10),
             child(2, 1.0, 1.0, 0.1, 10),
@@ -893,9 +944,10 @@ mod tests {
                 &[1, 2],
                 &eligible,
                 &allocation,
-                2
+                2,
+                false
             ),
-            vec![1, 2]
+            vec![1]
         );
         assert_eq!(
             schedule_children(
@@ -904,7 +956,8 @@ mod tests {
                 &[1, 2],
                 &eligible,
                 &allocation,
-                2
+                2,
+                false
             ),
             vec![2]
         );
@@ -932,6 +985,7 @@ mod tests {
                 ..Default::default()
             },
             limit,
+            false,
         )
     }
 
@@ -1034,7 +1088,7 @@ mod tests {
     fn error_target_waits_for_every_child_pilot() {
         let results = [MeasurementResult {
             estimator: crate::core::EstimateKind::Pooled,
-            basic: None,
+            pooled: None,
             name: AccumulatorMetricName::Mean,
             component: None,
             value: 1.5,

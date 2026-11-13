@@ -52,3 +52,17 @@ test("a signed component named abs keeps its own mean and absolute mean", () => 
   expect(within(component).getByRole("button", { name: "abs Mean", exact: true })).toBeVisible();
   expect(within(component).getByRole("button", { name: "|abs| Mean", exact: true })).toBeVisible();
 });
+
+test("target comparisons show reference uncertainty and explain the combined error", () => {
+  render(<KeyValuePanel title="Result" state={{ panel_id: "comparison", entries: [
+    { key: "target", label: "Reference", value: { kind: "target_comparison", value: 1.1,
+      error: 0.03, target: 1, target_error: 0.04, comparison_error: 0.05,
+      delta_percent: 10, delta_sigma: 2 } },
+  ] }} />);
+  const reference = screen.getByRole("button", { name: "Reference" });
+  expect(reference).toHaveTextContent("1.000(40)");
+  expect(reference).toHaveTextContent("+2.00σ");
+  fireEvent.click(reference);
+  expect(screen.getByText(/target_error =/)).toHaveTextContent("comparison_error =");
+  expect(screen.getByText(/assuming independent uncertainties/)).toBeVisible();
+});

@@ -24,11 +24,22 @@ persisted data; they are not adapters for older formats. The single baseline
 `202610080001_initial_schema.sql` includes campaign reservations, durable external
 launch leases/receipts, and deployment/build fencing. It is for fresh databases;
 previous migration checksums and older model databases are intentionally unsupported.
-Model 8 databases accept additive migrations. The plot read model and campaign
+Model 8 databases accept additive migrations. The `target_error` migration adds
+optional reference uncertainties; existing targets retain zero error. Deploy the
+matching server and dashboard together. The plot read model and campaign
 dashboard migrations preserve existing runs and snapshots; they do not backfill
 large histories. Campaign dashboard data is derived on demand, and missing fields
 in retained snapshots remain unavailable. This does not add compatibility with
 databases from earlier models.
+
+The estimator-terminology migration renames saved measurement fields `basic` to
+`pooled`, tuning fields `objective_basic` to `objective_pooled`, and campaign
+estimator tags `combined` to `independent_sum`. It preserves values and errors in
+task outputs, controller results and derived-result history. Raw accumulator
+history, sampler checkpoints, queues, user parameters and histogram names are
+unchanged. No model/protocol bump is needed for their formats. Stop components
+for this migration and restart with matching server, workers and dashboard;
+old exported files are not rewritten. New JSON/CSV exports use the current names.
 
 Use matching server, worker, SDK, and integration revisions. Stop all components
 before an incompatible upgrade. Preserve the old executable, environments,
@@ -61,6 +72,12 @@ Dashboard view preferences use the current `gammaboard.panel-values.v1.` storage
 namespace. Retired unversioned preferences are ignored, so zoom/selection/color
 preferences reset once after this cleanup. Numerical results and run definitions
 are unaffected.
+
+Offline worker responses use `offline`/`starting`, `restore_requested`, and
+`can_start`. Actions are `start`, `restore`, `unassign-offline`, and
+`cancel-restoration`; deployment shutdown uses `/admin/workers/save-for-restart`.
+Use matching dashboard/server and UBELIX scripts. Stored launch recipes and the
+database restoration markers remain valid; worker records and telemetry are retained.
 
 Protocol v10 enforces one unweighted result per evaluator input. Python observable
 callbacks use `eval` and `ObservableBatch`; aggregated state, callback weighting

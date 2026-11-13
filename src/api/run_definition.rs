@@ -62,6 +62,12 @@ pub fn instantiate(
         .map(serde_json::to_value)
         .transpose()
         .map_err(|e| bad(format!("invalid target: {e}")))?;
+    let target_error = table
+        .remove("target_error")
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| bad(format!("invalid target_error: {e}")))?;
+    crate::core::target::RunTarget::parse(target.as_ref(), target_error.as_ref()).map_err(bad)?;
     let body = if kind != "integration" {
         table.remove("name");
         table.remove("gammaboard");
@@ -107,6 +113,7 @@ pub fn instantiate(
     Ok(RunDefinition {
         name,
         target,
+        target_error,
         original_toml: frozen,
         effective_document: effective,
         body,
@@ -127,6 +134,7 @@ pub(crate) fn validate_document(value: &toml::Value) -> Result<(), ApiError> {
     let fields: &[&str] = match kind {
         "integration" => &[
             "target",
+            "target_error",
             "evaluator",
             "evaluator_requirements",
             "sampler_requirements",
@@ -136,6 +144,7 @@ pub(crate) fn validate_document(value: &toml::Value) -> Result<(), ApiError> {
         ],
         "integration_campaign" => &[
             "target",
+            "target_error",
             "children",
             "measurement",
             "stop_condition",
@@ -423,11 +432,12 @@ mod tests {
                 "evaluator",
                 "task_queue",
                 "target",
+                "target_error",
                 "sampler_requirements",
                 "evaluator_runner_params",
                 "sampler_aggregator_runner_params",
             ] {
-                if kind == "integration_campaign" && field == "target" {
+                if kind == "integration_campaign" && ["target", "target_error"].contains(&field) {
                     continue;
                 }
                 let doc = format!("name = 'bad'\nkind = '{kind}'\n{field} = []");

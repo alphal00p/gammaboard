@@ -1,5 +1,9 @@
 # Tetrahedron and checkerboard stratification showcase — 2026-10-29
 
+> Historical validation record. “Basic” in this report is now called “Pooled”;
+> current terminology and observable behavior are specified in the
+> [execution model](../execution-model.md#estimator-terminology).
+
 The [dashboard](http://itphlies:8098/) is also available through its
 [Tailnet hostname](http://itphlies.tailb3264.ts.net:8098/).
 It uses an isolated database on port 5418 and API on port 4018. Existing

@@ -58,23 +58,24 @@ test("pending and pooled nodes are excluded; errors leave the action usable", as
 
 test("offline tab replaces live controls with bulk actions and reports partial failures", async () => {
   const offline = [
-    { node_name: "old-1", node_uuid: "one", status: "retired", can_resume: true },
-    { node_name: "old-2", node_uuid: "two", status: "suspended", can_resume: true },
-    { node_name: "queued", node_uuid: "three", status: "starting", can_resume: false, launch_pending: true },
+    { node_name: "old-1", node_uuid: "one", status: "offline", can_start: true, restore_requested: true, pool_run_id: 1 },
+    { node_name: "old-2", node_uuid: "two", status: "offline", can_start: true, restore_requested: true, pool_run_id: 1 },
+    { node_name: "stopped", node_uuid: "stopped", status: "offline", can_start: true, restore_requested: false },
+    { node_name: "queued", node_uuid: "three", status: "starting", can_start: false, launch_pending: true },
   ];
   fetchOfflineNodes.mockResolvedValue(offline);
   updateOfflineNode.mockResolvedValueOnce({ rows_updated: 1 }).mockRejectedValueOnce(new Error("Node became live"));
   render(<WorkersWorkspace {...props} />);
-  fireEvent.click(screen.getByRole("tab", { name: "Offline / suspended" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Offline" }));
   await screen.findByText("old-1");
   expect(screen.queryByRole("button", { name: "Request nodes" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Stop all nodes" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Resume all" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Release all" })).toBeEnabled();
-  fireEvent.click(screen.getByRole("button", { name: "Retire all" }));
-  expect(await screen.findByText(/Retired 1 worker.*Skipped 1 unavailable worker.*old-2: Node became live/)).toBeVisible();
-  expect(updateOfflineNode.mock.calls).toEqual([[offline[0], "retire"], [offline[1], "retire"]]);
+  expect(screen.getByRole("button", { name: "Restore saved workers" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Unassign all" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Restore saved workers" }));
+  expect(await screen.findByText(/Queued start for 1 worker.*Skipped 2 workers.*old-2: Node became live/)).toBeVisible();
+  expect(updateOfflineNode.mock.calls).toEqual([[offline[0], "restore"], [offline[1], "restore"]]);
   fireEvent.click(screen.getByRole("tab", { name: "Live nodes" }));
   expect(screen.getByRole("button", { name: "Request nodes" })).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Resume all" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Restore saved workers" })).not.toBeInTheDocument();
 });

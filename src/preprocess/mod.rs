@@ -8,6 +8,7 @@ use serde_json::Value as JsonValue;
 pub struct RunDefinition {
     pub name: String,
     pub target: Option<JsonValue>,
+    pub target_error: Option<JsonValue>,
     pub original_toml: String,
     pub effective_document: toml::Value,
     pub body: RunDefinitionBody,
@@ -57,6 +58,7 @@ pub struct PreparedRun {
     pub name: String,
     pub kind: &'static str,
     pub target: Option<JsonValue>,
+    pub target_error: Option<JsonValue>,
     pub original_toml: String,
     pub effective_document: toml::Value,
     pub integration_params: IntegrationParams,
@@ -125,6 +127,7 @@ pub fn prepare_run(config: RunDefinition) -> Result<PreparedRun, EngineError> {
         name: config.name,
         kind,
         target: config.target,
+        target_error: config.target_error,
         original_toml: config.original_toml,
         effective_document: config.effective_document,
         integration_params,

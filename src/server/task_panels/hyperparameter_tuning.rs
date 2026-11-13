@@ -68,9 +68,9 @@ fn tuning_best_projector() -> TaskPanelProjector {
                 ),
                 key_value("samples", "Samples", objective_sample_count(best)),
             ];
-            if let Some(basic) = &best.objective_basic {
-                entries.push(key_value("basic_mean", "Basic mean (pooled)", basic.mean));
-                entries.push(key_value("basic_err", "Basic error (pooled)", basic.error));
+            if let Some(pooled) = &best.objective_pooled {
+                entries.push(key_value("pooled_mean", "Pooled mean", pooled.mean));
+                entries.push(key_value("pooled_error", "Pooled error", pooled.error));
             }
             for name in tuning_parameter_names(ctx, trials) {
                 let value = best
@@ -149,7 +149,11 @@ fn tuning_trials_projector() -> TaskPanelProjector {
                 "samples".to_string(),
             ];
             columns.extend(parameter_names.iter().cloned());
-            columns.extend(["estimator".into(), "basic_mean".into(), "basic_err".into()]);
+            columns.extend([
+                "estimator".into(),
+                "pooled_mean".into(),
+                "pooled_error".into(),
+            ]);
             if show_failure {
                 columns.push("failure".to_string());
             }
@@ -255,7 +259,7 @@ fn trial_to_plot_point(trial: &HyperparameterTrialOutput) -> Option<PlotPoint> {
         x,
         y,
         estimator: trial.objective_estimator,
-        basic: trial.objective_basic.clone(),
+        pooled: trial.objective_pooled.clone(),
         error: uncertainty,
         y_min: uncertainty.map(|error| y - error),
         y_max: uncertainty.map(|error| y + error),
@@ -283,7 +287,7 @@ fn best_so_far_points(points: &[PlotPoint], mode: crate::core::MeasurementMode) 
             x: point.x,
             y: best.y,
             estimator: best.estimator,
-            basic: best.basic.clone(),
+            pooled: best.pooled.clone(),
             ..Default::default()
         });
     }
@@ -312,8 +316,8 @@ fn trial_to_table_row(
     }));
     row.extend([
         serde_json::json!(trial.objective_estimator),
-        serde_json::json!(trial.objective_basic.as_ref().map(|b| b.mean)),
-        serde_json::json!(trial.objective_basic.as_ref().and_then(|b| b.error)),
+        serde_json::json!(trial.objective_pooled.as_ref().map(|b| b.mean)),
+        serde_json::json!(trial.objective_pooled.as_ref().and_then(|b| b.error)),
     ]);
     if include_failure {
         row.push(serde_json::json!(trial.child.failure_reason));
@@ -412,6 +416,7 @@ mod tests {
             source: super::super::TaskPanelCurrentSource::Empty,
             panel_state: &JsonValue::Null,
             run_target: None,
+            run_target_error: None,
             completed_samples_per_second: None,
             eta_seconds: None,
             sampler_engine_diagnostics: None,
@@ -468,7 +473,7 @@ mod tests {
                     "parameters": {"center": 0.5, "scale": 1.0},
                     "measurement": {
                         "status": "completed",
-                        "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 1.25, "uncertainty": 0.1, "sample_count": 4096}]
+                        "results": [{"name": "mean","estimator":"pooled","pooled":null, "value": 1.25, "uncertainty": 0.1, "sample_count": 4096}]
                     }
                 }
             ]
@@ -549,7 +554,7 @@ mod tests {
                     "parameters": {"center": 0.5, "scale": 1.0},
                     "measurement": {
                         "status": "completed",
-                        "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 2.0, "uncertainty": 0.2, "sample_count": 200}]
+                        "results": [{"name": "mean","estimator":"pooled","pooled":null, "value": 2.0, "uncertainty": 0.2, "sample_count": 200}]
                     }
                 }
             ]

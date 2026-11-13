@@ -13,7 +13,7 @@ static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 #[ignore = "requires an isolated postgres database with project migrations applied"]
-async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions() {
+async fn offline_workers_start_saved_recipes_and_reject_live_or_pending_actions() {
     let (_guard, store) = locked_test_store().await;
     let (run, _, _, _) = reliability_fixture(&store, 0).await;
     let original = store
@@ -37,8 +37,9 @@ async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions
         .into_iter()
         .find(|n| n["node_name"] == "saved-1")
         .unwrap();
-    assert_eq!(node["status"], "suspended");
-    assert_eq!(node["can_resume"], true);
+    assert_eq!(node["status"], "offline");
+    assert_eq!(node["restore_requested"], true);
+    assert_eq!(node["can_start"], true);
     assert_eq!(node["launch_pending"], false);
     let waiting = store
         .offline_nodes()
@@ -50,7 +51,7 @@ async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions
     assert_eq!(waiting["launch_pending"], true);
     assert!(
         !store
-            .release_offline_node("saved-2", "", true)
+            .cancel_worker_restoration("saved-2", "")
             .await
             .unwrap()
     );
@@ -63,29 +64,47 @@ async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions
     );
     assert!(
         store
-            .release_offline_node("saved-1", "saved-id", false)
+            .unassign_offline_node("saved-1", "saved-id")
+            .await
+            .unwrap()
+    );
+    let saved: bool = sqlx::query_scalar("SELECT resume_requested FROM nodes WHERE name='saved-1'")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert!(saved, "unassigning does not cancel restoration");
+    assert!(
+        store
+            .cancel_worker_restoration("saved-1", "saved-id")
             .await
             .unwrap()
     );
     assert!(
         store
-            .resume_offline_node("saved-1", "saved-id", false)
+            .start_offline_node("saved-1", "saved-id", true, true)
+            .await
+            .is_err(),
+        "a stale Restore action cannot start a worker after cancellation"
+    );
+    assert!(
+        store
+            .start_offline_node("saved-1", "saved-id", false, false)
             .await
             .is_err()
     );
     let resumed = store
-        .resume_offline_node("saved-1", "saved-id", true)
+        .start_offline_node("saved-1", "saved-id", true, false)
         .await
         .unwrap();
     assert!(
         store
-            .resume_offline_node("saved-1", "saved-id", true)
+            .start_offline_node("saved-1", "saved-id", true, false)
             .await
             .is_err()
     );
     assert!(
         !store
-            .release_offline_node("saved-1", "saved-id", true)
+            .cancel_worker_restoration("saved-1", "saved-id")
             .await
             .unwrap()
     );
@@ -108,7 +127,7 @@ async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions
         .unwrap();
     assert!(
         store
-            .release_offline_node("saved-1", "saved-id", false)
+            .unassign_offline_node("saved-1", "saved-id")
             .await
             .unwrap()
     );
@@ -120,10 +139,10 @@ async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions
         .find(|n| n["node_name"] == "saved-1")
         .unwrap();
     assert!(node["pool_run_id"].is_null());
-    assert_eq!(node["can_resume"], true);
+    assert_eq!(node["can_start"], true);
     assert!(
         store
-            .release_offline_node("saved-1", "saved-id", true)
+            .cancel_worker_restoration("saved-1", "saved-id")
             .await
             .unwrap()
     );
@@ -134,21 +153,30 @@ async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions
         .into_iter()
         .find(|n| n["node_name"] == "saved-1")
         .unwrap();
-    assert_eq!(node["status"], "retired");
-    assert_eq!(node["resume_requested"], false);
+    assert_eq!(node["status"], "offline");
+    assert_eq!(node["restore_requested"], false);
+    sqlx::query("UPDATE nodes SET resume_requested=true WHERE name='saved-1'")
+        .execute(store.pool())
+        .await
+        .unwrap();
     store
         .announce_node("saved-1", "new-id", &Default::default())
         .await
         .unwrap();
+    let saved: bool = sqlx::query_scalar("SELECT resume_requested FROM nodes WHERE name='saved-1'")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert!(!saved, "a new process consumes any old restoration marker");
     assert!(
         !store
-            .release_offline_node("saved-1", "saved-id", true)
+            .cancel_worker_restoration("saved-1", "saved-id")
             .await
             .unwrap()
     );
     assert!(
         store
-            .resume_offline_node("saved-1", "new-id", true)
+            .start_offline_node("saved-1", "new-id", true, false)
             .await
             .is_err()
     );
@@ -161,6 +189,103 @@ async fn offline_workers_resume_saved_recipes_and_reject_live_or_pending_actions
         .execute(store.pool())
         .await
         .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn saved_worker_restoration_never_starts_separately_stopped_workers() {
+    let (_guard, store) = locked_test_store().await;
+    let (run, _, fixture_node, _) = reliability_fixture(&store, 0).await;
+    sqlx::query("DELETE FROM nodes WHERE uuid=$1")
+        .bind(fixture_node)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let prefix = unique_id("restore-policy");
+    let original = store
+        .reserve_worker_launch(
+            "local",
+            vec![serde_json::json!({
+                "name_prefix": prefix, "count": 3,
+            })],
+        )
+        .await
+        .unwrap();
+    let names = (1..=3)
+        .map(|index| format!("{prefix}-{index}"))
+        .collect::<Vec<_>>();
+    let ids = (1..=3)
+        .map(|index| format!("{prefix}-process-{index}"))
+        .collect::<Vec<_>>();
+    for (name, id) in names.iter().zip(&ids) {
+        store
+            .announce_node(name, id, &Default::default())
+            .await
+            .unwrap();
+        store
+            .assign_worker_pool(name, gammaboard::core::WorkerRole::Evaluator, run)
+            .await
+            .unwrap();
+    }
+    // C is explicitly stopped before the deployment shuts down.
+    store.request_node_shutdown(&names[2]).await.unwrap();
+    assert!(store.node_shutdown_requested(&ids[2]).await.unwrap());
+    // C has acknowledged Stop but is still draining with a live lease.
+    assert_eq!(store.save_workers_for_restart().await.unwrap(), 2);
+    assert_eq!(store.save_workers_for_restart().await.unwrap(), 0);
+    store.expire_node_lease(&ids[2]).await.unwrap();
+    // A heartbeat while draining must not clear the saved intent.
+    store
+        .announce_node(&names[0], &ids[0], &Default::default())
+        .await
+        .unwrap();
+    for id in &ids[..2] {
+        store.expire_node_lease(id).await.unwrap();
+    }
+
+    // A plain deployment startup only reads this roster; it does not restore it.
+    for _ in 0..2 {
+        let rows = store.offline_nodes().await.unwrap();
+        for (index, name) in names.iter().enumerate() {
+            let row = rows.iter().find(|row| row["node_name"] == *name).unwrap();
+            assert_eq!(row["status"], "offline");
+            assert_eq!(row["restore_requested"], index < 2);
+            assert_eq!(row["can_start"], true);
+            assert_eq!(
+                row["pool_run_id"].as_i64(),
+                (index < 2).then_some(i64::from(run))
+            );
+        }
+    }
+    assert!(
+        store
+            .start_offline_node(&names[2], &ids[2], true, true)
+            .await
+            .is_err()
+    );
+    assert_eq!(store.restore_saved_workers().await.unwrap(), 2);
+    assert_eq!(store.restore_saved_workers().await.unwrap(), 0);
+    for (index, name) in names.iter().enumerate() {
+        let (request, saved): (i64, bool) =
+            sqlx::query_as("SELECT launch_request_id,resume_requested FROM nodes WHERE name=$1")
+                .bind(name)
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(request == original, index == 2);
+        assert!(!saved);
+    }
+    // C remains available for an explicit individual Start, with no deletion.
+    store
+        .start_offline_node(&names[2], &ids[2], true, false)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes WHERE name=ANY($1)")
+        .bind(&names)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
 }
 
 #[tokio::test]
@@ -1405,7 +1530,7 @@ async fn task_measurement_output_round_trips() {
             &TaskMeasurementOutput::Completed {
                 results: vec![MeasurementResult {
                     estimator: gammaboard::core::EstimateKind::Pooled,
-                    basic: None,
+                    pooled: None,
                     name: AccumulatorMetricName::Mean,
                     component: None,
                     value: 1.25,
@@ -2122,7 +2247,7 @@ async fn expired_shutdown_request_does_not_affect_replacement_node() {
         .expect("announce replacement node");
 
     let shutdown_requested = store
-        .consume_node_shutdown_request(&new_uuid)
+        .node_shutdown_requested(&new_uuid)
         .await
         .expect("consume replacement shutdown request");
     assert!(!shutdown_requested);
@@ -2543,7 +2668,7 @@ async fn resumed_worker_requires_a_new_registration_before_its_launch_is_fulfill
         .unwrap();
     sqlx::query("UPDATE nodes SET resume_requested=true,lease_expires_at=now()-interval '1 second' WHERE name=$1")
         .bind(&name).execute(store.pool()).await.unwrap();
-    assert_eq!(store.enqueue_resumed_workers().await.unwrap(), 1);
+    assert_eq!(store.restore_saved_workers().await.unwrap(), 1);
     let new: i64 = sqlx::query_scalar("SELECT launch_request_id FROM nodes WHERE name=$1")
         .bind(&name)
         .fetch_one(store.pool())
@@ -2638,13 +2763,13 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         requests.iter().find(|r| r.id == request_id).unwrap().state,
         "fulfilled"
     );
-    store.suspend_workers().await.unwrap();
+    store.save_workers_for_restart().await.unwrap();
     sqlx::query("UPDATE nodes SET lease_expires_at=now()-interval '1 minute' WHERE name=$1")
         .bind(&name)
         .execute(store.pool())
         .await
         .unwrap();
-    assert_eq!(store.enqueue_resumed_workers().await.unwrap(), 1);
+    assert_eq!(store.restore_saved_workers().await.unwrap(), 1);
     let replacement: i64 = sqlx::query_scalar("SELECT launch_request_id FROM nodes WHERE name=$1")
         .bind(&name)
         .fetch_one(store.pool())
@@ -3238,7 +3363,7 @@ async fn shutdown_deadline_includes_the_initial_database_update() {
         .unwrap();
     let result = tokio::time::timeout(
         Duration::from_secs(3),
-        gammaboard::api::nodes::suspend_nodes_gracefully(
+        gammaboard::api::nodes::stop_workers_for_restart(
             &store,
             gammaboard::api::nodes::GracefulNodeShutdownParams {
                 sampler_drain_timeout_seconds: 1,
@@ -4338,4 +4463,232 @@ async fn campaign_core_hours_count_only_publishing_sample_tasks() {
     );
     assert!(!hours.contains_key(&children[2]));
     store.remove_run(parent).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn campaign_scheduling_edits_reassign_immediately_without_waiting_for_grants() {
+    use gammaboard::api::runs::{create_run, parse_run_add_config_toml};
+    use gammaboard::core::{IntegrationCampaignAllocationSpec, IntegrationCampaignStopCondition};
+    use gammaboard::runners::integration_campaign::IntegrationCampaignRunner;
+    use serde_json::json;
+    let (_guard, store) = locked_test_store().await;
+    let child = "name='child'\ntarget=1.0\ntarget_error=0.02\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nkind='sample'\nstop_condition={max_samples=10000}\naccumulator={config='scalar'}\nsampler={config={kind='naive_monte_carlo'}}\n";
+    let card = format!(
+        "kind='integration_campaign'\nname='immediate-scheduling'\ntarget={{kind='vector',components={{real=3.0,imag=0.0}}}}\ntarget_error={{real=0.1}}\nstop_condition={{max_total_samples=10000}}\nallocation={{max_active_runs=2,min_evaluators_per_run=1,allocation_window_samples=100,min_samples_per_child=100}}\n{}",
+        ["A", "B", "C"]
+            .map(|name| format!("[[children]]\nname='{name}'\nrun='''{child}'''\n"))
+            .join("")
+    );
+    let run = create_run(&store, parse_run_add_config_toml(&card).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    for (role, prefix) in [
+        (WorkerRole::SamplerAggregator, "sampler"),
+        (WorkerRole::Evaluator, "evaluator"),
+    ] {
+        for i in 0..3 {
+            let name = format!("immediate-{prefix}-{i}");
+            store
+                .announce_node(&name, &name, &Default::default())
+                .await
+                .unwrap();
+            store.assign_worker_pool(&name, role, run).await.unwrap();
+        }
+    }
+    let task = store.activate_next_run_task(run).await.unwrap().unwrap();
+    IntegrationCampaignRunner::new(store.clone(), run, task.clone())
+        .tick()
+        .await
+        .unwrap();
+    let before = store.load_run_task(task.id).await.unwrap().unwrap();
+    let selected = &before
+        .controller_output
+        .as_ref()
+        .unwrap()
+        .integration_campaign()
+        .unwrap()
+        .selected_child_run_ids;
+    assert_eq!(selected.len(), 2);
+    let grants = store.allocate_campaign_samples(task.id, &[]).await.unwrap();
+    assert_eq!(grants.values().sum::<i64>(), 200);
+    assert_eq!(grants.values().filter(|grant| **grant == 100).count(), 2);
+    let run_info = store.get_run_progress(run).await.unwrap().unwrap();
+    assert_eq!(run_info.target_error, Some(json!({"real":0.1})));
+    let child_info = store.get_run_progress(selected[0]).await.unwrap().unwrap();
+    assert_eq!(child_info.target_error, Some(json!(0.02)));
+
+    let settings = serde_json::to_value(&before.task).unwrap();
+    let expected =
+        json!({"allocation":settings["allocation"],"stop_condition":settings["stop_condition"]});
+    let mut allocation: IntegrationCampaignAllocationSpec =
+        serde_json::from_value(settings["allocation"].clone()).unwrap();
+    let stop: IntegrationCampaignStopCondition =
+        serde_json::from_value(settings["stop_condition"].clone()).unwrap();
+    allocation.max_active_runs = 1;
+    store
+        .update_campaign_scheduling(run, task.id, expected, allocation.clone(), stop.clone())
+        .await
+        .unwrap();
+    // No controller tick or sample completion after the edit: assignment changes
+    // must already be visible when update_campaign_scheduling returns.
+    let after = store.load_run_task(task.id).await.unwrap().unwrap();
+    assert_eq!(
+        after
+            .controller_output
+            .as_ref()
+            .unwrap()
+            .integration_campaign()
+            .unwrap()
+            .running_children,
+        1
+    );
+    let placements: i64 = sqlx::query_scalar("SELECT count(DISTINCT desired_run_id) FROM nodes WHERE desired_role='sampler_aggregator' AND desired_run_id <> $1")
+        .bind(run).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(placements, 1);
+    assert_eq!(
+        store.allocate_campaign_samples(task.id, &[]).await.unwrap(),
+        grants
+    );
+
+    let expected = json!({"allocation":allocation,"stop_condition":stop});
+    allocation.max_active_runs = 3;
+    allocation.min_evaluators_per_run = 2;
+    store
+        .update_campaign_scheduling(run, task.id, expected, allocation.clone(), stop.clone())
+        .await
+        .unwrap();
+    let after = store.load_run_task(task.id).await.unwrap().unwrap();
+    assert_eq!(
+        after
+            .controller_output
+            .as_ref()
+            .unwrap()
+            .integration_campaign()
+            .unwrap()
+            .running_children,
+        1
+    );
+    let expected = json!({"allocation":allocation,"stop_condition":stop});
+    allocation.min_evaluators_per_run = 1;
+    store
+        .update_campaign_scheduling(run, task.id, expected, allocation, stop)
+        .await
+        .unwrap();
+    let after = store.load_run_task(task.id).await.unwrap().unwrap();
+    assert_eq!(
+        after
+            .controller_output
+            .as_ref()
+            .unwrap()
+            .integration_campaign()
+            .unwrap()
+            .running_children,
+        3
+    );
+    let expanded = store.allocate_campaign_samples(task.id, &[]).await.unwrap();
+    for (child, grant) in grants.into_iter().filter(|(_, grant)| *grant > 0) {
+        assert_eq!(expanded[&child], grant);
+    }
+    assert_eq!(expanded.values().sum::<i64>(), 300);
+    sqlx::query("DELETE FROM nodes")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(run).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn estimator_terminology_migration_preserves_statistics_and_user_names() {
+    use serde_json::{Value, json};
+    let (_guard, store) = locked_test_store().await;
+    let mut tx = store.pool().begin().await.unwrap();
+    let run: i32 = sqlx::query_scalar(
+        "INSERT INTO runs(name,point_spec) VALUES('terminology-migration','{}') RETURNING id",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    let old_measurement = json!({"name":"mean","component":"real","value":1.25,"uncertainty":0.125,"sample_count":80,
+        "estimator":"combined","basic":{"mean":1.5,"error":0.25}});
+    let output = json!({"status":"completed","results":[old_measurement]});
+    let reference = json!({"mean":1.5,"error":0.25});
+    let child = json!({"status":"completed","measurement":output,"absolute_results":[old_measurement],
+        "parameters":{"basic":7,"estimator":"combined"},"parameter_values":{"objective_basic":9},
+        "objective_basic":reference,"objective_estimator":"combined"});
+    let controller =
+        json!({"combined_measurement":output,"children":[child],"points":[child],"trials":[child]});
+    let task: i64 = sqlx::query_scalar("INSERT INTO run_tasks(run_id,name,sequence_nr,task,task_toml,measurement_output,controller_output) VALUES($1,'test',0,'{}','',$2,$3) RETURNING id")
+        .bind(run).bind(&output).bind(&controller).fetch_one(&mut *tx).await.unwrap();
+    let histograms =
+        json!({"basic":{"title":"basic","bins":[{"value":1.25,"error":0.125,"label":"basic"}]}});
+    let derived = json!({"sources":[],"metrics":[old_measurement],"observables":{"estimator":"combined","histograms":histograms}});
+    let raw = json!({"kind":"stratified","pooled":{"bundle":{"histograms":histograms}},"components":["basic"],"basic":{"user_field":true}});
+    let mut snapshot_ids = Vec::new();
+    for value in [&derived, &raw] {
+        let id: i64 = sqlx::query_scalar("INSERT INTO persisted_observable_snapshots(run_id,task_id,persisted_observable) VALUES($1,$2,$3) RETURNING id")
+            .bind(run).bind(task).bind(value).fetch_one(&mut *tx).await.unwrap();
+        snapshot_ids.push(id);
+    }
+    // Reapplying is harmless. Only known statistical result paths are rewritten.
+    for _ in 0..2 {
+        sqlx::raw_sql(include_str!(
+            "../migrations/202611130001_estimator_terminology.sql"
+        ))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let (measurement, updated): (Value, Value) = sqlx::query_as(
+            "SELECT measurement_output,controller_output FROM run_tasks WHERE id=$1",
+        )
+        .bind(task)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        let expected_measurement = json!({"name":"mean","component":"real","value":1.25,"uncertainty":0.125,"sample_count":80,
+            "estimator":"independent_sum","pooled":reference});
+        assert_eq!(measurement["results"][0], expected_measurement);
+        let typed: TaskMeasurementOutput = serde_json::from_value(measurement.clone()).unwrap();
+        let TaskMeasurementOutput::Completed { results } = typed else {
+            panic!("completed measurement")
+        };
+        assert_eq!(
+            results[0].estimator,
+            gammaboard::core::EstimateKind::IndependentSum
+        );
+        assert_eq!(results[0].pooled.as_ref().unwrap().error, Some(0.25));
+        assert_eq!(updated["combined_measurement"], measurement);
+        for key in ["children", "points", "trials"] {
+            let updated_child = &updated[key][0];
+            assert_eq!(updated_child["measurement"], measurement);
+            assert_eq!(updated_child["absolute_results"][0], expected_measurement);
+            assert_eq!(updated_child["objective_pooled"], reference);
+            assert_eq!(updated_child["objective_estimator"], "independent_sum");
+            assert!(updated_child.get("objective_basic").is_none());
+            assert_eq!(updated_child["parameters"], child["parameters"]);
+            assert_eq!(updated_child["parameter_values"], child["parameter_values"]);
+        }
+        let migrated: Value = sqlx::query_scalar(
+            "SELECT persisted_observable FROM persisted_observable_snapshots WHERE id=$1",
+        )
+        .bind(snapshot_ids[0])
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(migrated["metrics"][0], expected_measurement);
+        assert_eq!(migrated["observables"]["estimator"], "independent_sum");
+        assert_eq!(migrated["observables"]["histograms"], histograms);
+        let _: gammaboard::core::DerivedResultSnapshot = serde_json::from_value(migrated).unwrap();
+        let untouched: Value = sqlx::query_scalar(
+            "SELECT persisted_observable FROM persisted_observable_snapshots WHERE id=$1",
+        )
+        .bind(snapshot_ids[1])
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(untouched, raw);
+    }
+    tx.rollback().await.unwrap();
 }

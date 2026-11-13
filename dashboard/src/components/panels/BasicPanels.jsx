@@ -13,6 +13,7 @@ import {
 import prettyMilliseconds from "pretty-ms";
 import FigureExportActions, { escapeXml } from "./FigureExportActions";
 import {
+  estimatorLabel,
   convertTimeValue,
   formatCompactNumber,
   formatDateTime,
@@ -200,11 +201,12 @@ export const EstimateValueBlock = ({ value, label, help }) => {
   const estimate = formatEstimateDisplay(central, error, "unavailable");
   const details = [`estimator = ${estimator}`, `mean = ${formatF64Full(central, "unavailable")}`];
   if (estimator === "stratified") {
-    details.push(`strat_err = ${formatF64Full(error, "unavailable: insufficient stratum coverage")}`);
-    if (value?.basic) details.push(`basic_mean = ${formatF64Full(value.basic.mean, "unavailable")}`, `basic_err = ${formatF64Full(value.basic.error, "unavailable")}`);
-  } else {
-    details.push(`basic_err = ${formatF64Full(error, "unavailable: fewer than two samples")}`, "strat_err = not used");
+    details.push(`stratified_error = ${formatF64Full(error, "unavailable: insufficient stratum coverage")}`);
+  } else if (estimator === "pooled") {
+    details.push(`pooled_error = ${formatF64Full(error, "unavailable: fewer than two samples")}`, "stratified_error = not used");
   }
+  if (estimator === "independent_sum") details.push(`primary_error = ${formatF64Full(error, "unavailable")}`);
+  if (value?.pooled) details.push(`pooled_mean = ${formatF64Full(value.pooled.mean, "unavailable")}`, `pooled_error = ${formatF64Full(value.pooled.error, "unavailable")}`);
   const compact = <Box component="span" sx={{ display: "inline-flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 0.5 }}>
     <span>{central == null ? "Mean unavailable" : <ScientificValue text={estimate.text} />}</span>
     {central != null && error == null ? <span>· error unavailable</span> : estimate.relative_percent_text != null && <span>({estimate.relative_percent_text}%)</span>}
@@ -212,7 +214,7 @@ export const EstimateValueBlock = ({ value, label, help }) => {
   return <DisclosureField label={label || "Estimate details"} value={compact} inline={!label}>
     <PrecisionText>{details.join("\n")}</PrecisionText>
     <Typography variant="caption" component="p" sx={{ mt: 1 }}>Parenthesized integer digits give the uncertainty in the last displayed places: 5.4123(25) means 5.4123 ± 0.0025. A decimal uncertainty uses the same scale as the mean: 1.2(3.5) means 1.2 ± 3.5. Both share any displayed power of ten.</Typography>
-    {value?.basic && <Typography variant="caption" component="p">The pooled reference error belongs to its own pooled mean.</Typography>}
+    {value?.pooled && <Typography variant="caption" component="p">The pooled reference error belongs to its own pooled mean.</Typography>}
     {help && <Typography variant="caption" component="p" sx={{ mt: 1 }}>{help}</Typography>}
   </DisclosureField>;
 };
@@ -224,11 +226,11 @@ const TargetComparisonValueBlock = ({ value, label }) => {
   };
   return <DisclosureField label={label || "Target comparison details"} inline={!label}
     value={<Box component="span" sx={{ display: "inline-flex", alignItems: "baseline", flexWrap: "wrap", columnGap: 0.75 }}>
-      <span><ScientificValue text={formatScientific(value.target, 4)} /></span>
+      <span><ScientificValue text={Number(value.target_error) > 0 ? formatEstimateDisplay(value.target, value.target_error).text : formatScientific(value.target, 4)} /></span>
       <span>· Δ {signed(value.delta_percent)}%</span><span>· {signed(value.delta_sigma)}σ</span>
     </Box>}>
-    <PrecisionText>{`estimator = ${value.estimator || "pooled"}\nvalue = ${formatF64Full(value.value)}\nerror = ${formatF64Full(value.error)}\ntarget = ${formatF64Full(value.target)}\ndelta_percent = ${formatF64Full(value.delta_percent)}\ndelta_sigma = ${formatF64Full(value.delta_sigma)}`}</PrecisionText>
-    <Typography variant="caption" component="p" sx={{ mt: 1 }}>Delta is 100 × (estimate − target) / |target|. Pull is (estimate − target) / standard error. Positive values lie above the target. Undefined comparisons remain unavailable.</Typography>
+    <PrecisionText>{`estimator = ${value.estimator || "pooled"}\nvalue = ${formatF64Full(value.value)}\nerror = ${formatF64Full(value.error)}\ntarget = ${formatF64Full(value.target)}\ntarget_error = ${formatF64Full(value.target_error ?? 0)}\ncomparison_error = ${formatF64Full(value.comparison_error ?? value.error)}\ndelta_percent = ${formatF64Full(value.delta_percent)}\ndelta_sigma = ${formatF64Full(value.delta_sigma)}`}</PrecisionText>
+    <Typography variant="caption" component="p" sx={{ mt: 1 }}>Delta is 100 × (estimate − target) / |target|. Pull is (estimate − target) / √(sampling error² + target error²), assuming independent uncertainties. Positive values lie above the target. Undefined comparisons remain unavailable.</Typography>
   </DisclosureField>;
 };
 
@@ -247,7 +249,7 @@ function ValueField({ entry, state }) {
   return <DisclosureField label={label} value={["state", "status"].includes(label?.toLowerCase()) && typeof value === "string"
     ? <StatusChip status={value} /> : <Typography component="span" variant="body2" sx={{ overflowWrap: "anywhere",
       color: display.tone === "good" ? "success.main" : display.tone === "warning" ? "warning.main" : display.tone === "critical" ? "error.main" : "inherit" }}>
-      {renderStructuredValue(value)}</Typography>}>
+      {key === "estimator" ? estimatorLabel(value) : renderStructuredValue(value)}</Typography>}>
     {help || precise ? <>
       {help && <Typography variant="body2" sx={{ mb: precise ? 1 : 0 }}>{help}</Typography>}
       {precise && <PrecisionText>{formatF64Full(value)}</PrecisionText>}

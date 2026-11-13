@@ -192,7 +192,7 @@ export const normalizeGammaLoopHistogramBins = (histogram) => {
       stop,
       value: computeGammaLoopBinAverage(bin, sampleCount),
       error: computeGammaLoopBinError(bin, sampleCount),
-      basic: bin?.basic ?? null,
+      pooled: bin?.pooled ?? null,
       label: bin?.label ?? null,
       bin_id: bin?.bin_id ?? null,
       entry_count: bin?.entry_count ?? null,
@@ -233,7 +233,7 @@ export const buildCdfBins = (bins) => {
     // Unknown components make the cumulative estimate unknown too. Individual
     // bin errors cannot determine a sum's error without cross-bin covariance.
     cumulativeValue += bin.value == null ? NaN : numberOrNaN(bin.value);
-    return { ...bin, value: cumulativeValue, error: null, basic: null, comparison: null };
+    return { ...bin, value: cumulativeValue, error: null, pooled: null, comparison: null };
   });
 };
 
@@ -414,7 +414,7 @@ const normalizeUploadedHistogram = (name, histogram) => {
       stop: Number(bin.stop),
       value: Number(bin.value),
       error: bin.error == null ? null : Math.abs(numberOrNaN(bin.error)),
-      basic: bin?.basic ?? null,
+      pooled: bin?.pooled ?? null,
       label: bin?.label ?? null,
       bin_id: bin?.bin_id ?? null,
       entry_count: bin?.entry_count ?? null,

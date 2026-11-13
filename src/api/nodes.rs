@@ -251,14 +251,14 @@ pub async fn stop_all_nodes_gracefully(
     .await
 }
 
-/// Deployment shutdown preserves launch intent and assignments for explicit resume.
-pub async fn suspend_nodes_gracefully(
+/// Deployment shutdown saves launch intent and assignments for explicit restoration.
+pub async fn stop_workers_for_restart(
     store: &crate::stores::PgStore,
     params: GracefulNodeShutdownParams,
 ) -> Result<GracefulNodeShutdownResult, ApiError> {
     bounded_shutdown(params.clone(), async {
         let rows_updated = store
-            .suspend_workers()
+            .save_workers_for_restart()
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         wait_for_graceful_node_shutdown(store, params, 0, rows_updated).await

@@ -383,9 +383,9 @@ describe("Image heatmap controls", () => {
 
 });
 
-const renderTimeseries = ({ kind = "scalar_timeseries", panelId = "test_history", xAxis, points, value, target, xRange, yRange }) => {
+const renderTimeseries = ({ kind = "scalar_timeseries", panelId = "test_history", xAxis, points, value, target, targetError, xRange, yRange }) => {
   const state = kind === "scalar_timeseries"
-    ? { points, target }
+    ? { points, target, target_error: targetError }
     : { series: [{ id: "test", label: "Test", points }] };
   render(
     <PanelCollection
@@ -469,6 +469,21 @@ describe("PanelCollection scalar legends", () => {
     expect(option.series[0].data).toEqual([[250, 0.1, 0.3, 1000, 0.7, 0.9]]);
     expect(option.series[0].progressive).toBe(0);
     expect(option.series[2].data).toEqual([[250, 0], [1000, 0]]);
+    expect(option.series[2].markArea).toBeUndefined();
+    expect(option.legend.formatter("target")).toBe("Target");
+  });
+
+  test("reference uncertainty is a band on the target series and included in axis fitting", () => {
+    const option = renderTimeseries({ panelId: "real_estimate_history", target: 10, targetError: 3,
+      points: [{ x: 1, y: 10 }, { x: 2, y: 10 }] });
+    const target = option.series.find((series) => series.name === "target");
+    expect(target.markArea.data).toEqual([[{ yAxis: 7 }, { yAxis: 13 }]]);
+    expect(option.legend.formatter("target")).toBe("Target ±1σ");
+    const tooltip = option.tooltip.formatter([{ seriesName: "target", seriesId: "target", axisValue: 1, value: [1, 10] }]);
+    expect(tooltip).toContain("target error (1σ): 3.000000e+0");
+    expect(tooltip).toContain("target band: 7.000000e+0 to 1.300000e+1");
+    expect(option.yAxis.min).toBeLessThanOrEqual(7);
+    expect(option.yAxis.max).toBeGreaterThanOrEqual(13);
   });
 
   test("shows an error bar for the first mean point before a band can be drawn", () => {
@@ -640,7 +655,7 @@ test('stratum component and history controls update their own panel state',()=>{
   fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Component/}));
   fireEvent.click(screen.getByRole('option',{name:'y',exact:true}));
   expect(screen.getByText('Share of reported variance (y)')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Total y' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Combined y' })).toBeInTheDocument();
   fireEvent.mouseDown(screen.getByRole('combobox',{name:/^History/}));
   fireEvent.click(screen.getByRole('option',{name:'Hit rate',exact:true}));
   expect(screen.getByRole('checkbox',{name:'Between snapshots'})).toBeInTheDocument();
@@ -799,7 +814,7 @@ test("RSD fits the visible x range and selected components, retaining legend cho
 });
 
 test("mean axes exclude hidden target and uncertainty legend entries", () => {
-  renderTimeseries({ panelId: "mean_history", xAxis: "completed_samples", target: 1000,
+  renderTimeseries({ panelId: "mean_history", xAxis: "completed_samples", target: 1000, targetError: 100,
     points: [{ x: 0, y: 10, y_min: -100, y_max: 100 }, { x: 100, y: 12, y_min: -80, y_max: 90 }] });
   const chart = () => renderChart.mock.lastCall[0];
   act(() => chart().onEvents.legendselectchanged({ selected: { target: false } }));

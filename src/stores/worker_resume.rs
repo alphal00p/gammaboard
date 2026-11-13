@@ -7,6 +7,7 @@ struct OfflineLaunchRecipe {
     backend: Option<String>,
     args: Option<Value>,
     pending: bool,
+    restore_requested: bool,
 }
 
 impl PgStore {
@@ -15,12 +16,10 @@ impl PgStore {
             SELECT jsonb_build_object(
                 'node_name',n.name,'node_uuid',n.uuid,'last_seen',n.last_seen,
                 'pool_run_id',n.pool_run_id,'pool_run_name',r.name,'pool_role',n.pool_role,
-                'resume_requested',n.resume_requested,'backend',l.backend,
+                'restore_requested',n.resume_requested,'backend',l.backend,
                 'launch_state',l.state,'launch_pending',p.pending,
-                'can_resume',n.launch_group IS NOT NULL AND l.id IS NOT NULL AND NOT p.pending,
-                'status',CASE WHEN p.pending THEN 'starting'
-                    WHEN n.resume_requested THEN 'suspended'
-                    WHEN n.shutdown_requested_at IS NOT NULL THEN 'retired' ELSE 'offline' END)
+                'can_start',n.launch_group IS NOT NULL AND l.id IS NOT NULL AND NOT p.pending,
+                'status',CASE WHEN p.pending THEN 'starting' ELSE 'offline' END)
             FROM nodes n LEFT JOIN runs r ON r.id=n.pool_run_id
             LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id
             CROSS JOIN LATERAL (SELECT worker_launch_pending(n.name,n.launch_request_id,n.last_seen) AS pending) p
@@ -29,22 +28,24 @@ impl PgStore {
     }
 
     /// Queue one saved worker recipe without changing its name or assignments.
-    pub async fn resume_offline_node(
+    pub async fn start_offline_node(
         &self,
         name: &str,
         uuid: &str,
         allow_local: bool,
+        restore_only: bool,
     ) -> Result<i64, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
         super::connection_budget::lock(&mut tx).await?;
         let row: Option<OfflineLaunchRecipe> = sqlx::query_as(
-            "SELECT n.launch_group,l.backend,l.args,worker_launch_pending(n.name,n.launch_request_id,n.last_seen) AS pending FROM nodes n LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id WHERE n.name=$1 AND n.uuid=$2 AND n.lease_expires_at<=now() FOR UPDATE OF n"
+            "SELECT n.launch_group,l.backend,l.args,n.resume_requested AS restore_requested,worker_launch_pending(n.name,n.launch_request_id,n.last_seen) AS pending FROM nodes n LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id WHERE n.name=$1 AND n.uuid=$2 AND n.lease_expires_at<=now() FOR UPDATE OF n"
         ).bind(name).bind(uuid).fetch_optional(&mut *tx).await?;
         let Some(OfflineLaunchRecipe {
             launch_group: Some(group),
             backend: Some(backend),
             args: Some(mut args),
             pending,
+            restore_requested,
         }) = row
         else {
             return Err(sqlx::Error::Protocol("Node is live, changed identity, or has no saved launch recipe. Refresh the node list.".into()));
@@ -52,6 +53,11 @@ impl PgStore {
         if pending {
             return Err(sqlx::Error::Protocol(
                 "This worker already has a pending launch.".into(),
+            ));
+        }
+        if restore_only && !restore_requested {
+            return Err(sqlx::Error::Protocol(
+                "This worker is no longer saved for restart. Refresh the worker list.".into(),
             ));
         }
         if backend == "local" && !allow_local {
@@ -69,22 +75,45 @@ impl PgStore {
         Ok(id)
     }
 
-    pub async fn release_offline_node(
+    pub async fn unassign_offline_node(&self, name: &str, uuid: &str) -> Result<bool, sqlx::Error> {
+        self.update_offline_worker(
+            name,
+            uuid,
+            "pool_run_id=NULL,pool_role=NULL,desired_run_id=NULL,desired_role=NULL,active_run_id=NULL,active_role=NULL",
+        ).await
+    }
+
+    pub async fn cancel_worker_restoration(
         &self,
         name: &str,
         uuid: &str,
-        retire: bool,
+    ) -> Result<bool, sqlx::Error> {
+        self.update_offline_worker(name, uuid, "resume_requested=false")
+            .await
+    }
+
+    // Only fixed internal SET clauses reach this helper. Both actions fence a
+    // stale UI row against a live replacement or an already queued launch.
+    async fn update_offline_worker(
+        &self,
+        name: &str,
+        uuid: &str,
+        set_clause: &str,
     ) -> Result<bool, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
         super::connection_budget::lock(&mut tx).await?;
-        let changed = sqlx::query(r#"
-            UPDATE nodes SET pool_run_id=NULL,pool_role=NULL,desired_run_id=NULL,desired_role=NULL,
-                active_run_id=NULL,active_role=NULL,
-                resume_requested=CASE WHEN $3 THEN false ELSE resume_requested END,
-                shutdown_requested_at=CASE WHEN $3 THEN now() ELSE shutdown_requested_at END,updated_at=now()
+        let changed = sqlx::query(&format!(
+            r#"
+            UPDATE nodes SET {set_clause},updated_at=now()
             WHERE name=$1 AND uuid=$2 AND lease_expires_at<=now()
               AND NOT worker_launch_pending(name,launch_request_id,last_seen)
-        "#).bind(name).bind(uuid).bind(retire).execute(&mut *tx).await?.rows_affected();
+        "#
+        ))
+        .bind(name)
+        .bind(uuid)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         tx.commit().await?;
         Ok(changed > 0)
     }
@@ -164,17 +193,17 @@ impl PgStore {
     }
 
     /// Save only live workers, before requesting shutdown. Repeating this is harmless.
-    pub async fn suspend_workers(&self) -> Result<u64, sqlx::Error> {
+    pub async fn save_workers_for_restart(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query("UPDATE nodes SET resume_requested=true, shutdown_requested_at=now(), updated_at=now() WHERE lease_expires_at > now() AND shutdown_requested_at IS NULL")
             .execute(self.pool()).await?;
         Ok(result.rows_affected())
     }
 
     /// Clear the marker in the same transaction that durably enqueues its replacement.
-    pub async fn enqueue_resumed_workers(&self) -> Result<usize, sqlx::Error> {
+    pub async fn restore_saved_workers(&self) -> Result<usize, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
         super::connection_budget::lock(&mut tx).await?;
-        let rows: Vec<(String, Value, String, Value)> = sqlx::query_as("SELECT n.name,n.launch_group,r.backend,r.args FROM nodes n JOIN node_launch_requests r ON r.id=n.launch_request_id WHERE n.resume_requested AND n.lease_expires_at <= now() AND n.launch_group IS NOT NULL ORDER BY n.name FOR UPDATE OF n")
+        let rows: Vec<(String, Value, String, Value)> = sqlx::query_as("SELECT n.name,n.launch_group,r.backend,r.args FROM nodes n JOIN node_launch_requests r ON r.id=n.launch_request_id WHERE n.resume_requested AND n.lease_expires_at <= now() AND n.launch_group IS NOT NULL AND NOT worker_launch_pending(n.name,n.launch_request_id,n.last_seen) ORDER BY n.name FOR UPDATE OF n")
             .fetch_all(&mut *tx).await?;
         if !rows.is_empty() {
             super::connection_budget::check_worker_connection_budget(&mut tx, rows.len() as i64)
@@ -197,7 +226,7 @@ impl PgStore {
         if unknown > 0 {
             tracing::warn!(
                 workers = unknown,
-                "cannot resume workers without a recorded launch request; start them through the normal launcher"
+                "cannot restore workers without a recorded launch request; start them through the normal launcher"
             );
         }
         Ok(rows.len())

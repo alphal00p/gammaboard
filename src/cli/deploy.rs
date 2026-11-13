@@ -116,7 +116,7 @@ async fn deploy_run(args: DeployArgs, runtime: &RuntimeContext) -> Result<()> {
 
     if args.resume_workers {
         let resumed: Result<usize> = async {
-            let count = store.enqueue_resumed_workers().await?;
+            let count = store.restore_saved_workers().await?;
             gammaboard::api::node_launch::resolve_local_requests(&store, runtime).await?;
             Ok(count)
         }
@@ -416,7 +416,7 @@ async fn cleanup_deploy(
     nginx: &mut Child,
 ) -> Result<()> {
     let sampler_drain_result: Result<()> = async {
-            let stopped = node_api::suspend_nodes_gracefully(
+            let stopped = node_api::stop_workers_for_restart(
                 store,
                 server_config.cleanup.clone(),
             )

@@ -313,6 +313,10 @@ pub(crate) async fn announce_node(
             shutdown_requested_at = CASE
                 WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.shutdown_requested_at
                 ELSE NULL
+            END,
+            resume_requested = CASE
+                WHEN nodes.uuid = EXCLUDED.uuid THEN nodes.resume_requested
+                ELSE false
             END
         WHERE nodes.uuid = EXCLUDED.uuid OR nodes.lease_expires_at <= now()
         RETURNING 1
@@ -806,22 +810,15 @@ pub(crate) async fn request_idle_nodes_shutdown(pool: &PgPool) -> Result<u64, sq
     Ok(result.rows_affected())
 }
 
-pub(crate) async fn consume_node_shutdown_request(
+pub(crate) async fn node_shutdown_requested(
     pool: &PgPool,
     node_uuid: &str,
 ) -> Result<bool, sqlx::Error> {
     let requested = sqlx::query_scalar(
         r#"
-        WITH cleared AS (
-            UPDATE nodes
-            SET
-                shutdown_requested_at = NULL,
-                updated_at = now()
-            WHERE uuid = $1
-              AND shutdown_requested_at IS NOT NULL
-            RETURNING 1
+        SELECT EXISTS(
+            SELECT 1 FROM nodes WHERE uuid = $1 AND shutdown_requested_at IS NOT NULL
         )
-        SELECT EXISTS(SELECT 1 FROM cleared)
         "#,
     )
     .bind(node_uuid)

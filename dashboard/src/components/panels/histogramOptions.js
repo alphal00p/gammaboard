@@ -66,19 +66,19 @@ const histogramEntryCountLine = (bin) => {
   return `entries: ${formatScientific(entryCount, 6)}`;
 };
 
-const histogramBasicLines = (bin) => {
+const histogramEstimateLines = (bin) => {
   const comparison = bin?.comparison;
   if (comparison) {
     const number = (v) => v == null ? "n/a" : formatScientific(v, 6);
     return [
       `stratified mean: ${number(comparison.stratified_mean)}; error: ${number(comparison.stratified_error)}`,
-      `basic mean: ${number(comparison.basic_mean)}; error: ${number(comparison.basic_error)}`,
-      `error reduction: ${number(comparison.error_ratio)}`,
+      `pooled mean: ${number(comparison.pooled_mean)}; error: ${number(comparison.pooled_error)}`,
+      `error reduction: ${number(comparison.error_reduction)}`,
     ];
   }
-  return bin?.basic ? [
-    `basic mean: ${formatScientific(bin.basic.mean, 6)}`,
-    `basic error: ${bin.basic.error == null ? "n/a" : formatScientific(bin.basic.error, 6)}`,
+  return bin?.pooled ? [
+    `pooled mean: ${formatScientific(bin.pooled.mean, 6)}`,
+    `pooled error: ${bin.pooled.error == null ? "n/a" : formatScientific(bin.pooled.error, 6)}`,
   ] : [];
 };
 
@@ -385,7 +385,7 @@ export const buildHistogramOption = ({
             return [
               `${escapeXml(label)} · ${escapeXml(primaryLabel)}: ${formatScientific(val, 6)}`,
               histogramEntryCountLine(bin),
-              ...histogramBasicLines(bin),
+              ...histogramEstimateLines(bin),
               ...(bin?.comparison ? [] : [`abs error: ${absErrorText}`, `rel error: ${relErrorText}`]),
               ...discreteBinInfoLines(bin, selectedView, metricDescriptors),
             ]
@@ -612,7 +612,7 @@ export const buildHistogramOption = ({
           return [
             `${escapeXml(`${formatScientific(Number(bin?.start), 6)} → ${formatScientific(Number(bin?.stop), 6)}`)} · ${escapeXml(primaryLabel)}: ${formatScientific(valueNumeric, 6)}`,
             histogramEntryCountLine(bin),
-            ...histogramBasicLines(bin),
+            ...histogramEstimateLines(bin),
             ...(bin?.comparison ? [] : [`abs error: ${absErrorText}`, `rel error: ${relErrorText}`]),
           ]
             .filter(Boolean)

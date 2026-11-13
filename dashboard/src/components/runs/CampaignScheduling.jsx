@@ -63,9 +63,8 @@ export default function CampaignScheduling({ runId, taskId }) {
         <Typography>Configured concurrency: {data.settings.allocation.max_active_runs} · Capacity with assigned workers: {data.capacity}</Typography>
         <Typography variant="body2">{data.samplers} samplers · {data.evaluators} evaluators · {Number(data.reserved_samples).toLocaleString()} reserved samples</Typography>
         <Typography variant="body2">Scheduled children: {(data.controller_output?.selected_child_run_ids ?? []).map((id) => data.children.find((child) => child.run_id === id)?.label ?? `#${id}`).join(", ") || "None"}</Typography>
-        {(data.controller_output?.selected_child_run_ids?.length ?? 0) > data.settings.allocation.max_active_runs && <Alert severity="info">Finishing outstanding grants before reducing concurrency.</Alert>}
         {data.capacity < data.settings.allocation.max_active_runs && <Alert severity="info">{data.samplers <= Math.floor(data.evaluators / data.settings.allocation.min_evaluators_per_run) ? "Sampler availability" : "Evaluator availability"} limits concurrency. Assign additional workers to the campaign to increase capacity.</Alert>}
-        <Typography variant="body2" color="text.secondary">Existing sample grants finish before a lower concurrency limit takes effect. Allocation windows and priorities apply to future grants. Training samples count toward the total budget.</Typography>
+        <Typography variant="body2" color="text.secondary">Applying settings immediately rechecks assignments. Workers checkpoint before switching; existing sample reservations are retained. New allocation windows apply to future grants. Training samples count toward the total budget.</Typography>
       </Stack></CardContent></Card>
       {!editable && <Alert severity="info">{authenticated ? "Completed or failed campaigns are read-only." : "Log in to change scheduling."}</Alert>}
       <Box sx={{ display:"grid", gridTemplateColumns:{xs:"1fr",md:"1fr 1fr"}, gap:2 }}>

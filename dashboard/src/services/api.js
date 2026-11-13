@@ -199,7 +199,7 @@ export const stopAllNodes = async (signal) => apiPost("/nodes/stop-all", {}, "Fa
 export const stopIdleNodes = async (signal) => apiPost("/nodes/stop-idle", {}, "Failed to stop idle nodes", signal);
 export const fetchOfflineNodes = (signal) => apiGet("/nodes/offline", "Failed to load offline nodes", signal);
 export const updateOfflineNode = (node, action) => apiPost(`/nodes/${encodeURIComponent(node.node_name)}/${action}`,
-  { node_uuid: node.node_uuid }, `Failed to ${action === "release-offline" ? "release assignment" : action} for ${node.node_name}`);
+  { node_uuid: node.node_uuid }, `Failed to ${action === "unassign-offline" ? "unassign" : action === "cancel-restoration" ? "cancel restoration" : action} for ${node.node_name}`);
 
 export const restartDatabase = async (signal) => { clearResourceCache(); return apiPost("/admin/db/restart", {}, "Failed to restart database", signal); };
 

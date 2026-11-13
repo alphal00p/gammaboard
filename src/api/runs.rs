@@ -71,6 +71,8 @@ struct RunDefinitionToml {
     integration_params: IntegrationParams,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_error: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     task_queue: Vec<RunTaskInput>,
 }
@@ -293,6 +295,7 @@ async fn create_run_with_parent(
             &processed.name,
             resolved_integration_params,
             processed.target.as_ref(),
+            processed.target_error.as_ref(),
             initial_tasks,
         )?
     };
@@ -309,6 +312,7 @@ async fn create_run_with_parent(
             &provenance,
             &integration_params,
             processed.target.as_ref(),
+            processed.target_error.as_ref(),
             domain,
             initial_stage_snapshot,
             initial_tasks,
@@ -351,12 +355,14 @@ fn canonical_run_toml(
     name: &str,
     integration_params: &IntegrationParams,
     target: Option<&serde_json::Value>,
+    target_error: Option<&serde_json::Value>,
     task_queue: &[RunTaskInput],
 ) -> Result<String, ApiError> {
     toml::to_string(&RunDefinitionToml {
         name: name.to_string(),
         integration_params: integration_params.clone(),
         target: target.cloned().filter(|value| !value.is_null()),
+        target_error: target_error.cloned(),
         task_queue: task_queue.to_vec(),
     })
     .map_err(|err| ApiError::Internal(format!("failed to serialize run TOML: {err}")))
@@ -530,7 +536,13 @@ pub async fn export_run_definition(
         .iter()
         .map(task_definition)
         .collect::<Vec<_>>();
-    canonical_run_toml(&run.run_name, &params, run.target.as_ref(), &tasks)
+    canonical_run_toml(
+        &run.run_name,
+        &params,
+        run.target.as_ref(),
+        run.target_error.as_ref(),
+        &tasks,
+    )
 }
 
 /// Duplication edits a definition and uses the ordinary creation path.
@@ -1155,12 +1167,13 @@ mod tests {
     #[test]
     fn definition_export_contains_configuration_without_execution_metadata() {
         let config = prepare_run(parse_run_add_config_toml(
-            "name = 'definition'\ntarget = { kind = 'scalar', value = 1.25 }\n[evaluator]\nkind = 'unit'\n",
+            "name = 'definition'\ntarget = { kind = 'scalar', value = 1.25 }\ntarget_error = 0.03\n[evaluator]\nkind = 'unit'\n",
         ).unwrap()).unwrap();
         let raw = canonical_run_toml(
             &config.name,
             &config.integration_params,
             config.target.as_ref(),
+            config.target_error.as_ref(),
             &[],
         )
         .unwrap();
@@ -1168,6 +1181,7 @@ mod tests {
         let restored = parse_run_add_config_toml(&renamed).unwrap();
         assert_eq!(restored.name, "copy");
         assert_eq!(restored.target, config.target);
+        assert_eq!(restored.target_error, config.target_error);
         let document: toml::Value = toml::from_str(&renamed).unwrap();
         assert!(document.get("gammaboard").is_none());
     }
@@ -1219,9 +1233,14 @@ task_queue = [{
             processed.original_toml, raw,
             "reproduction must preserve the submitted layout and comments"
         );
-        let canonical =
-            canonical_run_toml(&processed.name, params, processed.target.as_ref(), tasks)
-                .expect("serialize effective run");
+        let canonical = canonical_run_toml(
+            &processed.name,
+            params,
+            processed.target.as_ref(),
+            processed.target_error.as_ref(),
+            tasks,
+        )
+        .expect("serialize effective run");
         let restored = prepare_run(parse_run_add_config_toml(&canonical).unwrap()).unwrap();
         assert_eq!(restored.name, processed.name);
         assert_eq!(

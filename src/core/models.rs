@@ -232,8 +232,9 @@ pub struct RuntimeLogEvent {
     pub fields: JsonValue,
 }
 
+/// A mean and its standard error, independent of which estimator produced them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BasicEstimate {
+pub struct MeanEstimate {
     pub mean: f64,
     pub error: Option<f64>,
 }
@@ -245,7 +246,7 @@ pub enum EstimateKind {
     #[default]
     Pooled,
     Stratified,
-    Combined,
+    IndependentSum,
 }
 
 impl EstimateKind {
@@ -253,7 +254,7 @@ impl EstimateKind {
         match self {
             Self::Pooled => "pooled",
             Self::Stratified => "stratified",
-            Self::Combined => "combined",
+            Self::IndependentSum => "independent_sum",
         }
     }
 }
@@ -261,7 +262,8 @@ impl EstimateKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeasurementResult {
     pub estimator: EstimateKind,
-    pub basic: Option<BasicEstimate>,
+    /// Optional pooled comparison from the same draws, with its own mean/error.
+    pub pooled: Option<MeanEstimate>,
     pub name: AccumulatorMetricName,
     pub component: Option<String>,
     pub value: f64,

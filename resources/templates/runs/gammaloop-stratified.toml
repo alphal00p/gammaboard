@@ -4,6 +4,10 @@
 replacements = { state_folder = "states/showcase/gg_hhh", train_samples = 32768, sample_samples = 65536, seed = 41, inference_seed = 42, image_bins = 33, line_points = 257 }
 name = "gammaloop-four-phases"
 target = { kind = "vector", components = { real = -1.89203604685291554e-6, imag = 5.46603099163412881e-6 } }
+# Illustrative 1-sigma target errors for the shaded bands and target comparisons.
+# These are demonstration values, not uncertainties supplied by the benchmark.
+target_error = { real = 5.0e-7, imag = 1.5e-6 }
+
 [evaluator]
 kind = "gammaloop"
 state_folder = "$(state_folder:states/showcase/gg_hhh)"

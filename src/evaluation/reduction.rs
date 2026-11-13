@@ -404,9 +404,9 @@ mod tests {
                     .abs()
                         < 1e-12
                 );
-                assert!((bin["basic"]["mean"].as_f64().unwrap() - s / (p * 128.)).abs() < 1e-12);
+                assert!((bin["pooled"]["mean"].as_f64().unwrap() - s / (p * 128.)).abs() < 1e-12);
                 assert!(
-                    (bin["basic"]["error"].as_f64().unwrap()
+                    (bin["pooled"]["error"].as_f64().unwrap()
                         - ((q - s * s / 128.) / (128. * 127.)).sqrt() / p)
                         .abs()
                         < 1e-12

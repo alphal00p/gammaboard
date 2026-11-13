@@ -1,5 +1,9 @@
 # Statistics and presentation consistency — 2026-10-22
 
+> Historical validation record. “Basic” in this report is now called “Pooled”;
+> current terminology and observable behavior are specified in the
+> [execution model](../execution-model.md#estimator-terminology).
+
 This pass separates the partition from the selected estimator throughout results,
 measurements, plots, controllers and exports. Training remains pooled, including
 earlier proposals; the dashboard explicitly says that stratified statistics are

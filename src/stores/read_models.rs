@@ -62,6 +62,7 @@ pub struct RunProgress {
     pub domain: Option<Domain>,
     pub active_task_id: Option<String>,
     pub target: Option<serde_json::Value>,
+    pub target_error: Option<serde_json::Value>,
     pub nr_produced_samples: i64,
     pub nr_completed_samples: i64,
     pub nr_produced_samples_including_children: i64,

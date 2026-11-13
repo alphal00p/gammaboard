@@ -402,7 +402,7 @@ impl StratifiedAccumulatorState {
     /// Integral of the absolute component using the same stratum assignment.
     /// Squaring removes the sign, so stored second moments also determine its
     /// error. Older checkpoints without absolute sums remain unavailable.
-    fn absolute_estimate(&self, index: usize) -> Option<crate::core::BasicEstimate> {
+    fn absolute_estimate(&self, index: usize) -> Option<crate::core::MeanEstimate> {
         let mut mean = 0.0;
         let mut error = 0.0_f64;
         for stratum in &self.strata {
@@ -419,7 +419,7 @@ impl StratifiedAccumulatorState {
                 error = error.hypot((centered_second.max(0.0) / (n - 1.0)).sqrt());
             }
         }
-        Some(crate::core::BasicEstimate {
+        Some(crate::core::MeanEstimate {
             mean,
             error: self.uncertainty_ready().then_some(error),
         })
@@ -449,7 +449,7 @@ impl StratifiedAccumulatorState {
         Some(pooled)
     }
 
-    pub fn basic_estimates(&self) -> Option<Vec<crate::core::BasicEstimate>> {
+    pub fn pooled_estimates(&self) -> Option<Vec<crate::core::MeanEstimate>> {
         let pooled = self.pooled_moments()?;
         let width = pooled.mean.len();
         let n = pooled.attempts;
@@ -461,7 +461,7 @@ impl StratifiedAccumulatorState {
                 .mean
                 .iter()
                 .enumerate()
-                .map(|(j, &mean)| crate::core::BasicEstimate {
+                .map(|(j, &mean)| crate::core::MeanEstimate {
                     mean,
                     error: (n >= 2).then(|| {
                         (pooled.m2[j * width + j].max(0.0) / (n as f64 * (n - 1) as f64)).sqrt()
@@ -601,8 +601,8 @@ impl StratifiedAccumulatorState {
         }
         Some(MeasurementResult {
             estimator: crate::core::EstimateKind::Stratified,
-            basic: (selector.name == AccumulatorMetricName::Mean)
-                .then(|| self.basic_estimates().map(|v| v[index].clone()))
+            pooled: (selector.name == AccumulatorMetricName::Mean)
+                .then(|| self.pooled_estimates().map(|v| v[index].clone()))
                 .flatten(),
             name: selector.name,
             component: Some(
@@ -707,10 +707,10 @@ mod tests {
         let saved = serde_json::to_value(left).unwrap();
         let mut merged: StratifiedAccumulatorState = serde_json::from_value(saved).unwrap();
         merged.merge(right).unwrap();
-        let basic = merged.basic_estimates().unwrap();
-        for (basic, direct) in basic.iter().zip(&direct) {
-            assert!((basic.mean - direct.mean()).abs() < 1e-12);
-            assert!((basic.error.unwrap() - direct.stderr().unwrap()).abs() < 1e-12);
+        let pooled = merged.pooled_estimates().unwrap();
+        for (pooled, direct) in pooled.iter().zip(&direct) {
+            assert!((pooled.mean - direct.mean()).abs() < 1e-12);
+            assert!((pooled.error.unwrap() - direct.stderr().unwrap()).abs() < 1e-12);
         }
         let name = merged.plan.components[0].clone();
         let selected = merged
@@ -720,9 +720,9 @@ mod tests {
             })
             .unwrap();
         assert_eq!(selected.estimator, crate::core::EstimateKind::Stratified);
-        assert_eq!(selected.basic.as_ref().unwrap().mean, basic[0].mean);
-        assert!((selected.value - basic[0].mean).abs() > 1e-3);
-        assert_ne!(selected.uncertainty, basic[0].error);
+        assert_eq!(selected.pooled.as_ref().unwrap().mean, pooled[0].mean);
+        assert!((selected.value - pooled[0].mean).abs() > 1e-3);
+        assert_ne!(selected.uncertainty, pooled[0].error);
         let state = super::super::AccumulatorState::Stratified(Box::new(merged));
         let stop = super::super::metrics::estimate_for_stop(
             &state,
@@ -891,7 +891,7 @@ mod tests {
         let mean = state.metric(&selector).unwrap();
         assert_eq!(mean.value, 0.0);
         assert_eq!(mean.uncertainty, None);
-        assert_eq!(mean.basic.as_ref().unwrap().error, Some(0.0));
+        assert_eq!(mean.pooled.as_ref().unwrap().error, Some(0.0));
         let wrapped = super::super::AccumulatorState::Stratified(Box::new(state.clone()));
         assert!(
             super::super::metrics::estimate_for_stop(&wrapped, Some(&selector), None)

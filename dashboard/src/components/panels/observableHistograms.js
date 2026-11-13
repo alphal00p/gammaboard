@@ -4,15 +4,19 @@ export const OBSERVABLE_DISPLAYS = [
   { id: "estimate", label: "Estimate" },
   { id: "compare_estimates", label: "Compare estimates" },
   { id: "errors", label: "Compare errors" },
-  { id: "error_ratio", label: "Error reduction" },
+  { id: "error_reduction", label: "Error reduction" },
 ];
 export const stratumKey = (prefix) => prefix.join(",");
 
-export const resolveObservableView = (state, requested = {}) => ({
-  stratum: state.strata?.some((s) => stratumKey(s.prefix) === requested.stratum)
-    ? requested.stratum : "combined",
-  display: OBSERVABLE_DISPLAYS.some((v) => v.id === requested.display) ? requested.display : "estimate",
-});
+export const resolveObservableView = (state, requested = {}) => {
+  const stratum = state.strata?.some((s) => stratumKey(s.prefix) === requested.stratum)
+    ? requested.stratum : "combined";
+  return {
+    stratum,
+    estimator: stratum === "combined" && requested.estimator === "pooled" ? "pooled" : "stratified",
+    display: OBSERVABLE_DISPLAYS.some((v) => v.id === requested.display) ? requested.display : "estimate",
+  };
+};
 
 // No estimates are recomputed here. The host provides conditional and pooled
 // contributions on the same bin layout, with unavailable values left null.
@@ -22,49 +26,59 @@ export const observableHistogramView = (state, requested) => {
   const source = state.bins.map((bin, index) => {
     const pair = stratum?.bins[index];
     const estimate = stratum ? pair?.estimate : { mean: bin.value, error: bin.error };
-    const basic = stratum ? pair?.basic : bin.basic;
+    const pooled = stratum ? pair?.pooled : bin.pooled;
     const primaryError = finiteNumberOrNull(estimate?.error);
-    const basicError = finiteNumberOrNull(basic?.error);
+    const pooledError = finiteNumberOrNull(pooled?.error);
     return {
       ...bin,
       // Pooled raw diagnostics belong to the combined view, not an individual stratum.
       entry_count: stratum ? null : bin.entry_count,
       value: finiteNumberOrNull(estimate?.mean),
       error: primaryError,
-      basic,
+      pooled,
       comparison: {
         stratified_mean: finiteNumberOrNull(estimate?.mean),
         stratified_error: primaryError,
-        basic_mean: finiteNumberOrNull(basic?.mean),
-        basic_error: basicError,
-        error_ratio: primaryError > 0 && basicError != null ? basicError / primaryError : null,
+        pooled_mean: finiteNumberOrNull(pooled?.mean),
+        pooled_error: pooledError,
+        error_reduction: primaryError > 0 && pooledError != null ? pooledError / primaryError : null,
       },
     };
   });
   const display = selection.display;
-  const errorView = display === "errors" || display === "error_ratio";
-  const primaryLabel = display === "errors" ? "Stratified error"
-    : display === "error_ratio" ? "Basic / stratified error" : "Stratified";
-  const bins = source.map((bin) => ({
+  const errorView = display === "errors" || display === "error_reduction";
+  const curveLabel = (estimator) => {
+    if (estimator === "pooled") return errorView ? "Pooled error" : "Pooled";
+    if (stratum) return errorView ? "Stratum error" : "Stratum contribution";
+    return errorView ? "Stratified error" : "Stratified";
+  };
+  const curveBins = (estimator) => source.map((bin) => ({
     ...bin,
-    value: display === "errors" ? bin.error : display === "error_ratio" ? bin.comparison.error_ratio : bin.value,
-    error: errorView ? null : bin.error,
+    value: bin.comparison[`${estimator}_${errorView ? "error" : "mean"}`],
+    error: errorView ? null : bin.comparison[`${estimator}_error`],
   }));
+  const primaryLabel = display === "error_reduction" ? "Pooled / stratified error"
+    : curveLabel(selection.estimator);
+  const bins = display === "error_reduction"
+    ? source.map((bin) => ({ ...bin, value: bin.comparison.error_reduction, error: null }))
+    : curveBins(selection.estimator);
+  const otherEstimator = selection.estimator === "pooled" ? "stratified" : "pooled";
   const overlay = display === "compare_estimates" || display === "errors" ? [{
-    name: display === "errors" ? "Basic error" : "Basic (unstratified)",
+    name: curveLabel(otherEstimator),
     color: "#d97706",
-    bins: source.map((bin) => ({ ...bin, value: display === "errors" ? bin.comparison.basic_error : bin.comparison.basic_mean, error: display === "errors" ? null : bin.comparison.basic_error })),
+    bins: curveBins(otherEstimator),
   }] : [];
   return {
     selection, stratum, errorView,
     state: {
       ...state,
       bins,
+      estimator: selection.estimator,
       series_label: primaryLabel,
-      y_label: display === "errors" ? "Standard error" : display === "error_ratio" ? "Error reduction" : "Contribution",
+      y_label: display === "errors" ? "Standard error" : display === "error_reduction" ? "Error reduction" : "Contribution",
       sample_count: stratum?.sample_count ?? state.sample_count,
       selection,
-      reference_value: display === "error_ratio" ? 1 : undefined,
+      reference_value: display === "error_reduction" ? 1 : undefined,
       zero_baseline: errorView,
       stratum_prefix: stratum?.prefix ?? null,
       overlay_alignment: "shared_edges",

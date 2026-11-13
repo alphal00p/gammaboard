@@ -172,11 +172,13 @@ fn summary_projector() -> TaskPanelProjector {
                             Some(component) => component,
                             None => "Estimate",
                         },
-                        json!({"kind":"estimate", "value":result.value, "error":result.uncertainty, "estimator":result.estimator, "basic":result.basic, "sample_count":result.sample_count}),
+                        json!({"kind":"estimate", "value":result.value, "error":result.uncertainty, "estimator":result.estimator, "pooled":result.pooled, "sample_count":result.sample_count}),
                     )
                 })
                 .collect::<Vec<_>>();
-            if let Some(target) = super::sample::run_target_from_json(ctx.run_target) {
+            if let Some(target) =
+                super::sample::run_target_from_json(ctx.run_target, ctx.run_target_error)
+            {
                 for (index, result) in results.into_iter().flatten().enumerate() {
                     let component = result.component.as_deref();
                     let names = match component {
@@ -557,7 +559,7 @@ mod tests {
             results: vec![
                 MeasurementResult {
                     estimator: crate::core::EstimateKind::Pooled,
-                    basic: None,
+                    pooled: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("real".to_string()),
                     value: real.0,
@@ -566,7 +568,7 @@ mod tests {
                 },
                 MeasurementResult {
                     estimator: crate::core::EstimateKind::Pooled,
-                    basic: None,
+                    pooled: None,
                     name: AccumulatorMetricName::Mean,
                     component: Some("imag".to_string()),
                     value: imag.0,

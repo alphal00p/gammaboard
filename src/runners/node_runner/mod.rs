@@ -520,18 +520,15 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
                         // Assignment changes and shutdown requests need a bounded
                         // response time, not a database round trip per batch tick.
                         if Instant::now() >= next_control_poll {
-                            let shutdown_requested = match self
-                                .store
-                                .consume_node_shutdown_request(&self.node_uuid)
-                                .await
-                            {
-                                Ok(value) => value,
-                                Err(err) if err.is_database_error() => {
-                                    self.sleep_after_database_error(&err).await;
-                                    continue;
-                                }
-                                Err(err) => return Err(err),
-                            };
+                            let shutdown_requested =
+                                match self.store.node_shutdown_requested(&self.node_uuid).await {
+                                    Ok(value) => value,
+                                    Err(err) if err.is_database_error() => {
+                                        self.sleep_after_database_error(&err).await;
+                                        continue;
+                                    }
+                                    Err(err) => return Err(err),
+                                };
                             if shutdown_requested {
                                 info!("node shutdown requested by control-plane");
                                 break;

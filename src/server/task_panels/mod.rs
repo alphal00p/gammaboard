@@ -80,6 +80,7 @@ pub struct TaskPanelContext<'a> {
     pub source: TaskPanelCurrentSource<'a>,
     pub panel_state: &'a JsonValue,
     pub run_target: Option<&'a JsonValue>,
+    pub run_target_error: Option<&'a JsonValue>,
     pub completed_samples_per_second: Option<f64>,
     pub eta_seconds: Option<f64>,
     pub sampler_engine_diagnostics: Option<&'a JsonValue>,
@@ -174,6 +175,7 @@ fn project_current_panels(
     task: &RunTask,
     panel_state: &JsonValue,
     run_target: Option<&JsonValue>,
+    run_target_error: Option<&JsonValue>,
     completed_samples_per_second: Option<f64>,
     eta_seconds: Option<f64>,
     sampler_engine_diagnostics: Option<&JsonValue>,
@@ -197,6 +199,7 @@ fn project_current_panels(
                     source,
                     panel_state,
                     run_target,
+                    run_target_error,
                     completed_samples_per_second,
                     eta_seconds,
                     sampler_engine_diagnostics,
@@ -814,6 +817,7 @@ impl TaskPanelSource {
         task: &RunTask,
         panel_state: &JsonValue,
         run_target: Option<&JsonValue>,
+        run_target_error: Option<&JsonValue>,
         completed_samples_per_second: Option<f64>,
         eta_seconds: Option<f64>,
         sampler_engine_diagnostics: Option<&JsonValue>,
@@ -828,6 +832,7 @@ impl TaskPanelSource {
             task,
             panel_state,
             run_target,
+            run_target_error,
             completed_samples_per_second,
             eta_seconds,
             sampler_engine_diagnostics,
@@ -1265,18 +1270,20 @@ mod tests {
             "total_samples": 100, "selected_child_run_ids": [],
             "max_active_runs": 2, "sampler_workers": 2, "evaluator_workers": 4, "worker_capacity": 2, "draining": false, "children": [],
             "combined_measurement": {"status": "completed", "results": [
-                {"name": "mean","estimator":"pooled","basic":null, "component": "real", "value": 1.5, "uncertainty": 0.1, "sample_count": 100},
-                {"name": "mean","estimator":"pooled","basic":null, "component": "imag", "value": -0.5, "uncertainty": 0.2, "sample_count": 100}
+                {"name": "mean","estimator":"pooled","pooled":null, "component": "real", "value": 1.5, "uncertainty": 0.1, "sample_count": 100},
+                {"name": "mean","estimator":"pooled","pooled":null, "component": "imag", "value": -0.5, "uncertainty": 0.2, "sample_count": 100}
             ]}
         })).unwrap());
         let target =
             serde_json::json!({"kind": "vector", "components": {"real": 1.4, "imag": -0.7}});
+        let target_error = serde_json::json!({"real": 0.1});
         let panel_state = serde_json::json!({});
         let ctx = TaskPanelContext {
             task: &task,
             source: TaskPanelCurrentSource::Empty,
             panel_state: &panel_state,
             run_target: Some(&target),
+            run_target_error: Some(&target_error),
             completed_samples_per_second: None,
             eta_seconds: None,
             sampler_engine_diagnostics: None,
@@ -1309,7 +1316,10 @@ mod tests {
         );
         assert_eq!(entries[2].value["target"], 1.4);
         assert_eq!(entries[3].value["target"], -0.7);
-        assert!((entries[2].value["delta_sigma"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+        assert!(
+            (entries[2].value["delta_sigma"].as_f64().unwrap() - 1.0 / 2.0_f64.sqrt()).abs()
+                < 1e-12
+        );
         assert!((entries[3].value["delta_sigma"].as_f64().unwrap() - 1.0).abs() < 1e-12);
     }
 
@@ -1342,6 +1352,7 @@ mod tests {
                     source: TaskPanelCurrentSource::Persisted(&persisted),
                     panel_state: &panel_state,
                     run_target: None,
+                    run_target_error: None,
                     completed_samples_per_second: None,
                     eta_seconds: None,
                     sampler_engine_diagnostics: None,
@@ -1539,6 +1550,7 @@ mod tests {
                             None,
                             None,
                             None,
+                            None,
                             (state == RunTaskState::Active).then_some(&accumulator),
                             (state == RunTaskState::Completed).then_some(&stage),
                             Some(&persisted),
@@ -1669,6 +1681,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some(&accumulator),
                 None,
                 None,
@@ -1705,6 +1718,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 &[],
                 &[],
             )
@@ -1731,6 +1745,7 @@ mod tests {
                 TaskPanelCursor::default(),
                 &run_task,
                 &JsonValue::Object(Default::default()),
+                None,
                 None,
                 None,
                 None,

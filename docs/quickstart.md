@@ -47,7 +47,7 @@ kept out of the menu.
 | [Installation smoke](../resources/templates/runs/installation-smoke.toml) | Unit integral, no generated state or process dependency |
 | [Tetrahedron surface](../resources/templates/runs/tetrahedron-surface.toml) | Two inputs, three outputs, Havana stratification and the complete plot tour |
 | [Tetrahedron process](../resources/templates/runs/tetrahedron-process.toml) | The same vector function through the Python process SDK, with a uniform proposal |
-| [GammaLoop four phases](../resources/templates/runs/gammaloop-stratified.toml) | A native complex one-loop amplitude, native observables and +, −, +i, −i strata |
+| [GammaLoop four phases](../resources/templates/runs/gammaloop-stratified.toml) | A native complex one-loop amplitude, native observables, +, −, +i, −i strata, and target-uncertainty bands |
 | [Hyperparameter tuning](../resources/templates/runs/hyperparameter-tuning.toml) | Nine Voronoi-centre configurations, ranked by the tetrahedron's frozen-inference x error |
 | [Parameter scan](../resources/templates/runs/parameter-scan.toml) | A 3×3 grid of surface sharpness/shear, including scan heatmaps |
 | [Integration campaign](../resources/templates/runs/integration-campaign.toml) | Two independent GammaLoop replicas, averaged with coefficients 1/2 and concurrent allocation |
@@ -71,6 +71,13 @@ parts vary with the sampled loop momentum. The four Voronoi centres are exactly
 `[1,0]`, `[-1,0]`, `[0,1]`, `[0,-1]`,
 labelled `(0,0)`, `(0,1)`, `(1,0)`, `(1,1)` respectively.
 
+The four-phases card includes illustrative target errors `real = 5e-7` and
+`imag = 1.5e-6`. These demonstrate **Target ±1σ** bands in the mean plots and
+target comparisons using both sampling and reference errors. They are not
+uncertainties supplied by the upstream benchmark. Expand **real vs Target** or
+**imag vs Target** to inspect the individual errors and their combined comparison
+error. Set `target_error` to your reference's actual errors for scientific use.
+
 For the surface example, define
 `a = tanh(k cos(2πu))`, `b = tanh(k cos(2π(v+s u)))` and `F = (a,b,a b)`.
 The default `k=6, s=0` spends most of the unit square near the four tetrahedron
@@ -92,7 +99,9 @@ The surface run's tasks form a plot tour:
   integrand remains a real three-component vector. This is not an RGB image mode.
 
 The native GammaLoop inference task additionally provides per-stratum observable
-histograms, paired basic/stratified errors and error-reduction plots. Strata do not
+histograms. **View** selects **Combined · stratified**, **Combined · pooled**, or
+an individual **Stratum (prefix)**. **Display** offers paired estimates, paired
+pooled/stratified errors and error-reduction plots. Strata do not
 promise improved precision for every observable. CDF error bars remain unavailable
 without cross-bin covariance.
 

@@ -1308,6 +1308,7 @@ async fn get_run_task_output(
             &task,
             &request.request.panel_state,
             run.target.as_ref(),
+            run.target_error.as_ref(),
             completed_samples_per_second,
             eta_seconds,
             sampler_engine_diagnostics.as_ref(),
@@ -1717,14 +1718,31 @@ async fn get_offline_nodes(
     )
 }
 
-async fn resume_offline_node(
+async fn start_offline_node(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
     AxumJson(action): AxumJson<OfflineNodeAction>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    start_saved_worker(&state, &name, &action.node_uuid, false).await
+}
+
+async fn restore_offline_node(
+    State(state): State<AppState>,
+    AxumPath(name): AxumPath<String>,
+    AxumJson(action): AxumJson<OfflineNodeAction>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    start_saved_worker(&state, &name, &action.node_uuid, true).await
+}
+
+async fn start_saved_worker(
+    state: &AppState,
+    name: &str,
+    uuid: &str,
+    restore_only: bool,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let id = state
         .store
-        .resume_offline_node(&name, &action.node_uuid, state.allow_local_node_spawn)
+        .start_offline_node(name, uuid, state.allow_local_node_spawn, restore_only)
         .await
         .map_err(|e| match e {
             sqlx::Error::Protocol(message) => ApiError::BadRequest(message),
@@ -1734,14 +1752,14 @@ async fn resume_offline_node(
     json_response(serde_json::json!({"request_id":id}))
 }
 
-async fn release_offline_node(
+async fn unassign_offline_node(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
     AxumJson(action): AxumJson<OfflineNodeAction>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     update_offline_node(&state, &name, &action.node_uuid, false).await
 }
-async fn retire_offline_node(
+async fn cancel_worker_restoration(
     State(state): State<AppState>,
     AxumPath(name): AxumPath<String>,
     AxumJson(action): AxumJson<OfflineNodeAction>,
@@ -1752,13 +1770,14 @@ async fn update_offline_node(
     state: &AppState,
     name: &str,
     uuid: &str,
-    retire: bool,
+    cancel_restoration: bool,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let changed = state
-        .store
-        .release_offline_node(name, uuid, retire)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let changed = if cancel_restoration {
+        state.store.cancel_worker_restoration(name, uuid).await
+    } else {
+        state.store.unassign_offline_node(name, uuid).await
+    }
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
     if !changed {
         return Err(ApiError::BadRequest(
             "Node became live, changed identity, or has a pending launch. Refresh the node list."
@@ -1881,12 +1900,12 @@ async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Va
     }))
 }
 
-async fn suspend_workers(
+async fn save_workers_for_restart(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let saved = state
         .store
-        .suspend_workers()
+        .save_workers_for_restart()
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     json_response(serde_json::json!({"workers_saved": saved}))
@@ -1903,7 +1922,7 @@ async fn shutdown_control_process(
     );
     let store = state.store.clone();
     tokio::spawn(async move {
-        let result = node_api::suspend_nodes_gracefully(&store, state.cleanup).await;
+        let result = node_api::stop_workers_for_restart(&store, state.cleanup).await;
         match result {
             Ok(result) => tracing::info!(
                 source = "control",

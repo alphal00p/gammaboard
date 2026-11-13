@@ -131,7 +131,7 @@ pub struct PlotPoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimator: Option<crate::core::EstimateKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub basic: Option<crate::core::BasicEstimate>,
+    pub pooled: Option<crate::core::MeanEstimate>,
     /// Start a new segment without interpolating across missing observations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub break_before: Option<bool>,
@@ -149,7 +149,7 @@ impl PlotPoint {
     pub(crate) fn estimate(result: &crate::core::MeasurementResult) -> Self {
         Self {
             estimator: Some(result.estimator),
-            basic: result.basic.clone(),
+            pooled: result.pooled.clone(),
             ..Self::timeseries(result.sample_count as f64, result.value, result.uncertainty)
         }
     }
@@ -245,6 +245,8 @@ pub enum PanelState {
         smooth: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_error: Option<f64>,
     },
     MultiTimeseries {
         panel_id: String,
@@ -336,8 +338,8 @@ pub struct StrataFrame {
     pub wall_time_ms: Option<i64>,
     pub sampler_uptime_ms: Option<f64>,
     pub rows: Vec<StratumRow>,
-    pub total: Vec<Option<crate::core::BasicEstimate>>,
-    pub basic: Option<Vec<crate::core::BasicEstimate>>,
+    pub total: Vec<Option<crate::core::MeanEstimate>>,
+    pub pooled: Option<Vec<crate::core::MeanEstimate>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,7 +349,7 @@ pub struct StratumRow {
     pub matches: u64,
     pub probability: Option<f64>,
     /// Empty during pooled training: no conditional estimator is advertised.
-    pub estimates: Vec<Option<crate::core::BasicEstimate>>,
+    pub estimates: Vec<Option<crate::core::MeanEstimate>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,6 +467,7 @@ pub(crate) fn scalar_timeseries_panel_with_smoothing(
         points,
         smooth,
         target: None,
+        target_error: None,
     }
 }
 

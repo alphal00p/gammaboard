@@ -204,7 +204,7 @@ def test_running_down_only_cancels_its_own_jobs(workspace, monkeypatch):
     u.down(
         u.parser().parse_args(["down", "--worker-timeout", "0", "--cancel-timeout", "1"]), scheduler
     )
-    api.request.assert_called_once_with("/admin/workers/suspend")
+    api.request.assert_called_once_with("/admin/workers/save-for-restart")
     assert scheduler.canceled == ["20", "10"]
     assert not scheduler.jobs["30"].terminal
 

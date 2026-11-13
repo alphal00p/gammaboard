@@ -86,27 +86,35 @@ Assigning or pausing a child resolves to its root family. Pause checkpoints work
 and retains pool membership; unassign/stop removes membership. Expired workers
 are not live capacity. Launch history records connection attempts, not current health.
 
-Graceful deploy shutdown records recreatable workers and intended assignments.
-Start with `deploy --resume-workers` to recreate them; plain `deploy` leaves them
-stopped. Use `node start-local`, dashboard launch requests, or the cluster launcher
+Graceful deploy shutdown marks running workers **Saved for restart**, preserving
+their launch settings and intended assignments. Workers stopped separately before
+shutdown are not marked. `deploy --resume-workers` restores only marked workers;
+plain `deploy` leaves them offline with their markers intact. Use `node start-local`, dashboard launch requests, or the cluster launcher
 so launch settings are recorded. Manually started `node run` workers cannot be
 automatically recreated. A forced kill cannot save a new shutdown roster.
 
-**System → Workers → Offline / suspended** lists saved worker identities,
-reservations, last-seen times, and launcher availability. **Resume** queues the
-original launch recipe under the same name. **Release assignment** frees the run
-reservation while keeping the launch recipe. **Retire** also cancels automatic
-resumption. Live identities and pending launches cannot be changed through stale
-offline rows. Local resume respects the server's local-launch setting.
-The Offline tab's toolbar offers **Resume all**, **Release all**, and **Retire all**.
-Bulk operations validate each captured worker identity, skip unavailable workers,
-and report individual failures. Release and retirement are safe to repeat.
+**System → Workers → Offline** shows offline and starting workers. Restoration
+intent is a separate **Saved for restart** badge, not a suspended/retired status.
+**Start** explicitly launches one offline worker using its saved settings, even if
+it was stopped separately. **Restore saved workers** starts only marked workers;
+the server rechecks that marker, so a canceled restoration cannot be revived by a
+stale dashboard. **Cancel restoration** clears the marker without changing the
+saved assignment. **Unassign** releases the run reservation without canceling
+restoration. Both keep the launch recipe and historical data; there is no worker
+deletion action. **Stop** shuts down a live worker, releases its assignment and
+clears restoration intent.
+
+Bulk restore, unassign and cancellation validate each captured identity, skip
+ineligible workers and report individual failures. Live replacements and pending
+launches cannot be changed through stale offline rows. Local starts respect the
+server's local-launch setting. A newly registered process consumes any saved
+restart marker; heartbeats from the old process while draining do not.
 Launch reservations are per worker: an old group request still marked `starting`
 does not block a worker that already connected and subsequently stopped. Workers
 still awaiting their first registration for that launch remain protected.
 
 Assigning a fresh sampler to a standalone run atomically releases expired sampler
-reservations that have no pending launch, including their automatic-resume intent.
+reservations that have no pending launch, including their restoration intent.
 Live workers and queued/starting launches retain their slots; auto-assignment
 counts pending launches when planning capacity. Ordinary pool resume re-enables
 only live members; it does not recreate offline processes.
@@ -233,10 +241,10 @@ empty selections or hidden comparison plots are retained. Reference selection,
 density inputs, and discrete matching live under **Comparisons**; axis scales
 and discrete ordering live under **Axes and ordering**.
 One **Merge adjacent bins** control applies the same grouping to the result and
-all selected references (and the basic estimator in Compare estimates). The
+all selected references (and the comparison estimator in Compare estimates). The
 largest permitted factor is limited by the shortest selected histogram. This is
 a display transformation of the original bins; merged errors retain the
-uncorrelated-bin approximation. Error/error-ratio views retain their original
+uncorrelated-bin approximation. Compare errors and Error reduction retain their original
 bins. PDF plots use the same selections and grouping as the dashboard.
 The merge-factor up/down buttons each occupy half of the input's height;
 keyboard arrow keys and direct entry remain available.

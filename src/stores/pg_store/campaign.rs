@@ -2,7 +2,7 @@
 use super::PgStore;
 use crate::core::{
     IntegrationCampaignAllocationSpec, IntegrationCampaignStopCondition, RunTaskInput, RunTaskSpec,
-    SamplerQueueTuning, StoreError, canonical_task_toml,
+    RunTaskStore, SamplerQueueTuning, StoreError, canonical_task_toml,
 };
 use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
@@ -89,8 +89,11 @@ impl PgStore {
         allocation: IntegrationCampaignAllocationSpec,
         stop_condition: IntegrationCampaignStopCondition,
     ) -> Result<(), StoreError> {
+        // Keep controller ticks serialized through both saving and rechecking.
+        // The edit commits separately so the runner sees the new settings.
+        let mut controller_guard = self.pool().begin().await?;
+        lock_controller(&mut controller_guard).await?;
         let mut tx = self.pool().begin().await?;
-        lock_controller(&mut tx).await?;
         let (name, mut spec) = campaign_task(&mut tx, run, task).await?;
         if settings(&spec) != expected {
             return Err(StoreError::invalid_input(
@@ -118,6 +121,17 @@ impl PgStore {
         spec.validate().map_err(StoreError::invalid_input)?;
         save_task(&mut tx, task, name, spec).await?;
         tx.commit().await?;
+        if let Some(active) = self
+            .load_active_run_task(run)
+            .await?
+            .filter(|t| t.id == task)
+        {
+            crate::runners::integration_campaign::IntegrationCampaignRunner::new(self.clone(), run, active)
+                .tick().await.map_err(|error| StoreError::store(format!(
+                    "Settings saved, but the immediate assignment check failed: {error}. The controller will retry."
+                )))?;
+        }
+        controller_guard.commit().await?;
         Ok(())
     }
 

@@ -41,7 +41,7 @@ pub fn extract_accumulator_metric_with_runtime(
     };
     Ok(Some(MeasurementResult {
         estimator: variance.estimator,
-        basic: None,
+        pooled: None,
         name: AccumulatorMetricName::TimeNormalizedVariance,
         component: variance.component,
         value: variance.value / rate,
@@ -143,7 +143,7 @@ fn metric_for_scalar(
     };
     Some(MeasurementResult {
         estimator: crate::core::EstimateKind::Pooled,
-        basic: None,
+        pooled: None,
         name,
         component,
         value,

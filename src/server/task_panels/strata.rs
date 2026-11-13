@@ -1,7 +1,7 @@
 use super::{
     TaskPanelCurrentSourcePolicy, TaskPanelProjector, panel_projector_with_source, sample,
 };
-use crate::core::{AccumulatorConfig, BasicEstimate, EstimateKind};
+use crate::core::{AccumulatorConfig, EstimateKind, MeanEstimate};
 use crate::evaluation::AccumulatorState;
 use crate::server::panels::{
     PanelHistoryMode, PanelKind, PanelState, PanelWidth, StrataFrame, StratumRow, sized_panel_spec,
@@ -35,7 +35,7 @@ pub(super) fn projector(config: AccumulatorConfig) -> TaskPanelProjector {
 }
 
 fn panel(accumulator: AccumulatorState) -> Option<PanelState> {
-    let (components, estimator, rows, total, basic) = match &accumulator {
+    let (components, estimator, rows, total, pooled) = match &accumulator {
         AccumulatorState::Stratified(state) => {
             // Moments may also contain an auxiliary norm training projection.
             let width = state.strata[0].mean.len();
@@ -44,7 +44,7 @@ fn panel(accumulator: AccumulatorState) -> Option<PanelState> {
             let means = state.mean();
             let total = (0..components)
                 .map(|j| {
-                    means.as_ref().map(|m| BasicEstimate {
+                    means.as_ref().map(|m| MeanEstimate {
                         mean: m[j],
                         error: covariance
                             .as_ref()
@@ -63,7 +63,7 @@ fn panel(accumulator: AccumulatorState) -> Option<PanelState> {
                     probability: state.plan.probabilities.as_ref().map(|p| p[k]),
                     estimates: (0..components)
                         .map(|j| {
-                            (s.attempts > 0).then(|| BasicEstimate {
+                            (s.attempts > 0).then(|| MeanEstimate {
                                 mean: s.mean[j],
                                 error: s.standard_error(j),
                             })
@@ -76,7 +76,7 @@ fn panel(accumulator: AccumulatorState) -> Option<PanelState> {
                 EstimateKind::Stratified,
                 rows,
                 total,
-                state.basic_estimates().map(|mut estimates| {
+                state.pooled_estimates().map(|mut estimates| {
                     estimates.truncate(components);
                     estimates
                 }),
@@ -101,7 +101,7 @@ fn panel(accumulator: AccumulatorState) -> Option<PanelState> {
                 .components
                 .iter()
                 .map(|c| {
-                    (c.state.count > 0).then(|| BasicEstimate {
+                    (c.state.count > 0).then(|| MeanEstimate {
                         mean: c.state.mean(),
                         error: c.state.stderr(),
                     })
@@ -126,7 +126,7 @@ fn panel(accumulator: AccumulatorState) -> Option<PanelState> {
             sampler_uptime_ms: None,
             rows,
             total,
-            basic,
+            pooled,
         }],
     })
 }
@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(frames[0].total[0].as_ref().unwrap().mean, 1.);
         assert_eq!(frames[0].rows[0].estimates[0].as_ref().unwrap().mean, -2.);
         assert_eq!(frames[0].rows[1].estimates[0].as_ref().unwrap().mean, 3.);
-        assert_ne!(frames[0].basic.as_ref().unwrap()[0].mean, 1.);
+        assert_ne!(frames[0].pooled.as_ref().unwrap()[0].mean, 1.);
     }
 
     #[test]

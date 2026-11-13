@@ -8,7 +8,7 @@ import {
   CardContent,
   Typography,
 } from "@mui/material";
-import { formatDecimalSignificant, formatScientific } from "../../utils/formatters";
+import { estimatorLabel, formatDecimalSignificant, formatScientific } from "../../utils/formatters";
 import { asArray } from "../../utils/collections";
 import {
   EmptyPlotPanel,
@@ -174,7 +174,7 @@ const formatTimeseriesXAxisValue = (value, mode, isTimestamp, originMs) => {
   return isTimestamp ? formatElapsedTime(numeric - originMs) : formatAxisValue(numeric);
 };
 const formatActivityPercent = (value) => `${formatDecimalSignificant(value, 3)}%`;
-const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs, sources = [], formatValue = formatScientific) => (params) => {
+const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs, sources = [], formatValue = formatScientific, target = null) => (params) => {
   const seen = new Set();
   const entries = asArray(params).filter((entry) => {
     // ECharts axis tooltips can include silent custom series (range/error bars).
@@ -197,18 +197,23 @@ const buildTimeseriesTooltipFormatter = (mode, isTimestamp, originMs, sources = 
   const lines = entries.map((entry) => {
     const rawValue = Array.isArray(entry?.value) ? entry.value[1] : entry?.value;
     const label = `${entry?.marker ?? ""}${escapeXml(entry?.seriesName ?? "")}: ${rawValue != null && Number.isFinite(Number(rawValue)) ? formatValue(Number(rawValue)) : "n/a"}`;
+    if (entry.seriesName === "target" && target) {
+      return `${label}<br/>target error (1σ): ${formatScientific(target.error)}${target.error > 0
+        ? `<br/>target band: ${formatScientific(target.value - target.error)} to ${formatScientific(target.value + target.error)}`
+        : " (exact target)"}`;
+    }
     const source = sources.find((item) => item.label === entry.seriesName);
     const point = asArray(source?.points).findLast((p) => Number(p.x) === axisValue);
     if (!point?.estimator) return label;
     const error = point.error;
-    const basic = point.basic ? `<br/>basic mean: ${formatScientific(point.basic.mean)}; basic error: ${formatScientific(point.basic.error)}` : "";
-    return `${label}<br/>estimator: ${escapeXml(point.estimator)}; error: ${formatScientific(error)}${basic}`;
+    const pooled = point.pooled ? `<br/>pooled mean: ${formatScientific(point.pooled.mean)}; pooled error: ${formatScientific(point.pooled.error)}` : "";
+    return `${label}<br/>estimator: ${escapeXml(estimatorLabel(point.estimator))}; error: ${formatScientific(error)}${pooled}`;
   });
   return [header, ...lines].join("<br/>");
 };
 const estimatorCaption = (points) => {
   const estimators = [...new Set(asArray(points).map((point) => point.estimator).filter(Boolean))];
-  return estimators.length === 1 ? estimators[0] : estimators.length ? "mixed estimators" : null;
+  return estimators.length === 1 ? estimatorLabel(estimators[0]) : estimators.length ? "mixed estimators" : null;
 };
 const estimateSeriesLabel = (label, points) => {
   const estimator = estimatorCaption(points);
@@ -340,6 +345,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const { selected, onLegendChanged } = useTimeseriesLegend(panelId, value, onValueChange);
   const meanData = points.map((point) => [Number(point?.x), Number(point?.y)]);
   const targetValue = Number(state?.target);
+  const targetError = Math.max(0, Number(state?.target_error) || 0);
   const hasTargetLine = state?.target != null && Number.isFinite(targetValue);
   const errorBarData = buildErrorBarData(points);
   const xDomain = fitXDomain(points.map((point) => point.x));
@@ -352,8 +358,8 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
   const visibleDomain = useMemo(() => fitTimeseriesYDomain(points, visibleXRange, {
     mean: selected[meanLabel || "Value"] !== false,
     uncertainty: selected[errorLabel] !== false,
-    extraValues: hasTargetLine && selected.target !== false ? [targetValue] : [],
-  }), [hasTargetLine, points, targetValue, visibleXRange, selected, meanLabel, errorLabel]);
+    extraValues: hasTargetLine && selected.target !== false ? [targetValue - targetError, targetValue + targetError] : [],
+  }), [hasTargetLine, points, targetValue, targetError, visibleXRange, selected, meanLabel, errorLabel]);
   const bandSegments = useMemo(() => {
     const segments = [];
     for (let index = 1; index < points.length; index += 1) {
@@ -420,6 +426,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       legend: {
         selected,
         show: showLegend,
+        formatter: (name) => name === "target" ? (targetError > 0 ? "Target ±1σ" : "Target") : name,
         top: 0,
         left: "center",
         textStyle: { fontSize: 12 },
@@ -448,7 +455,8 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       },
       tooltip: {
         trigger: "axis",
-        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs, [{ label: meanLabel, points }]),
+        formatter: buildTimeseriesTooltipFormatter(historyXAxisMode, usesTimestampXAxis, xAxisOriginMs, [{ label: meanLabel, points }], formatScientific,
+          hasTargetLine ? { value: targetValue, error: targetError } : null),
       },
       dataZoom: buildDataZoom(zoomRange, true, true, yZoomRange, true),
       series: [
@@ -511,6 +519,11 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
                 smooth: false,
                 showSymbol: false,
                 lineStyle: { width: 1.4, type: "dashed", color: "#ca6702" },
+                markArea: targetError > 0 ? {
+                  silent: true,
+                  itemStyle: { color: "rgba(202, 103, 2, 0.18)" },
+                  data: [[{ yAxis: targetValue - targetError }, { yAxis: targetValue + targetError }]],
+                } : undefined,
                 connectNulls: false,
               },
             ]
@@ -529,6 +542,7 @@ const ScalarTimeseriesPanel = ({ title, state, value = undefined, onValueChange 
       errorLabel,
       state?.smooth,
       targetValue,
+      targetError,
       title,
       usesTimestampXAxis,
       visibleDomain,

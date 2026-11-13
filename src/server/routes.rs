@@ -52,9 +52,13 @@ pub(super) fn build_app(state: AppState) -> Router {
         .route("/runs/:id/auto-assign", post(auto_assign_run))
         .route("/nodes", get(get_nodes))
         .route("/nodes/offline", get(get_offline_nodes))
-        .route("/nodes/:id/resume", post(resume_offline_node))
-        .route("/nodes/:id/release-offline", post(release_offline_node))
-        .route("/nodes/:id/retire", post(retire_offline_node))
+        .route("/nodes/:id/start", post(start_offline_node))
+        .route("/nodes/:id/restore", post(restore_offline_node))
+        .route("/nodes/:id/unassign-offline", post(unassign_offline_node))
+        .route(
+            "/nodes/:id/cancel-restoration",
+            post(cancel_worker_restoration),
+        )
         .route("/nodes/:id/panels", get(get_node_panels))
         .route("/nodes/:id/assign", post(assign_node))
         .route("/nodes/:id/unassign", post(unassign_node))
@@ -100,7 +104,10 @@ pub(super) fn build_app(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(histogram_import::MAX_IMPORT_BYTES)),
         )
         .route("/admin/db/restart", post(restart_db))
-        .route("/admin/workers/suspend", post(suspend_workers))
+        .route(
+            "/admin/workers/save-for-restart",
+            post(save_workers_for_restart),
+        )
         .route("/admin/control/shutdown", post(shutdown_control_process))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

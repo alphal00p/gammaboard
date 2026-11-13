@@ -17,7 +17,11 @@ function StratifiedHistogram({ state, value, onValueChange, ...props }) {
   const view = readHistogramBundleView(activeValue);
   const projected = useMemo(() => observableHistogramView(state, view.observable), [state, view.observable]);
   const { selection, stratum, errorView } = projected;
-  const options = useMemo(() => [{ key: "combined", label: "Combined" }, ...state.strata.map((s) => ({ key: stratumKey(s.prefix), label: prefixLabel(s.prefix) }))], [state.strata]);
+  const options = useMemo(() => [
+    { key: "stratified", label: "Combined · stratified", stratum: "combined", estimator: "stratified" },
+    { key: "pooled", label: "Combined · pooled", stratum: "combined", estimator: "pooled" },
+    ...state.strata.map((s) => ({ key: stratumKey(s.prefix), label: `Stratum ${prefixLabel(s.prefix)}`, stratum: stratumKey(s.prefix), estimator: "stratified" })),
+  ], [state.strata]);
   const update = (patch) => {
     const next = writeHistogramBundlePanelValue(activeValue, { observableView: { ...selection, ...patch } });
     if (onValueChange) onValueChange(state.source_panel_id || state.panel_id, next, false);
@@ -46,12 +50,12 @@ function StratifiedHistogram({ state, value, onValueChange, ...props }) {
     <Autocomplete
       size="small" disableClearable
       options={options}
-      value={options.find((s) => s.key === selection.stratum)}
+      value={options.find((s) => s.stratum === selection.stratum && s.estimator === selection.estimator)}
       isOptionEqualToValue={(a, b) => a.key === b.key}
       filterOptions={(items, { inputValue }) => items.filter((item) => item.label.replace(/\s/g, "").toLowerCase().includes(inputValue.replace(/\s/g, "").toLowerCase()))}
-      onChange={(_, option) => update({ stratum: option.key })}
-      renderInput={(params) => <TextField {...params} label="Stratum" />}
-      sx={{ width: 205 }}
+      onChange={(_, option) => update({ stratum: option.stratum, estimator: option.estimator })}
+      renderInput={(params) => <TextField {...params} label="View" />}
+      sx={{ width: 230 }}
     />
     <TextField select label="Display" size="small" value={selection.display}
       onChange={(event) => update({ display: event.target.value })} sx={{ minWidth: 185 }}>
@@ -60,14 +64,14 @@ function StratifiedHistogram({ state, value, onValueChange, ...props }) {
   </>;
   const caption = <>
     <Typography variant="caption" color="text.secondary" display="block">{subtitle}. Each stratum shows its contribution to the integral.</Typography>
-    {projected.state.bins.some((bin) => bin.comparison.stratified_error == null) && <Typography variant="caption" color="text.secondary" display="block">
+    {(selection.estimator !== "pooled" || selection.display !== "estimate") && projected.state.bins.some((bin) => bin.comparison.stratified_error == null) && <Typography variant="caption" color="text.secondary" display="block">
       Stratified errors are pending sufficient coverage of every selected stratum.
     </Typography>}
     {(errorView || stratum) && props.uploadedBundles?.length > 0 && <Typography variant="caption" color="text.secondary" display="block">
       Uploaded reference curves are shown in the combined estimate views.
     </Typography>}
     {selection.display !== "estimate" && <Typography variant="caption" color="text.secondary" display="block">
-      Basic uses the same draws without stratified statistics. {selection.display === "error_ratio" ? "Above 1 means stratification reduces the error; zero or unavailable stratified errors leave gaps." : "Each error belongs to its own estimator."}
+      Pooled uses the same weighted draws, including zero contributions from stratum misses. {selection.display === "error_reduction" ? "Above 1 means stratification reduces the error; zero or unavailable stratified errors leave gaps." : "Each error belongs to its own estimator."}
     </Typography>}
   </>;
   return <HistogramPanel {...props} state={projected.state} value={renderedValue}

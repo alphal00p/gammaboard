@@ -587,7 +587,7 @@ impl ControlPlaneStore for RecordingStore {
         unreachable!("unused in test")
     }
 
-    async fn consume_node_shutdown_request(&self, _node_uuid: &str) -> Result<bool, StoreError> {
+    async fn node_shutdown_requested(&self, _node_uuid: &str) -> Result<bool, StoreError> {
         unreachable!("unused in test")
     }
 
@@ -602,6 +602,7 @@ impl ControlPlaneStore for RecordingStore {
         _provenance: &JsonValue,
         _integration_params: &JsonValue,
         _target: Option<&JsonValue>,
+        _target_error: Option<&JsonValue>,
         _domain: &Domain,
         _initial_stage_snapshot: &RunStageSnapshot,
         _initial_tasks: &[RunTaskInput],

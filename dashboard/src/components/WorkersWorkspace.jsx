@@ -181,7 +181,7 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
           ) : null}
         </Stack>
 
-        <WorkspaceTabs id="workers" label="Worker lists" value={nodeView} onChange={setNodeView} level="detail" tabs={[["live", "Live nodes"], ["offline", "Offline / suspended"]]}
+        <WorkspaceTabs id="workers" label="Worker lists" value={nodeView} onChange={setNodeView} level="detail" tabs={[["live", "Live nodes"], ["offline", "Offline"]]}
           loading={nodeView === "offline" ? offline.isLoading || Boolean(offline.busy) : isLoading || startingNodes || stoppingAllNodes || stoppingIdleNodes || unassigningAllNodes}
           loadingLabel={nodeView === "offline" ? offline.busy || "Loading offline workers…" : startingNodes ? "Requesting worker launch…" : stoppingAllNodes || stoppingIdleNodes ? "Requesting worker shutdown…" : unassigningAllNodes ? "Removing worker assignments…" : "Loading nodes…"} />
         <WorkspacePanel id="workers" value="offline" active={nodeView === "offline"}><OfflineNodesPanel controller={offline} /></WorkspacePanel>

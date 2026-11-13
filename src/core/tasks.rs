@@ -1760,7 +1760,7 @@ pub struct ParameterScanOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HyperparameterTrialOutput {
     pub objective_estimator: Option<super::EstimateKind>,
-    pub objective_basic: Option<super::BasicEstimate>,
+    pub objective_pooled: Option<super::MeanEstimate>,
     pub index: usize,
     pub parameters: serde_json::Value,
     #[serde(flatten)]
@@ -1801,6 +1801,10 @@ pub struct IntegrationCampaignChildOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationCampaignOutput {
+    /// Settings used for the last successful assignment check. A changed value
+    /// forces selection to be reconsidered even while sample grants remain.
+    #[serde(default)]
+    pub applied_scheduling: serde_json::Value,
     pub completed_children: usize,
     pub running_children: usize,
     pub total_children: usize,

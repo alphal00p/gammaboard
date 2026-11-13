@@ -1,9 +1,21 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs, fetchCampaign } from "./api";
+import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs, fetchCampaign, updateOfflineNode } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+test("restoration uses a distinct action from individual start and fences the worker identity", async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ request_id: "7" }) });
+  vi.stubGlobal("fetch", fetch);
+  const node = { node_name: "worker / one", node_uuid: "previous-process" };
+  for (const action of ["start", "restore", "cancel-restoration", "unassign-offline"]) {
+    await updateOfflineNode(node, action);
+    expect(fetch).toHaveBeenLastCalledWith(`/api/nodes/worker%20%2F%20one/${action}`, expect.objectContaining({
+      method: "POST", body: JSON.stringify({ node_uuid: "previous-process" }),
+    }));
+  }
 });
 
 const removalResponse = (status, error = null) => ({

@@ -158,7 +158,7 @@ fn real_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let target = run_target_from_json(ctx.run_target)
+            let target = run_target_from_json(ctx.run_target, ctx.run_target_error)
                 .and_then(|target| target.component(&["real", "value"]));
             Ok(sample_accumulator(ctx, &current_config)?
                 .and_then(real_estimate_history_panel)
@@ -184,8 +184,8 @@ fn imag_estimate_history_projector(accumulator_config: &AccumulatorConfig) -> Ta
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let target =
-                run_target_from_json(ctx.run_target).and_then(|target| target.component(&["imag"]));
+            let target = run_target_from_json(ctx.run_target, ctx.run_target_error)
+                .and_then(|target| target.component(&["imag"]));
             Ok(sample_accumulator(ctx, &current_config)?
                 .and_then(imag_estimate_history_panel)
                 .map(|panel| with_scalar_target(panel, target)))
@@ -255,7 +255,7 @@ fn estimate_summary_projector(accumulator_config: &AccumulatorConfig) -> TaskPan
         ),
         TaskPanelCurrentSourcePolicy::PersistedFirst,
         move |ctx| {
-            let run_target = run_target_from_json(ctx.run_target);
+            let run_target = run_target_from_json(ctx.run_target, ctx.run_target_error);
             Ok(sample_accumulator(ctx, &accumulator_config)?
                 .map(|accumulator| estimate_summary_panel(accumulator, run_target)))
         },
@@ -635,7 +635,7 @@ fn ess_history_panel(accumulator: AccumulatorState) -> Option<PanelState> {
 
 fn estimate_summary_panel(
     accumulator: AccumulatorState,
-    run_target: Option<VectorTarget>,
+    run_target: Option<crate::core::target::RunTarget>,
 ) -> PanelState {
     key_value_panel(
         "estimate_summary",
@@ -822,7 +822,7 @@ fn diagnostic_ratio(value: f64) -> JsonValue {
 
 fn base_estimate_summary_entries(
     accumulator: &AccumulatorState,
-    run_target: Option<VectorTarget>,
+    run_target: Option<crate::core::target::RunTarget>,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
     let stratified = matches!(accumulator, AccumulatorState::Stratified(_));
     let estimator = if stratified {
@@ -843,7 +843,7 @@ fn base_estimate_summary_entries(
         entries.push(key_value(&format!("component_{name}_mean"), &format!("{name} Mean"), json!({
             "kind": "estimate", "value": estimate.as_ref().map(|e| e.value),
             "error": estimate.as_ref().and_then(|e| e.uncertainty), "estimator": estimator,
-            "basic": estimate.as_ref().and_then(|e| e.basic.clone()), "sample_count": accumulator.sample_count(),
+            "pooled": estimate.as_ref().and_then(|e| e.pooled.clone()), "sample_count": accumulator.sample_count(),
         })));
         let absolute = crate::evaluation::extract_accumulator_metric(
             accumulator,
@@ -966,7 +966,7 @@ fn stratum_results_panel(accumulator: AccumulatorState) -> Option<PanelState> {
                     json!((n > 0).then(|| stratum.matches as f64 / n as f64))];
                 for j in 0..state.plan.components.len() {
                     row.push(json!({"kind":"estimate", "value": (n > 0).then_some(stratum.mean[j]),
-                        "error": stratum.standard_error(j), "estimator":"stratified", "basic":null, "sample_count":n}));
+                        "error": stratum.standard_error(j), "estimator":"stratified", "pooled":null, "sample_count":n}));
                 }
                 row.push(ess[k].map(JsonValue::from).unwrap_or_else(|| json!("unavailable")));
                 row.push(json!(if stratum.matches == 0 { "No matches observed; a zero integral is not established" }
@@ -1015,59 +1015,19 @@ fn stratum_results_panel(accumulator: AccumulatorState) -> Option<PanelState> {
     ))
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct VectorTarget {
-    components: BTreeMap<String, f64>,
+pub(super) fn run_target_from_json(
+    target: Option<&JsonValue>,
+    error: Option<&JsonValue>,
+) -> Option<crate::core::target::RunTarget> {
+    crate::core::target::RunTarget::parse(target, error)
+        .ok()
+        .flatten()
 }
 
-pub(super) fn run_target_from_json(run_target: Option<&JsonValue>) -> Option<VectorTarget> {
-    let value = run_target?;
-    if let Some(scalar) = value.as_f64() {
-        return Some(VectorTarget::single("value", scalar));
-    }
-    let object = value.as_object()?;
-    let kind = object
-        .get("kind")
-        .or_else(|| object.get("type"))
-        .and_then(JsonValue::as_str)
-        .map(|value| value.to_ascii_lowercase());
-    if matches!(kind.as_deref(), Some("scalar") | Some("value")) {
-        let scalar = object.get("value").and_then(JsonValue::as_f64)?;
-        return Some(VectorTarget::single("value", scalar));
-    }
-    let source = object
-        .get("components")
-        .or_else(|| object.get("values"))
-        .and_then(JsonValue::as_object)?;
-    let components = source
-        .iter()
-        .filter_map(|(name, value)| Some((name.clone(), value.as_f64()?)))
-        .collect::<BTreeMap<_, _>>();
-    (!components.is_empty()).then_some(VectorTarget { components })
-}
-
-impl VectorTarget {
-    fn integrand_component(&self, name: &str) -> Option<f64> {
-        match name {
-            "real" => self.component(&["real", "value"]),
-            "value" => self.component(&["value", "real"]),
-            _ => self.component(&[name]),
-        }
-    }
-    fn single(name: &str, value: f64) -> Self {
-        Self {
-            components: BTreeMap::from([(name.to_string(), value)]),
-        }
-    }
-
-    pub(super) fn component(&self, names: &[&str]) -> Option<f64> {
-        names
-            .iter()
-            .find_map(|name| self.components.get(*name).copied())
-    }
-}
-
-fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
+fn with_scalar_target(
+    panel: PanelState,
+    target: Option<crate::core::target::TargetComponent>,
+) -> PanelState {
     match panel {
         PanelState::ScalarTimeseries {
             panel_id,
@@ -1080,7 +1040,8 @@ fn with_scalar_target(panel: PanelState, target: Option<f64>) -> PanelState {
             x_axis,
             points,
             smooth,
-            target,
+            target: target.map(|t| t.value),
+            target_error: target.map(|t| t.error),
         },
         other => other,
     }
@@ -1091,10 +1052,11 @@ pub(super) fn target_comparison_entry(
     label: &str,
     value: f64,
     error: impl Into<Option<f64>>,
-    target: f64,
+    target: crate::core::target::TargetComponent,
     estimator: crate::core::EstimateKind,
 ) -> crate::server::panels::KeyValueEntry {
     let error = error.into();
+    let comparison_error = error.map(|error| error.hypot(target.error));
     key_value(
         key,
         label,
@@ -1103,9 +1065,11 @@ pub(super) fn target_comparison_entry(
             "estimator": estimator,
             "value": value,
             "error": error,
-            "target": target,
-            "delta_percent": delta_percent(value, target),
-            "delta_sigma": error.map(|e| delta_sigma(value, e, target)),
+            "target": target.value,
+            "target_error": target.error,
+            "comparison_error": comparison_error,
+            "delta_percent": delta_percent(value, target.value),
+            "delta_sigma": comparison_error.map(|e| delta_sigma(value, e, target.value)),
         }),
     )
 }
@@ -1113,7 +1077,7 @@ pub(super) fn target_comparison_entry(
 fn delta_sigma(value: f64, error: f64, target: f64) -> f64 {
     let sigma = error.abs();
     if sigma > 0.0 && sigma.is_finite() && value.is_finite() && target.is_finite() {
-        (value - target).abs() / sigma
+        (value - target) / sigma
     } else if (value - target).abs() == 0.0 {
         0.0
     } else {
@@ -1124,7 +1088,7 @@ fn delta_sigma(value: f64, error: f64, target: f64) -> f64 {
 fn delta_percent(value: f64, target: f64) -> f64 {
     let denominator = target.abs();
     if denominator > 0.0 && denominator.is_finite() && value.is_finite() && target.is_finite() {
-        (value - target).abs() / denominator * 100.0
+        (value - target) / denominator * 100.0
     } else if (value - target).abs() == 0.0 {
         0.0
     } else {
@@ -1870,6 +1834,56 @@ fn timing_segment(key: &str, label: &str, value_ms: f64, color: &str) -> TickBre
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reference_errors_use_quadrature_without_changing_sampling_error() {
+        let target = crate::core::target::TargetComponent {
+            value: 1.0,
+            error: 0.04,
+        };
+        let comparison = super::target_comparison_entry(
+            "test",
+            "Test",
+            0.9,
+            Some(0.03),
+            target,
+            crate::core::EstimateKind::Pooled,
+        )
+        .value;
+        assert_eq!(comparison["error"], 0.03);
+        assert_eq!(comparison["target_error"], 0.04);
+        assert_eq!(comparison["comparison_error"], 0.05);
+        assert!((comparison["delta_sigma"].as_f64().unwrap() + 2.0).abs() < 1e-12);
+        assert!((comparison["delta_percent"].as_f64().unwrap() + 10.0).abs() < 1e-12);
+        let unknown = super::target_comparison_entry(
+            "test",
+            "Test",
+            0.9,
+            None,
+            target,
+            crate::core::EstimateKind::Pooled,
+        )
+        .value;
+        assert!(
+            unknown["delta_sigma"].is_null(),
+            "a target error cannot replace an unknown sampling error"
+        );
+        let exact = crate::core::target::TargetComponent {
+            value: 1.0,
+            error: 0.0,
+        };
+        let comparison = super::target_comparison_entry(
+            "test",
+            "Test",
+            1.1,
+            0.05,
+            exact,
+            crate::core::EstimateKind::Pooled,
+        )
+        .value;
+        assert_eq!(comparison["comparison_error"], 0.05);
+        assert!((comparison["delta_sigma"].as_f64().unwrap() - 2.0).abs() < 1e-12);
+    }
+
     use super::*;
     use crate::Point;
     use crate::{VectorAccumulatorState, evaluation::ScalarAccumulatorState};
@@ -2018,8 +2032,10 @@ mod tests {
             (TrainingProjection::Abs, 81.0 / 97.0),
         ] {
             let state = fixture_with_training_projection(complex_samples(), Some(projection));
-            let entries =
-                base_estimate_summary_entries(&state, Some(VectorTarget::single("real", -4.0)));
+            let entries = base_estimate_summary_entries(
+                &state,
+                run_target_from_json(Some(&json!(-4.0)), None),
+            );
             let value = |key: &str| &entries.iter().find(|entry| entry.key == key).unwrap().value;
             assert_eq!(value("component_real_mean")["value"], -4.5);
             assert_eq!(value("component_imag_mean")["value"], 4.5);
@@ -2195,7 +2211,13 @@ mod tests {
                     .unwrap();
                 // The mean's current view also adds a target; it must retain
                 // the axis metadata used by the persisted history.
-                let panel = with_scalar_target(panel, Some(0.5));
+                let panel = with_scalar_target(
+                    panel,
+                    Some(crate::core::target::TargetComponent {
+                        value: 0.5,
+                        error: 0.0,
+                    }),
+                );
                 let json = serde_json::to_value(&panel).unwrap();
                 assert_eq!(json["x_axis"], "completed_samples");
                 assert_eq!(json["points"][0]["x"], 16.0);
@@ -2513,7 +2535,7 @@ mod stratification_panels {
         let value = |key: &str| &entries.iter().find(|entry| entry.key == key).unwrap().value;
         assert_eq!(value("component_value_mean")["value"], json!(1.0));
         assert!(value("component_value_mean")["error"].is_null());
-        assert_eq!(value("component_value_mean")["basic"]["mean"], json!(1.0));
+        assert_eq!(value("component_value_mean")["pooled"]["mean"], json!(1.0));
         assert!(
             !entries
                 .iter()

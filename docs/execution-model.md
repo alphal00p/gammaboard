@@ -489,10 +489,30 @@ its covariance is the sum of `sample_covariance_k / n_k`. Component errors are
 square roots of its diagonal. Norm training projection remains a separate scalar
 observable: its mean is the integral of the norm, not the norm of the vector mean.
 
+### Estimator terminology
+
+Use **Pooled** for statistics over all weighted draws together, and **Stratified**
+for the sum of conditional stratum estimates with errors combined in quadrature.
+A **Stratum contribution** is one conditional estimate. **Combined** describes
+the view containing all strata; **Independent sum** (`independent_sum` in data)
+describes a campaign's weighted sum of independent run estimates.
+
+**Error** means one standard error. Explicit fields use `pooled_mean`,
+`pooled_error`, `stratified_mean`, and `stratified_error`; `error_reduction` is
+`pooled_error / stratified_error`. Generic `{mean,error}` values use the Rust
+`MeanEstimate` type. The optional comparison field is `pooled`, including in
+measurements, plots, and histogram bins; tuning uses `objective_pooled`.
+
+Pooled describes an estimator, not whether samples have a stratum assignment.
+The pooled comparison in a stratified run retains masking and counts misses as
+zeros. An **unstratified run** is a separate run without stratification. Masked
+and unmasked describe sample values and feedback, not alternative names for these
+estimators. No unmasked observable estimator is implied by the Pooled label.
+
 ### Pooled comparison during stratified inference
 
 The primary estimate remains the stratified mean and its conditional error. The
-expanded display also shows `basic_mean` and `basic_err`: the pooled estimator of
+expanded display also shows `pooled_mean` and `pooled_error`: the pooled estimator of
 **the same masked, fully weighted draws**. This is a different mean, and does not
 predict a separately trained unstratified sampler's performance.
 
@@ -504,8 +524,8 @@ mean/covariance formula, including between-group mean differences. The resulting
 pooled error uses `N*(N-1)`. A pooled comparison can be available while the primary
 stratified error is still unavailable; it is never used as a fallback for stopping.
 
-Measurements carry `estimator` (`pooled`, `stratified`, or `combined`), primary
-`value`/`uncertainty`, and optional `basic: {mean,error}`. Controllers and tuning
+Measurements carry `estimator` (`pooled`, `stratified`, or `independent_sum`), primary
+`value`/`uncertainty`, and optional `pooled: {mean,error}`. Controllers and tuning
 continue to use only the selected primary estimate. Campaigns combine selected
 child estimates and their uncertainties; any pooled comparison is combined
 separately with the same coefficients. Relative errors and target comparisons
@@ -551,7 +571,7 @@ Empty strata make the final mean unavailable. Errors use the same coverage guard
 as the primary integral (32 attempts and two matches per stratum).
 
 Presentation payloads retain raw reference statistics and add per-bin `estimate`
-(mean/error), `basic` (pooled mean/error), and per-stratum sample counts. Dashboard,
+(mean/error), `pooled` (pooled mean/error), and per-stratum sample counts. Dashboard,
 campaign combinations and exports use the selected estimator. JSON preserves
 unavailable estimates; HwU requires available means/errors. No fictitious pooled
 sample count or raw moments are manufactured for a sum of stratum estimates.
@@ -560,16 +580,19 @@ of bins, ratio or normalization needs the corresponding joint statistics.
 CDF views show cumulative means without error bars until that covariance is available.
 
 Observable histograms with frozen stratum statistics expose two compact selectors.
-**Stratum** defaults to **Combined** and can search any complete prefix, including
-ragged prefixes. **Display** selects Estimate, Compare estimates, Compare errors,
+**View** defaults to **Combined · stratified**, offers **Combined · pooled**, and
+can search any **Stratum (prefix)**, including ragged prefixes. Individual strata
+show their conditional contribution. **Display** selects Estimate, Compare estimates, Compare errors,
 or Error reduction. Only the selected population is drawn; comparisons add at most
-one basic curve. Error views use absolute standard errors, which remain useful
+one comparison curve for the same population. Switching the combined estimator
+selects its own mean and error, including in exports; it never borrows the other
+estimator's error. Error views use absolute standard errors, which remain useful
 for integrals near zero, and hide value-only controls and uploaded value references.
-The error reduction is `basic_error / stratified_error`; values above one indicate
+The error reduction is `pooled_error / stratified_error`; values above one indicate
 an improvement. Zero or unavailable denominators leave gaps. Selections persist
 with the histogram's view preferences and are included in figure JSON/CSV exports.
 
-For a single stratum, the basic comparison is its contribution to the pooled
+For a single stratum, the pooled comparison is its contribution to the pooled
 estimator over all N draws: `S_kb/(p_k N)`, with error squared
 `(Q_kb - S_kb^2/N)/(p_k^2 N(N-1))`. Other strata's draws are zeros in this comparison.
 It uses the same samples, rather than a separately trained unstratified run.

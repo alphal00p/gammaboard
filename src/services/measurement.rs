@@ -498,7 +498,7 @@ mod tests {
         task.measurement_output = Some(TaskMeasurementOutput::Completed {
             results: vec![MeasurementResult {
                 estimator: crate::core::EstimateKind::Pooled,
-                basic: None,
+                pooled: None,
                 name: AccumulatorMetricName::Mean,
                 component: None,
                 value: 2.0,

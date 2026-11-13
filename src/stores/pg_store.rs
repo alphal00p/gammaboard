@@ -604,8 +604,8 @@ impl ControlPlaneStore for PgStore {
             .map_err(map_sqlx)
     }
 
-    async fn consume_node_shutdown_request(&self, node_uuid: &str) -> Result<bool, StoreError> {
-        queries::consume_node_shutdown_request(&self.pool, node_uuid)
+    async fn node_shutdown_requested(&self, node_uuid: &str) -> Result<bool, StoreError> {
+        queries::node_shutdown_requested(&self.pool, node_uuid)
             .await
             .map_err(map_sqlx)
     }
@@ -623,6 +623,7 @@ impl ControlPlaneStore for PgStore {
         provenance: &serde_json::Value,
         integration_params: &JsonValue,
         target: Option<&JsonValue>,
+        target_error: Option<&JsonValue>,
         domain: &Domain,
         initial_stage_snapshot: &RunStageSnapshot,
         initial_tasks: &[RunTaskInput],
@@ -655,10 +656,10 @@ impl ControlPlaneStore for PgStore {
                 run_toml,
                 provenance,
                 integration_params,
-                target,
+                target, target_error,
                 point_spec, parent_run_id, parent_task_id, spawn_kind, spawn_label
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id
             "#,
         )
@@ -667,6 +668,7 @@ impl ControlPlaneStore for PgStore {
         .bind(provenance)
         .bind(&sanitized_params)
         .bind(target)
+        .bind(target_error)
         .bind(sqlx::types::Json(domain))
         .bind(parent.map(|p| p.run_id))
         .bind(parent.and_then(|p| p.task_id))

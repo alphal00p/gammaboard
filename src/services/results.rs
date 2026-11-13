@@ -52,7 +52,7 @@ pub(crate) fn combine_independent_observables(
         .map(str::to_string)
         .or_else(|| histograms.keys().next().cloned());
     Some(json!({
-        "estimator": "combined",
+        "estimator": "independent_sum",
         "statistics_kind": "independent_child_estimates",
         "estimator_note": "Independent child observable estimates are summed with the campaign coefficients; errors are combined in quadrature.",
         "primary_histogram_name": primary_histogram_name,
@@ -119,7 +119,7 @@ fn combine_histogram(inputs: &[(f64, &JsonValue)]) -> Option<JsonValue> {
         bin.remove("sum_weights");
         bin.remove("sum_weights_squared");
         bin.remove("estimate");
-        bin.remove("basic");
+        bin.remove("pooled");
         bin.insert("value".into(), json!(value));
         bin.insert("error".into(), json!(error));
         add_bin_counts(
@@ -238,7 +238,7 @@ pub(crate) fn observable_payload(accumulator: &AccumulatorState) -> Option<JsonV
             .ok()?;
         payload["estimator"] = json!("stratified");
         payload["estimator_note"] = json!(
-            "Stratified bin means and errors; raw sums and basic estimates retain the pooled reference. Bin errors do not include covariance between bins."
+            "Stratified bin means and errors; raw sums and pooled estimates retain the pooled reference. Bin errors do not include covariance between bins."
         );
         payload["stratum_prefixes"] = json!(state.plan.partition.prefixes().collect::<Vec<_>>());
         let probabilities = state.plan.probabilities.as_ref()?;
@@ -270,7 +270,7 @@ pub(crate) fn observable_payload(accumulator: &AccumulatorState) -> Option<JsonV
                     if !state.uncertainty_ready() {
                         estimate.error = None;
                     }
-                    bin["basic"] = bin_estimate(bin, count)
+                    bin["pooled"] = bin_estimate(bin, count)
                         .map(|(mean, error)| json!({"mean":mean,"error":error}))
                         .unwrap_or(JsonValue::Null);
                     bin["estimate"] = json!(estimate);
@@ -281,7 +281,7 @@ pub(crate) fn observable_payload(accumulator: &AccumulatorState) -> Option<JsonV
             attach(&mut histogram["underflow_bin"], estimate.underflow);
             attach(&mut histogram["overflow_bin"], estimate.overflow);
             // Only estimates vary by stratum; coordinates and labels are shared.
-            // The basic contribution uses the total count, including zeros from
+            // The pooled contribution uses the total count, including zeros from
             // draws assigned to other strata, and removes the conditional p_k.
             histogram["strata"] = json!(
                 state
@@ -319,7 +319,7 @@ fn stratum_histogram_payload(
                 "mean": (histogram.sample_count > 0).then(|| bin.average(histogram.sample_count)),
                 "error": uncertainty_ready.then(|| bin.error(histogram.sample_count)),
             },
-            "basic": {
+            "pooled": {
                 "mean": (reference.sample_count > 0).then(|| bin.average(reference.sample_count) / probability),
                 "error": (reference.sample_count > 1).then(|| bin.error(reference.sample_count) / probability),
             },
@@ -570,7 +570,7 @@ mod tests {
         for (index, mean) in [9., 13.].into_iter().enumerate() {
             assert_eq!(histogram["bins"][index]["bin_id"], json!(10 + index));
             assert_eq!(histogram["bins"][index]["estimate"]["mean"], json!(mean));
-            assert_eq!(histogram["bins"][index]["basic"]["mean"], json!(mean));
+            assert_eq!(histogram["bins"][index]["pooled"]["mean"], json!(mean));
         }
         assert_eq!(
             histogram["strata"][0]["bins"][0]["estimate"]["mean"],

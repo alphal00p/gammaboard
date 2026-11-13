@@ -242,7 +242,10 @@ fn panel_states(
                 ),
             ],
         ),
-        text_panel("run_target", target_summary(run.target.as_ref())),
+        text_panel(
+            "run_target",
+            target_summary(run.target.as_ref(), run.target_error.as_ref()),
+        ),
     ];
     Ok(panels)
 }
@@ -252,30 +255,22 @@ fn current_task_label(task: Option<&RunTask>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
-fn target_summary(target: Option<&JsonValue>) -> String {
-    match target {
-        None => "none".to_string(),
-        Some(JsonValue::Object(value))
-            if value.get("kind").and_then(JsonValue::as_str) == Some("scalar") =>
-        {
-            value
-                .get("value")
-                .map(JsonValue::to_string)
-                .map(|value| format!("scalar({value})"))
-                .unwrap_or_else(|| "scalar".to_string())
-        }
-        Some(JsonValue::Object(value))
-            if value.get("kind").and_then(JsonValue::as_str) == Some("vector") =>
-        {
-            value
-                .get("components")
-                .or_else(|| value.get("values"))
-                .map(JsonValue::to_string)
-                .map(|value| format!("vector({value})"))
-                .unwrap_or_else(|| "vector".to_string())
-        }
-        Some(value) => serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
-    }
+fn target_summary(target: Option<&JsonValue>, error: Option<&JsonValue>) -> String {
+    let Ok(Some(target)) = crate::core::target::RunTarget::parse(target, error) else {
+        return "none".into();
+    };
+    target
+        .components
+        .iter()
+        .map(|(name, component)| {
+            if component.error > 0.0 {
+                format!("{name}: {} ± {}", component.value, component.error)
+            } else {
+                format!("{name}: {}", component.value)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Checkpoint lifecycle is persisted independently of live workers.

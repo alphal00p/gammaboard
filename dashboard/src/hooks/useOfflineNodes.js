@@ -21,15 +21,17 @@ export const useOfflineNodes = ({ enabled = true } = {}) => {
     if (busy || pending.has(identity(node))) return "Waiting for the worker update.";
     if (isLoading || error) return "Waiting for a fresh worker list.";
     if (node.launch_pending) return "This worker is awaiting registration for a queued launch.";
-    if (action === "resume") {
-      if (!node.can_resume) return "No saved launch settings; start this worker through its launcher.";
+    if (["restore", "cancel-restoration"].includes(action) && !node.restore_requested) return "This worker is not saved for restart.";
+    if (action === "unassign-offline" && node.pool_run_id == null) return "This worker has no reserved run assignment.";
+    if (["start", "restore"].includes(action)) {
+      if (!node.can_start) return "No saved launch settings; start this worker through its launcher.";
       if (node.backend === "local" && !allowLocalNodeSpawn) return "Local worker launch is disabled on this server.";
     }
     return null;
   };
   const eligible = (action) => nodes.filter((node) => !disabledReason(node, action));
   const act = async (action, node = null) => {
-    if (busyRef.current) return;
+    if (busyRef.current || (action === "start" && !node)) return;
     const targets = node ? (disabledReason(node, action) ? [] : [node]) : eligible(action);
     if (!targets.length) return;
     busyRef.current = true;
@@ -40,7 +42,7 @@ export const useOfflineNodes = ({ enabled = true } = {}) => {
       // Every request validates the captured identity and current lease. A bulk
       // action never silently targets new workers arriving during the operation.
       for (const [index, target] of targets.entries()) {
-        setBusy(`${action === "resume" ? "Resuming" : action === "retire" ? "Retiring" : "Releasing"} workers: ${index + 1}/${targets.length}…`);
+        setBusy(`${action === "cancel-restoration" ? "Canceling restoration for" : action === "unassign-offline" ? "Unassigning" : "Starting"} workers: ${index + 1}/${targets.length}…`);
         try {
           await updateOfflineNode(target, action);
           succeeded += 1;
@@ -49,11 +51,11 @@ export const useOfflineNodes = ({ enabled = true } = {}) => {
           failures.push(`${target.node_name}: ${err?.message || "Request failed"}`);
         }
       }
-      const verb = action === "resume" ? "Queued resume for" : action === "retire" ? "Retired" : "Released assignments for";
+      const verb = action === "cancel-restoration" ? "Canceled restoration for" : action === "unassign-offline" ? "Unassigned" : "Queued start for";
       const skipped = node ? 0 : nodes.length - targets.length;
       setMessage({
         severity: failures.length ? "warning" : "success",
-        text: `${verb} ${node && succeeded ? node.node_name : `${succeeded} worker${succeeded === 1 ? "" : "s"}`}.${skipped ? ` Skipped ${skipped} unavailable worker${skipped === 1 ? "" : "s"}.` : ""}${failures.length ? ` Failed: ${failures.join("; ")}` : ""}`,
+        text: `${verb} ${node && succeeded ? node.node_name : `${succeeded} worker${succeeded === 1 ? "" : "s"}`}.${skipped ? ` Skipped ${skipped} worker${skipped === 1 ? "" : "s"}.` : ""}${failures.length ? ` Failed: ${failures.join("; ")}` : ""}`,
       });
     } finally {
       busyRef.current = false;

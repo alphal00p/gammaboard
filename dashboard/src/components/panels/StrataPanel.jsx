@@ -193,7 +193,7 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
     ? [
         ...series,
         {
-          name: 'Total (all strata)',
+          name: 'Combined · stratified',
           color: '#818b98',
           points: totalPoints
         }
@@ -267,7 +267,7 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
           color: s.color
         },
         lineStyle: {
-          width: s.name.startsWith('Total') ? 3 : 1.5
+          width: s.name === 'Combined · stratified' ? 3 : 1.5
         }
       },
       uncertaintyBand(s.name, s.points, s.color),
@@ -399,7 +399,7 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
                     }
                   />
                 }
-                label="Show total"
+                label="Show combined estimate"
               />
             ) : (
               <FormControlLabel
@@ -424,8 +424,8 @@ export default function StrataPanel({ title, state, value = {}, onValueChange })
               : 'Pooled training statistics. Stratum plots show allocation and matches; stratified estimates are not used during training.'}
           </Typography>
           {conditional && total && (
-            <EstimateValueBlock label={`Total ${state.components[component]}`} value={{ kind: "estimate", value: total.mean,
-              error: total.error, estimator: "stratified", basic: latest.basic?.[component], sample_count: latest.samples }} />
+            <EstimateValueBlock label={`Combined ${state.components[component]}`} value={{ kind: "estimate", value: total.mean,
+              error: total.error, estimator: "stratified", pooled: latest.pooled?.[component], sample_count: latest.samples }} />
           )}
           <LazyChart
             ref={ref}

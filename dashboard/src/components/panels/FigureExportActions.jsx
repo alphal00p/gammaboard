@@ -53,10 +53,10 @@ export const figureCsv = (payload) => {
   let columns;
   let rows;
   if (state?.kind === "strata") {
-    columns = ["scope","samples","wall_time_ms","sampler_uptime_ms","estimator","prefix","component","attempts","matches","exact_probability","mean","error","basic_mean","basic_error"];
+    columns = ["scope","samples","wall_time_ms","sampler_uptime_ms","estimator","prefix","component","attempts","matches","exact_probability","mean","error","pooled_mean","pooled_error"];
     rows = state.frames.flatMap(frame => [
       ...frame.rows.flatMap(row => state.components.map((component,j) => ["stratum",frame.samples,frame.wall_time_ms,frame.sampler_uptime_ms,state.estimator,row.prefix,component,row.attempts,row.matches,row.probability,row.estimates[j]?.mean,row.estimates[j]?.error,null,null])),
-      ...state.components.map((component,j) => ["total",frame.samples,frame.wall_time_ms,frame.sampler_uptime_ms,state.estimator,null,component,frame.samples,null,null,frame.total[j]?.mean,frame.total[j]?.error,frame.basic?.[j]?.mean,frame.basic?.[j]?.error]),
+      ...state.components.map((component,j) => ["total",frame.samples,frame.wall_time_ms,frame.sampler_uptime_ms,state.estimator,null,component,frame.samples,null,null,frame.total[j]?.mean,frame.total[j]?.error,frame.pooled?.[j]?.mean,frame.pooled?.[j]?.error]),
     ]);
   } else if (state?.kind === "pdf_comparison") {
     const {data,geometry}=state, axes=rasterAxes(geometry);
@@ -77,11 +77,11 @@ export const figureCsv = (payload) => {
     rows = state.points.map(point=>["grid",point.x,point.y,point.target,point.pdf,point.actual_stratum,state.normalization,point.relative_mismatch,point.log_ratio,point.coverage]);
     for (const [x,pdf] of state.pdf_steps||[]) rows.push(["pdf_step",x,null,null,pdf,null,state.normalization,null,null,null]);
   } else if (Array.isArray(state?.bins)) {
-    columns = ["start","stop","bin_id","label","stratum","display","value","error","stratified_mean","stratified_error","basic_mean","basic_error","error_reduction","samples"];
+    columns = ["start","stop","bin_id","label","stratum","display","estimator","value","error","stratified_mean","stratified_error","pooled_mean","pooled_error","error_reduction","samples"];
     rows = state.bins.map((bin) => [bin.start, bin.stop, bin.bin_id, bin.label,
-      state.stratum_prefix ?? "combined", state.selection?.display ?? "estimate", bin.value, bin.error,
-      bin.comparison?.stratified_mean, bin.comparison?.stratified_error, bin.comparison?.basic_mean,
-      bin.comparison?.basic_error, bin.comparison?.error_ratio, state.sample_count]);
+      state.stratum_prefix ?? "combined", state.selection?.display ?? "estimate", state.estimator, bin.value, bin.error,
+      bin.comparison?.stratified_mean, bin.comparison?.stratified_error, bin.comparison?.pooled_mean,
+      bin.comparison?.pooled_error, bin.comparison?.error_reduction, state.sample_count]);
   } else if (Array.isArray(state?.rows) && Array.isArray(state?.columns)) {
     columns = [...state.columns];
     rows = state.rows.map((row) => [...row]);
@@ -92,20 +92,20 @@ export const figureCsv = (payload) => {
       }
     }
   } else {
-    columns = ["quantity", "x", "estimator", "value", "primary_error", "strat_err", "basic_mean", "basic_err", "uncertainty_status", "samples"];
-    const row = (name, x, value, error, estimator, basic, samples) => [name, x, estimator, value, error,
+    columns = ["quantity", "x", "estimator", "value", "primary_error", "stratified_error", "pooled_mean", "pooled_error", "uncertainty_status", "samples"];
+    const row = (name, x, value, error, estimator, pooled, samples) => [name, x, estimator, value, error,
       estimator === "stratified" ? error : null,
-      basic?.mean ?? (estimator === "pooled" ? value : null),
-      basic?.error ?? (estimator === "pooled" ? error : null),
+      pooled?.mean ?? (estimator === "pooled" ? value : null),
+      pooled?.error ?? (estimator === "pooled" ? error : null),
       error == null ? "unavailable" : "estimated_from_samples", samples];
     if (Array.isArray(state?.entries)) {
       rows = state.entries.filter((entry) => entry.value?.kind === "estimate").map((entry) =>
-        row(entry.label, null, entry.value.value, entry.value.error, entry.value.estimator, entry.value.basic, entry.value.sample_count));
+        row(entry.label, null, entry.value.value, entry.value.error, entry.value.estimator, entry.value.pooled, entry.value.sample_count));
     } else if (Array.isArray(state?.points) || Array.isArray(state?.series)) {
       const series = state.series || [{ label: payload.panel_id || "value", points: state.points }];
       rows = series.flatMap((s) => (s.points || []).map((point) => row(s.label, point.x, point.y,
         point.error,
-        point.estimator, point.basic, point.x_completed_samples_total ?? (state.x_axis === "completed_samples" ? point.x : null))));
+        point.estimator, point.pooled, point.x_completed_samples_total ?? (state.x_axis === "completed_samples" ? point.x : null))));
     } else return null;
   }
   if (!rows.length) return null;

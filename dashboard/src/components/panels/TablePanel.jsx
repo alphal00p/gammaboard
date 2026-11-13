@@ -28,7 +28,7 @@ import { useEffect, useRef, useState } from "react";
 import LoadingStatus from "../common/LoadingStatus";
 import { apiUrl } from "../../services/api";
 import { asArray } from "../../utils/collections";
-import { formatCentralValueWithError, formatComparisonDecimal, formatScientific } from "../../utils/formatters";
+import { estimatorLabel, formatCentralValueWithError, formatComparisonDecimal, formatScientific } from "../../utils/formatters";
 import DisclosureField from "../common/DisclosureField";
 import { fieldHelp } from "./fieldHelp";
 import { formatF64Full } from "../../utils/formatters";
@@ -281,7 +281,7 @@ const TablePanel = ({
     if (value?.kind === "estimate") return <EstimateValueBlock value={value} />;
     const help = payload?.column_help?.[columns[columnIndex]] || fieldHelp(columnKeys[columnIndex], columns[columnIndex], state?.panel_id);
     const columnFormat = payload?.column_formats?.[columns[columnIndex]];
-    let displayed = renderStructuredValue(value);
+    let displayed = columnKeys[columnIndex] === "estimator" ? estimatorLabel(value) : renderStructuredValue(value);
     if (["state", "status"].includes(columnKeys[columnIndex]) && typeof value === "string") displayed = <StatusChip status={value} />;
     else if (columnFormat === "scientific" && typeof value === "number") displayed = formatScientific(value, payload?.column_precision?.[columns[columnIndex]] ?? 6);
     else if (columnFormat === "comparison_decimal" && typeof value === "number") displayed = formatComparisonDecimal(value);

@@ -1,5 +1,9 @@
 # Hybrid stratification validation — 2026-10-22
 
+> Historical validation record. “Basic” in this report is now called “Pooled”;
+> current terminology and observable behavior are specified in the
+> [execution model](../execution-model.md#estimator-terminology).
+
 GammaLoop native and process observable output can now combine a stratified
 real/imaginary integral estimate with ordinary pooled histograms. Classification
 uses unweighted primary values. Both streams use the same mask and attempted

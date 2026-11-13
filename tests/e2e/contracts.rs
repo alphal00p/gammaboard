@@ -480,15 +480,15 @@ sampler = { config={kind="naive_monte_carlo"} }
             run.run_id,
         )
         .await?;
-    assert_eq!(store.suspend_workers().await?, 1); // Pending scheduler jobs are not saved.
+    assert_eq!(store.save_workers_for_restart().await?, 1); // Pending scheduler jobs are not saved.
     store.expire_node_lease("first").await?;
     let saved: bool = sqlx::query_scalar("SELECT resume_requested FROM nodes WHERE name=$1")
         .bind(&names[0])
         .fetch_one(&pool)
         .await?;
     assert!(saved);
-    assert_eq!(store.enqueue_resumed_workers().await?, 1);
-    assert_eq!(store.enqueue_resumed_workers().await?, 0);
+    assert_eq!(store.restore_saved_workers().await?, 1);
+    assert_eq!(store.restore_saved_workers().await?, 0);
     let requests = store.list_node_launch_requests().await?;
     let resumed = requests.iter().find(|r| r.id != id).unwrap();
     assert_eq!(resumed.backend, "external");
@@ -508,13 +508,13 @@ sampler = { config={kind="naive_monte_carlo"} }
             .run_id,
         run.run_id
     );
-    store.suspend_workers().await?;
+    store.save_workers_for_restart().await?;
     store.expire_node_lease("second").await?;
     // An operator pause while the fleet is down still clears the saved assignment.
     store.clear_desired_assignments_for_run(run.run_id).await?;
     assert!(store.get_desired_assignment(&names[0]).await?.is_none());
     store.request_node_shutdown(&names[0]).await?;
-    assert_eq!(store.enqueue_resumed_workers().await?, 0);
+    assert_eq!(store.restore_saved_workers().await?, 0);
     pool.close().await;
     db.cleanup().await?;
     Ok(())

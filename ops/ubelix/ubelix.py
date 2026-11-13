@@ -487,7 +487,7 @@ def down(args, slurm):
                 "control has no reachable node; use down --force after inspecting status"
             )
         try:
-            Api(manifest, job.node, args.admin_password).request("/admin/workers/suspend")
+            Api(manifest, job.node, args.admin_password).request("/admin/workers/save-for-restart")
         except (OSError, RuntimeError, urllib.error.URLError) as error:
             raise RuntimeError(
                 "API shutdown failed; use down --force to cancel verified owned jobs"

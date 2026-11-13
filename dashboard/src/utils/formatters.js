@@ -1,3 +1,5 @@
+export const estimatorLabel = (kind) => ({ pooled: "Pooled", stratified: "Stratified", independent_sum: "Independent sum" })[kind] || kind;
+
 export const numberOrNaN = (value) => value == null ? Number.NaN : Number(value);
 
 export const formatScientific = (value, digits = 6, fallback = "n/a") => {

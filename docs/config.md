@@ -29,6 +29,23 @@ The first evaluator establishes the run's domain; later evaluators must preserve
 it. `evaluator_requirements` and `sampler_requirements` match worker capabilities
 with `>=`, for example `sampler_requirements = { gpu = 1 }` at the run root.
 
+Optional `target_error` gives independent, one-standard-deviation uncertainties
+for the reference target. Use a number for a scalar target, or a partial map:
+
+```toml
+target = { kind = "vector", components = { real = 1.0, imag = 0.0 } }
+target_error = { real = 0.02 }
+```
+
+Omitted errors are zero; supplied errors must be finite, nonnegative and refer to
+target components. This also works for integration campaign targets. The signed
+comparison pull is `(estimate − target) / sqrt(sampling_error² + target_error²)`;
+the dashboard shows the target uncertainty in comparison details and as a shaded
+orange band around the dashed target line, labelled **Target ±1σ**. The legend
+toggles the target line and band together; the tooltip reports the target error
+and band limits. Omitted or zero errors show just the target line. Target errors
+do not change sampling errors or stopping criteria.
+
 ### Evaluators and samplers
 
 | Kind | Main settings |
@@ -186,6 +203,12 @@ incumbent and waiting children. Equal scores keep the incumbent. Continuing a
 child renews its quantum without restarting its sampler. Switching checkpoints
 its sampler/statistics and preserves the workers of other retained children.
 
+Applying campaign scheduling settings immediately rechecks assignments using the
+new concurrency, resource requirements and priorities, even during an unfinished
+quantum. Workers checkpoint before switching. Existing grants remain reserved
+and can resume later; changing the quantum size affects future grants. A changed
+stopping condition is rechecked too, including whether draining is still needed.
+
 Every campaign uses durable cumulative quantum grants, including campaigns with
 only an error target. Grants also enforce `max_total_samples` when specified.
 Error convergence stops granting new quanta, finishes outstanding grants, and
@@ -210,9 +233,9 @@ compared to discrete observables by index; review the selected matching mode.
 
 **Merge adjacent bins** changes only the display of continuous histograms. One
 integer factor applies to the result and all selected comparisons, including the
-basic estimator in Compare estimates. The maximum factor is limited by the
+comparison estimator in Compare estimates. The maximum factor is limited by the
 shortest selected histogram. Valid changes apply immediately while editing or
-using the input arrows; error and error-ratio views keep their original bins.
+using the input arrows; Compare errors and Error reduction keep their original bins.
 Bins are merged in coordinate order, preserving a smaller final group. Overlaps
 and merges across gaps are rejected. Underflow and overflow remain separate.
 Values are bin integrals and are summed; for an imported differential density,
@@ -236,7 +259,7 @@ Both **Observables** and **Combined Observables** offer **JSON** and **HwU**
 downloads of the entire observable bundle. JSON retains metadata and underflow/
 overflow results; HwU contains the central value and uncertainty of each regular
 bin. Campaign JSON uses GammaLoop-compatible histogram fields, with
-`statistics_kind = "derived_moments"` and `estimator = "combined"`: its moments
+`statistics_kind = "derived_moments"` and `estimator = "independent_sum"`: its moments
 encode the sum of independent child estimates and their quadrature uncertainty.
 Entry and diagnostic counters are actual sums. These derived moments are for
 reading/plotting and are not pooled samples suitable for resuming or ordinary

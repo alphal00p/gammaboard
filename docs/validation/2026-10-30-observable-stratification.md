@@ -1,5 +1,9 @@
 # Per-sample evaluation and observable stratification
 
+> Historical validation record. “Basic” in this report is now called “Pooled”;
+> current terminology and observable behavior are specified in the
+> [execution model](../execution-model.md#estimator-terminology).
+
 GammaBoard now pins GammaLoop `227e3534a5fb39f64710b6754cc63f34ed4c95a7`
 (the sample-observable separation merged in PR #242).
 

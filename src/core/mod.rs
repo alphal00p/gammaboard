@@ -6,21 +6,21 @@ pub mod batch_ids;
 pub mod errors;
 pub mod models;
 pub mod run_spec;
+pub mod target;
 pub mod tasks;
 pub mod traits;
 
 pub use batch_ids::next_batch_ids;
 pub use errors::{EngineError, EngineResultExt, StoreError, StoreResultExt};
 pub use models::{
-    AssignmentTarget, BasicEstimate, BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchStatus,
-    CompletedBatch, DerivedResultSnapshot, EstimateKind, EvaluationBatch,
-    EvaluatorPerformanceMetrics, EvaluatorPerformanceSnapshot, InsertBatchesMetrics,
-    InsertBatchesOutcome, MeasurementResult, NodeAssignmentUpdate, NodeCapabilities,
-    NodeLaunchRequest, QueueBlocker, RegisteredNode, ResultSourceRef, RollingMetricSnapshot,
-    RunSampleProgress, RunStageSnapshot, RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot,
-    SamplerPerformanceMetrics, SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics,
-    SamplerWorkRollingAverages, WorkerBusyMetrics, WorkerPerformanceSnapshot, WorkerReportContext,
-    WorkerRole,
+    AssignmentTarget, BatchClaim, BatchFailOutcome, BatchQueueCounts, BatchStatus, CompletedBatch,
+    DerivedResultSnapshot, EstimateKind, EvaluationBatch, EvaluatorPerformanceMetrics,
+    EvaluatorPerformanceSnapshot, InsertBatchesMetrics, InsertBatchesOutcome, MeanEstimate,
+    MeasurementResult, NodeAssignmentUpdate, NodeCapabilities, NodeLaunchRequest, QueueBlocker,
+    RegisteredNode, ResultSourceRef, RollingMetricSnapshot, RunSampleProgress, RunStageSnapshot,
+    RuntimeLogEvent, SamplerAggregatorPerformanceSnapshot, SamplerPerformanceMetrics,
+    SamplerQueueRollingAverages, SamplerQueueRuntimeMetrics, SamplerWorkRollingAverages,
+    WorkerBusyMetrics, WorkerPerformanceSnapshot, WorkerReportContext, WorkerRole,
 };
 pub use run_spec::{
     AccumulatorConfig, AccumulatorMomentConfig, BatchTransformConfig, CapabilityRequirements,

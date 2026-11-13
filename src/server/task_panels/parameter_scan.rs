@@ -125,8 +125,8 @@ fn scan_points_projector() -> TaskPanelProjector {
                 "uncertainty".to_string(),
                 "samples".to_string(),
                 "estimator".to_string(),
-                "basic_mean".to_string(),
-                "basic_err".to_string(),
+                "pooled_mean".to_string(),
+                "pooled_error".to_string(),
             ]);
             let payload = child_table_payload(
                 &rows,
@@ -298,7 +298,7 @@ fn scan_result_to_plot_point(x: f64, result: &MeasurementResult) -> PlotPoint {
         x,
         y,
         estimator: Some(result.estimator),
-        basic: result.basic.clone(),
+        pooled: result.pooled.clone(),
         x_completed_samples_total: Some(result.sample_count as f64),
         error: uncertainty,
         y_min: uncertainty.map(|error| y - error),
@@ -329,8 +329,8 @@ fn scan_point_to_table_rows(
                 json!(result.uncertainty),
                 json!(result.sample_count),
                 json!(result.estimator),
-                json!(result.basic.as_ref().map(|b| b.mean)),
-                json!(result.basic.as_ref().and_then(|b| b.error)),
+                json!(result.pooled.as_ref().map(|b| b.mean)),
+                json!(result.pooled.as_ref().and_then(|b| b.error)),
             ]);
             row
         })
@@ -496,6 +496,7 @@ mod tests {
             source: super::super::TaskPanelCurrentSource::Empty,
             panel_state,
             run_target: None,
+            run_target_error: None,
             completed_samples_per_second: None,
             eta_seconds: None,
             sampler_engine_diagnostics: None,
@@ -519,7 +520,7 @@ mod tests {
                         "measurement": {
                             "status": "completed",
                             "results": [
-                                {"name": metric,"estimator":"pooled","basic":null, "value": 1.0, "uncertainty": 0.1, "sample_count": 100}
+                                {"name": metric,"estimator":"pooled","pooled":null, "value": 1.0, "uncertainty": 0.1, "sample_count": 100}
                             ]
                         }
                     },
@@ -531,7 +532,7 @@ mod tests {
                         "measurement": {
                             "status": "completed",
                             "results": [
-                                {"name": metric,"estimator":"pooled","basic":null, "value": 1.5, "uncertainty": 0.2, "sample_count": 200}
+                                {"name": metric,"estimator":"pooled","pooled":null, "value": 1.5, "uncertainty": 0.2, "sample_count": 200}
                             ]
                         }
                     },
@@ -578,9 +579,9 @@ mod tests {
                     "measurement": {
                         "status": "completed",
                         "results": [
-                            {"name": "mean","estimator":"pooled","basic":null, "component": "real", "value": 2.0, "uncertainty": 0.2, "sample_count": 100},
-                            {"name": "mean","estimator":"pooled","basic":null, "component": "imag", "value": -1.0, "uncertainty": 0.1, "sample_count": 100},
-                            {"name": "variance","estimator":"pooled","basic":null, "component": "real", "value": 0.5, "sample_count": 100}
+                            {"name": "mean","estimator":"pooled","pooled":null, "component": "real", "value": 2.0, "uncertainty": 0.2, "sample_count": 100},
+                            {"name": "mean","estimator":"pooled","pooled":null, "component": "imag", "value": -1.0, "uncertainty": 0.1, "sample_count": 100},
+                            {"name": "variance","estimator":"pooled","pooled":null, "component": "real", "value": 0.5, "sample_count": 100}
                         ]
                     }
                 }
@@ -623,25 +624,25 @@ mod tests {
                         "index": 0,
                         "parameter_values": {"scale": 0.0, "offset": 1.0},
                         "status": "completed",
-                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 1.0, "sample_count": 0}]}
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","pooled":null, "value": 1.0, "sample_count": 0}]}
                     },
                     {
                         "index": 1,
                         "parameter_values": {"scale": 1.0, "offset": 1.0},
                         "status": "completed",
-                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 1.5, "sample_count": 0}]}
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","pooled":null, "value": 1.5, "sample_count": 0}]}
                     },
                     {
                         "index": 2,
                         "parameter_values": {"scale": 0.0, "offset": 2.0},
                         "status": "completed",
-                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 2.0, "sample_count": 0}]}
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","pooled":null, "value": 2.0, "sample_count": 0}]}
                     },
                     {
                         "index": 3,
                         "parameter_values": {"scale": 1.0, "offset": 2.0},
                         "status": "completed",
-                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","basic":null, "value": 2.5, "sample_count": 0}]}
+                        "measurement": {"status": "completed", "results": [{"name": metric,"estimator":"pooled","pooled":null, "value": 2.5, "sample_count": 0}]}
                     }
                 ]
             })));
@@ -683,14 +684,14 @@ mod tests {
                     "parameter_values": {"scale": 0.0},
                     "child_run_id": 11,
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 3.0, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","pooled":null, "value": 3.0, "sample_count": 0}]}
                 },
                 {
                     "index": 1,
                     "parameter_values": {"scale": 1.0},
                     "child_run_id": 12,
                     "status": "completed",
-                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","basic":null, "value": 2.0, "sample_count": 0}]}
+                    "measurement": {"status": "completed", "results": [{"name": "mean","estimator":"pooled","pooled":null, "value": 2.0, "sample_count": 0}]}
                 }
             ]
         })));
