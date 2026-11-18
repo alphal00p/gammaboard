@@ -359,6 +359,19 @@ contain all private RNG/adaptation state required by future `generate` and
 configuration is stored separately. `persisted_output()` is optional task output;
 it is not a replacement for `snapshot()`.
 
+Samplers may implement `checkpoint_committed(snapshot)`. After the database save
+succeeds, GammaBoard passes back the exact opaque state returned by `snapshot()`,
+without the saved-sampler envelope. This notification covers activation, periodic
+saves, pause and completion. Its default implementation does nothing.
+Callback errors do not undo the committed checkpoint or reset its cadence;
+notifications retry after 30 seconds while the runner is active. A newer save
+attempt supersedes any older pending notification, even if that attempt fails:
+an uncertain database commit must never be followed by a stale cleanup signal.
+Notifications may repeat or be missed on exit. Implement the callback idempotently
+and also establish committed state in `from_snapshot`. A successful notification
+does not authorize deleting artifacts still referenced by stages, other tasks or
+backups. Ordinary generation/feedback/diagnostic calls are not commit signals.
+
 Initial activation, periodic task thresholds, graceful pause, and task completion
 save checkpoints. Sample tasks default to a periodic save every 3600 seconds;
 `checkpoint.interval_samples` optionally adds a completed-sample threshold.
@@ -415,12 +428,23 @@ def from_snapshot(cls, *, snapshot, domain,
 ```
 
 `init_args` is the construction dictionary, not expanded keywords on restoration.
+The optional Python notification hook is:
+
+```python
+def checkpoint_committed(self, *, snapshot) -> None:
+    ...  # Mark this exact artifact/state as committed; cleanup follows retention policy.
+```
+
+The SDK ABC provides a no-op default; duck-typed samplers may omit it entirely.
 Optional SDK callbacks match the Rust defaults above. Python spellings are
 `pdf(xs_discrete, xs_continuous)` and `discrete_mass(subspaces)`; the latter receives
-a list of dictionaries mapping discrete dimension indices to fixed values.
-Unavailable PDF or mass entries are `None`, independently for each query. Known
-zero is `0.0`. Invalid numbers, including negative or non-finite densities and
-masses outside `[0,1]`, are errors. There is no global PDF normalization hook.
+a list of dictionaries mapping discrete dimension indices to fixed values. Both
+return a sequence or one-dimensional NumPy array, with one entry per query in the
+same order, or `None` for a wholly unavailable response. Entries may independently
+be `None`; known zero is `0.0`. PDF values are normalized joint densities and may
+exceed one. Discrete masses marginalize unspecified discrete dimensions and
+integrate continuous coordinates, and must lie in `[0,1]`. Negative or non-finite
+values are errors. There is no global PDF normalization hook.
 
 Process roles use separate subprocesses and synchronous RPC calls; metadata flows
 through GammaBoard, not a direct sampler-to-evaluator connection. Workers must

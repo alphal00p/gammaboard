@@ -40,6 +40,49 @@ fn accumulator() -> AccumulatorConfig {
 
 #[test]
 #[ignore = "requires Python and NumPy; set GAMMABOARD_PROCESS_PYTHON"]
+fn process_sampler_checkpoint_notifications_roundtrip() -> Result {
+    let directory = tempfile::tempdir()?;
+    let domain = Domain::continuous(1);
+    let log = directory.path().join("committed.jsonl");
+    let mut definition = config("sampler", &domain, 0, &directory.path().join("stats.json"));
+    definition["args"]["checkpoint_log_path"] = json!(log);
+    let config: SamplingConfig = serde_json::from_value(definition.clone())?;
+    let mut sampler = config.create(domain.clone(), None, json!({}))?;
+    let state = json!({"artifact_id":"B", "optional":null, "nested":[0,false]});
+    sampler.checkpoint_committed(&state)?;
+    assert!(
+        sampler
+            .checkpoint_committed(&json!({"reject_notification":true}))
+            .is_err()
+    );
+    // A callback exception does not kill the SDK process or corrupt later RPCs.
+    assert_eq!(sampler.generate(1)?.into_batch()?.nr_samples, 1);
+    sampler.checkpoint_committed(&state)?;
+    sampler.checkpoint_committed(&json!(false))?;
+    let recorded = fs::read_to_string(&log)?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<Vec<Value>, _>>()?;
+    assert_eq!(recorded, [state.clone(), state, json!(false)]);
+    drop(sampler);
+
+    let command = definition["command"].as_array_mut().unwrap();
+    *command.last_mut().unwrap() = json!("legacy_sampler");
+    let legacy_log = directory.path().join("legacy.jsonl");
+    definition["args"]["checkpoint_log_path"] = json!(legacy_log);
+    let config: SamplingConfig = serde_json::from_value(definition)?;
+    let mut sampler = config.create(domain, None, json!({}))?;
+    sampler.checkpoint_committed(&json!({"artifact_id":"ignored"}))?;
+    assert!(
+        !legacy_log.exists(),
+        "unadvertised optional RPCs must not be sent"
+    );
+    assert_eq!(sampler.generate(1)?.into_batch()?.nr_samples, 1);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Python and NumPy; set GAMMABOARD_PROCESS_PYTHON"]
 fn process_api_roundtrips() -> Result {
     let directory = tempfile::tempdir()?;
     let domain = Domain::rectangular_with_cardinalities(6, [3]);

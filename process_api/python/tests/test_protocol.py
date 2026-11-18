@@ -336,8 +336,69 @@ def test_optional_sampler_hooks_have_defaults_and_validate_normalization(monkeyp
     worker = runners._SamplerWorker(None)
     worker.sampler = type("Sampler", (), {})()
     assert worker.handle("persisted_output", {}) == {"output": None}
+    assert worker.handle("checkpoint_committed", {"snapshot": {}}) == {"ok": True}
+    from gammaboard_process import Sampler
+
+    assert Sampler.checkpoint_committed(worker.sampler, snapshot={}) is None
+    assert "checkpoint_committed" not in Sampler.__abstractmethods__
     with pytest.raises(ValueError, match="unknown method"):
         worker.handle("global_pdf_norm", {})
+
+
+@pytest.mark.parametrize("snapshot", [{"artifact_id": "B", "optional": None}, {}, [], 0, False])
+def test_checkpoint_notification_passes_exact_payload_by_keyword_and_can_repeat(snapshot):
+    from gammaboard_process.runners import _SamplerWorker
+
+    received = []
+
+    class Receiver:
+        def checkpoint_committed(self, *, snapshot):
+            received.append(snapshot)
+
+    worker = _SamplerWorker.__new__(_SamplerWorker)
+    worker.sampler = Receiver()
+    for _ in range(2):
+        assert worker.handle("checkpoint_committed", {"snapshot": snapshot}) == {"ok": True}
+    assert received == [snapshot, snapshot]
+    for params in [{}, {"snapshot": None}]:
+        with pytest.raises(ValueError, match="non-null snapshot"):
+            worker.handle("checkpoint_committed", params)
+
+
+def test_checkpoint_notification_errors_are_reported_without_poisoning_worker():
+    from gammaboard_process.runners import _SamplerWorker
+
+    class Receiver:
+        def checkpoint_committed(self, *, snapshot):
+            raise RuntimeError("cleanup failed")
+
+        def diagnostics(self):
+            return {"alive": True}
+
+    worker = _SamplerWorker.__new__(_SamplerWorker)
+    worker.sampler = Receiver()
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        worker.handle("checkpoint_committed", {"snapshot": {}})
+    assert worker.handle("diagnostics", {}) == {"diagnostics": {"alive": True}}
+
+
+def test_pdf_and_discrete_mass_return_contracts():
+    import numpy as np
+    from gammaboard_process.runners import _probabilities
+
+    for mass in [False, True]:
+        assert _probabilities(None, 3, mass=mass) is None
+        assert _probabilities([0.0, None, 1.0], 3, mass=mass) == [0.0, None, 1.0]
+        assert _probabilities(np.array([0.25, 0.75]), 2, mass=mass) == [0.25, 0.75]
+        assert _probabilities(np.array([None, 0.5], dtype=object), 2, mass=mass) == [None, 0.5]
+        for invalid in [[-0.1], [np.nan], [np.inf]]:
+            with pytest.raises(ValueError, match="invalid normalized"):
+                _probabilities(invalid, 1, mass=mass)
+        with pytest.raises(ValueError, match="size mismatch"):
+            _probabilities([0.5], 2, mass=mass)
+    assert _probabilities([2.0], 1, mass=False) == [2.0]
+    with pytest.raises(ValueError, match="invalid normalized"):
+        _probabilities([2.0], 1, mass=True)
 
 
 def test_materializer_and_transform_share_batch_type(monkeypatch):
@@ -449,7 +510,9 @@ def test_sampler_stage_handoff_is_distinct_from_exact_recovery(monkeypatch):
         },
     )
     assert (worker.sampler.model, worker.sampler.produced) == (7, 0)
-    worker.handle("initialize", {**params, "initialization": {"kind": "fresh"}})
+    assert worker.handle("initialize", {**params, "initialization": {"kind": "fresh"}}) == {
+        "ok": True, "checkpoint_committed": True,
+    }
     assert worker.sampler.produced == 0
     with pytest.raises(ValueError, match="tagged"):
         worker.handle("initialize", params)

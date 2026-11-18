@@ -84,6 +84,13 @@ callbacks use `eval` and `ObservableBatch`; aggregated state, callback weighting
 and masking are removed. Native integration trigger adapters cannot implement
 this contract. The MadSpace per-sample evaluator remains supported.
 
+The optional checkpoint notification RPC is an additive v10 extension. A sampler
+worker advertises `"checkpoint_committed": true` alongside `"ok": true` in its
+initialization response. GammaBoard sends the RPC only to workers advertising it,
+with `{"snapshot": <committed opaque state>}` and expects `{"ok": true}`. The Python
+SDK dispatches it to the optional keyword-only `checkpoint_committed(snapshot=...)`
+hook; absent hooks acknowledge without action. The saved-state format is unchanged.
+
 Database model 8 and checkpoint model 6 retain conditional histogram bundles for
 each stratum. Older pooled-only histogram checkpoints cannot be upgraded: begin
 with a fresh database and matching workers/SDK. Queue input envelope 4 is unchanged.

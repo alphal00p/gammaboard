@@ -155,6 +155,7 @@ pub struct SamplerAggregatorRunner<S> {
     last_checkpoint_at: Instant,
     last_checkpoint_samples: i64,
     last_checkpoint_attempt_at: Option<Instant>,
+    pending_checkpoint_notification: Option<PendingCheckpointNotification>,
     pending_aggregation_flush: Option<PendingAggregationFlushTask>,
     runtime_state: SamplerProgress,
     completed_samples_per_second: f64,
@@ -313,6 +314,11 @@ struct StopConditionStatus {
     absolute_error_reached: bool,
     relative_error_reached: bool,
     min_samples_reached: bool,
+}
+
+struct PendingCheckpointNotification {
+    snapshot: JsonValue,
+    last_attempt_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -482,6 +488,7 @@ where
             last_checkpoint_at: now,
             last_checkpoint_samples: nr_completed_samples,
             last_checkpoint_attempt_at: None,
+            pending_checkpoint_notification: None,
             pending_aggregation_flush: None,
             runtime_state,
             completed_samples_per_second: 0.0,
@@ -756,6 +763,7 @@ where
     pub async fn tick(&mut self) -> Result<bool, RunnerError> {
         crate::runners::activity::context(self.run_id, self.task.id);
         crate::runners::activity::set("waiting");
+        self.notify_checkpoint_committed();
         self.refresh_live_queue_tuning().await?;
         let QueueTickResult {
             completed,
@@ -979,12 +987,21 @@ where
                 None
             };
             let _io = self.busy.io();
+            // A failed COMMIT can have an uncertain outcome. Once we attempt a
+            // newer save, never retry an older notification that could tell the
+            // sampler to discard the newer artifact. Recovery resolves ambiguity.
+            self.pending_checkpoint_notification = None;
             self.store
                 .save_sampler_checkpoint(self.run_id, &checkpoint, stage.as_ref())
                 .await?;
             self.last_checkpoint_at = Instant::now();
             self.last_checkpoint_samples = checkpoint.completed_samples;
             self.last_checkpoint_attempt_at = None;
+            self.pending_checkpoint_notification = Some(PendingCheckpointNotification {
+                snapshot: checkpoint.sampler_snapshot.state,
+                last_attempt_at: None,
+            });
+            self.notify_checkpoint_committed();
             Ok(())
         }
         .await;
@@ -994,6 +1011,34 @@ where
             })).await;
         }
         result
+    }
+
+    /// Notifications are advisory: callback failure must not turn a committed
+    /// checkpoint into a failed save or reset its cadence. Retry in order while
+    /// this runner remains active; a newer save supersedes the pending notice.
+    fn notify_checkpoint_committed(&mut self) {
+        let Some(pending) = self.pending_checkpoint_notification.as_mut() else {
+            return;
+        };
+        if pending
+            .last_attempt_at
+            .is_some_and(|at| at.elapsed() < CHECKPOINT_RETRY_INTERVAL)
+        {
+            return;
+        }
+        let _io = self.busy.io();
+        match self.sampler.checkpoint_committed(&pending.snapshot) {
+            Ok(()) => self.pending_checkpoint_notification = None,
+            Err(error) => {
+                pending.last_attempt_at = Some(Instant::now());
+                tracing::warn!(
+                    run_id = self.run_id,
+                    task_id = self.task.id,
+                    error = %error,
+                    "checkpoint is committed but sampler notification failed; retrying while active"
+                );
+            }
+        }
     }
 
     async fn drain_local_work_on_stop(&mut self) -> Result<(), RunnerError> {

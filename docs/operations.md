@@ -338,6 +338,15 @@ recovery boundary. Database save failures retain the last successful checkpoint
 and retry after 30 seconds while sampling continues. External sampler artifact
 requirements remain unchanged.
 
+An optional sampler `checkpoint_committed` callback runs after a successful
+database save. It receives the snapshot payload and may update artifact retention
+bookkeeping. Callback failure leaves the checkpoint committed; the notification
+retries after 30 seconds while the runner remains active. A newer checkpoint
+attempt supersedes older pending notifications. A crash may prevent delivery, so
+restoring a snapshot must also establish which artifact is committed. Keep external
+checkpoint files immutable and retain any versions required by saved stages or
+backups; a later sampler call does not imply the previous save succeeded.
+
 Check **Checkpoint recovery** or `run inspect` for the last committed checkpoint.
 Graceful pause/stop saves sampler state, accumulator, pending feedback, and progress
 together. A crash restores that boundary and replays later work: live progress may

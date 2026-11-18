@@ -135,6 +135,10 @@ impl Sampler for ProcessSampler {
         self.worker.snapshot()
     }
 
+    fn checkpoint_committed(&mut self, snapshot: &Value) -> Result<(), EngineError> {
+        self.worker.checkpoint_committed(snapshot)
+    }
+
     fn persisted_output(&mut self) -> Result<Option<Value>, EngineError> {
         let output = self.worker.request_field("persisted_output", "output")?;
         Ok((!output.is_null()).then_some(output))
@@ -150,6 +154,7 @@ impl Sampler for ProcessSampler {
 struct ProcessSamplerWorker {
     process: ProcessWorker,
     domain: Domain,
+    checkpoint_notifications: bool,
 }
 
 impl ProcessSamplerWorker {
@@ -166,7 +171,11 @@ impl ProcessSamplerWorker {
             "process sampler",
             params.shutdown_grace_seconds,
         )?;
-        let mut worker = Self { process, domain };
+        let mut worker = Self {
+            process,
+            domain,
+            checkpoint_notifications: false,
+        };
         worker.send_init(params.args.clone(), initialization, evaluator_metadata)?;
         Ok(worker)
     }
@@ -191,7 +200,27 @@ impl ProcessSamplerWorker {
                 }),
             )
             .map_err(EngineError::build)?;
+        // An optional protocol-v10 extension. Workers that do not advertise it
+        // never receive the new RPC, including older SDKs and custom workers.
+        self.checkpoint_notifications = response
+            .get("checkpoint_committed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         Self::expect_ack(response).map_err(EngineError::build)
+    }
+
+    fn checkpoint_committed(&mut self, snapshot: &Value) -> Result<(), EngineError> {
+        if !self.checkpoint_notifications {
+            return Ok(());
+        }
+        let response = self
+            .process
+            .request(
+                "checkpoint_committed",
+                serde_json::json!({"snapshot": snapshot}),
+            )
+            .map_err(EngineError::engine)?;
+        Self::expect_ack(response).map_err(EngineError::engine)
     }
 
     fn generate(&mut self, max_samples: usize) -> Result<Generation, EngineError> {
@@ -309,7 +338,7 @@ impl ProcessSamplerWorker {
         if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             return Ok(());
         }
-        Err("process sampler initialize result missing ok=true".to_string())
+        Err("process sampler acknowledgement missing ok=true".to_string())
     }
 }
 
