@@ -36,6 +36,7 @@ class Fixture:
         evaluator_metadata=None,
         feedback=True,
         benchmark=False,
+        checkpoint_log_path=None,
     ):
         discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         self.dims = continuous_dims
@@ -48,6 +49,7 @@ class Fixture:
         self.timings = {}
         self.count = 0
         self.total = 0.0
+        self.checkpoint_log_path = checkpoint_log_path
         if stats_path:
             atexit.register(
                 lambda: Path(stats_path).write_text(
@@ -107,6 +109,13 @@ class Fixture:
             evaluator_metadata=self.evaluator_metadata,
         )
 
+    def checkpoint_committed(self, *, snapshot):
+        if isinstance(snapshot, dict) and snapshot.get("reject_notification"):
+            raise RuntimeError("notification rejected for test")
+        if self.checkpoint_log_path:
+            with open(self.checkpoint_log_path, "a") as output:
+                output.write(json.dumps(snapshot) + "\n")
+
     @classmethod
     def from_snapshot(cls, *, snapshot, domain, init_args, evaluator_metadata=None):
         discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
@@ -126,4 +135,18 @@ class Fixture:
 
 
 if __name__ == "__main__":
-    {"evaluator": run_evaluator, "sampler": run_sampler}[sys.argv[1]](Fixture)
+    if sys.argv[1] == "legacy_sampler":
+        from gammaboard_process.runners import _SamplerWorker
+
+        class LegacyWorker(_SamplerWorker):
+            def handle(self, method, params, req_binary=b""):
+                if method == "checkpoint_committed":
+                    raise RuntimeError("legacy worker received unsupported notification")
+                response = super().handle(method, params, req_binary)
+                if method == "initialize":
+                    response.pop("checkpoint_committed")
+                return response
+
+        LegacyWorker(Fixture).run()
+    else:
+        {"evaluator": run_evaluator, "sampler": run_sampler}[sys.argv[1]](Fixture)

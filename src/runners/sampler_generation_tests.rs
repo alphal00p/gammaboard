@@ -2,6 +2,216 @@ use super::*;
 use crate::core::{BatchQueueCounts, RunTaskSpec};
 use crate::test_support::RecordingStore;
 use crate::utils::domain::Domain;
+use std::sync::{Arc, Mutex};
+
+#[derive(Default)]
+struct NotificationRecording {
+    sequence: u64,
+    attempts: Vec<JsonValue>,
+    failures_remaining: usize,
+}
+
+struct NotifyingSampler {
+    store: RecordingStore,
+    recording: Arc<Mutex<NotificationRecording>>,
+}
+
+impl Sampler for NotifyingSampler {
+    fn validate_domain(&self, _: &Domain) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn generate(&mut self, _: usize) -> Result<Generation, EngineError> {
+        Ok(Generation::Finished)
+    }
+
+    fn feedback(&mut self, _: &crate::sampling::Feedback) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn snapshot(&mut self) -> Result<JsonValue, EngineError> {
+        let mut log = self.recording.lock().unwrap();
+        log.sequence += 1;
+        Ok(json!({"artifact_id": log.sequence, "optional": null, "nested": [0, false]}))
+    }
+
+    fn checkpoint_committed(&mut self, snapshot: &JsonValue) -> Result<(), EngineError> {
+        let mut guard = self.store.checkpoints.lock().unwrap();
+        let committed = guard.as_mut().unwrap();
+        assert_eq!(
+            &committed.saved.last().unwrap().0.sampler_snapshot.state,
+            snapshot,
+            "the exact payload must already be committed before the callback"
+        );
+        committed.events.push("notification");
+        let mut log = self.recording.lock().unwrap();
+        log.attempts.push(snapshot.clone());
+        if log.failures_remaining > 0 {
+            log.failures_remaining -= 1;
+            return Err(EngineError::engine("notification failed"));
+        }
+        Ok(())
+    }
+}
+
+fn notifying_runner() -> (
+    SamplerAggregatorRunner<RecordingStore>,
+    Arc<Mutex<NotificationRecording>>,
+) {
+    let mut run = runner(0, 100, 1000);
+    *run.store.checkpoints.lock().unwrap() = Some(Default::default());
+    let recording = Arc::new(Mutex::new(NotificationRecording::default()));
+    run.sampler = Box::new(NotifyingSampler {
+        store: run.store.clone(),
+        recording: recording.clone(),
+    });
+    (run, recording)
+}
+
+#[tokio::test]
+async fn checkpoint_notifications_follow_initial_periodic_and_stage_commits() {
+    let (mut run, recording) = notifying_runner();
+    for kind in [
+        CheckpointKind::Initial,
+        CheckpointKind::Periodic,
+        CheckpointKind::Stage,
+    ] {
+        run.persist_sampler_checkpoint(kind).await.unwrap();
+    }
+    let guard = run.store.checkpoints.lock().unwrap();
+    let committed = guard.as_ref().unwrap();
+    assert!(committed.saved[0].1.is_none());
+    assert!(committed.saved[1].1.is_none());
+    assert!(committed.saved[2].1.is_some());
+    assert_eq!(
+        recording.lock().unwrap().attempts,
+        committed
+            .saved
+            .iter()
+            .map(|(saved, _)| saved.sampler_snapshot.state.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        committed
+            .events
+            .iter()
+            .filter(|event| ["checkpoint", "notification"].contains(event))
+            .copied()
+            .collect::<Vec<_>>(),
+        [
+            "checkpoint",
+            "notification",
+            "checkpoint",
+            "notification",
+            "checkpoint",
+            "notification"
+        ]
+    );
+    assert!(run.pending_checkpoint_notification.is_none());
+}
+
+#[tokio::test]
+async fn failed_checkpoint_suppresses_older_notifications_until_another_commit() {
+    let (mut run, recording) = notifying_runner();
+    recording.lock().unwrap().failures_remaining = 1;
+    run.save_initial_checkpoint().await.unwrap();
+    let boundary = run.last_checkpoint_at;
+    assert!(run.pending_checkpoint_notification.is_some());
+    run.store
+        .checkpoints
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .errors
+        .push_back(StoreError::RetryableTransaction {
+            sqlstate: "55P03".into(),
+            message: "save failed".into(),
+        });
+    assert!(
+        run.persist_sampler_checkpoint(CheckpointKind::Periodic)
+            .await
+            .is_err()
+    );
+    assert_eq!(run.last_checkpoint_at, boundary);
+    // The second save's outcome is not known to the notification mechanism.
+    // Sending the first notice now could authorize deleting its newer artifact.
+    assert!(run.pending_checkpoint_notification.is_none());
+    run.notify_checkpoint_committed();
+    assert_eq!(recording.lock().unwrap().attempts.len(), 1);
+    run.persist_sampler_checkpoint(CheckpointKind::Periodic)
+        .await
+        .unwrap();
+    assert_eq!(
+        recording
+            .lock()
+            .unwrap()
+            .attempts
+            .iter()
+            .map(|s| s["artifact_id"].clone())
+            .collect::<Vec<_>>(),
+        [json!(1), json!(3)]
+    );
+}
+
+#[tokio::test]
+async fn notification_failure_retries_without_resaving_or_resetting_the_boundary() {
+    let (mut run, recording) = notifying_runner();
+    recording.lock().unwrap().failures_remaining = 1;
+    run.save_initial_checkpoint().await.unwrap();
+    let boundary = run.last_checkpoint_at;
+    assert!(!run.periodic_checkpoint_due());
+    run.notify_checkpoint_committed();
+    assert_eq!(
+        recording.lock().unwrap().attempts.len(),
+        1,
+        "notification retries have backoff"
+    );
+    run.pending_checkpoint_notification
+        .as_mut()
+        .unwrap()
+        .last_attempt_at = Some(Instant::now() - CHECKPOINT_RETRY_INTERVAL);
+    // A normal tick retries the notification; the sampler finishes immediately.
+    assert!(run.tick().await.unwrap());
+    assert!(run.pending_checkpoint_notification.is_none());
+    assert_eq!(run.last_checkpoint_at, boundary);
+    assert_eq!(
+        run.store
+            .checkpoints
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .saved
+            .len(),
+        1
+    );
+    let log = recording.lock().unwrap();
+    assert_eq!(log.attempts.len(), 2);
+    assert_eq!(log.attempts[0], log.attempts[1]);
+}
+
+#[tokio::test]
+async fn newer_commit_supersedes_a_failed_notification_without_waiting_for_backoff() {
+    let (mut run, recording) = notifying_runner();
+    recording.lock().unwrap().failures_remaining = 1;
+    run.save_initial_checkpoint().await.unwrap();
+    run.persist_sampler_checkpoint(CheckpointKind::Periodic)
+        .await
+        .unwrap();
+    run.notify_checkpoint_committed();
+    assert_eq!(
+        recording
+            .lock()
+            .unwrap()
+            .attempts
+            .iter()
+            .map(|s| s["artifact_id"].clone())
+            .collect::<Vec<_>>(),
+        [json!(1), json!(2)]
+    );
+    assert!(run.pending_checkpoint_notification.is_none());
+}
 
 fn runner(
     training_window: usize,

@@ -71,6 +71,9 @@ return `metadata`, which GammaBoard forwards to sampler initialization. An absen
 metadata field means `{}`. Evaluator components are ordered, unique names; their
 order fixes the component axis in returned value arrays.
 
+Sampler workers may additionally return `"checkpoint_committed": true` to opt in
+to the checkpoint notification RPC below. Omitted or false means GammaBoard does
+not send that RPC. This optional extension does not change the v10 version string.
 
 Sampler initialization is exactly one of:
 
@@ -220,6 +223,7 @@ including the input weight and any new Jacobian factors.
 | Sampler / `pdf` | `nr_samples`, coordinate row-major arrays, optional coordinate offsets; no weights | `{"values":[number-or-null,...]}` with one entry per point, or `{"values":null}` |
 | Sampler / `discrete_mass` | `subspaces:[{"fixed_dims":[{"dim":0,"value":2},...]} , ...]` | The same values form, one entry per subspace |
 | Sampler / `snapshot` | `{}` | `{"snapshot": <non-null JSON>}` |
+| Sampler / `checkpoint_committed` (advertised at initialization) | `{"snapshot": <exact committed snapshot state>}` | `{"ok":true}` |
 | Sampler / `persisted_output` | `{}` | `{"output":null}` by default |
 | Evaluator or sampler / `diagnostics` | `{}` | `{"diagnostics":{}}` by default |
 
@@ -227,6 +231,14 @@ For unavailable PDF information, return null or null entries. Default optional
 methods still have successful responses; an unknown-method error is not a default.
 `persisted_output` is display/task output, distinct from recoverable private state.
 `snapshot` must preserve all state needed to process pending feedback after restore.
+`checkpoint_committed` is sent only after the database save succeeds. Its payload
+is the opaque state returned by `snapshot`, not the enclosing GammaBoard checkpoint.
+Notification errors leave that checkpoint committed and are retried after 30 seconds
+while the runner is active. A newer save attempt supersedes an older pending notice;
+after an uncertain commit, an old notice could incorrectly authorize cleanup.
+Delivery is best effort and may repeat; implementations must be idempotent.
+On restore, the supplied snapshot is authoritative even if no notification arrived.
+Acknowledgement does not release artifacts referenced by other stages or backups.
 Materializers and transforms have no snapshot method.
 
 `latent_batch` is `{nr_samples, payload}`; its count agrees with the outer count.

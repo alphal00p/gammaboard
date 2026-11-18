@@ -201,7 +201,7 @@ class _SamplerWorker:
                 )
             else:
                 raise ValueError(f"unsupported sampler initialization kind: {kind!r}")
-            return {"ok": True}
+            return {"ok": True, "checkpoint_committed": True}
         if self.sampler is None:
             raise RuntimeError("worker not initialized")
         if method == "generate":
@@ -244,6 +244,14 @@ class _SamplerWorker:
                     "sampler snapshot must not be null; use {} for empty state"
                 )
             return {"snapshot": snapshot}
+        if method == "checkpoint_committed":
+            snapshot = params.get("snapshot")
+            if snapshot is None:
+                raise ValueError("checkpoint_committed requires non-null snapshot")
+            callback = getattr(self.sampler, "checkpoint_committed", None)
+            if callback is not None:
+                callback(snapshot=snapshot)
+            return {"ok": True}
         if method == "diagnostics":
             diagnostics = _call_optional(self.sampler, "diagnostics", {})
             return {"diagnostics": diagnostics if diagnostics is not None else {}}

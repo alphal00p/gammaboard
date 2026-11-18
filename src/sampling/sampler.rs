@@ -86,6 +86,13 @@ pub trait Sampler: Send {
     /// Non-null JSON containing all private state needed for deterministic restore,
     /// including pending feedback. The runtime records construction config separately.
     fn snapshot(&mut self) -> Result<JsonValue, EngineError>;
+    /// Best-effort notification after the database commits this exact snapshot.
+    /// May be repeated or missed on a crash: restore must also establish the
+    /// committed state. Acknowledgement does not release artifacts used by stages
+    /// or backups. Errors never invalidate the committed recovery boundary.
+    fn checkpoint_committed(&mut self, _snapshot: &JsonValue) -> Result<(), EngineError> {
+        Ok(())
+    }
     fn diagnostics(&mut self) -> JsonValue {
         json!({})
     }
