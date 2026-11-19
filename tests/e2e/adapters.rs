@@ -301,26 +301,21 @@ count = 128
 }
 
 #[tokio::test]
-#[ignore = "requires local postgres with CREATE DATABASE privilege, scalar-sin .venv, nix, and python+numpy"]
-async fn full_stack_cli_python_scalar_venv_e2e() -> anyhow::Result<()> {
+#[ignore = "requires local postgres with CREATE DATABASE privilege and Python with the SDK"]
+async fn full_stack_cli_python_tutorial_workers_e2e() -> anyhow::Result<()> {
     let mut harness = FullStackHarness::new().await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let evaluator_dir = manifest_dir.join("process_api/examples/python_scalar_sin");
-    let evaluator_python = evaluator_dir.join(".venv/bin/python");
+    let evaluator_dir = manifest_dir.join("process_api/examples/python_evaluator");
+    let evaluator_python =
+        std::env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into());
     let process_api_python = manifest_dir.join("process_api/python/src");
-    let sampler_src = manifest_dir.join("process_api/examples/python_sampler_symbolica_havana/src");
+    let sampler_src = manifest_dir.join("process_api/examples/python_sampler/src");
     let sampler_pythonpath = format!("{}:{}", process_api_python.display(), sampler_src.display());
-    let sampler_flake_ref = format!(
-        "path:{}#runtime",
-        manifest_dir
-            .join("process_api/examples/python_sampler_symbolica_havana")
-            .display()
-    );
     let config = temp_config(&format!(
         r#"
-name = "python-scalar-venv-e2e"
+name = "python-tutorial-workers-e2e"
 
 [evaluator]
 kind = "process_evaluator"
@@ -328,6 +323,7 @@ command = ["env", "PYTHONPATH={}", "{}", "-u", "-m", "run_evaluator"]
 cwd = "{}"
 domain = {{ rectangular = {{ discrete_cardinalities = [2, 3], continuous_dims = 2 }} }}
 args = {{ scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }}
+output = {{ kind = "values", components = ["value"] }}
 
 [[task_queue]]
 name = "accumulator"
@@ -353,22 +349,23 @@ fixed_dims = {{ "0" = 0 }}
 name = "sample-a"
 kind = "sample"
 stop_condition = {{ max_samples = 64 }}
-sampler = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{sampler_flake_ref}", "-c", "env", "PYTHONPATH={sampler_pythonpath}", "python", "-u", "-m", "run_sampler"], args = {{ seed = 0, bins = 8, samples_for_update = 8, stop_training_after_n_samples = 64, initial_training_rate = 0.1, final_training_rate = 0.01 }} }} }}
+sampler = {{ config = {{ kind = "process_sampler", command = ["env", "PYTHONPATH={sampler_pythonpath}", "{evaluator_python}", "-u", "-m", "run_sampler"], args = {{ seed = 13, training_samples = 64, feedback_window = 8 }} }} }}
+
 "#,
         process_api_python.display(),
-        evaluator_python.display(),
+        evaluator_python,
         evaluator_dir.join("src").display(),
     ));
 
     harness.add_run(&config);
-    let run_id = harness.run_id("python-scalar-venv-e2e").await?;
+    let run_id = harness.run_id("python-tutorial-workers-e2e").await?;
 
-    harness.assign_node("w-1", "sampler_aggregator", "python-scalar-venv-e2e");
-    harness.assign_node("w-2", "evaluator", "python-scalar-venv-e2e");
+    harness.assign_node("w-1", "sampler_aggregator", "python-tutorial-workers-e2e");
+    harness.assign_node("w-2", "evaluator", "python-tutorial-workers-e2e");
 
     harness
         .wait_for(
-            "python scalar venv task completes",
+            "Python tutorial task completes",
             Duration::from_secs(120),
             || async {
                 let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
@@ -389,7 +386,7 @@ sampler = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{
 
     harness
         .wait_for(
-            "python symbolica havana sampler checkpoint is persisted",
+            "Python tutorial sampler checkpoint is persisted",
             Duration::from_secs(30),
             || async { Ok(harness.run_sampler_checkpoint(run_id).await?.is_some()) },
         )
@@ -407,216 +404,11 @@ sampler = {{ config = {{ kind = "process_sampler", command = ["nix", "shell", "{
 }
 
 #[tokio::test]
-#[ignore = "requires local postgres, a local MadNIS Python runtime, and the bundled GammaLoop state"]
-async fn madnis_metadata_and_batch_boundaries() -> anyhow::Result<()> {
-    let mut harness = FullStackHarness::new().await?;
-
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let process_api_python = manifest_dir.join("process_api/python/src");
-    let madnis_src = manifest_dir.join("integrations/madnis/src");
-    let gammaloop_state = std::env::var_os("GAMMABOARD_MADNIS_STATE_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("resources/states/epem_a_ttxh/LO/state"));
-    let integrand_name =
-        std::env::var("GAMMABOARD_MADNIS_INTEGRAND").unwrap_or_else(|_| "LO".into());
-    let madnis_pythonpath = format!("{}:{}", process_api_python.display(), madnis_src.display());
-    let default_madnis_python = manifest_dir.join("integrations/madnis/.venv/bin/python");
-    let madnis_python = std::env::var("GAMMABOARD_MADNIS_PYTHON").unwrap_or_else(|_| {
-        if default_madnis_python.is_file() {
-            default_madnis_python.display().to_string()
-        } else {
-            "python".to_string()
-        }
-    });
-    let run_name = format!("gammaloop-madnis-metadata-fuzz-{}", unique_suffix());
-    let cases = [(1_usize, 1_usize, 2_usize), (2, 1, 3), (3, 2, 4)];
-
-    let madnis_runtime_status = std::process::Command::new(&madnis_python)
-        .args(["-c", "import run_sampler"])
-        .env("PYTHONPATH", &madnis_pythonpath)
-        .current_dir(manifest_dir.join("resources"))
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
-    anyhow::ensure!(
-        madnis_runtime_status.success(),
-        "failed to preflight MadNIS runtime"
-    );
-
-    harness.start_nodes(&["w-1", "w-2"]).await?;
-
-    let sampler_artifacts = tempfile::tempdir()?;
-    let mut task_toml = String::new();
-    for (case_idx, (queue_max_batch_size, madnis_max_batch_size, samples_for_update)) in
-        cases.iter().copied().enumerate()
-    {
-        let save_path = sampler_artifacts
-            .path()
-            .join(format!("madnis-{case_idx}.pkl"))
-            .display()
-            .to_string();
-        task_toml.push_str(&format!(
-            r#"
-
-[[task_queue]]
-name = "madnis-case-{case_idx}"
-kind = "sample"
-stop_condition = {{ max_samples = {samples_for_update} }}
-accumulator = "latest"
-sampler = {{ config = {{ kind = "process_sampler", command = ["env", "PYTHONPATH={madnis_pythonpath}", "{madnis_python}", "-u", "-m", "run_sampler"], args = {{ save_path = "{save_path}", seed = {case_idx}, training_steps = 1, training_batch_size = {samples_for_update}, max_batch_size = {madnis_max_batch_size}, use_gpu = false, learning_rate = 0.001, use_scheduler = false, discrete_model = "made", discrete_dims_position = "first", flow_config = {{ layers = 1, units = 8, bins = 4 }}, made_config = {{ layers = 1, nodes_per_feature = 8 }} }} }} }}
-
-[task_queue.queue_tuning]
-max_batch_size = {queue_max_batch_size}
-target_batch_eval_ms = 1.0
-"#
-        ));
-    }
-
-    let config = temp_config(&format!(
-        r#"
-name = "{run_name}"
-
-[evaluator]
-kind = "gammaloop"
-state_folder = "{}"
-integrand_name = "{integrand_name}"
-training_projection = "abs"
-
-[evaluator.preprocessing]
-read_only = true
-commands = [
-  # Keep a rectangular graph axis while retaining native graph-aware maps.
-  # Orientation and channel counts may differ between graphs, so sum those axes.
-  "set process string '\n[sampling]\ngraphs = \"monte_carlo\"\norientations = \"summed\"\nsampling_multichanneling = true\nsampling_channels = \"summed\"\n'",
-  "set model MT=173.0",
-  "set model WT=0.0",
-  "set model ymt=173.0",
-  "set model aS=0.118",
-  "set model aEWM1=132.507",
-  "set model Gf=1.166390e-05",
-  "set model MZ=91.188",
-]
-
-[sampler_aggregator_runner_params]
-performance_snapshot_interval_ms = 100
-min_tick_time_ms = 10
-frontend_sync_interval_ms = 100
-db_pool_size = 2
-
-[evaluator_runner_params]
-performance_snapshot_interval_ms = 100
-
-[[task_queue]]
-name = "accumulator"
-kind = "set_accumulator"
-
-[task_queue.accumulator]
-kind = "vector"
-components = ["real", "imag"]
-training_projection = {{ kind = "component", name = "real" }}
-
-{task_toml}
-"#,
-        gammaloop_state.display()
-    ));
-
-    harness.add_run(&config);
-    let run_id = harness.run_id(&run_name).await?;
-
-    harness.assign_node("w-1", "sampler_aggregator", &run_name);
-    harness.assign_node("w-2", "evaluator", &run_name);
-
-    for case_idx in 0..cases.len() {
-        let task_name = format!("madnis-case-{case_idx}");
-        harness
-            .wait_for(
-                format!("GammaLoop/MadNIS task {task_name} completes"),
-                Duration::from_secs(300),
-                || {
-                    let pool = harness.pool.clone();
-                    let task_name = task_name.clone();
-                    async move {
-                        let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
-                            "SELECT state, failure_reason FROM run_tasks WHERE run_id = $1 AND name = $2",
-                        )
-                        .bind(run_id)
-                        .bind(&task_name)
-                        .fetch_one(&pool)
-                        .await?;
-                        anyhow::ensure!(
-                            state != "failed",
-                            "{task_name} failed: {}",
-                            failure_reason.unwrap_or_else(|| "no failure_reason".to_string())
-                        );
-                        Ok(state == "completed")
-                    }
-                },
-            )
-            .await?;
-    }
-
-    harness
-        .wait_for(
-            "MadNIS diagnostics include GammaLoop evaluator metadata",
-            Duration::from_secs(30),
-            || {
-                let pool = harness.pool.clone();
-                let gammaloop_state = gammaloop_state.clone();
-                let integrand_name = integrand_name.clone();
-                async move {
-                    let diagnostics: Option<JsonValue> = sqlx::query_scalar(
-                        r#"
-                        SELECT metrics->'engine_diagnostics'
-                        FROM sampler_aggregator_performance_latest
-                        WHERE run_id = $1 AND worker_id = 'w-1'
-                        "#,
-                    )
-                    .bind(run_id)
-                    .fetch_optional(&pool)
-                    .await?;
-                    let Some(diagnostics) = diagnostics else {
-                        return Ok(false);
-                    };
-                    let metadata = &diagnostics["gammaloop_metadata"];
-                    Ok(metadata["state_folder"].as_str().is_some_and(|path| {
-                        std::path::Path::new(path) == gammaloop_state.as_path()
-                    }) && metadata["process_id"].as_u64().is_some()
-                        && metadata["integrand_name"].as_str() == Some(integrand_name.as_str())
-                        && metadata["coordinate_space"].as_str() == Some("x_space")
-                        && diagnostics["produced_batches"].as_u64().unwrap_or(0) > 0)
-                }
-            },
-        )
-        .await?;
-
-    let completed_samples: i64 =
-        sqlx::query_scalar("SELECT nr_completed_samples FROM runs WHERE id = $1")
-            .bind(run_id)
-            .fetch_one(&harness.pool)
-            .await?;
-    let expected_samples: i64 = cases
-        .iter()
-        .map(|(_, _, samples_for_update)| *samples_for_update as i64)
-        .sum();
-    assert!(completed_samples >= expected_samples);
-
-    harness.cleanup().await?;
-    Ok(())
-}
-
-#[tokio::test]
 #[ignore = "requires local postgres with CREATE DATABASE privilege and python+numpy"]
-async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow::Result<()> {
+async fn full_stack_cli_python_observables_process_api_e2e() -> anyhow::Result<()> {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let example_dir = manifest_dir.join("process_api/examples/python_gammaloop_observable");
-    let default_python = example_dir.join(".venv/bin/python");
-    let python = std::env::var("GAMMABOARD_GAMMALOOP_EXAMPLE_PYTHON").unwrap_or_else(|_| {
-        if default_python.is_file() {
-            default_python.display().to_string()
-        } else {
-            "python".to_string()
-        }
-    });
+    let example_dir = manifest_dir.join("process_api/examples/python_observables");
+    let python = std::env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into());
     let process_api_python = manifest_dir.join("process_api/python/src");
     let pythonpath = format!(
         "{}:{}",
@@ -635,14 +427,14 @@ async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow:
     .await
     .map_err(|_| {
         anyhow::anyhow!(
-            "timed out preflighting python_gammaloop_observable runtime with {} using PYTHONPATH={}",
+            "timed out preflighting python_observables runtime with {} using PYTHONPATH={}",
             python,
             pythonpath
         )
     })??;
     anyhow::ensure!(
         preflight_output.status.success(),
-        "failed to preflight python_gammaloop_observable runtime with {} using PYTHONPATH={}\nstdout:\n{}\nstderr:\n{}",
+        "failed to preflight python_observables runtime with {} using PYTHONPATH={}\nstdout:\n{}\nstderr:\n{}",
         python,
         pythonpath,
         String::from_utf8_lossy(&preflight_output.stdout),
@@ -652,7 +444,7 @@ async fn full_stack_cli_python_gammaloop_observable_process_api_e2e() -> anyhow:
     let mut harness = FullStackHarness::new().await?;
     harness.start_nodes(&["w-1", "w-2"]).await?;
 
-    let run_name = format!("python-gammaloop-observable-e2e-{}", unique_suffix());
+    let run_name = format!("python-observables-e2e-{}", unique_suffix());
     let config = temp_config(&format!(
         r#"
 name = "{run_name}"
@@ -704,7 +496,7 @@ target_batch_eval_ms = 1.0
     );
 
     harness
-        .wait_for("python gammaloop observable sample completes", Duration::from_secs(15), || {
+        .wait_for("synthetic observable sample completes", Duration::from_secs(15), || {
             let pool = harness.pool.clone();
             async move {
                 let (state, failure_reason): (String, Option<String>) = sqlx::query_as(
@@ -762,7 +554,7 @@ target_batch_eval_ms = 1.0
 #[ignore = "requires local postgres with CREATE DATABASE privilege, apptainer, and a working unprivileged Apptainer build setup"]
 async fn full_stack_cli_rust_apptainer_process_evaluator_e2e() -> anyhow::Result<()> {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let example_dir = manifest_dir.join("process_api/examples/rust_breit_wigner_evaluator");
+    let example_dir = manifest_dir.join("process_api/examples/rust_evaluator");
     let image_path = example_dir.join("runtime.sif");
     let _ = std::fs::remove_file(&image_path);
     let _image_cleanup = RemoveFileOnDrop(image_path.clone());
@@ -790,7 +582,7 @@ name = "rust-apptainer-process-evaluator-e2e"
 
 [evaluator]
 kind = "process_evaluator"
-command = ["apptainer", "exec", "{}", "breit-wigner-worker"]
+command = ["apptainer", "exec", "{}", "rust-evaluator-worker"]
 domain = {{ discrete = {{ axis_label = "d0", branches = [
   {{ index = 0, domain = {{ rectangular = {{ discrete_cardinalities = [], continuous_dims = 3 }} }} }},
   {{ index = 1, domain = {{ discrete = {{ axis_label = "d1", branches = [
@@ -815,7 +607,7 @@ kind = "sample"
 stop_condition = {{ max_samples = 64 }}
 sampler = {{ config = {{ kind = "naive_monte_carlo" }} }}
 "#,
-        "../process_api/examples/rust_breit_wigner_evaluator/runtime.sif"
+        "../process_api/examples/rust_evaluator/runtime.sif"
     ));
 
     harness.add_run(&config);

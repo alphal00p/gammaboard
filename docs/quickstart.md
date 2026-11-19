@@ -4,7 +4,7 @@ Run commands from the repository root. Linux x86_64 with `nix develop` is the
 supported setup. Without Nix, install stable Rust, C/C++ build tools, PostgreSQL 16
 server/client tools, nginx, Node.js from [dashboard/.nvmrc](../dashboard/.nvmrc),
 npm, and `sqlx-cli` (`cargo install sqlx-cli --no-default-features --features postgres`).
-External Python workers need Python 3.11+; MadNIS supports 3.12–3.13.
+External Python workers need Python 3.11+ and their evaluator/sampler dependencies.
 Install from Git; crates.io installation is not supported.
 
 ## First run
@@ -38,19 +38,20 @@ binary, build the dashboard separately with `npm ci && npm run build` in
 
 ## Default examples
 
-The dashboard's default menu contains seven run cards. Integration-only controller
+The [dashboard catalog](../resources/templates/README.md) contains seven run cards.
+These are templates, not automatically created runs. Integration-only controller
 children use smaller budgets and omit plot-only tasks; their support files are
 kept out of the menu.
 
 | Run card | What it demonstrates | Build feature |
 | --- | --- | --- |
 | [Installation smoke](../resources/templates/runs/installation-smoke.toml) | Unit integral, no generated state or process dependency | Any build |
-| [Tetrahedron surface](../resources/templates/runs/tetrahedron-surface.toml) | Two inputs, three outputs, Havana stratification and the complete plot tour | `symbolica` |
+| [Tetrahedron native](../resources/templates/runs/tetrahedron-native.toml) | Two inputs, three outputs, Havana stratification and the complete plot tour | `symbolica` |
 | [Tetrahedron process](../resources/templates/runs/tetrahedron-process.toml) | The same vector function through the Python process SDK, with a uniform proposal | Any build; Python SDK required |
-| [GammaLoop four phases](../resources/templates/runs/gammaloop-stratified.toml) | A native complex one-loop amplitude, native observables, +, −, +i, −i strata, and target-uncertainty bands | `gammaloop` |
-| [Hyperparameter tuning](../resources/templates/runs/hyperparameter-tuning.toml) | Nine Voronoi-centre configurations, ranked by the tetrahedron's frozen-inference x error | `symbolica` |
-| [Parameter scan](../resources/templates/runs/parameter-scan.toml) | A 3×3 grid of surface sharpness/shear, including scan heatmaps | `symbolica` |
-| [Integration campaign](../resources/templates/runs/integration-campaign.toml) | Two independent GammaLoop replicas, averaged with coefficients 1/2 and concurrent allocation | `gammaloop` |
+| [GammaLoop four phases](../resources/templates/runs/gammaloop-four-phases.toml) | A native complex one-loop amplitude, native observables, +, −, +i, −i strata, and target-uncertainty bands | `gammaloop` |
+| [Hyperparameter tuning](../resources/templates/runs/tetrahedron-tuning.toml) | Nine Voronoi-centre configurations, ranked by the tetrahedron's frozen-inference x error | `symbolica` |
+| [Parameter scan](../resources/templates/runs/tetrahedron-scan.toml) | A 3×3 grid of surface sharpness/shear, including scan heatmaps | `symbolica` |
+| [Tetrahedron campaign](../resources/templates/runs/tetrahedron-campaign.toml) | Two independently trained surface replicas, averaged with coefficients 1/2 and concurrent allocation | `symbolica` |
 
 The default build includes both features. See [build features](deployment.md#build-features)
 for smaller builds; their domains, stratification and process interfaces are unchanged.
@@ -59,10 +60,10 @@ Prepare the two optional dependencies once in the worker environment:
 
 ```bash
 python3 -m pip install ./process_api/python
-cargo run --example prepare_showcase -- resources/states/showcase/gg_hhh
+just prepare-gammaloop resources/states/showcase/gg_hhh
 ```
 
-The generator uses GammaBoard's pinned GammaLoop library, refuses to overwrite an
+The [preparation tool](../tools/prepare-gammaloop/README.md) uses GammaBoard's pinned GammaLoop library, refuses to overwrite an
 existing state, and prepares the GL15 contribution to gg → HHH at the upstream
 physical benchmark point. It includes threshold subtraction and native real/imaginary
 integral, graph and amplitude-weighted external Higgs-pT observables. This is an
@@ -111,14 +112,14 @@ without cross-bin covariance.
 Validate, create and assign a selected card:
 
 ```bash
-./gammaboard run validate resources/templates/runs/tetrahedron-surface.toml --probe
-./gammaboard run create resources/templates/runs/tetrahedron-surface.toml
+./gammaboard run validate resources/templates/runs/tetrahedron-native.toml --probe
+./gammaboard run create resources/templates/runs/tetrahedron-native.toml
 ./gammaboard node start-local 6
-./gammaboard run resume tetrahedron-surface --max-evaluators 4
+./gammaboard run resume tetrahedron-native --max-evaluators 4
 ```
 
-`--probe` initializes configured runtimes without creating work. The native card
-needs the generated state above; the process card needs the SDK installed for its
+`--probe` initializes configured runtimes without creating work. The GammaLoop card
+needs the generated state above; the tetrahedron process card needs the SDK installed for its
 chosen Python. Generated states and virtual environments are not bundled. The
 campaign needs at least six compatible workers to run both replicas concurrently;
 with fewer workers it runs fewer children. Its hard budget includes training and
@@ -130,10 +131,10 @@ the original corners are included. The other centre coordinates, integrand,
 sampler settings and per-trial budgets stay fixed. Each candidate starts its own
 training and frozen-inference stages.
 
-Specialist examples live with their integrations instead of in the default menu:
-[MadNIS](../integrations/madnis/README.md), [MadGraph](../integrations/madgraph/README.md),
-[process API](../process_api/README.md), [compiled Symbolica](../examples/symbolica-variable-theta/run.toml),
-and the [GammaLoop map reference](../examples/gammaloop/reference.toml).
+The [process-worker tutorials](../process_api/examples/README.md) are separate from
+the dashboard catalog. The [stratification A/B benchmark](../benchmarks/stratification/README.md)
+uses the older one-dimensional tetrahedron path and calls the components directly;
+it is not a distributed run or a dashboard preset.
 
 For another instance use `./gammaboard --port-offset 1 deploy` and the same offset
 on subsequent CLI commands. See [deployment](deployment.md) for shared machines,

@@ -1,0 +1,44 @@
+# Python process evaluator over a small discrete/continuous sine integrand.
+# Requires Python with the SDK installed; set the python replacement as needed.
+# Uniform sampling with discrete projections; works in a minimal build.
+# Run: ./gammaboard run create process_api/examples/python_evaluator/run.toml
+
+replacements = { python = "python3" }
+name = "python-evaluator"
+
+[evaluator]
+kind = "process_evaluator"
+command = ['$(python:python3)', "-u", "$resources/../process_api/examples/python_evaluator/src/run_evaluator.py"]
+domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
+args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
+output = {kind = "values", components = ["value"]}
+
+[[task_queue]]
+name = "accumulator"
+kind = "set_accumulator"
+
+[task_queue.accumulator]
+kind = "vector"
+components = ["value"]
+training_projection = { kind = "component", name = "value" }
+
+[[task_queue.accumulator.discrete_projections.items]]
+name = "spin"
+dims = [0]
+fixed_dims = {}
+
+[[task_queue.accumulator.discrete_projections.items]]
+name = "channel_for_spin_0"
+dims = [1]
+fixed_dims = { "0" = 0 }
+
+[[task_queue.accumulator.discrete_projections.items]]
+name = "channel_for_spin_1"
+dims = [1]
+fixed_dims = { "0" = 1 }
+
+[[task_queue]]
+name = "sample"
+kind = "sample"
+stop_condition = { max_samples = 16384 }
+sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }

@@ -63,7 +63,27 @@ channel definitions/order requires a new run and trained grid. `graph_groups`
 selects graph groups from the loaded integration view. Optional `preprocessing`
 runs ordered commands; `read_only = true` protects the loaded state by default.
 `use_f128 = true` skips double-precision stability levels. See the
-[GammaLoop card](../resources/templates/runs/gammaloop-stratified.toml) for field names.
+[GammaLoop card](../resources/templates/runs/gammaloop-four-phases.toml) for field names.
+
+For a precompiled Symbolica evaluator, provide a shared library and its exported
+function name. Fixed bindings are separate from sampled arguments:
+
+```toml
+[evaluator]
+kind = "symbolica"
+args = ["x"]
+[evaluator.source]
+kind = "compiled"
+path = "artifacts/eval.so"
+name = "eval"
+compiled_args = ["scale", "x"]
+bindings = { scale = 2.0 }
+```
+
+The library must use Symbolica's complex evaluator ABI; it is not an arbitrary C
+function. Generate it with the compatible Symbolica version. Relative paths are
+resolved through resource roots. The compiled evaluator and fixed bindings have
+an automated regression test; no generated physics evaluator is bundled.
 
 ## Task sources and training
 
@@ -142,7 +162,7 @@ and [backup/restore commands](operations.md#backup-and-recovery).
 
 Optional `discrete_projections` specifies `items` with `name`, `dims`, and
 `fixed_dims`. `normalization` is `contribution` (default) or `conditional_mean`;
-optional `streams` selects components. See the [projection example](../process_api/examples/python_scalar_sin/run.toml).
+optional `streams` selects components. See the [projection example](../process_api/examples/python_evaluator/run.toml).
 
 Sample stopping supports `max_samples`, `min_samples`, `absolute_error`, and
 `relative_error`, with an optional metric selector.
@@ -165,9 +185,9 @@ They do not accept an integration task queue or a parent evaluator.
 
 | Kind | Settings and example |
 | --- | --- |
-| `integration_campaign` | `children`, `allocation`, `stop_condition`, optional `target`; [card](../resources/templates/runs/integration-campaign.toml) |
-| `parameter_scan` | `parameters`, `child`, `measurement`, `max_concurrent_runs`; [card](../resources/templates/runs/parameter-scan.toml) |
-| `hyperparameter_tuning` | `parameters`, `child`, `objective`, `optimizer`, `max_concurrent_trials`; [card](../resources/templates/runs/hyperparameter-tuning.toml) |
+| `integration_campaign` | `children`, `allocation`, `stop_condition`, optional `target`; [card](../resources/templates/runs/tetrahedron-campaign.toml) |
+| `parameter_scan` | `parameters`, `child`, `measurement`, `max_concurrent_runs`; [card](../resources/templates/runs/tetrahedron-scan.toml) |
+| `hyperparameter_tuning` | `parameters`, `child`, `objective`, `optimizer`, `max_concurrent_trials`; [card](../resources/templates/runs/tetrahedron-tuning.toml) |
 
 Child `run` is an inline TOML string or `{ file = "path.toml" }`. Relative references
 are resolved and contents frozen at submission. Generated parameter values override
@@ -279,7 +299,7 @@ and optional positive component `scales`. The inference task selects
 `accumulator = { config = ... }`. No user probability table is accepted.
 The frozen sampler supplies it through `discrete_mass`. See the
 [statistical specification](stratification.md) and the
-[tetrahedron run](../resources/templates/runs/tetrahedron-surface.toml).
+[tetrahedron run](../resources/templates/runs/tetrahedron-native.toml).
 
 Symbolica can evaluate named real vectors using
 `source = { kind = "expressions", components = ["x", "y", "z"], exprs = ["t", "2*t", "-t"] }`.
@@ -313,8 +333,8 @@ stratum prefix. Every complete prefix is inspected, including ragged/sparse labe
 The saved source determines the partition and training projection. Diagnostic
 statistics start fresh and do not modify the source or publish a new integral.
 
-For two-dimensional inputs, use [stratum-pdf-line.toml](../resources/templates/tasks/stratum-pdf-line.toml)
-or the full [surface card](../resources/templates/runs/tetrahedron-surface.toml).
+For two-dimensional inputs, the [native tetrahedron card](../resources/templates/runs/tetrahedron-native.toml)
+includes complete line and plane PDF tasks that can be copied into another run.
 [PDF inspection](operations.md#stratum-plots-and-pdf-inspection) describes display
 controls; the [probe contract](stratification.md#stratum-plot-data-and-pdf-probes)
 defines densities, normalization and supported coordinate mappings.

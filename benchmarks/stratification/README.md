@@ -1,10 +1,17 @@
 # Scaled Voronoi stratification: tetrahedron path A/B
 
+This benchmark is separate from the 2D dashboard showcase. `main.rs` is registered
+as the `stratification_ab` Cargo target and needs the `symbolica` feature. It
+directly drives the production components without a server or database.
+Historical data and PNG previews live in `results/`; their recorded settings and
+measurements are unchanged. Newly generated reports belong in a separate output
+directory so they do not overwrite those records.
+
 The current example uses two stratum dimensions with centre keys `(0,0)`,
 `(0,1)`, `(1,0)`, `(1,1)`. The earlier single-axis measurements below are historical;
 the [prefix-model validation](../../docs/validation/2026-10-22-stratum-prefixes.md)
 records the new live sine/tetrahedron runs, 32 repeated pairs, and an independent
-frozen-proposal variance check. [Machine-readable results](prefix-validation.json)
+frozen-proposal variance check. [Machine-readable results](results/prefix-validation.json)
 include the observed finite-budget uncertainty limitation.
 
 The experiment integrates the vector path itself over unit parameter time:
@@ -51,10 +58,10 @@ run exercise distributed queue execution separately.
 These correspond to standard-error reductions of **3.93×, 2.22×, 3.71×**.
 Bootstrap intervals resample whole pairs and are descriptive Monte Carlo estimates,
 not guaranteed bounds. Raw repetitions and settings are in
-[tetrahedron-results.json](tetrahedron-results.json); computed metrics are in
-[summary.json](summary.json).
+[tetrahedron-results.json](results/tetrahedron-results.json); computed metrics are in
+[summary.json](results/summary.json).
 
-![Path, empirical variance and error calibration](comparison.png)
+![Path, empirical variance and error calibration](results/comparison.png)
 
 ## Unexpected behavior and limits
 
@@ -72,8 +79,8 @@ The other coverages were 98.44% for x and 90.63% for z; with 64 repetitions thes
 are noisy diagnostics. This supports a finite-sample tail explanation but does
 not establish universally reliable confidence intervals. All three stratified
 ensemble means were within 1.1 ensemble standard errors of zero in the follow-up.
-See [long-summary.json](long-summary.json) and
-[tetrahedron-long-inference.json](tetrahedron-long-inference.json).
+See [long-summary.json](results/long-summary.json) and
+[tetrahedron-long-inference.json](results/tetrahedron-long-inference.json).
 
 An initial two-pair pilot with only 8192 training attempts produced worse errors
 with stratification, before the conditional grids learned the masked regions.
@@ -89,21 +96,30 @@ matched evaluation budget; the extra classification/covariance work has a cost.
 ## Reproduce
 
 ```bash
-cargo run --locked --example stratification_ab -- \
+just stratification-ab \
   --trials 128 --training 131072 --inference 131072 \
-  --output benchmarks/stratification/tetrahedron-prefix-repetitions.json
-python benchmarks/stratification/report.py benchmarks/stratification/tetrahedron-prefix-repetitions.json
+  --output results/stratification/tetrahedron-prefix-repetitions.json
+python benchmarks/stratification/report.py results/stratification/tetrahedron-prefix-repetitions.json
 
-cargo run --locked --example stratification_ab -- \
+just stratification-ab \
   --trials 64 --training 131072 --inference 1048576 \
-  --output benchmarks/stratification/tetrahedron-prefix-long-inference.json
+  --output results/stratification/tetrahedron-prefix-long-inference.json
 python benchmarks/stratification/report.py \
-  benchmarks/stratification/tetrahedron-prefix-long-inference.json --output-prefix long-
+  results/stratification/tetrahedron-prefix-long-inference.json --output-prefix long-
 ```
 
-The plotter requires NumPy and Matplotlib. The result files include source/build
+The plotter requires NumPy and Matplotlib and writes summary JSON plus PNG/PDF
+exports beside its input. Only PNG previews are kept in the repository. The result files include source/build
 identity and full settings. Measurements were made on the development worktree;
 subsequent display/validation changes do not alter the fixed-budget estimator.
+
+To reproduce a historical plot without changing the archived files:
+
+```bash
+python benchmarks/stratification/report.py \
+  benchmarks/stratification/results/tetrahedron-results.json \
+  --output-dir results/stratification/historical
+```
 
 For distributed execution, use the matching
 [stratified](https://github.com/alphal00p/gammaboard/blob/c5968d1/resources/templates/runs/tetrahedron-stratified.toml) and

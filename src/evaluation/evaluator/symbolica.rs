@@ -166,7 +166,7 @@ impl SymbolicaEngine {
                 })?;
                 if !path.is_file() {
                     return Err(EngineError::build(format!(
-                        "symbolica compiled evaluator does not exist at {}; build or copy the configured shared library into a resource root (for the bundled variable_theta example run `just symbolica-variable-theta`)",
+                        "symbolica compiled evaluator does not exist at {}; build or copy the configured shared library into a resource root",
                         path.display()
                     )));
                 }

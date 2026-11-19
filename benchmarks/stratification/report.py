@@ -13,9 +13,11 @@ import matplotlib.pyplot as plt
 parser = argparse.ArgumentParser()
 parser.add_argument("results", type=Path)
 parser.add_argument("--output-prefix", default="")
+parser.add_argument("--output-dir", type=Path, help="write reports elsewhere; keep archived inputs unchanged")
 args = parser.parse_args()
 data = json.loads(args.results.read_text())
-directory = args.results.parent
+directory = args.output_dir or args.results.parent
+directory.mkdir(parents=True, exist_ok=True)
 summary = {
     "configuration": data["configuration"],
     "exact_integral": data["integrand"]["exact_integral"],
@@ -76,9 +78,14 @@ x = np.tanh(8 * np.cos(2 * np.pi * t))
 y = np.tanh(8 * np.sin(2 * np.pi * t))
 z = x * y
 ax.plot(x, y, z, color="#315f98", lw=1.8)
-center_map = data["integrand"]["stratification"]["centers"]
-prefixes = sorted(center_map, key=lambda key: tuple(map(int, key.split(","))))
-centers = np.array([center_map[prefix] for prefix in prefixes])
+# The retained 2026-10-21 measurements used flat labels; current runs use prefixes.
+if "stratification" in data["integrand"]:
+    center_map = data["integrand"]["stratification"]["centers"]
+    prefixes = sorted(center_map, key=lambda key: tuple(map(int, key.split(","))))
+    centers = np.array([center_map[prefix] for prefix in prefixes])
+else:
+    centers = np.array(data["integrand"]["centers"])
+    prefixes = [str(k) for k in range(len(centers))]
 ax.scatter(*centers.T, color="#d76035", s=55)
 for prefix, c in zip(prefixes, centers):
     ax.text(*c, f"  ({prefix})")

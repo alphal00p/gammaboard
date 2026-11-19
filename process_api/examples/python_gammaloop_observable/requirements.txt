@@ -1,3 +1,0 @@
-# Install from this example directory to use the matching local SDK.
-numpy
--e ../../python

@@ -96,10 +96,6 @@
         "${cargoLinkerVar}" = nixCc;
         RUSTFLAGS = "-C linker=${nixCc}";
 
-        # MG7-generated makefiles hardcode /bin/bash, which does not exist on
-        # non-FHS Nix systems. A make command-line variable overrides that value.
-        MAKEFLAGS = "SHELL=${pkgs.bash}/bin/bash";
-
         # Make libpython + libgmp/libmpfr/libmpc visible to local binaries.
         LD_LIBRARY_PATH = runtimeLibPath;
         DYLD_LIBRARY_PATH = runtimeLibPath;
@@ -110,7 +106,7 @@
           gmp
           mpfr
           libmpc
-          # MadGraph7/MadSpace source build and runtime dependencies.
+          # Native build tools and Python process-worker dependencies.
           cmake
           ninja
           gnumake
@@ -123,13 +119,11 @@
           pkg-config
           patchelf
           openblas
-          lhapdf
           python313
           python313Packages.pip
           python313Packages.setuptools
           python313Packages.wheel
           python313Packages.packaging
-          python313Packages.scikit-build-core
           python313Packages.numpy
           cargo-nextest
           cargo-watch

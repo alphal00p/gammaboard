@@ -3,8 +3,8 @@
 Scaled Voronoi stratification is a sampling-pipeline option for integration tasks; campaigns, scans and
 tuning use it through their child integration definitions. It is not a run kind.
 Configure it with [Stratified inference](config.md#stratified-inference) and the
-[tetrahedron](../resources/templates/runs/tetrahedron-surface.toml) or
-[GammaLoop](../resources/templates/runs/gammaloop-stratified.toml) run card.
+[tetrahedron](../resources/templates/runs/tetrahedron-native.toml) or
+[GammaLoop](../resources/templates/runs/gammaloop-four-phases.toml) run card.
 The [execution model](execution-model.md#ownership-and-flow) defines the shared
 sampler/evaluator contract; [operations](operations.md#stratum-plots-and-pdf-inspection)
 explains the dashboard controls.

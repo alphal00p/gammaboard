@@ -115,11 +115,12 @@ def test_templates_are_seeded_once_and_dashboard_edits_survive_new_deployments(w
     assert (templates / "runs/installation-smoke.toml").is_file()
     assert (templates / "nodes/cpu-workers.toml").is_file()
     assert {path.name for path in (templates / "runs").glob("*.toml")} == {
-        "installation-smoke.toml", "tetrahedron-surface.toml", "hyperparameter-tuning.toml",
-        "parameter-scan.toml", "integration-campaign.toml",
+        "installation-smoke.toml", "tetrahedron-native.toml", "tetrahedron-tuning.toml",
+        "tetrahedron-scan.toml", "tetrahedron-campaign.toml",
     }
     assert (templates / "runs/support/tetrahedron-trial.toml").is_file()
-    assert (templates / "runs/support/ubelix-sine.toml").is_file()
+    common = settings.OPS_ROOT.parents[1] / "resources/templates/runs"
+    assert (templates / "runs/tetrahedron-campaign.toml").read_text() == (common / "tetrahedron-campaign.toml").read_text()
     (templates / "nodes/cpu-workers.toml").unlink()
     edited = templates / "runs/installation-smoke.toml"
     edited.write_text('name="custom"\n')

@@ -218,7 +218,7 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
         "kind": "process_evaluator", "output": {"kind": "gammaloop"}, "domain": Domain::continuous(1),
         "cwd": root,
         "command": ["env", format!("PYTHONPATH={}:{}", root.join("process_api/python/src").display(),
-            root.join("process_api/examples/python_gammaloop_observable/src").display()),
+            root.join("process_api/examples/python_observables/src").display()),
             env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into()),
             "-c", "from demo_evaluator import PolynomialEvaluator; from gammaboard_process import run_evaluator; run_evaluator(PolynomialEvaluator)"]
     }))?;

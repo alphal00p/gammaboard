@@ -1,0 +1,20 @@
+Bootstrap: docker
+From: rust:1.87-bookworm
+
+%files
+    Cargo.toml /opt/evaluator/Cargo.toml
+    Cargo.lock /opt/evaluator/Cargo.lock
+    src /opt/evaluator/src
+
+%post
+    set -eux
+    cd /opt/evaluator
+    cargo build --release --locked
+    install -Dm755 target/release/rust-evaluator-worker /usr/local/bin/rust-evaluator-worker
+    rm -rf /opt/evaluator/target /usr/local/cargo/registry /usr/local/cargo/git
+
+%runscript
+    exec /usr/local/bin/rust-evaluator-worker "$@"
+
+%test
+    /usr/local/bin/rust-evaluator-worker --help >/dev/null 2>&1 || true

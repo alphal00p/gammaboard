@@ -5,6 +5,15 @@
 See the [validation and risk report](docs/validation/2026-10-15-consolidation.md)
 for tested workflows, fixes found in the dashboard, and remaining limitations.
 
+- Consolidate the dashboard catalog under `resources/templates/`, with consistent
+  tetrahedron run names and one portable replica campaign shared with UBELIX.
+  Move physics preparation to `tools/prepare-gammaloop/` and the 1D A/B driver to
+  `benchmarks/stratification/`. Retain historical results; remove redundant task
+  cards and specialist physics examples. Process tutorials now include a small
+  NumPy sampler with recovery and exact PDF/mass queries.
+- Remove the bundled MadGraph/MadSpace and MADNIS adapters, environments and
+  example cards. Existing commands pointing into `integrations/` must use an
+  independently installed adapter. The generic process API remains supported.
 - Optional native backends: minimal builds omit Symbolica; `symbolica` enables
   expression evaluation and Havana, and the default `gammaloop` feature includes
   both. Shared domains, stratification and process interfaces remain available.
@@ -46,7 +55,7 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
   performance reporting, and allocated core-hour accounting.
 - Parameter scans, hyperparameter tuning, and campaigns combining independent
   child estimates and compatible histograms.
-- GammaLoop, MadGraph, MadNIS, and custom process evaluators/samplers.
+- Native GammaLoop and custom process evaluators/samplers.
 - Shared local, ITPhlies, and UBELIX workflows; backup/restore and worker recreation.
 - Consolidated accumulator, measurement, sampler-state, and extension interfaces.
   Scalar configuration remains shorthand for a one-component statistical vector.

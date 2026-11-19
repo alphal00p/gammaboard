@@ -147,7 +147,7 @@ sampler={{config={{kind="process_sampler",command={command},args={{inference=tru
 
 #[test]
 fn scaled_voronoi_run_cards_validate_and_reject_invalid_estimators() {
-    let card = include_str!("../../resources/templates/runs/tetrahedron-surface.toml");
+    let card = include_str!("../../resources/templates/runs/tetrahedron-native.toml");
     let definition = gammaboard::api::runs::parse_run_add_config_toml(card).unwrap();
     assert_eq!(
         gammaboard::api::runs::validate_run(definition, true)
@@ -246,7 +246,7 @@ async fn stratified_sigkill_with_outstanding_work_replays_the_frozen_sample_stre
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let python = std::env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_| "python3".into());
     let command=serde_json::to_string(&vec![
-        "env".to_string(),format!("PYTHONPATH={}:{}",root.join("process_api/python/src").display(),root.join("process_api/examples/python_gammaloop_observable/src").display()),python,
+        "env".to_string(),format!("PYTHONPATH={}:{}",root.join("process_api/python/src").display(),root.join("process_api/examples/python_observables/src").display()),python,
         "-c".into(),"import time; import demo_evaluator as d; from gammaboard_process import run_evaluator; d._f=lambda x: (time.sleep(0.02), x)[1]; run_evaluator(d.PolynomialEvaluator)".into(),
     ])?;
     let config = temp_config(&format!(

@@ -2,6 +2,7 @@
 name = "gammaboard"
 version = "0.3.0"
 edition = "2024"
+autoexamples = false
 description = "Distributed numerical integration control plane and dashboard"
 license = "MIT"
 repository = "https://github.com/alphal00p/gammaboard"
@@ -11,8 +12,8 @@ keywords = ["integration", "monte-carlo", "distributed", "scientific"]
 categories = ["science", "command-line-utilities"]
 include = [
     "/src/**",
-    "/examples/prepare_showcase.rs",
-    "/examples/gammaloop/showcase.toml",
+    "/tools/prepare-gammaloop/**",
+    "/benchmarks/stratification/main.rs",
     "/tests/fixtures/json_worker.py",
     "/migrations/**",
     "/resources/templates/**",
@@ -80,8 +81,14 @@ name = "gammaboard"
 crate-type = ["rlib"]
 
 [[example]]
-name = "prepare_showcase"
+name = "prepare_gammaloop"
+path = "tools/prepare-gammaloop/main.rs"
 required-features = ["gammaloop"]
+
+[[example]]
+name = "stratification_ab"
+path = "benchmarks/stratification/main.rs"
+required-features = ["symbolica"]
 
 [[test]]
 name = "full_stack_cli"

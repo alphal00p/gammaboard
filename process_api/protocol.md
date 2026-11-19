@@ -173,7 +173,7 @@ Sum all correlated fills within each bin before squaring; include empty draws.
 The host validates these counts and moments and applies sampling weights,
 classification, masking, feedback projection and per-stratum reduction centrally.
 Evaluators never receive outer weights or stratification metadata and cannot
-return aggregate statistics. See the [observable example](examples/python_gammaloop_observable/src/demo_evaluator.py)
+return aggregate statistics. See the [observable example](examples/python_observables/src/demo_evaluator.py)
 and [typed output](python/src/gammaboard_process/gammaloop.py).
 Initialization may specify `output.training_projection` for observable output:
 `real` (default), `imag`, `abs`, or `abs_sq`; this is interpreted by the Rust host.

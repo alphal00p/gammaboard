@@ -246,6 +246,31 @@ def test_unit_integral_statistics(tmp_path):
     assert row(result.stdout, "Toy-integral statistics").endswith("PASS")
 
 
+@pytest.mark.parametrize("training", [False, True])
+def test_numpy_sampler_tutorial_satisfies_the_process_contract(tmp_path, training):
+    entry = ROOT / "process_api/examples/python_sampler/src/demo_sampler.py"
+    args = {"training_samples": 128, "feedback_window": 16} if training else {}
+    extra = [
+        "--require-stratified", "--max-samples", "512", "--max-calls", "128",
+        "--stage-init-args", '{"training_samples":0}',
+    ]
+    if not training:
+        extra.append("--statistics")
+    result = run_checker([f"{entry}:UniformSampler"], tmp_path, args, extra)
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name in [
+        "Snapshot JSON and recovery without notice", "Discrete mass return contract",
+        "Stage handoff and source preservation",
+    ]:
+        assert row(result.stdout, name).endswith("PASS"), result.stdout
+    if training:
+        assert row(result.stdout, "Recovery with pending feedback").endswith("PASS")
+        assert row(result.stdout, "GenerationStatus.FINISHED").endswith("PASS")
+    else:
+        assert row(result.stdout, "PDF / sampling-weight consistency").endswith("PASS")
+        assert row(result.stdout, "Toy-integral statistics").endswith("PASS")
+
+
 def rectangular(cards=(), continuous=2, strata=0):
     return {
         "rectangular": {

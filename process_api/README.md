@@ -223,15 +223,18 @@ can skip inherited defaults. See `--help` for all options.
 
 ## Working examples
 
-- [NumPy evaluator](examples/python_scalar_sin/README.md): ordinary scalar/vector values.
-- [Havana sampler](examples/python_sampler_symbolica_havana/README.md): adaptive draws,
-  feedback, snapshots, and inference.
-- [GammaLoop observable evaluator](examples/python_gammaloop_observable/src/demo_evaluator.py):
-  unweighted values and one histogram bundle per input draw. Its
-  [stratified observable run card](examples/python_gammaloop_observable/run-stratified.toml)
+- [NumPy evaluator](examples/python_evaluator/README.md): ordinary scalar/vector values.
+- [NumPy sampler](examples/python_sampler/README.md): uniform draws, feedback,
+  exact PDFs/masses, snapshots and inference, without Symbolica.
+- [Synthetic observable evaluator](examples/python_observables/README.md):
+  a polynomial and one GammaLoop-format histogram bundle per input draw. Its
+  [stratified observable run card](examples/python_observables/run-stratified.toml)
   uses stratified statistics for the integral and histogram bins.
-- [Rust/Apptainer evaluator](examples/rust_breit_wigner_evaluator/README.md): a direct
+- [Rust/Apptainer evaluator](examples/rust_evaluator/README.md): a direct
   wire implementation, including ragged coordinate layouts.
+
+See the [tutorial index and shared setup](examples/README.md). These tutorials are
+separate from the default dashboard run catalog.
 
 ## Logs and lifecycle
 

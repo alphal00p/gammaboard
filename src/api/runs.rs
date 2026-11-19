@@ -1620,15 +1620,11 @@ config = "scalar"
     #[test]
     fn bundled_run_and_task_templates_parse_after_replacement_expansion() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for directory in [
-            "resources/templates/runs",
-            "resources/templates/tasks",
-            "ops/ubelix/resources/templates/runs",
-        ] {
+        for directory in ["resources/templates/runs", "resources/templates/tasks"] {
             for name in crate::api::templates::list_templates(&root.join(directory)).unwrap() {
                 if !cfg!(feature = "gammaloop")
                     && directory == "resources/templates/runs"
-                    && (name.starts_with("gammaloop") || name == "integration-campaign.toml")
+                    && name.starts_with("gammaloop")
                 {
                     continue;
                 }
@@ -1643,13 +1639,11 @@ config = "scalar"
             }
         }
         for path in [
-            "process_api/examples/python_gammaloop_observable/run.toml",
-            "process_api/examples/python_sampler_symbolica_havana/run.toml",
-            "process_api/examples/python_scalar_sin/run.toml",
-            "process_api/examples/rust_breit_wigner_evaluator/run.toml",
-            "integrations/madnis/examples/ghost_bump_apptainer.toml",
-            "examples/symbolica-variable-theta/run.toml",
-            "examples/symbolica-variable-theta/tune.toml",
+            "process_api/examples/python_observables/run.toml",
+            "process_api/examples/python_observables/run-stratified.toml",
+            "process_api/examples/python_sampler/run.toml",
+            "process_api/examples/python_evaluator/run.toml",
+            "process_api/examples/rust_evaluator/run.toml",
         ] {
             load_run_add_config_file(&root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
         }
@@ -1815,7 +1809,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
 
     #[test]
     fn default_tuning_and_scan_children_publish_the_requested_metric() {
-        for file in ["hyperparameter-tuning.toml", "parameter-scan.toml"] {
+        for file in ["tetrahedron-tuning.toml", "tetrahedron-scan.toml"] {
             let config = load_run_add_config_file(
                 &Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("resources/templates/runs")
@@ -1859,24 +1853,26 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
     }
 
     #[test]
-    fn default_campaign_averages_independent_native_replicas() {
-        if !cfg!(feature = "gammaloop") {
-            return;
-        }
+    fn default_campaign_averages_independent_tetrahedron_replicas() {
         let config = load_run_add_config_file(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("resources/templates/runs/integration-campaign.toml"),
+                .join("resources/templates/runs/tetrahedron-campaign.toml"),
         )
         .unwrap();
         let Some(RunTaskSpec::IntegrationCampaign {
             children,
             allocation,
+            measurement,
             ..
         }) = config.controller()
         else {
             panic!("campaign")
         };
         assert_eq!(children.len(), 2);
+        assert_eq!(
+            measurement.selection,
+            crate::core::MeasurementSelection::AllComponentMeans
+        );
         assert_eq!(allocation.max_active_runs, 2);
         assert_eq!(children.iter().map(|c| c.coefficient).sum::<f64>(), 1.0);
         let definitions = children
@@ -1896,7 +1892,7 @@ sampler = { config = { kind = "naive_monte_carlo", fail_on_materialize_batch_nr 
             let integration = child.integration().unwrap();
             assert!(matches!(
                 integration.params.evaluator,
-                Some(crate::core::EvaluatorConfig::Gammaloop { .. })
+                Some(crate::core::EvaluatorConfig::Symbolica { .. })
             ));
             let RunTaskSpec::Sample {
                 sampler: Some(crate::core::tasks::StageSourceSpec::Config { config }),

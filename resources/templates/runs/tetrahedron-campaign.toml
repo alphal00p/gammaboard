@@ -1,0 +1,22 @@
+# Average two independent replicas of the tetrahedron surface integral.
+# Portable: needs Symbolica/Havana, but no generated physics state or Python.
+kind = "integration_campaign"
+name = "tetrahedron-campaign"
+target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
+[stop_condition]
+max_total_samples = 98304
+[allocation]
+max_active_runs = 2
+min_evaluators_per_run = 2
+min_samples_per_child = 4096
+allocation_window_samples = 8192
+[[children]]
+name = "replica-a"
+coefficient = 0.5
+replacements = { run_name = "tetrahedron-replica-a", seed = 101, inference_seed = 201 }
+run = { file = "support/tetrahedron-trial.toml" }
+[[children]]
+name = "replica-b"
+coefficient = 0.5
+replacements = { run_name = "tetrahedron-replica-b", seed = 102, inference_seed = 202 }
+run = { file = "support/tetrahedron-trial.toml" }

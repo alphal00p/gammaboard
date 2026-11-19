@@ -1,0 +1,31 @@
+# Uniform sampling with a finite feedback phase and a fresh inference stage.
+# This tutorial exercises the API; the uniform proposal does not learn.
+replacements = { python = "python3" }
+name = "python-sampler"
+target = { kind = "scalar", value = 1.0 }
+[evaluator]
+kind = "unit"
+continuous_dims = 2
+
+[[task_queue]]
+name = "feedback-demo"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = 128 }
+accumulator = { config = "scalar" }
+[task_queue.sampler.config]
+kind = "process_sampler"
+command = ['$(python:python3)', "-u", "$resources/../process_api/examples/python_sampler/src/run_sampler.py"]
+args = { seed = 13, training_samples = 128, feedback_window = 32 }
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = { max_samples = 4096 }
+accumulator = { config = "scalar" }
+[task_queue.sampler]
+from_stage = "feedback-demo"
+[task_queue.sampler.config]
+kind = "process_sampler"
+command = ['$(python:python3)', "-u", "$resources/../process_api/examples/python_sampler/src/run_sampler.py"]
+args = { seed = 29, training_samples = 0 }

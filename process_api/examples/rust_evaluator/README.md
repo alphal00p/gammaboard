@@ -1,0 +1,60 @@
+# Rust Ragged-Domain Evaluator
+
+Standalone non-Python process evaluator example packaged with Apptainer.
+
+For a local worker, build directly from the repository root:
+
+```bash
+cargo build --release --locked --manifest-path process_api/examples/rust_evaluator/Cargo.toml
+```
+
+Set the run card's `command` to the absolute path of the resulting
+`rust-evaluator-worker` binary. It has no GammaBoard native-backend dependency.
+The bundled [run card](run.toml) uses uniform sampling; its default command uses
+the container option below.
+
+It demonstrates the direct process protocol shape:
+
+- `src/protocol.rs` reads and writes `Content-Length` framed JSON-RPC.
+- `src/evaluator.rs` owns config parsing and a vectorized ragged-domain function.
+- `src/main.rs` only connects the protocol to the evaluator.
+
+Build the worker image from the repo root:
+
+```bash
+just process-rust-evaluator-sif
+```
+
+Or build it directly from this directory:
+
+```bash
+apptainer build runtime.sif apptainer.def
+```
+
+Run config can then start it with:
+
+```toml
+command = ["apptainer", "exec", "$resources/../process_api/examples/rust_evaluator/runtime.sif", "rust-evaluator-worker"]
+cwd = "$resources"
+```
+
+The evaluator consumes ragged row-major batches. The demo domain is:
+
+```text
+d0 = 0 -> 3 continuous dimensions
+d0 = 1, d1 = 0 -> 1 continuous dimension
+d0 = 1, d1 = 1, d2 in 0..=4 -> 5 continuous dimensions
+```
+
+Configure it through `evaluator.domain`; `args.scale` is optional:
+
+```toml
+args = { scale = 1.0 }
+domain = { discrete = { axis_label = "d0", branches = [
+  { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 3 } } },
+  { index = 1, domain = { discrete = { axis_label = "d1", branches = [
+    { index = 0, domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 1 } } },
+    { index = 1, domain = { rectangular = { discrete_cardinalities = [5], continuous_dims = 5 } } },
+  ] } } },
+] } }
+```

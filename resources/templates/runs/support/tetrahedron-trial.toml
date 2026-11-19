@@ -1,7 +1,7 @@
-# Integration-only controller child; publish the metric consumed by tuning and scanning.
+# Integration-only child shared by tuning, scanning and campaigns.
 # Give each of the four conditional grids several updates before inference.
-replacements = { sharpness = 6, skew = 0, train_samples = 32768, sample_samples = 16384, center_00_x = 1.0, center_10_x = -1.0, seed = 10 }
-name = "tetrahedron-trial"
+replacements = { run_name = "tetrahedron-trial", sharpness = 6, skew = 0, train_samples = 32768, sample_samples = 16384, center_00_x = 1.0, center_10_x = -1.0, seed = 10, inference_seed = 20 }
+name = "$(run_name:tetrahedron-trial)"
 target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
 [evaluator]
 kind = "symbolica"
@@ -38,4 +38,4 @@ measurement = { selection = { kind = "metric", name = "error", component = "x" }
 estimator = "stratified"
 stop_condition = { max_samples = "$(sample_samples:16384)" }
 accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
-sampler = { from_stage = "train", config = { kind = "havana_inference", seed = 20 } }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = "$(inference_seed:20)" } }

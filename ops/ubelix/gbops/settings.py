@@ -6,13 +6,13 @@ import tomllib
 
 OPS_ROOT = Path(__file__).resolve().parents[1]
 
-# Reuse the canonical portable cards; cluster-specific additions live beside the
-# UBELIX node cards. Generated physics states and external runtimes are optional.
+# Select from the canonical catalog; only the worker presets are cluster-specific.
 PORTABLE_RUNS = (
     "installation-smoke.toml",
-    "tetrahedron-surface.toml",
-    "hyperparameter-tuning.toml",
-    "parameter-scan.toml",
+    "tetrahedron-native.toml",
+    "tetrahedron-tuning.toml",
+    "tetrahedron-scan.toml",
+    "tetrahedron-campaign.toml",
     "support/tetrahedron-trial.toml",
 )
 
@@ -55,9 +55,7 @@ def install_examples(workspace):
     """Refresh only the bundled portable run cards, including their child files."""
     target = Path(workspace) / "resources/templates/runs"
     common = OPS_ROOT.parents[1] / "resources/templates/runs"
-    cluster = OPS_ROOT / "resources/templates/runs"
     sources = [(common / name, Path(name)) for name in PORTABLE_RUNS]
-    sources += [(path, path.relative_to(cluster)) for path in sorted(cluster.rglob("*.toml"))]
     for source, name in sources:
         destination = target / name
         destination.parent.mkdir(parents=True, exist_ok=True)

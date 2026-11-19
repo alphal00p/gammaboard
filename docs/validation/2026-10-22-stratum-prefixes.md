@@ -86,7 +86,7 @@ For tetrahedron, the exact vector integral is `[0,0,0]`.
 
 Browser checks opened all four completed inference tasks, verified the tuple-labelled
 stratum counts, and recorded no page errors. Configuration and result data are in
-[prefix-validation.json](../../benchmarks/stratification/prefix-validation.json).
+[prefix-validation.json](../../benchmarks/stratification/results/prefix-validation.json).
 
 ## Observed uncertainty limitation
 

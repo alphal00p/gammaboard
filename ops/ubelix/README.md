@@ -57,13 +57,13 @@ needed for these examples.
 | Dashboard template | Example | Suggested workers |
 | --- | --- | --- |
 | `installation-smoke.toml` | Built-in unit integrand, exact result 1; works without a compiler | 2 |
-| `tetrahedron-surface.toml` | Stratified 2D → 3D surface, component/phase images, lines and per-stratum PDF diagnostics | 3–6 |
-| `hyperparameter-tuning.toml` | Nine Voronoi-centre configurations for the tetrahedron | 3–6 |
-| `parameter-scan.toml` | Nine surface sharpness/shear points with an error heatmap | 3–6 |
-| [integration-campaign.toml](resources/templates/runs/integration-campaign.toml) | Two independently trained sine integrals with ± strata, averaged with coefficients 1/2 and a shared 163,840-sample cap | 6 for two active children |
+| `tetrahedron-native.toml` | Stratified 2D → 3D surface, component/phase images, lines and per-stratum PDF diagnostics | 3–6 |
+| `tetrahedron-tuning.toml` | Nine Voronoi-centre configurations for the tetrahedron | 3–6 |
+| `tetrahedron-scan.toml` | Nine surface sharpness/shear points with an error heatmap | 3–6 |
+| [tetrahedron-campaign.toml](../../resources/templates/runs/tetrahedron-campaign.toml) | Two independently trained tetrahedron replicas, averaged with coefficients 1/2 and a shared 98,304-sample cap | 6 for two active children |
 
 The portable cards reuse the [canonical examples](../../docs/quickstart.md#default-examples).
-The campaign and its child live under `ops/ubelix/resources/templates/runs/`.
+There are no cluster-specific run definitions; only worker presets differ.
 All examples use the same image on each worker; GPU allocations are unnecessary.
 Create the run in the dashboard, then assign/resume workers after Slurm starts them.
 `PD (Priority)` means the allocation is waiting in the scheduler, not that its
@@ -75,10 +75,15 @@ To install these examples into an **existing workspace**, run from `ops/ubelix`:
 python3 ubelix.py install-examples
 ```
 
-This refreshes the five named cards and their support files, including replacing
-the generic GammaLoop campaign with the portable sine campaign. Other templates,
+This refreshes the five named cards and their shared tetrahedron child. Other templates,
 node cards and existing runs are preserved. Reload the New Run template list;
 the deployment can stay running while templates are installed.
+
+Older template filenames are not migrated or deleted automatically. For a clean
+catalog, remove the old bundled cards from the template menu, or remove the
+workspace's `resources/templates/` directory while stopped to reseed all defaults.
+Save any private templates before resetting that directory. Existing database
+runs keep their recorded definitions.
 
 An older image without `g++` can run `installation-smoke`, but Symbolica examples
 fail during evaluator initialization. Rebuild the image using the current recipe,
