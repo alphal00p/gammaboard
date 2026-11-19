@@ -484,6 +484,20 @@ def bounded_prefixes(domain, limit=128):
     return result
 
 
+def toy_integrand_domain(domain, prefix):
+    """Remove a complete stratum prefix, including ragged tree branches."""
+    from gammaboard_process.domain import RectangularDomain
+
+    for depth, label in enumerate(prefix):
+        if isinstance(domain, RectangularDomain):
+            return RectangularDomain(
+                domain.discrete_cardinalities[len(prefix) - depth :],
+                domain.continuous_dims,
+            )
+        domain = next(b.domain for b in domain.branches if b.index == label)
+    return domain
+
+
 def record_call(worker, trajectory, method, params, binary=b""):
     response, output = worker.call(method, params, binary)
     trajectory.events.append(Event(method, params, binary, response, output))
@@ -1032,20 +1046,30 @@ class Suite:
 
         if not self.options.statistics:
             raise Unsupported("enable --statistics for toy-integral smoke checks")
-        if not isinstance(self.domain, RectangularDomain) or self.domain.strata_dims:
+        prefixes = bounded_prefixes(self.domain)
+        stratified = prefixes != [()]
+        integrand = toy_integrand_domain(self.domain, prefixes[0])
+        if not isinstance(integrand, RectangularDomain) or any(
+            toy_integrand_domain(self.domain, prefix) != integrand
+            for prefix in prefixes
+        ):
             raise Unexercised(
-                "toy-integral check currently uses unstratified rectangular unit domains"
+                "toy-integral check needs the same rectangular integrand domain under every prefix"
             )
+        if stratified and integrand.continuous_dims == 0:
+            raise Unexercised("stratified toy integrals need a continuous coordinate")
+        volume = math.prod(integrand.discrete_cardinalities)
+        count = len(prefixes)
+        values = [[] for _ in prefixes]
+        matches = [0] * count
+        masses = None
         with self.worker() as worker:
-            weights = []
+            samples = 0
             calls = 0
-            while (
-                len(weights) < self.options.max_samples
-                and calls < self.options.max_calls
-            ):
+            while samples < self.options.max_samples and calls < self.options.max_calls:
                 limit = min(
                     max(self.options.batch_sizes),
-                    self.options.max_samples - len(weights),
+                    self.options.max_samples - samples,
                 )
                 response, binary = worker.call("generate", {"max_samples": limit})
                 calls += 1
@@ -1058,19 +1082,100 @@ class Suite:
                     )
                 if any(np.any((row < 0) | (row > 1)) for row in batch.xs_continuous):
                     raise Unexercised("fixture is not sampled on the unit hypercube")
-                weights.extend(batch.weights.tolist())
-        if len(weights) < 32:
-            raise Unexercised(
-                f"only {len(weights)} inference samples; at least 32 needed"
+                if stratified and masses is None:
+                    queries = [
+                        {
+                            "fixed_dims": [
+                                {"dim": d, "value": v} for d, v in enumerate(p)
+                            ]
+                        }
+                        for p in prefixes
+                    ]
+                    response, binary = worker.call(
+                        "discrete_mass", {"subspaces": queries}
+                    )
+                    masses = probability_values(response, binary, count, mass=True)
+                    if any(p is None for p in masses):
+                        raise Unexercised("toy integrals need exact stratum-prefix masses")
+                    if any(p <= 0 for p in masses) or not math.isclose(
+                        sum(masses), 1, rel_tol=1e-8, abs_tol=1e-10
+                    ):
+                        raise CheckError(
+                            "toy integrals need positive prefix masses summing to 1"
+                        )
+                for discrete, continuous, weight in zip(
+                    batch.xs_discrete, batch.xs_continuous, batch.weights
+                ):
+                    if not stratified:
+                        values[0].append([weight])
+                        continue
+                    k = next(
+                        i
+                        for i, p in enumerate(prefixes)
+                        if tuple(discrete[: len(p)]) == p
+                    )
+                    x = continuous[0]
+                    hit = min(int(x * count), count - 1) == k
+                    matches[k] += int(hit)
+                    # Full weights include 1/p_k. Misses remain zero-valued attempts.
+                    conditional = masses[k] * weight if hit else 0.0
+                    values[k].append([conditional, conditional * (x - 0.5)])
+                samples += len(batch.weights)
+
+        details, disagreements = [], []
+
+        def compare(label, estimate, error, expected):
+            details.append(
+                f"{label}: {estimate:.6g} ± {error:.3g}; expected {expected:.6g}"
             )
-        estimate = float(np.mean(weights))
-        expected = math.prod(self.domain.discrete_cardinalities)
-        error = float(np.std(weights, ddof=1) / math.sqrt(len(weights)))
-        detail = f"integral of 1: {estimate:.6g} ± {error:.3g}; expected {expected}; N={len(weights)}"
-        if abs(estimate - expected) > max(6 * error, 1e-8 * expected):
+            if abs(estimate - expected) > max(6 * error, 1e-8 * volume):
+                disagreements.append(label)
+
+        means, variances = [], []
+        names = (
+            ["integral of 1", "integral of x[0]-1/2"]
+            if stratified else ["integral of 1"]
+        )
+        for k, (prefix, observations) in enumerate(zip(prefixes, values)):
+            n = len(observations)
+            label = f"stratum {prefix}" if stratified else "inference"
+            if n < 32 or (stratified and matches[k] < 2):
+                raise Unexercised(
+                    f"{label}: N={n}"
+                    + (f", matches={matches[k]}" if stratified else "")
+                    + "; need at least 32 attempts"
+                    + (" and 2 matches per stratum" if stratified else "")
+                    + "; increase --max-samples/--max-calls"
+                )
+            mean = np.mean(observations, axis=0)
+            variance = np.var(observations, axis=0, ddof=1) / n
+            if not np.isfinite(mean).all() or not np.isfinite(variance).all():
+                raise Unexercised("toy-integral moments overflowed")
+            means.append(mean)
+            variances.append(variance)
+            details.append(
+                f"{label}: N={n}"
+                + (f", matches={matches[k]}, p={masses[k]:.6g}" if stratified else "")
+            )
+            expected = (
+                [volume / count, volume / count * ((k + 0.5) / count - 0.5)]
+                if stratified else [volume]
+            )
+            for name, value, var, exact in zip(names, mean, variance, expected):
+                compare(f"{label} {name}", value, math.sqrt(var), exact)
+        if stratified:
+            # Each conditional estimate already contains p_k; do not weight again.
+            for name, value, var, exact in zip(
+                names, np.sum(means, axis=0), np.sum(variances, axis=0), [volume, 0]
+            ):
+                compare(f"combined {name}", value, math.sqrt(var), exact)
+        detail = "; ".join(details)
+        if disagreements:
             raise Unexercised(
                 detail
-                + "; disagreement needs investigation (statistical evidence, not proof)"
+                + "; disagreement needs investigation: "
+                + ", ".join(disagreements)
+                + " (statistical evidence, not proof)"
             )
         return detail + "; smoke check only, not a normalization certificate"
 

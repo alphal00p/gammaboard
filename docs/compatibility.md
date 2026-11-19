@@ -1,13 +1,15 @@
 # Formats and deployment compatibility
 
-GammaBoard supports the current configuration and execution interfaces. It does
-not convert old definitions, databases, sampler state, or queue payloads. Start
-from the current [templates](../resources/templates) and validate definitions:
+GammaBoard supports its current configuration and execution interfaces. Validate
+run cards against the installed version; use the [current templates](../resources/templates)
+as starting points:
 
 ```bash
 gammaboard run validate run.toml
 gammaboard run validate run.toml --probe
 ```
+
+## Version matrix
 
 | Contract | Current version |
 | --- | --- |
@@ -18,80 +20,52 @@ gammaboard run validate run.toml --probe
 | Queue envelope | `GBQ` followed by byte `0x04` |
 | Performance responses | 2 |
 
-These versions identify separate contracts. Unknown configuration fields and
-unsupported protocol/state versions fail explicitly. The version checks protect
-persisted data; they are not adapters for older formats. The single baseline
-`202610080001_initial_schema.sql` includes campaign reservations, durable external
-launch leases/receipts, and deployment/build fencing. It is for fresh databases;
-previous migration checksums and older model databases are intentionally unsupported.
-Model 8 databases accept additive migrations. The `target_error` migration adds
-optional reference uncertainties; existing targets retain zero error. Deploy the
-matching server and dashboard together. The plot read model and campaign
-dashboard migrations preserve existing runs and snapshots; they do not backfill
-large histories. Campaign dashboard data is derived on demand, and missing fields
-in retained snapshots remain unavailable. This does not add compatibility with
-databases from earlier models.
+These identify separate contracts. The package version alone does not establish
+compatibility. [Runtime format checks](../src/compatibility.rs) reject unsupported
+versions; [configuration validation](config.md) rejects unknown fields.
+Database model 8 accepts the additive [migrations](../migrations) after its current
+baseline. Databases with an older model or different baseline migration checksums
+need matching older software or a fresh database; there is no general converter.
 
-The estimator-terminology migration renames saved measurement fields `basic` to
-`pooled`, tuning fields `objective_basic` to `objective_pooled`, and campaign
-estimator tags `combined` to `independent_sum`. It preserves values and errors in
-task outputs, controller results and derived-result history. Raw accumulator
-history, sampler checkpoints, queues, user parameters and histogram names are
-unchanged. No model/protocol bump is needed for their formats. Stop components
-for this migration and restart with matching server, workers and dashboard;
-old exported files are not rewritten. New JSON/CSV exports use the current names.
+## Upgrade procedure
 
-Use matching server, worker, SDK, and integration revisions. Stop all components
-before an incompatible upgrade. Preserve the old executable, environments,
-physics states, immutable sampler artifacts, and database backup together. Use a
-fresh database for an incompatible model; an old backup remains usable only with
-its matching software. An older executable cannot enforce a newer compatibility
-guard. See [backup and recovery](operations.md#backup-and-recovery).
+1. Check the format versions and integration revisions before changing binaries.
+2. Stop servers and workers. Back up the database and retain the matching executable,
+   environments, generated physics states and immutable sampler artifacts. Database
+   backups do not include external files; see [backup and recovery](operations.md#backup-and-recovery).
+3. Install matching server, worker, dashboard, SDK and deployment scripts. Update
+   SDK installations inside process-worker environments and rebuild their images.
+   Regenerate GammaLoop states when required by the revision pinned in GammaBoard.
+4. For a supported database model, restart the deployment to apply its pending
+   migrations. For an incompatible model, create a fresh database and recreate runs
+   from validated cards. Old backups remain usable with their matching software.
+5. Validate external workers and example definitions before resuming production
+   work. The [sampler checker](../process_api/README.md#check-a-sampler) can test a
+   process sampler without a server or database.
 
-Install process adapters into their intended environment and rebuild container
-images when changing the SDK:
+Use the profile-specific deployment procedure for [UBELIX](../ops/ubelix/README.md)
+or [ITPhlies](../ops/itphlies/README.md). Build Python wheels from a clean checkout:
+stale ignored `build/` directories can retain outdated modules. Check installed
+exports and the protocol, then run `python -m pip check` in each worker environment.
 
-```bash
-python -m pip install ./process_api/python ./integrations/madgraph
-# In an environment with the required scientific dependencies:
-python -m pip install ./process_api/python ./integrations/madnis
-python -m pip check
-```
+## Current upgrade notes
 
-Build wheels from a clean checkout. Stale ignored `build/` directories can retain
-outdated modules; check installed exports and the protocol, not just the version
-number. Regenerate GammaLoop physics states with GammaBoard's pinned revision.
-
-Rust task fields and serialized task fields use `sampler`; the execution worker
-role remains `sampler_aggregator`. Run lifecycle values include `completed` and
-`failed`, unassigned live workers report `idle`, and auth responses expose
-`auth_enabled`. Performance consumers read sampler identity from `metrics.epoch`
-and `metrics.node_uuid`.
-
-Dashboard view preferences use the current `gammaboard.panel-values.v1.` storage
-namespace. Retired unversioned preferences are ignored, so zoom/selection/color
-preferences reset once after this cleanup. Numerical results and run definitions
-are unaffected.
-
-Offline worker responses use `offline`/`starting`, `restore_requested`, and
-`can_start`. Actions are `start`, `restore`, `unassign-offline`, and
-`cancel-restoration`; deployment shutdown uses `/admin/workers/save-for-restart`.
-Use matching dashboard/server and UBELIX scripts. Stored launch recipes and the
-database restoration markers remain valid; worker records and telemetry are retained.
-
-Protocol v10 enforces one unweighted result per evaluator input. Python observable
-callbacks use `eval` and `ObservableBatch`; aggregated state, callback weighting
-and masking are removed. Native integration trigger adapters cannot implement
-this contract. The MadSpace per-sample evaluator remains supported.
-
-The optional checkpoint notification RPC is an additive v10 extension. A sampler
-worker advertises `"checkpoint_committed": true` alongside `"ok": true` in its
-initialization response. GammaBoard sends the RPC only to workers advertising it,
-with `{"snapshot": <committed opaque state>}` and expects `{"ok": true}`. The Python
-SDK dispatches it to the optional keyword-only `checkpoint_committed(snapshot=...)`
-hook; absent hooks acknowledge without action. The saved-state format is unchanged.
-
-Database model 8 and checkpoint model 6 retain conditional histogram bundles for
-each stratum. Older pooled-only histogram checkpoints cannot be upgraded: begin
-with a fresh database and matching workers/SDK. Queue input envelope 4 is unchanged.
-The GammaLoop pin includes its explicit sample-observable accumulation API.
+- Additive target-error and plot migrations preserve existing numerical results;
+  omitted target uncertainties remain zero. Older snapshots can lack optional
+  diagnostic fields; those values remain unavailable rather than being invented.
+- The estimator-terminology migration changes saved `basic` comparisons to `pooled`,
+  `objective_basic` to `objective_pooled`, and campaign estimator tags `combined`
+  to `independent_sum`. Values/errors, raw accumulators, queues, sampler state,
+  user parameters and histogram names are preserved. Old exported files are not
+  rewritten; new JSON/CSV exports use the current names.
+- Offline-worker actions require matching dashboard/server and UBELIX scripts.
+  They preserve saved launch recipes and worker history; see the [worker model](operations.md#manage-work).
+- Protocol v10 requires one unweighted evaluator result per input and per-sample
+  observable bundles. Older aggregate-only adapters need updating; see the
+  [callback contract](../process_api/README.md#python-callbacks).
+- Checkpoint notifications are an optional v10 extension, negotiated at sampler
+  initialization. Older workers are not sent the new RPC, and saved-state encoding
+  is unchanged. See [initialization](../process_api/protocol.md#initialization).
+- Database model 8/checkpoint model 6 retain conditional histogram bundles for each
+  stratum. Older pooled-only histogram checkpoints cannot be upgraded to this
+  estimator; start fresh with matching software.

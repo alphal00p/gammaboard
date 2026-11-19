@@ -57,4 +57,4 @@ for tested workflows, fixes found in the dashboard, and remaining limitations.
 require a fresh database and matching workers. Old checkpoints and queue formats
 cannot be resumed. Export run definitions before resetting; see
 [compatibility](docs/compatibility.md) and
-[deployment](docs/deployment.md#upgrading-this-revision).
+[upgrade procedure](docs/compatibility.md#upgrade-procedure).

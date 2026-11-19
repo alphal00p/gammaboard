@@ -158,12 +158,23 @@ class UniformSampler(Sampler):
         return np.asarray(values)
 
     def discrete_mass(self, subspaces):
-        if not isinstance(self.domain, RectangularDomain):
-            return None
-        return [
-            math.prod(1 / self.domain.discrete_cardinalities[d] for d in query)
-            for query in subspaces
-        ]
+        def mass(node, query, depth=0):
+            if isinstance(node, RectangularDomain):
+                cards = node.discrete_cardinalities
+                if any(d >= depth + len(cards) for d in query):
+                    return 0.0
+                return math.prod(
+                    1 / n if 0 <= query[depth + d] < n else 0
+                    for d, n in enumerate(cards)
+                    if depth + d in query
+                )
+            return sum(
+                mass(branch.domain, query, depth + 1)
+                for branch in node.branches
+                if depth not in query or query[depth] == branch.index
+            ) / len(node.branches)
+
+        return [mass(self.domain, query) for query in subspaces]
 
     def diagnostics(self):
         return {"generated": self.generated, "returned": self.returned}
@@ -245,6 +256,47 @@ class BadMass(UniformSampler):
 class NoMass(UniformSampler):
     def discrete_mass(self, subspaces):
         return None
+
+
+class NonuniformSampler(UniformSampler):
+    """Known density 2*x on the first continuous axis, with optional bad weights."""
+
+    def point(self, node):
+        discrete, continuous, weight = super().point(node)
+        # Transform only once, after walking a possibly nested domain.
+        if node is self.domain:
+            continuous[0] = math.sqrt(continuous[0])
+            weight *= self.extra.get("weight_scale", 1) / (2 * continuous[0])
+        return discrete, continuous, weight
+
+    def pdf(self, xs_discrete, xs_continuous):
+        return super().pdf(xs_discrete, xs_continuous) * np.array(
+            [2 * row[0] for row in xs_continuous]
+        )
+
+
+class ScriptedStrataSampler(UniformSampler):
+    """Fixed draws for an exact accounting oracle, not an independent sampler."""
+
+    def generate(self, max_samples):
+        batch = super().generate(max_samples)
+        if not isinstance(batch, SampleBatch):
+            return batch
+        n = len(batch.weights)
+        indices = np.arange(self.generated - n, self.generated)
+        labels = (indices % 4 != 0).astype(int)
+        xs = np.where(indices % 8 < 4, 0.25, 0.75)
+        if self.extra.get("miss_only"):
+            xs = np.where(labels == 0, 0.75, 0.25)
+        batch.xs_discrete[:, 0] = labels
+        batch.xs_continuous[:, 0] = xs
+        batch.weights[:] = np.where(labels == 0, 4.0, 4.0 / 3)
+        batch.weights *= self.extra.get("weight_scale", 1)
+        return batch
+
+    def discrete_mass(self, subspaces):
+        p = self.extra.get("reported_p", 0.25)
+        return [1.0 if not q else (p if q[0] == 0 else 1 - p) for q in subspaces]
 
 
 class InvalidWeights(UniformSampler):

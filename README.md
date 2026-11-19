@@ -39,16 +39,13 @@ masking and statistical aggregation. Materializers and transforms connect genera
 samples to integrand coordinates. The [execution model](docs/execution-model.md#ownership-and-flow)
 defines these contracts for native and process implementations.
 
-## Guides
+## Documentation
 
-- [Setup and examples](docs/quickstart.md)
-- [Run and task configuration](docs/config.md)
-- [Sampling, evaluation, feedback, and recovery specification](docs/execution-model.md)
-- [Deployment, access, and capacity](docs/deployment.md)
-- [Daily operation, performance, and recovery](docs/operations.md)
-- [Benchmarks and plots](docs/benchmarking.md)
-- [External evaluators and samplers](process_api/README.md)
-- [UBELIX](ops/ubelix/README.md) · [ITPhlies](ops/itphlies/README.md)
+Start with [setup and examples](docs/quickstart.md), then use the
+[documentation index](docs/README.md) to find configuration, operations, deployment
+and extension guides. [Stratification](docs/stratification.md) covers partitioning,
+weights, observables and uncertainty; the [execution model](docs/execution-model.md)
+specifies the complete sampling/evaluation contract.
 
 ## Development
 

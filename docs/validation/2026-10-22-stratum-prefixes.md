@@ -1,5 +1,8 @@
 # Stratum-prefix and feedback validation — 2026-10-22
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 The sampler protocol now exposes complete domains and one rich feedback object.
 `Integrand` and `Stratum` roles are left-bound on each path; rectangular nodes use
 `strata_dims`. Prefix lengths may vary, and explicit branch labels may have gaps.

@@ -1,5 +1,8 @@
 # Unified PDF diagnostics — 2026-10-23
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 Ordinary and stratified PDF tasks now share one backend projector and one
 comparison panel. The separate legacy normalization, mismatch and histogram
 projection path was removed. The client uses the same diagnostic calculations,

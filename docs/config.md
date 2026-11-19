@@ -3,7 +3,8 @@
 Run cards use TOML 1.1. Start from [run/task templates](../resources/templates),
 then validate with `gammaboard run validate CARD`. Runner defaults are listed in
 [run.toml](../src/config_defaults/run.toml); hosting settings are in
-[deployment](deployment.md).
+[deployment](deployment.md). Dashboard controls and imports/exports are in
+[operations](operations.md#read-results-and-plots).
 
 ## Integration runs
 
@@ -40,11 +41,9 @@ target_error = { real = 0.02 }
 Omitted errors are zero; supplied errors must be finite, nonnegative and refer to
 target components. This also works for integration campaign targets. The signed
 comparison pull is `(estimate − target) / sqrt(sampling_error² + target_error²)`;
-the dashboard shows the target uncertainty in comparison details and as a shaded
-orange band around the dashed target line, labelled **Target ±1σ**. The legend
-toggles the target line and band together; the tooltip reports the target error
-and band limits. Omitted or zero errors show just the target line. Target errors
-do not change sampling errors or stopping criteria.
+target errors do not change sampling errors or stopping criteria. See
+[reading results](operations.md#read-results-and-plots) for comparison details
+and target bands in the dashboard.
 
 ### Evaluators and samplers
 
@@ -111,6 +110,22 @@ means the complex pair `["real", "imag"]`. Images provide one selector for compo
 and the full vector magnitude; complex phase is offered only for real/imag output.
 Use a task-local evaluator projection, as in the tetrahedron's `xy-phase` task,
 when a complex view is wanted for part of a higher-dimensional output.
+
+### Checkpoint policy
+
+Set periodic recovery triggers inside a sample task:
+
+```toml
+checkpoint = { interval_seconds = 3600.0, interval_samples = 0 }
+```
+
+The default saves hourly. Zero disables that trigger; either positive threshold
+can trigger a save. For example, `interval_seconds = 0` and
+`interval_samples = 10000000` saves after ten million newly completed task samples,
+including zero contributions. Setting both to zero disables periodic saves but
+retains activation, pause and completion checkpoints. Inherited accumulator samples
+do not count toward the new task's sample interval. See [recovery semantics](execution-model.md#tasks-checkpoints-and-failures)
+and [backup/restore commands](operations.md#backup-and-recovery).
 
 ## Accumulators and measurements
 
@@ -216,78 +231,6 @@ rechecks the target before publishing completion. Final publication waits for
 worker checkpoints. Interrupted grants survive pause, worker loss and controller
 recovery; they are not issued a second time.
 
-## Observable comparisons
-
-**Upload Bundle** in both **Observables** and **Combined Observables** accepts
-JSON and HwU files up to 16 MiB. JSON imports stay in the browser; HwU files are
-converted by the authenticated server to the same comparison format. Imports
-remain local to the current panel session and never change a run's accumulator.
-HwU imports preserve bin edges, central values, errors, titles, axis flags and
-TYPE descriptions. Extra named weight columns are omitted with a notice. Duplicate
-titles receive numeric suffixes. **Add Histogram** selects the dropdown entry whose
-displayed name exactly matches the selected observable's title in the table. If
-there is no available match, it selects the first compatible histogram in the
-bundle that has not already been added. HwU cannot recover original
-sample counts, raw moments or category labels. Integer unit-width bins can be
-compared to discrete observables by index; review the selected matching mode.
-
-**Merge adjacent bins** changes only the display of continuous histograms. One
-integer factor applies to the result and all selected comparisons, including the
-comparison estimator in Compare estimates. The maximum factor is limited by the
-shortest selected histogram. Valid changes apply immediately while editing or
-using the input arrows; Compare errors and Error reduction keep their original bins.
-Bins are merged in coordinate order, preserving a smaller final group. Overlaps
-and merges across gaps are rejected. Underflow and overflow remain separate.
-Values are bin integrals and are summed; for an imported differential density,
-select **Density per unit x** to multiply its values and errors by bin width
-before merging.
-
-Merged-bin uncertainties use quadrature, an **uncorrelated-bin approximation**.
-Cumulative uncertainties remain unavailable: GammaLoop histogram snapshots do
-not retain cross-bin covariance.
-Missing errors stay unavailable. Comparisons draw their own edges; ratios use only
-matching intervals or exact sums of finer reference bins, never midpoint sampling
-of a wider bin. Shared grouping does not guarantee aligned edges when the
-original binnings differ.
-
-Factors persist as panel view preferences across refreshes. **Reset** restores the
-original binning and zoom; the input value convention stays selected. Bundle
-exports retain original data, while figure exports use the displayed bins. No
-checkpoint or database format changes are required for these controls.
-
-Both **Observables** and **Combined Observables** offer **JSON** and **HwU**
-downloads of the entire observable bundle. JSON retains metadata and underflow/
-overflow results; HwU contains the central value and uncertainty of each regular
-bin. Campaign JSON uses GammaLoop-compatible histogram fields, with
-`statistics_kind = "derived_moments"` and `estimator = "independent_sum"`: its moments
-encode the sum of independent child estimates and their quadrature uncertainty.
-Entry and diagnostic counters are actual sums. These derived moments are for
-reading/plotting and are not pooled samples suitable for resuming or ordinary
-accumulator merging. JSON export checks that the encoded moments reproduce values
-and errors (relative tolerances 1e-12 and 1e-6 respectively); if float64 precision
-cannot preserve an uncertainty, it reports an error and HwU remains available.
-Campaign HwU writes values and errors directly. View settings and
-uploaded comparisons do not change these data downloads.
-
-Campaign downloads default to the aggregate only. Check **Include child observables**
-to append the original unscaled child data: JSON adds a `children` array with
-names, coefficients, source references, and bundles; HwU adds child-labelled
-histogram blocks with coefficient comments. Children are fetched only when an
-export is requested, and the aggregate is calculated from exactly those fetched
-states. An active campaign's export may therefore be newer than the last dashboard
-refresh. The same compatibility rule as the dashboard applies: only observables
-present with matching layouts in every child enter the aggregate; omissions are
-listed in JSON. Original child bundles can still contain those omitted observables.
-
-**Download plots PDF** renders one observable per page, using the current scales,
-bin merging, zoom, and enabled relative-error/ratio plots. When comparison bundles
-are uploaded, check **Include comparisons in PDF** to include their overlays.
-Configured selections are retained per observable; for observables not yet
-configured, the export matches the table title to the comparison dropdown name,
-falling back to the first compatible entry. Uncheck the option to export only the
-run's observables. PDF generation shows progress and leaves the dashboard view
-unchanged.
-
 ## Batch and resource tuning
 
 ```toml
@@ -335,7 +278,7 @@ and optional positive component `scales`. The inference task selects
 `estimator = "stratified"`, `from_stage = "train"`, and an explicit fresh
 `accumulator = { config = ... }`. No user probability table is accepted.
 The frozen sampler supplies it through `discrete_mass`. See the
-[execution contract](execution-model.md#scaled-voronoi-stratification) and the
+[statistical specification](stratification.md) and the
 [tetrahedron run](../resources/templates/runs/tetrahedron-surface.toml).
 
 Symbolica can evaluate named real vectors using
@@ -353,14 +296,7 @@ The primary integral and every observable bin use conditional per-stratum statis
 Process observable callbacks return unweighted per-sample contributions under protocol v10;
 GammaBoard applies masking and weights centrally.
 
-### Stratum plots and PDF inspection
-
-Sample tasks with a partition expose a **Strata** panel. Training shows allocation
-and hit-rate histories; conditional inference adds component contributions with
-reported errors and a variance breakdown. The component selector applies to the
-convergence plot and variance shares together. Legend selections and **Show total**
-change visibility only. **Between snapshots** uses differences of retained counts,
-so its intervals can become wider when history is downsampled.
+## PDF diagnostic tasks
 
 Append a diagnostic task to a trained or frozen sampler:
 
@@ -377,74 +313,8 @@ stratum prefix. Every complete prefix is inspected, including ragged/sparse labe
 The saved source determines the partition and training projection. Diagnostic
 statistics start fresh and do not modify the source or publish a new integral.
 
-Ordinary and stratified sources share the same **PDF comparison** panel. Its
-**Scope** selector offers an overview, one stratum or comparisons paged four at a
-time. Large prefix lists are searchable. The **View** selector switches between
-density comparison, sampling mismatch, distributions, coverage and (when a
-partition exists) membership. This keeps expensive plots and controls off screen
-until requested.
-
-The four normalization modes are:
-
-- **Shape on this slice:** normalize the target by trapezoidal integration over
-  the parameter grid. Native Havana line PDFs use their exact bin integrals;
-  other PDFs use the same grid quadrature. A zero or unavailable integral has no
-  normalized curve. When a stratum's target is zero at every evaluated slice
-  point, the panel says so and omits the undefined target curve and legend entry.
-  Joint/conditional density modes can still show the raw zero target. The sampler
-  PDF remains visible outside its intended stratum; it describes proposed points,
-  including those that would miss and contribute zero.
-- **Source integral reference:** compare joint PDFs with the target divided by
-  the source estimate of its absolute-projection integral, when available. A
-  signed integral's magnitude is never used as a substitute.
-- **Conditional density:** divide the joint PDF by the exact complete prefix
-  mass. Unknown or zero masses produce unavailable conditional curves.
-- **Joint density:** retain the sampler's returned PDF, including its prefix mass.
-
-Mismatch and distribution views use shape or source-reference normalization so
-that ratios compare like quantities. Raw density modes give the importance
-target its own scale. **Normalization and leakage details** reports raw slice
-integrals, applied divisors, exact requested masses, target shares, estimated
-actual-cell masses and proposal leakage outside each intended cell. Leakage and
-cell masses are grid estimates on the displayed slice, not full-domain guarantees.
-
-The mismatch metrics are `PDF / target - 1` and `log10(PDF / target)`. Log ratio
-is the default because near-zero targets can dominate a linear mismatch axis. **Coverage**
-distinguishes positive target with zero PDF, zero target with positive PDF, both
-zero, and unavailable data. Infinite/undefined ratios are counted explicitly and
-can be located in Coverage. Histograms describe deterministic grid-point values;
-they have no Monte Carlo error bars, and retain the shared histogram CDF, scale,
-ratio and export controls.
-
-Zoom/pan is linked within the panel and persists across refreshes and view
-changes. **Reset view** restores the full extent. The expandable colour controls
-share both bounds across comparable heatmaps, including logarithmic scales;
-raw target and PDF quantities have separately labelled bounds. Native Havana
-line densities are drawn at exact bin edges. Other sampler curves interpolate
-queried points.
-
-For stratified 2D density comparisons, **Colour encoding → Stratum hue + density**
-optionally uses the established stratum hues and increases saturation with the
-displayed density. Both target and sampler use the **actual integrand stratum** at
-each grid point: sampler density in another stratum's colour exposes leakage.
-The mapping follows the chosen linear/logarithmic scale and colour limits; white
-is the low end and unknown membership is grey. The compact hue key shows up to
-eight prefixes, after which colours repeat; hover identifies the exact prefix.
-**Density only** remains the default. The selection persists across view changes
-and reloads. Boundary-line overlays have been removed; use hue encoding or the
-membership view to inspect the partition.
-
-The Strata history panel also has paged/searchable scope selection, elapsed-time
-and reported sampler-time axes, follow-latest behaviour, and persistent zoom.
-Sampler time uses the last preceding performance report for the same task;
-missing timestamps are omitted rather than inferred from sample counts.
-
-PDF leakage outside the intended stratum remains visible; only the target is
-masked. Classification uses the complete output vector, independently of the
-training projection being plotted. These views are slices, not marginals over
-omitted coordinates. Custom process materializers are rejected because their
-coordinate mapping cannot be reconstructed from a PDF query alone. Batch
-transforms still apply, with their Jacobians included in the importance target.
-
-Use [stratum-pdf-line.toml](../resources/templates/tasks/stratum-pdf-line.toml) with
-the two-dimensional tetrahedron examples. The [surface card](../resources/templates/runs/tetrahedron-surface.toml) includes the complete line/image/PDF tour.
+For two-dimensional inputs, use [stratum-pdf-line.toml](../resources/templates/tasks/stratum-pdf-line.toml)
+or the full [surface card](../resources/templates/runs/tetrahedron-surface.toml).
+[PDF inspection](operations.md#stratum-plots-and-pdf-inspection) describes display
+controls; the [probe contract](stratification.md#stratum-plot-data-and-pdf-probes)
+defines densities, normalization and supported coordinate mappings.

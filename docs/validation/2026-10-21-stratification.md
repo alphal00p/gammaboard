@@ -1,5 +1,8 @@
 # Stratification validation — 2026-10-21
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 Implemented scaled output-space Voronoi partitioning as a sampling-pipeline
 option. Training uses full-weight feedback with zeros for misses; frozen inference
 uses exact label probabilities and independent per-stratum moments/covariance.

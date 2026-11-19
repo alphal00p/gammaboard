@@ -96,10 +96,9 @@ with settings in `ops/ubelix/local.toml`. Builds replace fixed service images wh
 the workspace is stopped; deployments retain image digests and configuration/script
 snapshots. See its [operator guide](../ops/ubelix/README.md).
 
-## Upgrading this revision
+## Upgrades
 
-Use the [compatibility policy](compatibility.md) to match binaries, SDKs, generated
-physics states, and persisted formats. Incompatible models require a fresh database;
-there is no definition/state converter. Preserve the old deployment and backup,
-then recreate runs from current validated templates. See
-[backup and recovery](operations.md#backup-and-recovery) for operator commands.
+Follow the [compatibility matrix and upgrade procedure](compatibility.md). It covers
+matching server/worker/SDK builds, database migrations, generated states and backups.
+Use [backup and recovery](operations.md#backup-and-recovery) for CLI commands, and
+the relevant deployment profile for cluster-specific steps.

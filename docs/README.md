@@ -1,40 +1,34 @@
-# Operator guide
+# Documentation
+
+## Get started
 
 | Task | Guide |
 | --- | --- |
-| Install and run an example | [Quickstart](quickstart.md) |
-| Define runs, tasks, and tuning | [Configuration](config.md) |
-| Configure hosting, access, and resources | [Deployment](deployment.md) |
-| Manage work, read metrics, and recover | [Operations](operations.md) |
-| Measure a machine and generate plots | [Benchmarks](benchmarking.md) |
-| Understand or implement sampling/evaluation interfaces | [Execution specification](execution-model.md) |
-| Connect an external process worker | [Process guide](../process_api/README.md) · [Wire protocol](../process_api/protocol.md) |
-| Match versions and persisted formats | [Compatibility](compatibility.md) |
-| Implement an external cluster launcher | [Launch leases and deployment identity](cluster-launches.md) |
+| Install and run the standard examples | [Setup and examples](quickstart.md) |
+| Define runs, tasks, sources, tuning and campaigns | [Configuration reference](config.md) |
+| Understand strata, weights and reported errors | [Stratification](stratification.md) |
 
-Cluster-specific commands: [UBELIX](../ops/ubelix/README.md) and
-[ITPhlies](../ops/itphlies/README.md).
+## Operate GammaBoard
 
-[Stratification example and A/B results](../benchmarks/stratification/README.md):
-scaled output-space Voronoi cells with Symbolica and Havana.
+| Task | Guide |
+| --- | --- |
+| Assign workers, inspect plots, compare observables and recover work | [Operations](operations.md) |
+| Configure hosting, access, ports and capacity | [Deployment](deployment.md) |
+| Upgrade matching binaries, SDKs and saved formats | [Compatibility](compatibility.md) |
+| Measure throughput and overhead | [Benchmarking](benchmarking.md) |
 
-[Stratum-prefix validation](validation/2026-10-22-stratum-prefixes.md): ragged labels,
-rich feedback, process/recovery tests, and live sine/tetrahedron comparisons.
+Deployment profiles: [local](../ops/local/README.md),
+[ITPhlies](../ops/itphlies/README.md), and [UBELIX](../ops/ubelix/README.md).
 
-[Statistics consistency validation](validation/2026-10-22-statistics-consistency.md):
-selected and pooled estimates, uncertainty availability, diagnostics, and browser exports.
+## Extend GammaBoard
 
-[Stratum plot showcase](validation/2026-10-23-stratum-plots.md): convergence and
-allocation plots, conditional PDF comparisons, membership maps, and live examples.
+| Task | Guide |
+| --- | --- |
+| Implement sampling, materialization, evaluation, feedback and recovery | [Execution model](execution-model.md) |
+| Write or test an external worker | [Process-worker guide](../process_api/README.md) |
+| Implement the transport without the Python SDK | [Wire protocol](../process_api/protocol.md) |
+| Submit workers through an external scheduler | [Cluster launch contract](cluster-launches.md) |
+| Use MadNIS, MadGraph or another adapter | [Integrations](../integrations/README.md) |
 
-[Unified PDF diagnostics](validation/2026-10-23-unified-pdf-diagnostics.md): restored
-diagnostics, exact native bins, bounded comparisons, shared controls and validation.
-
-[Concurrent campaigns](validation/2026-10-29-campaign-concurrency.md): resource-aware
-assignment, independent scheduling quanta, shared budgets and recovery validation.
-
-[UBELIX lifecycle](validation/2026-10-29-ubelix-lifecycle.md): managed launch supervision,
-fresh database cleanup, checkout-based builds and fixed-image deployment.
-
-[Tetrahedron and checkerboard showcase](validation/2026-10-29-stratification-showcase.md):
-live ordinary/stratified comparisons, PDF diagnostics and chart cleanup validation.
+[Historical validation and benchmark records](validation/README.md) retain their
+original revisions, settings and results. Use the guides above for current behavior.

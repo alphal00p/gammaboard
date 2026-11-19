@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
@@ -243,6 +244,150 @@ def test_unit_integral_statistics(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert row(result.stdout, "Toy-integral statistics").endswith("PASS")
+
+
+def rectangular(cards=(), continuous=2, strata=0):
+    return {
+        "rectangular": {
+            "discrete_cardinalities": list(cards),
+            "continuous_dims": continuous,
+            "strata_dims": strata,
+        }
+    }
+
+
+def stratum_tree(branches):
+    return {
+        "discrete": {
+            "axis_role": "stratum",
+            "branches": [
+                {"index": index, "domain": domain} for index, domain in branches
+            ],
+        }
+    }
+
+
+def toy_statistics(name="UniformSampler", *, domain=None, args=None, samples=512):
+    options = checker.parse_args(
+        [
+            f"{FIXTURES}:{name}",
+            "--statistics",
+            "--require-stratified",
+            "--max-samples", str(samples),
+            "--max-calls", "128",
+            "--batch-sizes", "1,7,31",
+            "--init-args", json.dumps(args or {}),
+            "--domain", json.dumps(domain or rectangular([2], strata=1)),
+        ]
+    )
+    return checker.Suite(options, checker.Report()).statistics()
+
+
+def test_stratified_statistics_run_through_cli(tmp_path):
+    result = run_sampler(
+        "UniformSampler",
+        tmp_path,
+        extra=(
+            "--statistics", "--require-stratified",
+            "--max-samples", "512", "--max-calls", "64",
+        ),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert row(result.stdout, "Toy-integral statistics").endswith("PASS")
+    assert "stratum (0,) integral of x[0]-1/2:" in result.stdout
+    assert "expected -0.125" in result.stdout and "expected 0.125" in result.stdout
+    assert "combined integral of x[0]-1/2:" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "domain,volume",
+    [
+        (rectangular([2], strata=1), 1),
+        (rectangular([2, 2, 3], strata=2), 3),
+        (
+            stratum_tree([
+                (0, rectangular([3])),
+                (1, stratum_tree([(k, rectangular([3])) for k in (0, 1, 3)])),
+            ]),
+            3,
+        ),
+    ],
+)
+def test_stratified_toys_with_nonuniform_density_and_integrand_dimensions(
+    domain, volume
+):
+    from gammaboard_process import Domain
+
+    detail = toy_statistics("NonuniformSampler", domain=domain)
+    for prefix in Domain.from_dict(domain).stratum_prefixes():
+        assert f"stratum {prefix} integral of 1:" in detail
+    assert f"expected {volume}; combined integral of x[0]-1/2:" in detail
+    assert "smoke check only" in detail
+
+
+def test_stratified_toy_exact_accounting_retains_zeros_and_sums_variances():
+    detail = toy_statistics("ScriptedStrataSampler", samples=128)
+    assert "stratum (0,): N=32, matches=16, p=0.25" in detail
+    assert "stratum (1,): N=96, matches=48, p=0.75" in detail
+    # Each stratum has half zeros and half +/-1/4 after p*W; the different
+    # attempted counts (not matches or total N) determine its standard error.
+    for prefix, n, mean in [(0, 32, -0.125), (1, 96, 0.125)]:
+        error = 0.125 / math.sqrt(n - 1)
+        assert (
+            f"stratum ({prefix},) integral of x[0]-1/2: {mean} ± {error:.3g}"
+            in detail
+        )
+    combined_error = 0.125 * math.sqrt(1 / 31 + 1 / 95)
+    assert (
+        f"combined integral of x[0]-1/2: 0 ± {combined_error:.3g}; expected 0"
+        in detail
+    )
+    assert "combined integral of 1: 1 ±" in detail
+
+
+def test_stratum_checks_detect_wrong_weights_despite_signed_cancellation():
+    with pytest.raises(checker.Unexercised) as exc:
+        toy_statistics("ScriptedStrataSampler", args={"weight_scale": 10}, samples=512)
+    detail = str(exc.value)
+    assert "combined integral of x[0]-1/2: 0 ±" in detail
+    assert "stratum (0,) integral of x[0]-1/2: -1.25" in detail
+    assert "disagreement needs investigation" in detail
+
+
+def test_stratified_toy_detects_incorrect_normalized_prefix_masses():
+    with pytest.raises(checker.Unexercised, match="disagreement needs investigation"):
+        toy_statistics("ScriptedStrataSampler", args={"reported_p": 0.5})
+
+
+@pytest.mark.parametrize(
+    "name,kwargs,message",
+    [
+        ("NoMass", {}, "exact stratum-prefix masses"),
+        ("UniformSampler", {"samples": 20}, "32 attempts"),
+        ("UniformSampler", {"args": {"training": True}}, "frozen proposal"),
+        ("ScriptedStrataSampler", {"args": {"miss_only": True}}, "matches=0"),
+        (
+            "UniformSampler",
+            {"domain": rectangular([2], continuous=0, strata=1)},
+            "continuous coordinate",
+        ),
+        (
+            "UniformSampler",
+            {"domain": stratum_tree([
+                (0, rectangular(continuous=1)), (1, rectangular(continuous=2)),
+            ])},
+            "same rectangular integrand domain",
+        ),
+    ],
+)
+def test_stratified_toy_unexercised_cases(name, kwargs, message):
+    with pytest.raises(checker.Unexercised, match=message):
+        toy_statistics(name, **kwargs)
+
+
+def test_stratified_toy_rejects_zero_mass():
+    with pytest.raises(checker.CheckError, match="positive prefix masses"):
+        toy_statistics("ScriptedStrataSampler", args={"reported_p": 0})
 
 
 def test_portable_snapshot_values():

@@ -1,5 +1,8 @@
 # UBELIX lifecycle and checkout deployment — 2026-10-29
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 The control allocation supervises the request launcher. Control and workers share
 configuration snapshots and container arguments. Healthy workers use a deployment
 heartbeat; stale-control scheduler queries are cached across workers. A launcher

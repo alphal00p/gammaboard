@@ -2,7 +2,7 @@
 
 > Historical validation record. “Basic” in this report is now called “Pooled”;
 > current terminology and observable behavior are specified in the
-> [execution model](../execution-model.md#estimator-terminology).
+> [stratification specification](../stratification.md#estimator-terminology).
 
 The [dashboard](http://itphlies:8098/) is also available through its
 [Tailnet hostname](http://itphlies.tailb3264.ts.net:8098/).

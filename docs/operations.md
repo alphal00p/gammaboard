@@ -1,72 +1,33 @@
 # Operations
 
 Use the same runtime config and port offset as the deployment. Run IDs avoid
-ambiguity when several runs share a name.
+ambiguity when several runs share a name. For run-card fields see
+[configuration](config.md); for statistical definitions see [stratification](stratification.md).
 
 ## Dashboard navigation
 
-The header shows the connection status and last successful server-status update
-across all tabs. The persistent tabs are **Runs**, **System**, and **Logs**. Runs shares one run
-selector across **Tasks**, **Summary**, **Performance**, and **Settings**.
-The run selector searches loaded runs by name, ID, lifecycle state or parent ID.
-Child labels and status remain visible; use **Load more runs** to include older entries.
-Showing children augments the root catalog without reloading the selected parent
-or discarding loaded root pages. Hiding children pauses their catalog polling.
-Top-level navigation is centered on wider screens; section and view tabs align
-with the left edge of their content. Nested tabs use progressively quieter styles.
-Tasks separates the selected task's Result, Observables, Stratum output,
-and Diagnostics. Unsupported output tabs remain visible but disabled; Stratum output
-becomes available once the task provides stratum data. An unavailable retained
-selection displays Result. Collapse the queue to give the output more space;
-the selected task's name, state, and kind remain above its output.
-Worker actions remain visible but disabled when inapplicable, with hover explanations.
-Completed runs cannot receive workers, but remaining pool members can still be removed.
-System worker controls use the same assignment rules; completed/failed pools remain
-listed but disabled, and unassign actions require an existing assignment.
-Sample progress is an unlabeled bar with ETA; sample counts remain in the task table.
-Campaign progress retains a full-width bordered panel, with its label and sample
-count on the same row.
-Changing tasks reserves output height during loading to avoid scrolling the page.
-Summary combines identity, lifecycle, totals, and targets in a run overview, followed
-by the selected task's metadata and expandable checkpoint recovery. Recovery errors
-remain visible when collapsed. Settings shows effective evaluator/sampler configuration,
-its source stage, with evaluator/sampler summaries before their configuration trees.
-Run definition and deletion actions sit at the right of the worker-assignment
-row below the run selector; child-run worker information occupies the same row.
-Child runs retain their dash and an extra indent
-in run-selection menus. New run and Show child runs sit beside the selector on wider screens.
+- **Runs** shares a run selector across **Tasks**, **Summary**, **Performance**,
+  and **Settings**. Search by name, ID, status or parent; **Load more runs** extends
+  the catalog, and **Show child runs** includes controller children.
+- **Tasks** contains the queue and the selected task's **Result**, **Observables**,
+  **Stratum output**, and **Diagnostics**. Collapse the queue to give results more
+  space. Unsupported tabs and actions stay visible but disabled, with explanations.
+- **Summary** shows run identity, totals, targets and checkpoint recovery;
+  **Settings** shows the effective evaluator/sampler configuration and source stage.
+- **Performance** contains **Overview**, **Diagnostics**, **Graphs**, and **Queue
+  tuning**. Queue tuning follows the active sampling task, not the task being
+  inspected. It is disabled without active sampling; changing tasks discards its
+  unsaved edits. Controller-owned child tasks are read-only here.
+- **System** manages workers, the database and server settings. **Logs** retains
+  its filters and loaded older pages; use **Refresh** to request the latest page.
 
-Performance provides Overview, Diagnostics, Graphs, and Queue tuning. Queue tuning
-automatically follows the active sampling task, independently of the task selected
-for viewing results. There is no task selector; when sampling is not active the tab
-is disabled. Task changes reset the form and discard unsaved edits. Live Queue and
-Batch panels appear only for the active sampling task. Managed child tasks remain
-read-only. System contains Workers, Database (runtime/server details and
-destructive controls), and Settings (configuration paths and documentation).
-Logs retains its own run and worker filters and loaded older pages across tab
-switches. Use **Refresh** for the latest log page; changing filters loads a new list.
-Performance graph navigation instructions are available from the information button
-beside the current history/following status.
-
-**GammaLoop time per sample** in task Diagnostics measures elapsed time inside
-GammaLoop, averaged over the task's evaluated samples. It excludes GammaBoard's
-queue/database work, sampler work and observable aggregation. Mapping is
-GammaLoop's sampling map and channel partition, not the strata. Generated
-evaluator calls and event processing are subsets of integrand time; Other integrand
-work excludes both. Unclassified GammaLoop time is the residual after subtracting
-mapping and inclusive integrand time from the total, not a separately timed operation.
-
-Node management's **Stop Idle nodes** requests shutdown only for live nodes with
-no current role, pending assignment, or pool membership. Eligibility is checked
-atomically by the server. **Unassign all** reports only live nodes whose stored
-assignment changed; expired stored assignments are also cleared but are excluded
-from the notification count.
-
-The URL records the selected run, task, and tabs for refresh, bookmarks, and
-browser Back/Forward. Switching tabs keeps drafts, imported comparisons, and view
-preferences while pausing inactive polling and chart updates. Open panels and
-canvases remain mounted, and resize when shown again. Imported
-comparisons and unsaved drafts remain browser-session state, not saved run data.
+The URL records the selected run, task and tabs for bookmarks and Back/Forward.
+Switching tabs retains loaded plots and view preferences while pausing hidden
+polling. Returning shows cached data with a refresh indicator; failed refreshes
+retain the last data with a warning. Worker lists and actions always recheck live
+state. Plot preferences persist locally; result data and imported reference bundles
+are page-session state. Expand result fields or table cells for full precision,
+help and configuration details.
 
 ## Manage work
 
@@ -89,8 +50,8 @@ are not live capacity. Launch history records connection attempts, not current h
 Graceful deploy shutdown marks running workers **Saved for restart**, preserving
 their launch settings and intended assignments. Workers stopped separately before
 shutdown are not marked. `deploy --resume-workers` restores only marked workers;
-plain `deploy` leaves them offline with their markers intact. Use `node start-local`, dashboard launch requests, or the cluster launcher
-so launch settings are recorded. Manually started `node run` workers cannot be
+plain `deploy` leaves them offline with their markers intact. Use `node start-local`,
+dashboard launch requests, or the cluster launcher so launch settings are recorded. Manually started `node run` workers cannot be
 automatically recreated. A forced kill cannot save a new shutdown roster.
 
 **System → Workers → Offline** shows offline and starting workers. Restoration
@@ -146,6 +107,181 @@ Removal drains the whole run tree before deleting it. Browser deletion continues
 in the background; the CLI waits. If removal fails, inspect the error and retry
 after workers stop. After a server restart, refresh the run list before retrying.
 
+## Read results and plots
+
+Each component's result keeps its primary mean/error, target comparison, RSD and
+absolute mean together. **Pooled** and **Stratified** identify the estimator;
+**Independent sum** identifies a campaign result. Each pooled comparison has its
+own mean and error. See [estimator terminology](stratification.md#estimator-terminology).
+
+Parenthesized errors retain two uncertainty digits: `5.4123(25)` means
+`5.4123 ± 0.0025`, while `1.2(3.5)` means `1.2 ± 3.5`. Any exponent applies to
+both numbers. Expand a field for full precision. Unavailable errors remain
+unavailable, never zero. The absolute mean is the mean of absolute component
+values, not the absolute value of the signed mean.
+
+A configured `target_error` appears as an orange **Target ±1σ** band around the
+dashed target line. Its legend entry toggles both; the tooltip gives its error and
+limits. Zero target error gives a line only. Target comparisons use both independent
+uncertainties in quadrature; see [target configuration](config.md#integration-runs).
+
+RSD measures relative sampling noise using the primary estimator. Normalized
+training ESS describes concentration of the training weights, not confidence in
+the integral. Their [definitions and limits](stratification.md#rsd-and-training-ess)
+apply to both result summaries and history plots. The recorded training projection
+appears beside ESS; missing historical information remains labelled as such.
+
+Histories contain cumulative accumulator snapshots, not independent batch
+estimates. Long histories are downsampled while retaining their endpoints; sample
+count remains the canonical ordering. Zoom and legend choices change display only,
+and the vertical range fits the visible interval and enabled curves. Recovery may
+roll progress back and discard newer snapshots; the dashboard replaces stale
+history. UI history is not a durable sampler checkpoint.
+
+## Observable comparisons
+
+Use the searchable **Observable** picker, previous/next controls or **All
+observables** to choose a histogram. Its information button explains the estimator
+and any omitted campaign observables. **Comparisons** holds imported references
+and matching options; **Axes and ordering** holds scales and discrete sorting.
+
+Observable histograms with frozen stratum statistics expose two compact selectors.
+**View** defaults to **Combined · stratified**, offers **Combined · pooled**, and
+can search any **Stratum (prefix)**, including ragged prefixes. Individual strata
+show their conditional contribution. **Display** selects Estimate, Compare
+estimates, Compare errors, or Error reduction. Comparisons add at most
+one comparison curve for the same population. Switching the combined estimator
+selects its own mean and error, including in exports; it never borrows the other
+estimator's error. Error views use absolute standard errors, which remain useful
+for integrals near zero, and hide value-only controls and uploaded value references.
+Error reduction above one indicates improvement; zero or unavailable denominators
+leave gaps. See the [statistical definitions](stratification.md#observable-statistics).
+Selections persist with the histogram's view preferences and are included in
+figure JSON/CSV exports.
+
+**Upload Bundle** in both **Observables** and **Combined Observables** accepts
+JSON and HwU files up to 16 MiB. JSON imports stay in the browser; HwU files are
+converted by the authenticated server to the same comparison format. Imports
+remain local to the current panel session and never change a run's accumulator.
+HwU imports preserve bin edges, central values, errors, titles, axis flags and
+TYPE descriptions. Extra named weight columns are omitted with a notice. Duplicate
+titles receive numeric suffixes. **Add Histogram** selects the dropdown entry whose
+displayed name exactly matches the selected observable's title in the table. If
+there is no available match, it selects the first compatible histogram in the
+bundle that has not already been added. HwU cannot recover original
+sample counts, raw moments or category labels. Integer unit-width bins can be
+compared to discrete observables by index; review the selected matching mode.
+
+**Merge adjacent bins** changes only the display of continuous histograms. One
+integer factor applies to the result and all selected comparisons, including the
+comparison estimator in Compare estimates. The maximum factor is limited by the
+shortest selected histogram. Compare errors and Error reduction keep their original bins.
+Bins are merged in coordinate order, preserving a smaller final group. Overlaps
+and merges across gaps are rejected. Underflow and overflow remain separate.
+Values are bin integrals and are summed; for an imported differential density,
+select **Density per unit x** to multiply its values and errors by bin width
+before merging.
+
+Merged-bin uncertainties use quadrature, an **uncorrelated-bin approximation**.
+Cumulative uncertainties remain unavailable: GammaLoop histogram snapshots do
+not retain cross-bin covariance.
+Missing errors stay unavailable. Comparisons draw their own edges; ratios use only
+matching intervals or exact sums of finer reference bins, never midpoint sampling
+of a wider bin. Shared grouping does not guarantee aligned edges when the
+original binnings differ.
+
+Factors persist as panel view preferences across refreshes. **Reset** restores the
+original binning and zoom; the input value convention stays selected. Bundle
+exports retain original data, while figure exports use the displayed bins.
+
+Both **Observables** and **Combined Observables** offer **JSON** and **HwU**
+downloads of the entire observable bundle. JSON retains metadata and underflow/
+overflow results; HwU contains the central value and uncertainty of each regular
+bin. Campaign JSON uses GammaLoop-compatible histogram fields, with
+`statistics_kind = "derived_moments"` and `estimator = "independent_sum"`: its moments
+encode the sum of independent child estimates and their quadrature uncertainty.
+Entry and diagnostic counters are actual sums. These derived moments are for
+reading/plotting and are not pooled samples suitable for resuming or ordinary
+accumulator merging. JSON export checks that the encoded moments reproduce values
+and errors (relative tolerances 1e-12 and 1e-6 respectively); if float64 precision
+cannot preserve an uncertainty, it reports an error and HwU remains available.
+Campaign HwU writes values and errors directly. View settings and
+uploaded comparisons do not change these data downloads.
+
+Campaign downloads default to the aggregate only. Check **Include child observables**
+to append the original unscaled child data: JSON adds a `children` array with
+names, coefficients, source references, and bundles; HwU adds child-labelled
+histogram blocks with coefficient comments. Children are fetched only when an
+export is requested, and the aggregate is calculated from exactly those fetched
+states. An active campaign's export may therefore be newer than the last dashboard
+refresh. The same compatibility rule as the dashboard applies: only observables
+present with matching layouts in every child enter the aggregate; omissions are
+listed in JSON. Original child bundles can still contain those omitted observables.
+
+**Download plots PDF** renders one observable per page, using the current scales,
+bin merging, zoom, and enabled relative-error/ratio plots. When comparison bundles
+are uploaded, check **Include comparisons in PDF** to include their overlays.
+Configured selections are retained per observable; for observables not yet
+configured, the export matches the table title to the comparison dropdown name,
+falling back to the first compatible entry. Uncheck the option to export only the
+run's observables. PDF generation shows progress and leaves the dashboard view
+unchanged.
+
+## Stratum plots and PDF inspection
+
+**Stratum output** shows allocation and hit-rate histories during training. Frozen
+inference adds component contributions, errors and variance shares. The component
+selector applies to both convergence and variance plots. Legend selections and
+**Show combined estimate** change visibility only. **Between snapshots** uses
+count differences, so downsampling can widen its reporting intervals.
+
+Create a [PDF diagnostic task](config.md#pdf-diagnostic-tasks) from a saved sampler
+to inspect its proposal without changing its statistics. The **PDF comparison**
+panel's **Scope** selects an overview, one searchable stratum, or comparisons
+paged four at a time. **View** selects density, mismatch, distributions, coverage
+or membership. Both ordinary and stratified sources use these controls.
+
+| Normalization | Use |
+| --- | --- |
+| **Shape on this slice** | Compare shapes after each curve is normalized over the displayed parameter grid. A zero/unavailable integral has no normalized curve. |
+| **Source integral reference** | Compare the joint PDF with the target divided by the source's estimated absolute-projection integral. This is not necessarily unit area on a slice. |
+| **Conditional density** | Divide the joint PDF by the exact complete-prefix mass; unavailable/zero mass leaves the curve unavailable. |
+| **Joint density** | Inspect the returned PDF including its prefix probability. |
+
+The [probe specification](stratification.md#stratum-plot-data-and-pdf-probes)
+defines these quantities and their numerical integration. Native Havana line PDFs
+use exact grid edges/integrals; other sampler curves interpolate queried points.
+If a stratum's target is zero at every evaluated point, shape mode explains and
+omits that undefined normalized target; raw density modes can show its zero curve.
+Sampler density outside the intended stratum remains visible as leakage.
+
+Mismatch/distribution views use shape or source-reference normalization; raw
+PDF and target densities have separate labelled scales. **Normalization and
+leakage details** shows slice integrals, divisors, prefix masses, target shares,
+actual-cell mass estimates and leakage. These are slice estimates, not marginals
+over omitted coordinates or full-domain coverage guarantees.
+
+Mismatch offers `PDF / target - 1` or `log10(PDF / target)` (the default).
+**Coverage** locates positive-target/zero-PDF, zero-target/positive-PDF, both-zero
+and unavailable cases. Infinite or undefined ratios are counted but omitted from
+numeric curves. Distribution histograms describe deterministic raster values and
+have no Monte Carlo error bars; they retain the histogram scale/CDF/export controls.
+
+Zoom/pan is linked within the panel and persists across views; **Reset view**
+restores the full extent. Comparable heatmaps share colour bounds; raw target/PDF
+quantities keep separate bounds. **Colour encoding → Stratum hue + density** adds
+stratum hue and density saturation to 2D comparisons. Both plots use the actual
+integrand stratum at each point, so other hues in a sampler plot reveal leakage.
+White is the low end, unknown membership is grey, and hues repeat after eight
+prefixes; hover identifies the exact prefix. **Density only** is the default.
+
+Stratum histories offer elapsed-time and reported sampler-time axes, follow-latest
+and persistent zoom. Sampler time uses the latest preceding report for the same
+task; missing timestamps stay absent. Classification always uses the complete
+output vector, independently of the plotted training projection. Integrand
+transforms contribute their Jacobians; custom process materializers are rejected
+because these probes cannot reconstruct their coordinate mapping.
+
 ## Read performance
 
 Overview, Diagnostics, and Graphs share **30 s · 5 min · All** or a dragged custom
@@ -188,113 +324,44 @@ Reporting defaults to two seconds; graph refresh is five seconds. Zoom shows
 available detail but cannot recover sub-report spikes. Higher reporting frequency
 increases database history: two-second cadence is 43,200 rows per worker/day.
 
-RSD is `sqrt(N) × SE(estimate) / |estimate|`, using each signed component of the
-primary integral. Stratified runs use their conditional-estimate error, not the
-pooled reference error. RSD is dimensionless and stays roughly constant during
-inference with a fixed proposal. Cancellation to a zero estimate produces an
-infinite RSD when the error is nonzero; `0/0` is undefined. Insufficient coverage
-leaves it unavailable. Only finite values enter the RSD history plot.
+**GammaLoop time per sample** in task Diagnostics measures elapsed time inside
+GammaLoop, averaged over the task's evaluated samples. It excludes GammaBoard's
+queue/database work, sampler work and observable aggregation. Mapping is
+GammaLoop's sampling map and channel partition, not the strata. Generated
+evaluator calls and event processing are subsets of integrand time; Other integrand
+work excludes both. Unclassified GammaLoop time is the residual after subtracting
+mapping and inclusive integrand time from the total, not a separately timed operation.
 
-Normalized training ESS is `(Σ|w|)² / (N Σw²)`, between zero and one, where `w`
-is the weighted **training projection**. For partitioned sampling, calculate it
-within each requested stratum, counting mismatches as zero contributions. The
-aggregate is `Σ(N_s × ESS_s) / ΣN_s`; stratum-specific values appear under
-**Stratum output**. This measures training-weight concentration, not the variance
-of the primary stratified integral, and is not inferred from RSD.
+## Campaign dashboard
 
-Result uses the same compact fields for pooled and stratified estimators. Mean
-histories are followed by the RSD and ESS plots. Each component keeps its mean,
-target comparison, and RSD together in one column. Parenthesized uncertainties
-use last-digit notation with two uncertainty digits retained: `5.4123(25)` means
-`5.4123 ± 0.0025`, and `1.23(20)` means `1.23 ± 0.20`. Same-order errors retain
-their decimal point: `1.2(3.5)` means `1.2 ± 3.5`; any exponent applies to both.
-Target deltas and pulls use at most three significant digits and three decimal
-places. Each component's absolute mean and its own uncertainty appear beneath
-its RSD. Absolute means use the primary estimator, including per-stratum
-allocation; older stratified snapshots without absolute sums show unavailable.
-There is no separate absolute-mean RSD or progression plot.
-The training projection recorded with the samples appears beside normalized
-training ESS. Historical GammaLoop snapshots that omit it are explicitly marked
-as unrecorded, with the absolute-magnitude fallback used by their ESS calculation.
-Per-stratum estimates, counts, coverage, probabilities, and ESS live under
-Stratum output. Optional moment fields preserve compatibility with old snapshots;
-ESS remains unavailable when the needed historical training moments are missing.
+Campaign Overview combines accepted progress and allocated core-hours across child
+runs. Activity is weighted by reporting worker-time; throughput sums accepted
+counter changes over one shared interval. Performance Diagnostics and Graphs use
+a remembered child selection.
 
-Expandable fields use a triangle between the title and value. Click the title or
-value, or focus the field and press Enter/Space, to expand precision, definitions,
-or configuration children. RSD and ESS each carry their own definitions. Table
-cells put the same triangle directly before the value; sortable headers and
-editable controls retain their usual interactions. Expanded configuration trees
-preserve nested objects, arrays, indentation, and expansion state across refreshes.
-Observables use a searchable picker with previous/next navigation; the full table
-is available under **All observables**. Upload Bundle stays on the left and
-JSON/HwU/PDF exports on the right of the same action row.
-The picker remembers the typed query across refreshes and focus changes. While
-unfocused it displays the selected observable; focusing restores the query.
-Typing filters results without changing the selection. Choosing a result, a
-table row, or a navigation arrow changes the selected observable.
-Their top-right information icon opens the estimator and campaign-combination
-notes; import/export errors and omitted-observable warnings stay visible.
-Matching uploaded references and the **Comparison** plot appear by default.
-Matches use a compatible histogram name or an unambiguous title, and explicit
-empty selections or hidden comparison plots are retained. Reference selection,
-density inputs, and discrete matching live under **Comparisons**; axis scales
-and discrete ordering live under **Axes and ordering**.
-One **Merge adjacent bins** control applies the same grouping to the result and
-all selected references (and the comparison estimator in Compare estimates). The
-largest permitted factor is limited by the shortest selected histogram. This is
-a display transformation of the original bins; merged errors retain the
-uncorrelated-bin approximation. Compare errors and Error reduction retain their original
-bins. PDF plots use the same selections and grouping as the dashboard.
-The merge-factor up/down buttons each occupy half of the input's height;
-keyboard arrow keys and direct entry remain available.
+Task Diagnostics gathers the latest usable publishing-stage accumulator for each
+child. Evaluation counters and times combine before fractions are calculated.
+Retained extrema are ranked by their contribution to the combined estimate,
+including child coefficients and stratum attempt counts. Compatibility groups and
+missing-child coverage are explicit; absent diagnostics are not treated as zero.
 
-Result histories are cumulative accumulator snapshots, not independent batch
-estimates. Current panels load before history, and Observables is fetched only
-when selected. Active tasks poll every three seconds; hidden sections pause
-polling. Completed tasks refresh once when revisited. The history query selects
-up to 256 snapshot IDs across the entire retained history, keeping the first and
-last, before loading compact moment data. New samples append by sample count;
-large gaps and deleted cursors after recovery trigger a fresh overview. Browser
-history is bounded and retains its endpoints. A rollback cannot recover snapshots
-that were deleted by recovery, and cached pre-rollback history is replaced.
+Campaign views refresh while visible and retain the previous result during refresh.
+Controller scheduling and aggregation continue independently of dashboard viewers.
 
-The additive plot-snapshot migration stores compact moments separately from full
-observables, excluding histogram bundles, discrete bins, sample coordinates and
-evaluation diagnostics. Existing rows are projected on demand; migration does
-not rewrite historical payloads. Each selected snapshot is decoded once and only
-history panels are projected. Full observables and recovery state are unchanged.
+Queue tuning defaults to all children and unfinished sample tasks. The selector
+can restrict child names and publishing/non-publishing stages or a named task.
+Only edited fields are applied. Durable rules also apply to children created later;
+completed and failed tasks are skipped. A later edit takes precedence per field.
+Clearing the fixed-size override restores that child's run default.
 
-Result, Observables, and read-only run panels (summary, configurations and queue
-telemetry) use a page-session LRU cache, bounded to 64 entries/64 MiB with a
-30-minute expiry. Returning to a tab displays its cached data immediately with
-a small refresh indicator; a failed refresh keeps the last data with a warning.
-Authentication failures and missing resources invalidate cached data. Login,
-logout, database reset and completed run/task deletions clear the cache. Zoom
-preferences remain in localStorage; result payloads do not survive page reload.
-Settings retain their loaded values and refresh on return. Logs and historical
-performance graphs retain their existing incremental/window caches. Health,
-worker lists, assignments, task queues, permissions and action results continue
-to use fresh requests and server-side validation.
-Loading indicators occupy a fixed slot to the left of the nearest tab row;
-their descriptive labels are available on hover and to assistive technology.
-Single- and multi-series progression plots share automatic vertical range fitting
-to the visible horizontal interval and enabled legend entries. Explicit fixed
-ranges, such as worker utilization percentages, remain fixed.
-Mean uncertainty bands render in one pass with the mean line, avoiding the
-incremental painting delay on long histories. UI snapshots are distinct from
-durable sampler checkpoints: recovery rolls back progress and deletes snapshots
-after the checkpoint boundary while retaining allocated core-hour accounting.
-
-Sampler batch insertions preserve explicit PostgreSQL abort codes. Lock timeouts
-(`55P03`), deadlocks (`40P01`), and serialization failures (`40001`) retry the whole
-insertion transaction with the same batch IDs, payloads, and feedback flag.
-Retries use exponential backoff with jitter, capped at five seconds. The failed
-bundle remains an ordering barrier; worker lease/control checks run between
-attempts. These errors do not restart the sampler or reset its progress. Other
-insertion errors, including connection loss with an unknown commit outcome,
-retain the conservative checkpoint-recovery behavior. These retries are separate
-from evaluator `max_batch_retries` and do not re-evaluate completed samples.
+**Tasks → Scheduling** edits concurrency, evaluator requirements, allocation
+windows, pilot minima, and stopping conditions. Changes serialize with the
+controller and reject stale forms. Applying edits immediately rechecks assignments
+under the new settings. Workers checkpoint before switching, and existing sample grants remain reserved for later
+resumption. New allocation-window sizes apply to future grants. A sample cap
+cannot be lowered below already produced or reserved work. Scheduling edits are
+included when exporting the campaign definition; queue-tuning rules are runtime
+database settings and are not copied by exporting a run card.
 
 ## Backup and recovery
 
@@ -305,57 +372,22 @@ from evaluator `max_batch_retries` and do not re-evaluate completed samples.
 ```
 
 Restore replaces database contents; `--yes` acknowledges replacement in scripts.
-Backups must match the current schema/model format. A database backup does not
-include external model files or generated physics states.
+Backups must match the supported [schema/model format](compatibility.md). A database
+backup does not include external sampler files or generated physics states; retain
+those immutable artifacts with the software/environment needed to read them.
 
-Sample tasks checkpoint automatically once per hour by default. Configure the
-policy inside a `[[task_queue]]` sample task (or a standalone sample-task card):
+Sample tasks checkpoint hourly by default and also at activation, graceful pause
+and completion. Configure time/sample triggers with the [checkpoint policy](config.md#checkpoint-policy).
+Check **Checkpoint recovery** or `run inspect` for the last committed boundary.
+Long sampler callbacks can delay a save. A failed database save retains the previous
+checkpoint and retries; a failed sampler commit notification does not undo a save.
 
-```toml
-checkpoint = { interval_seconds = 3600.0, interval_samples = 0 }
-```
-
-Zero disables that trigger. Set `interval_samples = 10_000_000` to also checkpoint
-after ten million newly completed task samples; either threshold triggers a save.
-For sample-only checkpoints, set `interval_seconds = 0`. Setting both to zero
-disables periodic saves; activation, pause and completion checkpoints remain.
-
-The first interval starts at the task's initial/restored recovery boundary. A new
-task built from an earlier sampler/accumulator starts its own interval. Resuming
-an active task starts from the restored checkpoint's sample count and gets a new
-hour of execution; downtime and inherited run uptime do not trigger an immediate
-save. Both thresholds restart only after a successful checkpoint commit. Samples
-are completed task samples, including zero contributions, rather than generated
-or inherited accumulator samples.
-
-Saves run between sampler ticks, so a long generation/feedback call can delay a
-trigger until that operation finishes. Pending inserts, aggregation and progress
-writes are flushed before the sampler, accumulator, generation/feedback buffers
-and queue cursors are committed together. Evaluators can continue working during
-the save. Periodic saves replace the active checkpoint without adding named stage
-snapshots. Consumed queue rows are eligible for cleanup only behind a committed
-recovery boundary. Database save failures retain the last successful checkpoint
-and retry after 30 seconds while sampling continues. External sampler artifact
-requirements remain unchanged.
-
-An optional sampler `checkpoint_committed` callback runs after a successful
-database save. It receives the snapshot payload and may update artifact retention
-bookkeeping. Callback failure leaves the checkpoint committed; the notification
-retries after 30 seconds while the runner remains active. A newer checkpoint
-attempt supersedes older pending notifications. A crash may prevent delivery, so
-restoring a snapshot must also establish which artifact is committed. Keep external
-checkpoint files immutable and retain any versions required by saved stages or
-backups; a later sampler call does not imply the previous save succeeded.
-
-Check **Checkpoint recovery** or `run inspect` for the last committed checkpoint.
-Graceful pause/stop saves sampler state, accumulator, pending feedback, and progress
-together. A crash restores that boundary and replays later work: live progress may
-roll back, and evaluation/callbacks may run again. Invalid checkpoints fail visibly.
-
-The [execution specification](execution-model.md#tasks-checkpoints-and-failures)
-defines claim fencing, ordered feedback, rollback, replay, and external artifact
-requirements. It is the interface contract for custom workers. An abandoned
-submission transaction releases its locks after a fixed 30-second idle timeout.
+Recovery restores the sampler, accumulator, pending feedback and queue boundary
+together. Live progress can roll back and later work can replay; invalid checkpoints
+fail visibly. Allocated core-hour accounting remains. Custom samplers must preserve
+external artifacts required by saved stages and backups, even after receiving a
+commit notification. The [recovery contract](execution-model.md#tasks-checkpoints-and-failures)
+defines ordering, replay, notification retries and artifact responsibilities.
 
 ## Troubleshooting
 
@@ -371,38 +403,3 @@ submission transaction releases its locks after a fixed 30-second idle timeout.
 Default logs: `resources/logs/nodes/`, `resources/db/logfile` (offset suffix when
 used), and `logs/slurm/` on UBELIX. For live measurements:
 `gammaboard --json run performance RUN --duration 60s --interval 1s`.
-
-
-### Campaign dashboard
-
-Campaign Overview combines accepted progress and allocated core-hours across child
-runs. Activity is weighted by reporting worker-time; throughput sums accepted
-counter changes over one shared interval. Performance Diagnostics and Graphs use
-a remembered child selection.
-
-Task Diagnostics gathers the latest usable publishing-stage accumulator for each
-child. Evaluation counters and times combine before fractions are calculated.
-Retained extrema are ranked by their contribution to the combined estimate,
-including child coefficients and stratum attempt counts. Compatibility groups and
-missing-child coverage are explicit; absent diagnostics are not treated as zero.
-
-Campaign panels load when selected, refresh ten seconds after the preceding
-request completes, and stop polling when their dashboard or browser tab is hidden.
-The dashboard retains a bounded page-session cache and shows the previous result
-while refreshing. The server shares concurrent requests and briefly caches the
-finished response. Scientific aggregation required by the controller continues
-independently of dashboard viewers.
-
-Queue tuning defaults to all children and unfinished sample tasks. The selector
-can restrict child names and publishing/non-publishing stages or a named task.
-Only edited fields are applied. Durable rules also apply to children created later;
-completed and failed tasks are skipped. A later edit takes precedence per field.
-Clearing the fixed-size override restores that child's run default.
-
-Task queue → Scheduling edits concurrency, evaluator requirements, allocation
-windows, pilot minima, and stopping conditions. Changes serialize with the
-controller and reject stale forms. Reduced concurrency drains selected children's
-outstanding grants; resource loss can still interrupt a placement. A sample cap
-cannot be lowered below already produced or reserved work. Scheduling edits are
-included when exporting the campaign definition; queue-tuning rules are runtime
-database settings and are not copied by exporting a run card.

@@ -1,5 +1,8 @@
 # Default examples validation — 2026-10-30
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 The seven cards in [the quickstart catalog](../quickstart.md#default-examples)
 were created on an isolated deployment with 18 local workers. All seven root runs
 and all 20 controller children completed. The dashboard's template menu contains

@@ -1,5 +1,8 @@
 # Stratum plots and PDF showcase — 2026-10-23
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 The dashboard now projects per-stratum histories and breakdowns from existing
 accumulator snapshots. Conditional inference exposes component contributions with
 reported uncertainty and the unchanged total. Training exposes only counts,

@@ -2,7 +2,7 @@
 
 > Historical validation record. “Basic” in this report is now called “Pooled”;
 > current terminology and observable behavior are specified in the
-> [execution model](../execution-model.md#estimator-terminology).
+> [stratification specification](../stratification.md#estimator-terminology).
 
 This pass separates the partition from the selected estimator throughout results,
 measurements, plots, controllers and exports. Training remains pooled, including

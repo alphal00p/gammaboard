@@ -1,5 +1,8 @@
 # Consolidation validation and risk assessment — 2026-10-15
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 This is a dated validation record. Current behavior and interfaces are specified
 in the [execution model](../execution-model.md) and [compatibility policy](../compatibility.md).
 

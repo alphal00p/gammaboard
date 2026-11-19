@@ -1,5 +1,8 @@
 # Campaign concurrency — 2026-10-29
 
+> Historical validation record. See the [current documentation](../README.md)
+> for supported interfaces and operating instructions.
+
 Campaigns use `max_active_runs` as a ceiling and reserve one sampler plus
 `min_evaluators_per_run` evaluators per active child (default two evaluators).
 Automatic assignment plans complete bundles from compatible free workers and
