@@ -5,6 +5,50 @@ local worker launch requests. Ctrl-C drains workers and stops the stack.
 Profile commands: [local](../ops/local/README.md),
 [ITPhlies](../ops/itphlies/README.md), [UBELIX/Slurm](../ops/ubelix/README.md).
 
+## Build features
+
+The default build includes GammaLoop, Symbolica and native Havana. Smaller builds
+can omit the native backends:
+
+| Cargo options | Included backends |
+| --- | --- |
+| Default | All backends; `gammaloop` enables `symbolica` |
+| `--no-default-features --features symbolica` | Symbolica evaluator and native Havana, without GammaLoop |
+| `--no-default-features` | Unit evaluator, uniform/raster sampling and process backends; no Symbolica dependency |
+
+For example, build the minimal binary with:
+
+```bash
+cargo build --locked --release --no-default-features --bin gammaboard
+target/release/gammaboard build-info
+target/release/gammaboard run validate resources/templates/runs/installation-smoke.toml --probe
+```
+
+Run the resulting binary directly. The checkout's `./gammaboard` helper and UBELIX
+service-image build use the default features. Build the dashboard separately when
+deploying a custom binary, as described in the [setup guide](quickstart.md#first-run).
+`build-info`, server build metadata and run provenance record the enabled features.
+
+Domains, the process protocol, scalar/vector statistics, stratification, controllers
+and generic PDF diagnostics are available in every build. External processes bring
+their own dependencies. **GammaLoop observable output still requires `gammaloop`**,
+including when the evaluator runs in a separate process.
+
+Backend configurations and opaque sampler snapshots remain readable in minimal
+builds. Constructing or restoring an unavailable backend returns a feature error;
+it never substitutes another sampler. Use `run validate --probe` to check actual
+backend availability. The native example cards stay in the menu; choose the
+installation smoke or tetrahedron process examples for a minimal build.
+
+Symbolica licensing is activated when constructing a native backend that needs it,
+not when starting the server or running unrelated CLI commands. Builds with the
+`symbolica` feature include the application license; compiling with
+`NO_SYMBOLICA_OEM_LICENSE=1` requires a regular runtime license for those backends.
+
+CI tests all three configurations. The native `full_stack_cli` suite requires
+`symbolica`; core tests, CLI feature checks and process API roundtrips also run
+without it.
+
 ## Configuration and ports
 
 Runtime config controls database connection, resource roots, logging, and local
@@ -87,8 +131,8 @@ Keep states, process environments, and checkpoint files accessible at the same
 paths on all relevant workers. A service image contains GammaBoard; process
 runtime images contain task dependencies. Rebuild workers with the matching
 [process protocol](../process_api/README.md). GPU containers need `--nv` and
-matching binds. Normal builds include Symbolica licensing; builds made with
-`NO_SYMBOLICA_OEM_LICENSE=1` require a regular runtime license.
+matching binds. See [build features](#build-features) for backend availability and
+Symbolica licensing.
 
 For external launch leases, per-worker receipts, and deployment/build fencing, see
 the [cluster launch contract](cluster-launches.md). UBELIX runs from a Git checkout

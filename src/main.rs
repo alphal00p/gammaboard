@@ -26,10 +26,7 @@ fn main() -> ExitCode {
         }
     };
     let json_output = cli.json_output_requested();
-    let result = match gammaboard::activate_symbolica_oem_license() {
-        Ok(()) => cli::dispatch(cli),
-        Err(error) => Err(error),
-    };
+    let result = cli::dispatch(cli);
 
     match result {
         Ok(()) => ExitCode::SUCCESS,

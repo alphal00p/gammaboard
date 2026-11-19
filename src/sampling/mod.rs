@@ -1,5 +1,6 @@
 pub(crate) mod batch_transform;
 mod feedback;
+#[cfg(feature = "symbolica")]
 pub(crate) mod havana_grid;
 pub(crate) mod latent_batch;
 pub(crate) mod materializer;
@@ -12,7 +13,9 @@ use crate::evaluation::AccumulatorState;
 pub use batch_transform::{SphericalBatchTransformParams, UnitBallBatchTransformParams};
 pub use feedback::{Feedback, StratumAssignments};
 pub use latent_batch::{LatentBatch, LatentBatchPayload};
-pub use materializer::{HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer};
+#[cfg(feature = "symbolica")]
+pub use materializer::HavanaInferenceMaterializer;
+pub use materializer::{IdentityMaterializer, ProcessMaterializer};
 pub use sampler::{DiscreteSubspace, Generation, PdfPoint, Sampler, SavedSampler};
 pub use sampler_aggregator::{
     HavanaInferenceSamplerParams, HavanaSamplerParams, NaiveMonteCarloSamplerParams,

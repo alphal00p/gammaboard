@@ -1,4 +1,6 @@
+#[cfg(feature = "symbolica")]
 mod havana;
+mod havana_config;
 mod naive_monte_carlo;
 mod process;
 mod raster;
@@ -6,18 +8,18 @@ mod raster;
 use crate::Materializer;
 use crate::core::{EngineError, MaterializerConfig, SamplingConfig};
 use crate::evaluation::AccumulatorState;
-use crate::sampling::materializer::{
-    HavanaInferenceMaterializer, IdentityMaterializer, ProcessMaterializer,
-};
+#[cfg(feature = "symbolica")]
+use crate::sampling::materializer::HavanaInferenceMaterializer;
+use crate::sampling::materializer::{IdentityMaterializer, ProcessMaterializer};
 use crate::sampling::{Sampler, SavedSampler, StageHandoff};
 use crate::utils::domain::Domain;
 use serde_json::Value as JsonValue;
 
-pub use self::havana::HavanaInferenceSamplerParams;
-pub use self::havana::HavanaSamplerParams;
+#[cfg(feature = "symbolica")]
 use self::havana::{
     HavanaInferenceSampler, HavanaInferenceSamplerSnapshot, HavanaSampler, HavanaSamplerSnapshot,
 };
+pub use self::havana_config::{HavanaInferenceSamplerParams, HavanaSamplerParams};
 use self::naive_monte_carlo::NaiveMonteCarloSamplerAggregator;
 pub use self::naive_monte_carlo::NaiveMonteCarloSamplerParams;
 use self::process::ProcessSampler;
@@ -29,6 +31,11 @@ use self::raster::{
     RasterLineSampler, RasterPlaneSampler, RasterSamplerSnapshot,
 };
 pub(crate) use self::raster::{coprime_stride, permuted_raster_index};
+
+#[cfg(not(feature = "symbolica"))]
+fn havana_disabled_error() -> EngineError {
+    EngineError::build("native Havana sampling requires the \"symbolica\" build feature")
+}
 
 fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> Option<f64> {
     let observable = handoff.and_then(|value| value.observable_state)?;
@@ -56,6 +63,18 @@ fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> 
 }
 
 impl SamplingConfig {
+    pub(crate) fn validate_backend_availability(&self) -> Result<(), EngineError> {
+        #[cfg(not(feature = "symbolica"))]
+        if matches!(
+            self.sampler,
+            crate::core::SamplerConfig::HavanaTraining { .. }
+                | crate::core::SamplerConfig::HavanaInference { .. }
+        ) {
+            return Err(havana_disabled_error());
+        }
+        Ok(())
+    }
+
     pub fn sampling_domain(&self, integrand: &Domain) -> Result<Domain, EngineError> {
         integrand.validate().map_err(EngineError::invalid_input)?;
         match &self.stratification {
@@ -182,6 +201,7 @@ impl SamplingConfig {
                     integrand_domain,
                 )?))
             }
+            #[cfg(feature = "symbolica")]
             Self {
                 sampler: crate::core::SamplerConfig::HavanaTraining { params, .. },
                 ..
@@ -198,6 +218,7 @@ impl SamplingConfig {
                     domain,
                 )?))
             }
+            #[cfg(feature = "symbolica")]
             Self {
                 sampler: crate::core::SamplerConfig::HavanaInference { .. },
                 ..
@@ -212,6 +233,13 @@ impl SamplingConfig {
                     snapshot, domain,
                 )?))
             }
+            #[cfg(not(feature = "symbolica"))]
+            Self {
+                sampler:
+                    crate::core::SamplerConfig::HavanaTraining { .. }
+                    | crate::core::SamplerConfig::HavanaInference { .. },
+                ..
+            } => Err(havana_disabled_error()),
             Self {
                 sampler: crate::core::SamplerConfig::ProcessSampler { params, .. },
                 ..
@@ -288,6 +316,8 @@ impl SamplingConfig {
         evaluator_metadata: JsonValue,
     ) -> Result<Box<dyn Sampler>, EngineError> {
         let domain = self.sampling_domain(&domain)?;
+        #[cfg(not(feature = "symbolica"))]
+        let _ = sample_budget;
         match self {
             Self {
                 sampler: crate::core::SamplerConfig::NaiveMonteCarlo { params, .. },
@@ -309,6 +339,7 @@ impl SamplingConfig {
                 params.clone(),
                 &domain,
             )?)),
+            #[cfg(feature = "symbolica")]
             Self {
                 sampler: crate::core::SamplerConfig::HavanaTraining { params, .. },
                 ..
@@ -322,11 +353,21 @@ impl SamplingConfig {
                     sample_budget,
                 )?))
             }
+            #[cfg(not(feature = "symbolica"))]
+            Self {
+                sampler:
+                    crate::core::SamplerConfig::HavanaTraining { .. }
+                    | crate::core::SamplerConfig::HavanaInference { .. },
+                ..
+            } => Err(havana_disabled_error()),
+            #[cfg(feature = "symbolica")]
             Self {
                 sampler: crate::core::SamplerConfig::HavanaInference { .. },
                 ..
-            }
-            | Self {
+            } => Err(EngineError::build(
+                "this sampler requires explicit initialization from a stage",
+            )),
+            Self {
                 sampler: crate::core::SamplerConfig::PdfAdaptationRasterPlane { .. },
                 ..
             }
@@ -362,6 +403,7 @@ impl SamplingConfig {
         source: StageHandoff<'_>,
         evaluator_metadata: JsonValue,
     ) -> Result<Box<dyn Sampler>, EngineError> {
+        self.validate_backend_availability()?;
         let snapshot = source
             .sampler_snapshot
             .ok_or_else(|| EngineError::build("stage handoff requires a saved sampler"))?;
@@ -406,6 +448,7 @@ impl SamplingConfig {
                     .with_target_config(source.observable_state.map(|state| state.config())),
                 ))
             }
+            #[cfg(feature = "symbolica")]
             Self {
                 sampler: crate::core::SamplerConfig::HavanaInference { params, .. },
                 ..
@@ -435,8 +478,11 @@ impl SamplingConfig {
         domain: &Domain,
         handoff: Option<StageHandoff<'_>>,
     ) -> Result<Box<dyn Materializer>, EngineError> {
+        self.validate_backend_availability()?;
         let sampling_domain = self.sampling_domain(domain)?;
         let domain = &sampling_domain;
+        #[cfg(not(feature = "symbolica"))]
+        let _ = handoff;
         if let Some(materializer) = self.materializer_config() {
             return match materializer {
                 MaterializerConfig::ProcessMaterializer { params } => Ok(Box::new(
@@ -451,6 +497,7 @@ impl SamplingConfig {
             } => Box::new(IdentityMaterializer::new_with_failure(
                 params.fail_on_materialize_batch_nr,
             )),
+            #[cfg(feature = "symbolica")]
             SamplingConfig {
                 sampler: crate::core::SamplerConfig::HavanaInference { .. },
                 ..

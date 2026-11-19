@@ -40,10 +40,14 @@ impl RunProvenance {
 }
 
 fn enabled_features() -> Vec<String> {
-    #[cfg(feature = "gammaloop")]
-    return vec!["gammaloop".to_string()];
-    #[cfg(not(feature = "gammaloop"))]
-    Vec::new()
+    [
+        ("symbolica", cfg!(feature = "symbolica")),
+        ("gammaloop", cfg!(feature = "gammaloop")),
+    ]
+    .into_iter()
+    .filter(|(_, enabled)| *enabled)
+    .map(|(name, _)| name.to_string())
+    .collect()
 }
 
 fn external_versions() -> JsonValue {

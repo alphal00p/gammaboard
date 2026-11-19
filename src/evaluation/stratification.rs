@@ -275,11 +275,13 @@ pub fn accumulate_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "symbolica")]
     use crate::{
         EvaluatorConfig,
         core::{StratificationConfig, TrainingProjection},
     };
     #[test]
+    #[cfg(feature = "symbolica")]
     fn vector_symbolica_gating_preserves_misses_and_full_weight_feedback() {
         let config:EvaluatorConfig=serde_json::from_value(serde_json::json!({"kind":"symbolica","args":["t"],"source":{"kind":"expressions","components":["x","y","z"],"exprs":["t","2*t","-t"]}})).unwrap();
         let mut evaluator = config.build().unwrap();

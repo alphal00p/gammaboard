@@ -37,6 +37,7 @@ pub(crate) trait RasterGeometry: Clone + Send {
     fn point_at(&self, index: usize) -> Vec<f64>;
     fn discrete(&self) -> &[i64];
     fn with_discrete(&self, discrete: Vec<i64>) -> Self;
+    #[cfg(feature = "symbolica")]
     fn line(&self) -> Option<&LineRasterGeometry> {
         None
     }
@@ -62,6 +63,7 @@ impl RasterGeometry for PlaneRasterGeometry {
     }
 }
 impl RasterGeometry for LineRasterGeometry {
+    #[cfg(feature = "symbolica")]
     fn line(&self) -> Option<&LineRasterGeometry> {
         Some(self)
     }
@@ -290,6 +292,7 @@ impl<G: RasterGeometry> PdfAdaptationRasterSampler<G> {
                 actual_strata: vec![None; total_samples],
             });
         }
+        #[cfg(feature = "symbolica")]
         if let Some(line) = params.geometry.line() {
             output_state.pdf_steps = native_pdf_steps(
                 &source_sampler_snapshot,
@@ -360,6 +363,7 @@ impl PdfAdaptationImageOutputState {
     }
 }
 
+#[cfg(feature = "symbolica")]
 fn native_pdf_steps(
     saved: &SavedSampler,
     source: &mut dyn Sampler,
@@ -749,6 +753,7 @@ mod tests {
     use num::Integer;
 
     #[test]
+    #[cfg(feature = "symbolica")]
     fn native_pdf_steps_preserve_narrow_bins_and_integrals() {
         use crate::core::{AccumulatorConfig, SamplerConfig, TrainingProjection};
         let domain = Domain::continuous(1);

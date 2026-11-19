@@ -27,7 +27,8 @@ include = [
 
 [features]
 default = ["gammaloop"]
-gammaloop = ["dep:gammalooprs", "dep:gammaloop_api"]
+symbolica = ["dep:symbolica"]
+gammaloop = ["symbolica", "dep:gammalooprs", "dep:gammaloop_api"]
 
 [dependencies]
 sha2 = "0.10"
@@ -49,7 +50,7 @@ clap_complete = "4.5"
 toml = "1.1"
 async-trait = "0.1"
 thiserror = "2.0"
-symbolica = { version = "3.0.0", default-features = false, features = ["integer-gmp", "float-mpfr", "native_code_generation", "serde"] }
+symbolica = { version = "3.0.0", optional = true, default-features = false, features = ["integer-gmp", "float-mpfr", "native_code_generation", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 num = "0.4.3"
@@ -77,3 +78,11 @@ opt-level = 2
 [lib]
 name = "gammaboard"
 crate-type = ["rlib"]
+
+[[example]]
+name = "prepare_showcase"
+required-features = ["gammaloop"]
+
+[[test]]
+name = "full_stack_cli"
+required-features = ["symbolica"]

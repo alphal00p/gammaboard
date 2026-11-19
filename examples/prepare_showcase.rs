@@ -1,5 +1,4 @@
 //! Generate the default native physics state with GammaBoard's pinned GammaLoop.
-#[cfg(feature = "gammaloop")]
 fn main() -> anyhow::Result<()> {
     let output = std::env::args_os()
         .nth(1)
@@ -40,8 +39,4 @@ fn main() -> anyhow::Result<()> {
         })?
         .join()
         .map_err(|_| anyhow::anyhow!("GammaLoop generation thread panicked"))?
-}
-#[cfg(not(feature = "gammaloop"))]
-fn main() -> anyhow::Result<()> {
-    anyhow::bail!("prepare_showcase requires the gammaloop feature")
 }

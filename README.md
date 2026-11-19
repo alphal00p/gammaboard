@@ -49,6 +49,9 @@ specifies the complete sampling/evaluation contract.
 
 ## Development
 
+Native backends are optional: see [build features](docs/deployment.md#build-features)
+for minimal, Symbolica-only and full builds. The default includes all backends.
+
 `cargo test` runs Rust unit tests; `scripts/test_e2e.sh core` runs backend workflows
 and seeded recovery checks. Set `GAMMABOARD_TEST_DATABASE_URL` to a disposable
 PostgreSQL server with database-creation permission; tests create private databases.
@@ -57,5 +60,5 @@ and `scripts/test_e2e.sh physics` for configured physics integrations.
 
 ## License
 
-MIT. Normal builds include a Symbolica application license; no separate key is
-needed. Symbolica remains subject to [its license](https://symbolica.io/license.html).
+MIT. Builds with the `symbolica` feature include a Symbolica application license;
+no separate key is needed. Symbolica remains subject to [its license](https://symbolica.io/license.html).

@@ -80,7 +80,11 @@ fn ragged_strata_are_left_bound_complete_and_prefix_free() {
 
 #[test]
 fn generic_samplers_preserve_ragged_labels_masses_feedback_and_frozen_replay() {
-    for kind in ["naive_monte_carlo", "havana_training"] {
+    for kind in [
+        "naive_monte_carlo",
+        #[cfg(feature = "symbolica")]
+        "havana_training",
+    ] {
         let partition = partition();
         let mut config: SamplingConfig = serde_json::from_value(if kind == "naive_monte_carlo" {
             json!({"kind":kind,"seed":17,"training_window_samples":1024})

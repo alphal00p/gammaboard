@@ -2,15 +2,14 @@ use crate::core::EngineResultExt;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
-    path::PathBuf,
 };
 
+use super::symbolica_config::{SymbolicaParams, SymbolicaSource};
 use crate::utils::domain::Domain;
 use crate::{
     Batch, EngineError, core::AccumulatorConfig, evaluation::Evaluator,
     resources::resolve_resource_path, runtime_context::evaluator_tmp_dir,
 };
-use serde::{Deserialize, Serialize};
 use symbolica::evaluate::{
     BatchEvaluator, CompileOptions, CompiledComplexEvaluator, FunctionMap, OptimizationSettings,
 };
@@ -57,43 +56,6 @@ impl SymbolicaEngine {
             _artifacts_dir: artifacts_dir.into_iter().collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SymbolicaParams {
-    pub args: Vec<String>,
-    pub source: SymbolicaSource,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SymbolicaSource {
-    Expressions {
-        components: Vec<String>,
-        exprs: Vec<String>,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        constants: BTreeMap<String, toml::Value>,
-    },
-    Expression {
-        expr: String,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        constants: BTreeMap<String, toml::Value>,
-    },
-    Compiled {
-        path: PathBuf,
-        name: String,
-        #[serde(default = "default_symbolica_outputs")]
-        outputs: usize,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        compiled_args: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        bindings: BTreeMap<String, toml::Value>,
-    },
-}
-
-fn default_symbolica_outputs() -> usize {
-    1
 }
 
 #[derive(Clone)]

@@ -42,15 +42,18 @@ The dashboard's default menu contains seven run cards. Integration-only controll
 children use smaller budgets and omit plot-only tasks; their support files are
 kept out of the menu.
 
-| Run card | What it demonstrates |
-| --- | --- |
-| [Installation smoke](../resources/templates/runs/installation-smoke.toml) | Unit integral, no generated state or process dependency |
-| [Tetrahedron surface](../resources/templates/runs/tetrahedron-surface.toml) | Two inputs, three outputs, Havana stratification and the complete plot tour |
-| [Tetrahedron process](../resources/templates/runs/tetrahedron-process.toml) | The same vector function through the Python process SDK, with a uniform proposal |
-| [GammaLoop four phases](../resources/templates/runs/gammaloop-stratified.toml) | A native complex one-loop amplitude, native observables, +, −, +i, −i strata, and target-uncertainty bands |
-| [Hyperparameter tuning](../resources/templates/runs/hyperparameter-tuning.toml) | Nine Voronoi-centre configurations, ranked by the tetrahedron's frozen-inference x error |
-| [Parameter scan](../resources/templates/runs/parameter-scan.toml) | A 3×3 grid of surface sharpness/shear, including scan heatmaps |
-| [Integration campaign](../resources/templates/runs/integration-campaign.toml) | Two independent GammaLoop replicas, averaged with coefficients 1/2 and concurrent allocation |
+| Run card | What it demonstrates | Build feature |
+| --- | --- | --- |
+| [Installation smoke](../resources/templates/runs/installation-smoke.toml) | Unit integral, no generated state or process dependency | Any build |
+| [Tetrahedron surface](../resources/templates/runs/tetrahedron-surface.toml) | Two inputs, three outputs, Havana stratification and the complete plot tour | `symbolica` |
+| [Tetrahedron process](../resources/templates/runs/tetrahedron-process.toml) | The same vector function through the Python process SDK, with a uniform proposal | Any build; Python SDK required |
+| [GammaLoop four phases](../resources/templates/runs/gammaloop-stratified.toml) | A native complex one-loop amplitude, native observables, +, −, +i, −i strata, and target-uncertainty bands | `gammaloop` |
+| [Hyperparameter tuning](../resources/templates/runs/hyperparameter-tuning.toml) | Nine Voronoi-centre configurations, ranked by the tetrahedron's frozen-inference x error | `symbolica` |
+| [Parameter scan](../resources/templates/runs/parameter-scan.toml) | A 3×3 grid of surface sharpness/shear, including scan heatmaps | `symbolica` |
+| [Integration campaign](../resources/templates/runs/integration-campaign.toml) | Two independent GammaLoop replicas, averaged with coefficients 1/2 and concurrent allocation | `gammaloop` |
+
+The default build includes both features. See [build features](deployment.md#build-features)
+for smaller builds; their domains, stratification and process interfaces are unchanged.
 
 Prepare the two optional dependencies once in the worker environment:
 

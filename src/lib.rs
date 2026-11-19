@@ -35,6 +35,7 @@ pub mod server;
 mod service_error;
 mod services;
 pub mod stores;
+#[cfg(feature = "symbolica")]
 mod symbolica_license;
 pub mod tracing;
 pub mod utils;
@@ -81,6 +82,7 @@ pub use stores::{
     RunLifecycleState, RunProgress, TaskOutputSnapshot, TaskStageSnapshot, WorkerStatus,
 };
 pub use stores::{get_pg_pool, init_pg_store};
+#[cfg(feature = "symbolica")]
 pub use symbolica_license::activate_symbolica_oem_license;
 pub use utils::domain::{DiscreteAxisRole, Domain, DomainBranch};
 pub type BinResult<T = ()> = Result<T, Box<dyn std::error::Error>>;

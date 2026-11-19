@@ -210,6 +210,7 @@ pub fn validate_run(config: RunDefinition, probe: bool) -> Result<RunValidation,
                 .sample_sampler_config()
                 .or_else(|| task.task.sampler_config())
             {
+                sampler.validate_backend_availability()?;
                 let needs_handoff = matches!(
                     &sampler.sampler,
                     crate::core::SamplerConfig::HavanaInference { .. }

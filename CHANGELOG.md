@@ -5,6 +5,10 @@
 See the [validation and risk report](docs/validation/2026-10-15-consolidation.md)
 for tested workflows, fixes found in the dashboard, and remaining limitations.
 
+- Optional native backends: minimal builds omit Symbolica; `symbolica` enables
+  expression evaluation and Havana, and the default `gammaloop` feature includes
+  both. Shared domains, stratification and process interfaces remain available.
+  See [build features](docs/deployment.md#build-features).
 - Concurrent campaigns reserve one sampler and a configurable minimum evaluator
   pool per active child, schedule independent durable sample quanta, and preserve
   other children's workers during switching. Error-only campaigns use the same

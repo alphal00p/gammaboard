@@ -226,6 +226,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "symbolica")]
     fn havana_handoff_applies_new_seed_and_resets_stage_counters() {
         use crate::sampling::{HavanaInferenceSamplerParams, HavanaSamplerParams, StageHandoff};
         let domain = Domain::continuous(2);

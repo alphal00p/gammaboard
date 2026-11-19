@@ -5,7 +5,9 @@ pub(crate) mod gammaloop;
 pub(crate) mod gammaloop;
 mod gammaloop_config;
 pub(crate) mod process;
+#[cfg(feature = "symbolica")]
 mod symbolica;
+mod symbolica_config;
 pub(crate) mod unit;
 
 use crate::core::{AccumulatorConfig, EngineError, EvaluatorConfig};
@@ -14,11 +16,12 @@ use crate::utils::domain::Domain;
 
 use self::gammaloop::GammaLoopEvaluator;
 use self::process::ProcessEvaluator;
+#[cfg(feature = "symbolica")]
 use self::symbolica::SymbolicaEngine;
 use self::unit::UnitEvaluator;
 pub use gammaloop::GammaLoopParams;
 pub use process::{ProcessEvaluatorParams, ProcessOutput};
-pub use symbolica::SymbolicaParams;
+pub use symbolica_config::SymbolicaParams;
 pub use unit::UnitEvaluatorParams;
 
 impl EvaluatorConfig {
@@ -37,9 +40,14 @@ impl EvaluatorConfig {
                 Ok(Box::new(GammaLoopEvaluator::from_params(params.clone())?))
             }
             Self::Unit { params } => Ok(Box::new(UnitEvaluator::from_params(params.clone())?)),
+            #[cfg(feature = "symbolica")]
             Self::Symbolica { params } => {
                 Ok(Box::new(SymbolicaEngine::from_params(params.clone())?))
             }
+            #[cfg(not(feature = "symbolica"))]
+            Self::Symbolica { .. } => Err(EngineError::build(
+                "evaluator.kind = \"symbolica\" requires the \"symbolica\" build feature",
+            )),
             Self::ProcessEvaluator { params } => {
                 Ok(Box::new(ProcessEvaluator::from_params(params.clone())?))
             }
@@ -80,7 +88,7 @@ impl EvaluatorConfig {
                 }
             },
             Self::Symbolica { params } => match &params.source {
-                symbolica::SymbolicaSource::Expressions { components, .. } => {
+                symbolica_config::SymbolicaSource::Expressions { components, .. } => {
                     validate_value_accumulator(self.kind_str(), config, components)
                 }
                 _ => validate_symbolica_accumulator(self.kind_str(), config),
