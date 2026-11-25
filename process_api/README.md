@@ -22,16 +22,15 @@ python -m pip install ./process_api/python
 kind = "process_evaluator"
 command = ["/path/to/venv/bin/python", "-m", "my_worker"]
 cwd = "/shared/project"
-domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 2 } }
-output = { kind = "values", components = ["value"] }
 args = { scale = 2.0 }
 ```
 
 All process roles share `command`, optional `cwd`, `args`, and
 `shutdown_grace_seconds` (30 by default). Process samplers inherit the run domain.
-Ordinary evaluator output defaults to one `value` component; tasks choose
-statistical or full-vector accumulation with matching components. Use
-`output = { kind = "gammaloop" }` for native observable bundles.
+Evaluators declare their domain and available channels. Tasks select components
+through their accumulators, including `gammaloop` for observable integration.
+Optional explicit `domain`/`descriptor` assertions support deployment validation.
+The older fixed `output` setting is retained for legacy workers.
 Commands may launch a local executable or an explicit container invocation.
 
 ## Entrypoints
@@ -62,8 +61,8 @@ the reserved keys `domain` or `evaluator_metadata`.
 
 | Role | Python callback | Result |
 | --- | --- | --- |
-| Values evaluator | `eval(xs_discrete, xs_continuous)` | Unweighted `(N,)` for one component, `(N,C)`, or a mapping from every declared component name to an `(N,)` array |
-| Observable evaluator | `eval(xs_discrete, xs_continuous)` | `ObservableBatch(values, observables)`, one unweighted result per input |
+| Evaluator discovery | `descriptor()` | `EvaluatorDescriptor(domain, components, observables=False, details=False, diagnostics=False, scalar_projection=None)` |
+| Evaluator | `evaluate(xs_discrete, xs_continuous, request)` | `EvaluationBatch(values, observables=None, details=None, diagnostics=None)` |
 | Sampler | `generate(max_samples)` | `SampleBatch(xs_discrete, xs_continuous, weights, training_remaining=None)` or `WAITING` / `FINISHED` |
 | Sampler feedback | `feedback(feedback)` | Complete draw with masked `.values`, `.unmasked_values`, and optional `.strata` |
 | Materializer | `materialize_batch(latent_batch)` | `Batch(xs_discrete, xs_continuous, weights)` |
@@ -74,7 +73,22 @@ Fixed-width discrete and continuous coordinates are NumPy arrays with shapes
 component count. Variable-width coordinates are tuples of one-dimensional arrays. Weights and
 feedback value arrays have shape `(N,)`. SDK callback input arrays own writable
 storage and can be retained without corrupting later requests. All output arrays
-must have the required shape and finite values. Component order comes from initialization.
+must have the required shape and finite values. Values may be an `(N,C)` array in
+`request.components` order, `(N,)` for one component, or a mapping keyed by component
+name. Optional channels are lists of N per-sample dictionaries, computed only when
+requested. `None` means unavailable. `request` has `components`, `observables`,
+`details` and `diagnostics` fields.
+
+Evaluator construction receives `domain=None` during automatic discovery. The
+provider derives its domain from its arguments/state and returns it in the descriptor.
+A supplied domain is an assertion. New run cards can omit both `domain` and `output`;
+select integration/plot outputs through the task accumulator. Explicit descriptors
+avoid starting a probe on the service host. See the [selected-output contract](protocol.md#selected-output-evaluator-contract)
+for validation, binary encoding, sidecar fields and discovery deployment constraints.
+
+Legacy classes implementing only `eval(xs_discrete, xs_continuous)` remain supported
+with explicit `domain` and `output`. `ObservableBatch` is a compatibility alias for
+`EvaluationBatch`. The preferred interface has one evaluation hook for every output.
 
 Samplers/materializers receive the augmented domain, including stratum prefixes;
 evaluators/transforms receive the integrand domain. Use
@@ -232,6 +246,9 @@ can skip inherited defaults. See `--help` for all options.
   uses stratified statistics for the integral and histogram bins.
 - [Rust/Apptainer evaluator](examples/rust_evaluator/README.md): a direct
   wire implementation, including ragged coordinate layouts.
+- [Rust GammaLoop wrapper](examples/rust_gammaloop/README.md): the native
+  evaluator behind the process API, with matching native/process run cards and
+  a values-only mode usable by hosts built without GammaLoop.
 
 See the [tutorial index and shared setup](examples/README.md). These tutorials are
 separate from the default dashboard run catalog.

@@ -8,8 +8,10 @@ fn main() {
     let mut evaluator: Option<BranchingDomainEvaluator> = None;
     let mut fixed_widths: Option<(Option<usize>, Option<usize>)> = None;
 
+    let mut reader = std::io::stdin().lock();
+    let mut writer = std::io::stdout().lock();
     loop {
-        let request = match read_request() {
+        let request = match read_request(&mut reader) {
             Ok(Some(request)) => request,
             Ok(None) => break,
             Err(error) => {
@@ -98,13 +100,13 @@ fn main() {
 
         match result {
             Ok((value, binary)) => {
-                if let Err(error) = send_result(request.id, value, &binary) {
+                if let Err(error) = send_result(&mut writer, request.id, value, &binary) {
                     eprintln!("failed to send result: {error}");
                     break;
                 }
             }
             Err(error) => {
-                if let Err(send_error) = send_error(request.id, &error) {
+                if let Err(send_error) = send_error(&mut writer, request.id, &error) {
                     eprintln!("failed to send error response: {send_error}");
                     break;
                 }

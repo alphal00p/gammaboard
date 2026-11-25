@@ -5,6 +5,7 @@ From: rust:1.87-bookworm
     Cargo.toml /opt/evaluator/Cargo.toml
     Cargo.lock /opt/evaluator/Cargo.lock
     src /opt/evaluator/src
+    ../common /opt/common
 
 %post
     set -eux

@@ -26,6 +26,7 @@ pub struct RuntimeOverrides {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeContext {
+    allow_local_processes: bool,
     runtime_config_path: PathBuf,
     runtime_config: RuntimeConfig,
     primary_resource_root: PathBuf,
@@ -50,8 +51,10 @@ impl RuntimeContext {
             &runtime_config.resources.roots,
         );
         initialize_resource_roots(&runtime_config.resources.roots);
+        crate::resources::initialize_temp_dir(runtime_config.resources.temp_dir.clone());
         let primary_resource_root = runtime_config.primary_resource_root();
         Ok(Self {
+            allow_local_processes: false,
             runtime_config_path,
             runtime_config,
             primary_resource_root,
@@ -61,6 +64,20 @@ impl RuntimeContext {
         })
     }
 
+    pub fn with_local_processes(mut self, allowed: bool) -> Self {
+        self.allow_local_processes = allowed;
+        self
+    }
+    pub fn local_processes_allowed(&self) -> bool {
+        !self.runtime_config.externally_managed || self.allow_local_processes
+    }
+    pub fn require_local_processes(&self, action: &str) -> anyhow::Result<()> {
+        crate::local_control::require_local_processes(
+            self.runtime_config.externally_managed,
+            self.allow_local_processes,
+            action,
+        )
+    }
     pub fn runtime_config_path(&self) -> &Path {
         &self.runtime_config_path
     }
@@ -82,6 +99,9 @@ impl RuntimeContext {
             "--runtime-config".to_string(),
             self.runtime_config_path.display().to_string(),
         ];
+        if self.allow_local_processes {
+            args.push("--allow-local-processes".into());
+        }
         for root in &self.runtime_config.resources.roots {
             args.push("--resource-root".to_string());
             args.push(root.clone());
@@ -101,7 +121,13 @@ impl RuntimeContext {
     }
 
     pub fn node_log_paths(&self, node_name: &str) -> anyhow::Result<(PathBuf, PathBuf)> {
-        let dir = self.primary_resource_root.join("logs/nodes");
+        let dir = self
+            .runtime_config
+            .resources
+            .log_dir
+            .clone()
+            .unwrap_or_else(|| self.primary_resource_root.join("logs"))
+            .join("nodes");
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("failed creating node log directory {}", dir.display()))?;
         Ok((
@@ -110,20 +136,21 @@ impl RuntimeContext {
         ))
     }
 
-    pub fn deploy_tmp_dir(&self, frontend_port: u16) -> PathBuf {
-        self.primary_resource_root
-            .join(format!("nginx/{frontend_port}"))
-    }
-
     pub fn evaluator_tmp_dir(&self, kind: &str) -> PathBuf {
-        self.primary_resource_root
-            .join(format!("tmp/evaluators/{kind}"))
+        self.runtime_config
+            .resources
+            .temp_dir
+            .clone()
+            .unwrap_or_else(|| self.primary_resource_root.join("tmp"))
+            .join(format!("evaluators/{kind}"))
     }
 }
 
 pub fn evaluator_tmp_dir(kind: &str) -> anyhow::Result<PathBuf> {
     let root = primary_resource_root().context("failed resolving primary resource root")?;
-    Ok(root.join(format!("tmp/evaluators/{kind}")))
+    Ok(crate::resources::temp_dir()
+        .unwrap_or_else(|| root.join("tmp"))
+        .join(format!("evaluators/{kind}")))
 }
 
 fn apply_runtime_overrides(config: &mut RuntimeConfig, overrides: RuntimeOverrides) -> Result<()> {

@@ -1,46 +1,11 @@
-use super::auto_assign::{AutoAssignArgs, run_auto_assign_command};
-use super::shared::{
-    NodeSelection, RoleArg, json_output_enabled, print_json, resolve_run_ref, with_cli_store,
-    with_control_store,
-};
+use super::shared::with_cli_store;
 use anyhow::{Result, bail};
-use clap::{Args, Subcommand};
-use comfy_table::{Cell, CellAlignment, ContentArrangement, Table};
-use gammaboard::PgStore;
-use gammaboard::api::nodes as node_api;
-use gammaboard::config::RuntimeConfig;
-use gammaboard::core::{ControlPlaneStore, NodeCapabilities, WorkerRole};
-use gammaboard::runners::{NodeRunner, NodeRunnerConfig};
-use gammaboard::runtime_context::RuntimeContext;
-
-#[derive(Debug, Args)]
-pub struct NodeArgs {
-    #[command(subcommand)]
-    pub command: NodeCommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum NodeCommand {
-    /// Run one worker node in the foreground
-    Run(NodeRunArgs),
-    /// Spawn local worker node processes
-    StartLocal(AutoRunArgs),
-    /// Assign free nodes to a run automatically
-    AutoAssign(AutoAssignArgs),
-    /// Assign a node role for a run
-    Assign {
-        node_name: String,
-        role: RoleArg,
-        run: String,
-    },
-    /// Remove a node from its worker pool and stop its current role
-    Unassign { node_name: String },
-    /// List registered nodes
-    List { node_name: Option<String> },
-    /// Request shutdown for one node or all nodes
-    Stop(NodeSelection),
-}
-
+use clap::Args;
+use gammaboard::{
+    config::RuntimeConfig,
+    core::NodeCapabilities,
+    runners::{NodeRunner, NodeRunnerConfig},
+};
 #[derive(Debug, Args)]
 pub struct NodeRunArgs {
     #[arg(long)]
@@ -49,13 +14,6 @@ pub struct NodeRunArgs {
     max_start_failures: u32,
     #[arg(long = "capability", value_parser = parse_capability, value_name = "KEY=VALUE")]
     capabilities: Vec<(String, u64)>,
-}
-
-#[derive(Debug, Args)]
-pub struct AutoRunArgs {
-    count: usize,
-    #[arg(long, default_value_t = 3)]
-    max_start_failures: u32,
 }
 
 fn parse_capability(raw: &str) -> Result<(String, u64), String> {
@@ -91,88 +49,7 @@ fn capabilities_from_pairs(pairs: Vec<(String, u64)>) -> Result<NodeCapabilities
     Ok(capabilities)
 }
 
-pub async fn run_node_commands(
-    command: NodeCommand,
-    runtime: &RuntimeContext,
-    quiet: bool,
-) -> Result<()> {
-    let config = runtime.runtime_config();
-    match command {
-        NodeCommand::Run(args) => return run_node(args, config, quiet).await,
-        NodeCommand::StartLocal(args) => return run_auto_run_command(args, runtime, quiet).await,
-        NodeCommand::AutoAssign(args) => return run_auto_assign_command(args, config, quiet).await,
-        command => run_control_node_command(command, config, quiet).await,
-    }
-}
-
-async fn run_control_node_command(
-    command: NodeCommand,
-    config: &RuntimeConfig,
-    quiet: bool,
-) -> Result<()> {
-    with_control_store(
-        config,
-        10,
-        quiet,
-        node_command_name(&command),
-        |store| async move {
-            match command {
-                NodeCommand::Assign {
-                    node_name,
-                    role,
-                    run,
-                } => {
-                    let run = resolve_run_ref(&store, &run).await?;
-                    let assigned =
-                        node_api::assign_node(&store, &node_name, run.run_id, role.into()).await?;
-                    if json_output_enabled() {
-                        print_json(&serde_json::json!({"node_name": assigned.node_name, "role": assigned.role.to_string(), "run_id": assigned.run_id, "run_name": assigned.run_name}));
-                    } else {
-                        println!(
-                            "assigned node={} role={} run_id={} run_name={}",
-                            assigned.node_name, assigned.role, assigned.run_id, assigned.run_name
-                        );
-                    }
-                }
-                NodeCommand::Unassign { node_name } => {
-                    node_api::unassign_node(&store, &node_name).await?;
-                    if json_output_enabled() {
-                        print_json(&serde_json::json!({"node_name": node_name, "unassigned": true}));
-                    } else {
-                        println!("unassigned node={}", node_name);
-                    }
-                }
-                NodeCommand::List { node_name } => {
-                    if json_output_enabled() {
-                        print_json(&store.list_nodes(node_name.as_deref()).await?);
-                    } else {
-                        let nodes = store.get_registered_worker_summaries(None).await?
-                            .into_iter().filter(|node| node_name.as_ref().is_none_or(|name| *name == node.node_name)).collect();
-                        print_node_table(build_node_rows(nodes));
-                    }
-                }
-                NodeCommand::Stop(selection) => stop_nodes(&store, selection).await?,
-                NodeCommand::Run(_) | NodeCommand::StartLocal(_) | NodeCommand::AutoAssign(_) => unreachable!(),
-            }
-            Ok(())
-        },
-    )
-    .await
-}
-
-fn node_command_name(command: &NodeCommand) -> &'static str {
-    match command {
-        NodeCommand::Run(_) => "node_run",
-        NodeCommand::StartLocal(_) => "node_start_local",
-        NodeCommand::AutoAssign(_) => "node_auto_assign",
-        NodeCommand::Assign { .. } => "node_assign",
-        NodeCommand::Unassign { .. } => "node_unassign",
-        NodeCommand::List { .. } => "node_list",
-        NodeCommand::Stop(_) => "node_stop",
-    }
-}
-
-async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Result<()> {
+pub async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Result<()> {
     let node_name = args.name.clone();
     let capabilities = capabilities_from_pairs(args.capabilities)?;
     println!(
@@ -201,152 +78,4 @@ async fn run_node(args: NodeRunArgs, config: &RuntimeConfig, quiet: bool) -> Res
         Ok(())
     })
     .await
-}
-
-async fn run_auto_run_command(
-    args: AutoRunArgs,
-    runtime: &RuntimeContext,
-    quiet: bool,
-) -> Result<()> {
-    with_control_store(
-        runtime.runtime_config(),
-        10,
-        quiet,
-        "node_auto_run",
-        |store| async move {
-            let result = gammaboard::api::node_launch::launch(
-                &store,
-                runtime,
-                true,
-                gammaboard::api::node_launch::AutoRunNodesRequest {
-                    toml: None,
-                    count: Some(args.count),
-                    max_start_failures: Some(args.max_start_failures),
-                    args: serde_json::json!({}),
-                    name_prefix: None,
-                },
-            )
-            .await?;
-            print_json(&result);
-            Ok(())
-        },
-    )
-    .await
-}
-
-async fn stop_nodes(store: &PgStore, selection: NodeSelection) -> Result<()> {
-    if selection.all {
-        let rows = store.request_all_nodes_shutdown().await?;
-        if json_output_enabled() {
-            print_json(&serde_json::json!({"all": true, "rows_updated": rows}));
-        } else {
-            println!("requested shutdown for all nodes: rows_updated={rows}");
-        }
-        return Ok(());
-    }
-
-    for node_name in selection.node_names {
-        let stopped = node_api::stop_node(store, &node_name).await?;
-        if json_output_enabled() {
-            print_json(
-                &serde_json::json!({"node_name": stopped.node_name, "rows_updated": stopped.rows_updated}),
-            );
-        } else {
-            println!(
-                "requested shutdown for node={}: rows_updated={}",
-                stopped.node_name, stopped.rows_updated
-            );
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug)]
-struct NodeRow {
-    node_name: String,
-    node_uuid: String,
-    capabilities: String,
-    pool: String,
-    run: String,
-    role: String,
-    last_seen: String,
-}
-
-fn build_node_rows(nodes: Vec<gammaboard::stores::RegisteredWorkerSummary>) -> Vec<NodeRow> {
-    let run_label = |id: Option<i32>, name: Option<String>| match id {
-        Some(id) => format!("{} (#{id})", name.as_deref().unwrap_or("run")),
-        None => "None".into(),
-    };
-    nodes
-        .into_iter()
-        .map(|node| NodeRow {
-            node_name: node.node_name,
-            node_uuid: node.node_uuid,
-            capabilities: format_capabilities(
-                &serde_json::from_value(node.capabilities).unwrap_or_default(),
-            ),
-            pool: run_label(node.pool_run_id, node.pool_run_name),
-            run: run_label(node.desired_run_id, node.desired_run_name),
-            role: format_role(node.desired_role),
-            last_seen: format_last_seen(node.last_seen),
-        })
-        .collect()
-}
-
-fn print_node_table(rows: Vec<NodeRow>) {
-    if rows.is_empty() {
-        println!("no nodes found");
-        return;
-    }
-
-    let mut table = Table::new();
-    table.set_content_arrangement(ContentArrangement::Dynamic);
-    table.set_header(vec![
-        Cell::new("Name").set_alignment(CellAlignment::Center),
-        Cell::new("UUID").set_alignment(CellAlignment::Center),
-        Cell::new("Capabilities").set_alignment(CellAlignment::Center),
-        Cell::new("Pool").set_alignment(CellAlignment::Center),
-        Cell::new("Placement").set_alignment(CellAlignment::Center),
-        Cell::new("Role").set_alignment(CellAlignment::Center),
-        Cell::new("Last Seen").set_alignment(CellAlignment::Center),
-    ]);
-
-    for row in rows {
-        table.add_row(vec![
-            row.node_name,
-            row.node_uuid,
-            row.capabilities,
-            row.pool,
-            row.run,
-            row.role,
-            row.last_seen,
-        ]);
-    }
-
-    println!("{table}");
-}
-
-fn format_capabilities(capabilities: &NodeCapabilities) -> String {
-    if capabilities.is_empty() {
-        return "-".to_string();
-    }
-    capabilities
-        .iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn format_role(role: Option<WorkerRole>) -> String {
-    match role {
-        Some(WorkerRole::Evaluator) => "Evaluator".to_string(),
-        Some(WorkerRole::SamplerAggregator) => "Sampler Aggregator".to_string(),
-        None => "None".to_string(),
-    }
-}
-
-fn format_last_seen(last_seen: Option<chrono::DateTime<chrono::Utc>>) -> String {
-    last_seen
-        .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-        .unwrap_or_else(|| "-".to_string())
 }

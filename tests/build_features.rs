@@ -24,17 +24,13 @@ fn cli_reports_features_and_probes_the_dependency_free_example() {
         cfg!(feature = "gammaloop")
     );
 
-    Command::cargo_bin("gammaboard")
-        .unwrap()
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args([
-            "run",
-            "validate",
-            "resources/templates/runs/installation-smoke.toml",
-            "--probe",
-        ])
-        .assert()
-        .success();
+    let definition = gammaboard::api::runs::load_run_add_config_file(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/templates/runs/installation-smoke.toml")
+            .as_path(),
+    )
+    .unwrap();
+    gammaboard::api::runs::validate_run(definition, true).unwrap();
 }
 
 #[test]

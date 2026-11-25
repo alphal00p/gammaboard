@@ -1,188 +1,227 @@
+//! Service executable: local bootstrap, offline maintenance, and worker execution.
+//! Ordinary management commands are handled by the lightweight client crate.
 pub mod auth;
-pub mod auto_assign;
 pub mod benchmark;
-pub mod completion;
 pub mod db;
-pub mod deploy;
+pub mod instance;
+pub mod service;
+use service as local;
+pub mod management;
 pub mod node;
-pub mod performance;
-pub mod run;
-pub mod server;
 pub mod shared;
-
-use anyhow::Result;
-use auth::{AuthArgs, run_auth_command};
-use clap::{ArgAction, Parser, Subcommand};
-use completion::{CompletionArgs, run_completion};
-use db::{DbArgs, run_db_command};
-use deploy::{DeployArgs, run_deploy_command};
-use gammaboard::config::DEFAULT_RUNTIME_CONFIG_PATH;
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use gammaboard::runtime_context::{RuntimeContext, RuntimeOverrides};
-use node::{NodeArgs, run_node_commands};
-use run::{RunArgs, run_run_commands};
-use server::{ServerArgs, run_server};
 use std::path::PathBuf;
-
 #[derive(Debug, Parser)]
-#[command(name = "gammaboard")]
-#[command(version, about = "GammaBoard operations CLI", long_about = None)]
+#[command(
+    name = "gammaboard",
+    version,
+    about = "GammaBoard service and worker executable; use gb for management"
+)]
 pub struct Cli {
-    #[arg(long = "runtime-config", global = true, default_value = DEFAULT_RUNTIME_CONFIG_PATH, value_name = "PATH")]
+    #[arg(long, global = true)]
+    instance: Option<PathBuf>,
+    #[arg(long, global = true)]
+    allow_local_processes: bool,
+    #[arg(long, global = true, default_value = "runtime.toml")]
     runtime_config: PathBuf,
-    #[arg(long = "database-url", global = true, value_name = "URL")]
+    #[arg(long, global = true)]
     database_url: Option<String>,
-    #[arg(long = "resource-root", global = true, value_name = "PATH")]
+    #[arg(long = "resource-root", global = true)]
     resource_roots: Vec<String>,
-    #[arg(long = "port-offset", global = true, default_value_t = 0)]
+    #[arg(long, global = true, default_value_t = 0)]
     port_offset: u16,
-    #[arg(long = "postgres-trusted-network", global = true, action = ArgAction::SetTrue)]
+    #[arg(long, global = true)]
     postgres_trusted_network: bool,
-    #[arg(short = 'q', long, global = true, action = ArgAction::SetTrue)]
+    #[arg(long, short = 'q', global = true)]
     quiet: bool,
-    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
     command: Command,
 }
-
 impl Cli {
     pub fn json_output_requested(&self) -> bool {
         self.json
     }
 }
-
 pub fn format_error_json(code: &str, message: impl std::fmt::Display) -> String {
-    serde_json::json!({
-        "error": {
-            "code": code,
-            "message": message.to_string(),
-        }
-    })
-    .to_string()
+    serde_json::json!({"error":{"code":code,"message":message.to_string()}}).to_string()
 }
-
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Print the compiled build identity as JSON without connecting to a database
-    BuildInfo,
-    /// Helpers for the Python benchmark suite
+    Start(local::StartArgs),
+    Restart(gammaboard_client::cli::StartupOptions),
+    Db(db::DbArgs),
+    #[command(visible_alias = "worker")]
+    Node {
+        #[command(subcommand)]
+        command: NodeCommand,
+    },
+    Auth(auth::AuthArgs),
     Benchmark(benchmark::BenchmarkArgs),
-    /// Run lifecycle commands
-    Run(RunArgs),
-    /// Node assignment and node lifecycle commands
-    Node(NodeArgs),
-    /// API-only backend server
-    Server(ServerArgs),
-    /// Auth helpers
-    Auth(AuthArgs),
-    /// Generate shell completion scripts
-    Completion(CompletionArgs),
-    /// Local PostgreSQL lifecycle helpers
-    Db(DbArgs),
-    /// Foreground dashboard deploy stack supervisor
-    Deploy(DeployArgs),
+    BuildInfo,
+    /// Validate deployment configuration without starting services.
+    CheckConfig,
+    /// Validate or probe a run on this host.
+    CheckRun {
+        file: PathBuf,
+        #[arg(long)]
+        probe: bool,
+    },
 }
-
+#[derive(Debug, Subcommand)]
+enum NodeCommand {
+    Run(node::NodeRunArgs),
+}
 pub fn dispatch(cli: Cli) -> Result<()> {
-    let mut runtime = tokio::runtime::Builder::new_multi_thread();
-    // Worker computation runs on the calling thread; one background thread
-    // keeps leases and queue I/O moving without a machine-sized pool per node.
-    if !matches!(cli.command, Command::Server(_))
-        && std::env::var_os("TOKIO_WORKER_THREADS").is_none()
-    {
-        runtime.worker_threads(1);
-    }
-    runtime.enable_all().build()?.block_on(dispatch_async(cli))
+    let worker = matches!(cli.command, Command::Node { .. });
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(if worker { 1 } else { 4 })
+        .enable_all()
+        .build()?
+        .block_on(dispatch_async(cli))
 }
-
 async fn dispatch_async(cli: Cli) -> Result<()> {
-    if matches!(cli.command, Command::BuildInfo) {
-        println!("{}", gammaboard::provenance::build_info());
-        return Ok(());
-    }
-    let quiet = cli.quiet;
-    shared::set_json_output(cli.json);
-    if cli.postgres_trusted_network && !cli.json {
-        eprintln!(
-            "WARNING: --postgres-trusted-network allows passwordless PostgreSQL access from directly connected networks"
-        );
-    }
-    let runtime = RuntimeContext::load(
-        &cli.runtime_config,
-        RuntimeOverrides {
-            database_url: cli.database_url,
-            resource_roots: cli.resource_roots,
-            port_offset: cli.port_offset,
-            postgres_trusted_network: cli.postgres_trusted_network,
-        },
-    )?;
-    let config = runtime.runtime_config();
     match cli.command {
-        Command::BuildInfo => unreachable!(),
-        Command::Benchmark(args) => benchmark::run(args, config).await,
-        Command::Run(args) => run_run_commands(args.command, config, quiet).await,
-        Command::Node(args) => run_node_commands(args.command, &runtime, quiet).await,
-        Command::Server(args) => run_server(args, &runtime, quiet).await,
-        Command::Auth(args) => run_auth_command(args),
-        Command::Completion(args) => run_completion(args),
-        Command::Db(args) => run_db_command(args, config),
-        Command::Deploy(args) => run_deploy_command(args, &runtime).await,
+        Command::Auth(args) => return auth::run_auth_command(args),
+        Command::BuildInfo => {
+            shared::print_json(&gammaboard::provenance::build_info());
+            return Ok(());
+        }
+
+        _ => {}
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Cli, format_error_json};
-    use clap::{CommandFactory, Parser};
-
-    #[test]
-    fn public_command_tree_uses_release_names() {
-        let command = Cli::command();
-        assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
-        let run = command.find_subcommand("run").expect("run command");
-        assert!(run.find_subcommand("create").is_some());
-        assert!(run.find_subcommand("add").is_none());
-        let task = run.find_subcommand("task").expect("run task command");
-        assert!(task.find_subcommand("append").is_some());
-        assert!(task.find_subcommand("add").is_none());
-
-        let node = command.find_subcommand("node").expect("node command");
-        assert!(node.find_subcommand("auto-assign").is_some());
-        assert!(node.find_subcommand("start-local").is_some());
-        assert!(node.find_subcommand("auto-run").is_none());
-        assert!(command.find_subcommand("auto-assign").is_none());
-
-        let auth = command.find_subcommand("auth").expect("auth command");
-        assert!(auth.find_subcommand("hash-password").is_some());
-        let deploy = command.find_subcommand("deploy").expect("deploy command");
-        assert!(deploy.find_subcommand("run").is_none());
-    }
-
-    #[test]
-    fn destructive_flags_are_limited_to_destructive_commands() {
-        assert!(Cli::try_parse_from(["gammaboard", "run", "pause", "--dry-run", "demo"]).is_err());
-        assert!(Cli::try_parse_from(["gammaboard", "run", "remove", "--dry-run", "demo"]).is_ok());
-        assert!(
-            Cli::try_parse_from(["gammaboard", "run", "task", "remove", "demo", "1", "--yes",])
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn trusted_network_postgres_flag_is_explicit() {
-        assert!(
-            Cli::try_parse_from(["gammaboard", "--postgres-trusted-network", "db", "status"])
-                .is_ok()
-        );
-        assert!(Cli::try_parse_from(["gammaboard", "--postgres-public", "db", "status"]).is_err());
-    }
-
-    #[test]
-    fn json_errors_have_a_stable_shape() {
-        let payload: serde_json::Value =
-            serde_json::from_str(&format_error_json("command_failed", "missing run"))
-                .expect("error JSON");
-        assert_eq!(payload["error"]["code"], "command_failed");
-        assert_eq!(payload["error"]["message"], "missing run");
+    let legacy_runtime =
+        cli.runtime_config != std::path::Path::new("runtime.toml") || cli.database_url.is_some();
+    let selected = cli.instance.or_else(|| {
+        (!legacy_runtime && PathBuf::from("gammaboard.toml").is_file())
+            .then(|| PathBuf::from("gammaboard.toml"))
+    });
+    let instance = selected
+        .as_deref()
+        .map(instance::Instance::load)
+        .transpose()?;
+    match cli.command {
+        Command::Start(args) => {
+            return local::start(
+                instance
+                    .as_ref()
+                    .context("start requires --instance FILE")?,
+                args,
+                cli.allow_local_processes,
+            )
+            .await;
+        }
+        Command::Restart(mut args) => {
+            let instance = instance
+                .as_ref()
+                .context("restart requires --instance FILE")?;
+            instance
+                .require_local_processes(cli.allow_local_processes, "restart local services")?;
+            let started = std::time::Instant::now();
+            local::stop(
+                instance,
+                local::StopArgs {
+                    wait: false,
+                    timeout: Some(args.timeout),
+                },
+            )
+            .await?;
+            args.timeout = args
+                .timeout
+                .checked_sub(started.elapsed())
+                .context("restart deadline elapsed after shutdown; instance was not restarted")?;
+            return local::start(
+                instance,
+                local::StartArgs {
+                    component: None,
+                    options: args,
+                },
+                cli.allow_local_processes,
+            )
+            .await;
+        }
+        Command::CheckConfig => {
+            shared::print_json(
+                &instance
+                    .as_ref()
+                    .context("check-config requires --instance FILE")?
+                    .redacted()?,
+            );
+            Ok(())
+        }
+        Command::CheckRun { file, probe } => {
+            let snapshot = tempfile::tempdir()?;
+            if probe {
+                let instance = instance
+                    .as_ref()
+                    .context("check-run --probe requires --instance FILE")?;
+                instance.require_local_processes(
+                    cli.allow_local_processes,
+                    "probe a run on this host",
+                )?;
+                instance.write_snapshot(snapshot.path())?;
+                RuntimeContext::load(
+                    snapshot.path().join("runtime.toml"),
+                    RuntimeOverrides::default(),
+                )?;
+            }
+            let definition = gammaboard::api::runs::load_run_add_config_file(&file)?;
+            shared::print_json(&gammaboard::api::runs::validate_run(definition, probe)?);
+            Ok(())
+        }
+        Command::Db(args) if instance.is_some() => {
+            let instance = instance.as_ref().unwrap();
+            if instance.managed_database
+                && !matches!(
+                    args.command,
+                    db::DbCommand::Status
+                        | db::DbCommand::Stop
+                        | db::DbCommand::Backup { .. }
+                        | db::DbCommand::Purge { .. }
+                )
+            {
+                instance.require_local_processes(
+                    cli.allow_local_processes,
+                    "perform local database maintenance",
+                )?;
+            }
+            return management::database(instance, args, cli.allow_local_processes).await;
+        }
+        command => {
+            let snapshot = tempfile::tempdir()?;
+            let path = if let Some(instance) = instance {
+                instance.write_snapshot(snapshot.path())?;
+                snapshot.path().join("runtime.toml")
+            } else {
+                cli.runtime_config
+            };
+            let runtime = RuntimeContext::load(
+                path,
+                RuntimeOverrides {
+                    database_url: cli.database_url,
+                    resource_roots: cli.resource_roots,
+                    port_offset: cli.port_offset,
+                    postgres_trusted_network: cli.postgres_trusted_network,
+                },
+            )?
+            .with_local_processes(cli.allow_local_processes);
+            match command {
+                Command::Node {
+                    command: NodeCommand::Run(args),
+                } => {
+                    runtime.require_local_processes("run a local worker")?;
+                    node::run_node(args, runtime.runtime_config(), cli.quiet).await
+                }
+                Command::Benchmark(args) => {
+                    runtime.require_local_processes("run a local benchmark")?;
+                    benchmark::run(args, runtime.runtime_config()).await
+                }
+                Command::Db(args) => db::run_db_command(args, runtime.runtime_config()),
+                _ => unreachable!(),
+            }
+        }
     }
 }

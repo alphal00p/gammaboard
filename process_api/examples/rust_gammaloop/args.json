@@ -1,0 +1,6 @@
+{
+  "state_folder": "/absolute/path/gg_hhh",
+  "integrand_name": "1L",
+  "training_projection": "abs",
+  "preprocessing": { "read_only": true }
+}

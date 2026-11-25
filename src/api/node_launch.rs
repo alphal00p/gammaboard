@@ -121,7 +121,6 @@ pub(crate) fn resolve_node_launch_groups(
 
 pub async fn launch(
     store: &PgStore,
-    runtime: &RuntimeContext,
     local: bool,
     payload: AutoRunNodesRequest,
 ) -> Result<JsonValue, ApiError> {
@@ -145,9 +144,6 @@ pub async fn launch(
             }
             other => ApiError::Internal(other.to_string()),
         })?;
-    if local {
-        resolve_local_requests(store, runtime).await?;
-    }
     let request = store
         .list_node_launch_requests()
         .await?
@@ -171,6 +167,9 @@ pub async fn resolve_local_requests(
     store: &PgStore,
     runtime: &RuntimeContext,
 ) -> Result<(), ApiError> {
+    runtime
+        .require_local_processes("launch local workers")
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let binary =
         crate::runtime_context::self_executable().map_err(|e| ApiError::Internal(e.to_string()))?;
     while let Some((id, args)) = store
@@ -293,4 +292,16 @@ fn node_process_log_paths(
     runtime
         .node_log_paths(node_name)
         .map_err(|err| ApiError::Internal(format!("failed resolving node log paths: {err}")))
+}
+
+/// Stable submission receipt, independent of the execution backend.
+pub async fn receipt(store: &PgStore, ids: Vec<i64>) -> Result<JsonValue, ApiError> {
+    let requests = store.list_node_launch_requests().await?;
+    let names: Vec<_> = requests
+        .iter()
+        .filter(|r| ids.contains(&r.id))
+        .flat_map(|r| r.args["groups"].as_array().into_iter().flatten())
+        .flat_map(|g| g["node_names"].as_array().into_iter().flatten().cloned())
+        .collect();
+    Ok(json!({"request_ids":ids.iter().map(i64::to_string).collect::<Vec<_>>(),"node_names":names}))
 }

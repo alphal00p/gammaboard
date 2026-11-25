@@ -9,20 +9,21 @@ On Linux, from a checkout:
 
 ```bash
 nix develop
-./gammaboard deploy
+./gb start --workers 2 --wait
+./gb run create resources/templates/runs/installation-smoke.toml \
+  --start --export-path "$PWD/installation-smoke.json"
+./gb stop --wait
 ```
 
-Open <http://localhost:8080>. In a second terminal:
+With dashboard assets installed, open <http://localhost:4000> while running.
+Build the optional assets with `npm ci` and `npm run build` inside `dashboard/`. The run should finish with an integral
+of **1.0**. Use `start --api-only --workers 2 --wait` for headless execution. Each worker
+count launches that many additional workers; service startup alone launches none.
 
-```bash
-nix develop
-./gammaboard run create resources/templates/runs/installation-smoke.toml
-./gammaboard node start-local 2
-./gammaboard node auto-assign installation-smoke
-```
+The checked-in `gammaboard.toml` consolidates local settings and explicit paths.
+Use `--instance FILE` for another configuration. See the [local CLI guide](docs/local-cli.md)
+for separate service starts, result exports, worker restoration and database maintenance.
 
-The run should finish with an integral of **1.0**. Stop workers with
-`./gammaboard node stop -a`, then press Ctrl-C in the deployment terminal.
 Anyone with dashboard access can launch configured process commands; keep the
 default passwordless deployment on a trusted network.
 

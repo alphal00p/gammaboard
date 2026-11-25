@@ -6,8 +6,6 @@ target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
 [evaluator]
 kind = "process_evaluator"
 command = ['$(python:"python3")', "-u", "$resources/templates/runs/support/tetrahedron.py"]
-domain = { rectangular = { continuous_dims = 2, discrete_cardinalities = [] } }
-output = { kind = "values", components = ["x","y","z"] }
 args = { sharpness = 6.0, skew = 0.0 }
 [[task_queue]]
 name = "inference"

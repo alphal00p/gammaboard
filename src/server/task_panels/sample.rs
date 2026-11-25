@@ -1658,6 +1658,13 @@ fn gammaloop_evaluation_diagnostics_panel(accumulator: AccumulatorState) -> Opti
 pub(crate) fn gammaloop_diagnostics_entries(
     diagnostics: &GammaLoopDiagnostics,
 ) -> Vec<crate::server::panels::KeyValueEntry> {
+    if diagnostics.count_total == 0 {
+        return vec![key_value(
+            "availability",
+            "Evaluation diagnostics",
+            "Unavailable",
+        )];
+    }
     vec![
         key_value("count_total", "Evaluations", diagnostics.count_total),
         key_value(

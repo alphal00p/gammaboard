@@ -398,6 +398,7 @@ where
         mut sampler: Box<dyn Sampler>,
         mut observable_state: AccumulatorState,
         evaluator_config: EvaluatorConfig,
+        evaluator_domain: &crate::Domain,
         sampler_config: SamplingConfig,
         batch_transforms: Vec<BatchTransformConfig>,
         params: SamplerAggregatorRunnerParams,
@@ -410,7 +411,7 @@ where
             policy.validate().map_err(StoreError::invalid_input)?;
         }
         evaluator_config
-            .validate_accumulator_config(&observable_state.config())
+            .validate_accumulator_config(&observable_state.config(), evaluator_domain)
             .map_err(|e| StoreError::store(e.to_string()))?;
         let evaluation_plan = crate::evaluation::stratification::prepare_estimator(
             &task.task,

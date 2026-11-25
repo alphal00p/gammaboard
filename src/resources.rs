@@ -1,6 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+static TEMP_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+pub fn initialize_temp_dir(path: Option<PathBuf>) {
+    let _ = TEMP_DIR.set(path);
+}
+pub fn temp_dir() -> Option<PathBuf> {
+    TEMP_DIR.get().cloned().flatten()
+}
+
 static RESOURCE_ROOTS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
 pub fn initialize_resource_roots(roots: &[String]) {

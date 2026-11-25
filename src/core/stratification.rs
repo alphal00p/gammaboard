@@ -281,6 +281,40 @@ mod tests {
         }
     }
     #[test]
+    fn frozen_plan_survives_json_transport_bit_exactly() {
+        // Adaptive probabilities from the tetrahedron workflow and their neighbors.
+        // The queue and PostgreSQL transport plans through JSON, while accumulator
+        // merging correctly requires the original immutable plan identity.
+        let probabilities: [f64; 4] = [
+            0.25997220954215033,
+            0.24436304663587455,
+            0.254975224310527,
+            0.24068951951144815,
+        ];
+        for index in 0..probabilities.len() {
+            for shift in -2_i64..=2 {
+                let mut p = probabilities.to_vec();
+                p[index] = f64::from_bits((p[index].to_bits() as i64 + shift) as u64);
+                let plan = StratificationPlan {
+                    proposal_id: "frozen-tetrahedron".into(),
+                    partition: StratificationConfig::Voronoi {
+                        domain: crate::Domain::strata(vec![4]),
+                        centers: (0..4).map(|i| (vec![i], vec![i as f64])).collect(),
+                        scales: None,
+                    },
+                    probabilities: Some(p),
+                    components: vec!["value".into()],
+                };
+                plan.validate().unwrap();
+                let encoded = serde_json::to_vec(&plan).unwrap();
+                let decoded: StratificationPlan = serde_json::from_slice(&encoded).unwrap();
+                assert_eq!(plan, decoded, "JSON changed a frozen probability");
+                assert_eq!(plan.id(), decoded.id());
+            }
+        }
+    }
+
+    #[test]
     fn frozen_probabilities_are_complete_and_never_silently_renormalized() {
         let plan = StratificationPlan {
             proposal_id: "p".into(),

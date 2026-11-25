@@ -232,7 +232,7 @@ pub(crate) fn observable_payload(accumulator: &AccumulatorState) -> Option<JsonV
     );
     if let AccumulatorState::Stratified(state) = accumulator {
         let estimates =
-            gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+            crate::evaluation::observables::ObservableSnapshotBundle::sum_independent_estimates(
                 &state.histograms,
             )
             .ok()?;
@@ -266,7 +266,7 @@ pub(crate) fn observable_payload(accumulator: &AccumulatorState) -> Option<JsonV
             let count = histogram["sample_count"].as_f64()?;
             let attach =
                 |bin: &mut JsonValue,
-                 mut estimate: gammalooprs::observables::IndependentEstimate| {
+                 mut estimate: crate::evaluation::observables::IndependentEstimate| {
                     if !state.uncertainty_ready() {
                         estimate.error = None;
                     }
@@ -308,12 +308,12 @@ pub(crate) fn observable_payload(accumulator: &AccumulatorState) -> Option<JsonV
 /// incompatible payload, never an unrelated positional substitute.
 #[cfg(feature = "gammaloop")]
 fn stratum_histogram_payload(
-    reference: &gammalooprs::observables::HistogramSnapshot,
-    histogram: &gammalooprs::observables::HistogramSnapshot,
+    reference: &crate::evaluation::observables::HistogramSnapshot,
+    histogram: &crate::evaluation::observables::HistogramSnapshot,
     probability: f64,
     uncertainty_ready: bool,
 ) -> Option<JsonValue> {
-    let paired = |bin: &gammalooprs::observables::HistogramBinSnapshot| {
+    let paired = |bin: &crate::evaluation::observables::HistogramBinSnapshot| {
         json!({
             "estimate": {
                 "mean": (histogram.sample_count > 0).then(|| bin.average(histogram.sample_count)),
@@ -338,8 +338,8 @@ fn stratum_histogram_payload(
 
 #[cfg(feature = "gammaloop")]
 fn histogram_bin_indices(
-    reference: &gammalooprs::observables::HistogramSnapshot,
-    source: &gammalooprs::observables::HistogramSnapshot,
+    reference: &crate::evaluation::observables::HistogramSnapshot,
+    source: &crate::evaluation::observables::HistogramSnapshot,
 ) -> Option<Vec<usize>> {
     let by_id = source
         .bins
@@ -494,11 +494,11 @@ mod tests {
     fn stratified_histogram_views_follow_bin_ids_and_reject_missing_bins() {
         use crate::core::{AccumulatorConfig, StratificationConfig, StratificationPlan};
         use crate::evaluation::accumulator::StratifiedAccumulatorState;
-        use crate::{Domain, Point};
-        use gammalooprs::observables::{
+        use crate::evaluation::observables::{
             DiscreteBinOrdering, HistogramAccumulatorState, ObservablePhase,
             ObservableSnapshotBundle,
         };
+        use crate::{Domain, Point};
         let plan = StratificationPlan {
             proposal_id: "bin-order".into(),
             partition: StratificationConfig::Voronoi {

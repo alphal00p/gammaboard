@@ -1,30 +1,20 @@
-# Local development
+# Local deployment
 
-From the repository root, enter `nix develop` and run:
+Copy `instance.example.toml` to an explicit location and edit its paths and ports.
+Relative paths resolve against that file. From the repository:
 
-```sh
-./gammaboard --port-offset 1 deploy --resume-workers
+```bash
+./gb start --workers 6 --wait
+./gb run create resources/templates/runs/tetrahedron-native.toml \
+  --start --max-evaluators 4 --export-path "$PWD/tetrahedron.json"
+./gb stop --wait
 ```
 
-The foreground supervisor owns the API, frontend, local workers, and managed
-PostgreSQL. `Ctrl-C` drains workers and stops the stack. Use the same port offset
-for commands in another terminal:
+The optional dashboard and API share the configured API port (4000 by default).
+No nginx process is needed. The lightweight client can be installed separately:
+`cargo install --path crates/gb`. Local bootstrap also needs the `gammaboard`
+service executable; remote management only needs an endpoint and credentials.
 
-```sh
-./gammaboard --port-offset 1 run create resources/templates/runs/installation-smoke.toml
-./gammaboard --port-offset 1 node start-local 2
-./gammaboard --port-offset 1 run resume installation-smoke --max-evaluators 1
-./gammaboard --port-offset 1 run wait installation-smoke --until completed
-```
-
-The checkout launcher builds the backend and refreshes the frontend for deploys.
-For repeated measurements, build once and pass the binary directly to
-`just benchmark`; compilation must stay outside timed intervals.
-
-`config/runtime.toml` sets the managed PostgreSQL connection limit. Omitted
-settings use embedded defaults. Changing the connection limit requires a
-database restart. Use `--runtime-config PATH` for a separate configuration.
-Do not start a second deployment on occupied ports.
-
-See [examples](../../docs/quickstart.md#default-examples), [operations](../../docs/operations.md),
-and [benchmarking](../../docs/benchmarking.md).
+See [CLI guide](../../docs/local-cli.md), [API contract](../../docs/management-api.md),
+and [Slurm deployment](../slurm/README.md). Old runtime files remain usable for
+worker execution and offline maintenance, not as a second management interface.

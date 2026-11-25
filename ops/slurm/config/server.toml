@@ -1,0 +1,10 @@
+# Backend API/dashboard and deploy settings for the UBELIX profile.
+name = "slurm"
+allow_local_node_spawn = false
+
+[frontend]
+build_dir = "/usr/local/share/gammaboard/dashboard"
+host = "0.0.0.0"
+
+# Supply [server.auth] in local.toml when dashboard authentication
+# is required on the cluster network.

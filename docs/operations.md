@@ -1,6 +1,6 @@
 # Operations
 
-Use the same runtime config and port offset as the deployment. Run IDs avoid
+Use the deployment endpoint or its explicit instance/connection file. Run IDs avoid
 ambiguity when several runs share a name. For run-card fields see
 [configuration](config.md); for statistical definitions see [stratification](stratification.md).
 
@@ -32,14 +32,14 @@ help and configuration details.
 ## Manage work
 
 ```bash
-./gammaboard run list
-./gammaboard run inspect RUN
-./gammaboard run task list RUN
-./gammaboard run pause RUN
-./gammaboard run resume RUN --max-evaluators 16
-./gammaboard node list
-./gammaboard node start-local 2
-./gammaboard node stop -a
+./gb run list
+./gb run inspect RUN
+./gb run task list RUN
+./gb run pause RUN
+./gb run resume RUN --max-evaluators 16
+./gb worker list
+./gb worker launch --count 2
+./gb worker stop --all
 ```
 
 Workers belong to a root run's pool; controllers place them among children.
@@ -47,10 +47,10 @@ Assigning or pausing a child resolves to its root family. Pause checkpoints work
 and retains pool membership; unassign/stop removes membership. Expired workers
 are not live capacity. Launch history records connection attempts, not current health.
 
-Graceful deploy shutdown marks running workers **Saved for restart**, preserving
+Graceful instance shutdown marks running workers **Saved for restart**, preserving
 their launch settings and intended assignments. Workers stopped separately before
-shutdown are not marked. `deploy --resume-workers` restores only marked workers;
-plain `deploy` leaves them offline with their markers intact. Use `node start-local`,
+shutdown are not marked. `start --restore-workers` restores only marked workers;
+plain `start` leaves them offline with their markers intact. Use `worker launch --count N`,
 dashboard launch requests, or the cluster launcher so launch settings are recorded. Manually started `node run` workers cannot be
 automatically recreated. A forced kill cannot save a new shutdown roster.
 
@@ -93,14 +93,14 @@ External paths are retained, so choose distinct writable artifact paths for
 independent runs. Historical snapshot branching is not supported.
 
 ```bash
-./gammaboard run export RUN > run.toml
-./gammaboard run duplicate RUN NEW_NAME
-./gammaboard run task append RUN tasks.toml
-./gammaboard run task export RUN TASK_ID > task.toml
-./gammaboard run task duplicate RUN TASK_ID
-./gammaboard run task edit RUN TASK_ID task.toml
-./gammaboard run task remove RUN TASK_ID
-./gammaboard run remove RUN
+./gb run export RUN > run.toml
+./gb run duplicate RUN NEW_NAME
+./gb run task append RUN tasks.toml
+./gb run task export RUN TASK_ID > task.toml
+./gb run task duplicate RUN TASK_ID
+./gb run task edit RUN TASK_ID task.toml
+./gb run task remove RUN TASK_ID --yes
+./gb run remove RUN --yes
 ```
 
 Removal drains the whole run tree before deleting it. Browser deletion continues
@@ -366,9 +366,9 @@ database settings and are not copied by exporting a run card.
 ## Backup and recovery
 
 ```bash
-./gammaboard db backup --output /safe/path/gammaboard.dump
+./gb db backup --output /safe/path/gammaboard.dump
 # Stop servers and workers before replacing the database:
-./gammaboard db restore /safe/path/gammaboard.dump
+./gb local db restore /safe/path/gammaboard.dump --yes
 ```
 
 Restore replaces database contents; `--yes` acknowledges replacement in scripts.

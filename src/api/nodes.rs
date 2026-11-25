@@ -38,7 +38,7 @@ pub struct StoppedAllNodes {
 }
 
 /// Shared settings for deploy, dashboard shutdown and direct API callers.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GracefulNodeShutdownParams {
     pub sampler_drain_timeout_seconds: u64,
@@ -350,7 +350,6 @@ pub async fn auto_assign_run(
         .load_run_spec(run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("run {run_id} spec not found")))?;
-    let resumed_nodes = store.resume_worker_pool(run_id).await?;
     let nodes = store.list_nodes(None).await?;
     let starting = store.starting_pool_assignments(run_id).await?;
     let existing = nodes
@@ -362,6 +361,12 @@ pub async fn auto_assign_run(
             WorkerRole::SamplerAggregator => (s + 1, e),
             WorkerRole::Evaluator => (s, e + 1),
         });
+    if max_evaluators.is_some_and(|limit| existing.1 > limit) {
+        return Err(ApiError::BadRequest(format!(
+            "run already has {} evaluators; unassign workers before lowering its cap",
+            existing.1
+        )));
+    }
     let (max_samplers, min_evaluators) = store
         .list_run_tasks(run_id)
         .await?
@@ -391,6 +396,7 @@ pub async fn auto_assign_run(
         (max_samplers, min_evaluators),
         max_evaluators.unwrap_or(usize::MAX),
     );
+    let resumed_nodes = store.resume_worker_pool(run_id).await?;
     let mut assigned_samplers = Vec::new();
     let mut assigned_evaluators = Vec::new();
     for (selected, role, assigned) in [
@@ -452,7 +458,11 @@ fn plan_auto_roles(
         if existing.0 + samplers.len() < active {
             continue;
         }
-        let evaluators = take_best_nodes(&mut available, evaluator_requirements, evaluator_limit);
+        let evaluators = take_best_nodes(
+            &mut available,
+            evaluator_requirements,
+            evaluator_limit.saturating_sub(existing.1),
+        );
         if existing.1.saturating_add(evaluators.len()) >= active.saturating_mul(minimum_evaluators)
         {
             return (samplers, evaluators);
@@ -639,8 +649,8 @@ mod tests {
         let (s, e) = plan_auto_roles(&free, &requirements, &requirements, (1, 2), (4, 2), 2);
         assert_eq!(
             (s.len(), e.len()),
-            (1, 2),
-            "respect existing roles and evaluator limit"
+            (0, 0),
+            "the evaluator limit includes existing assignments"
         );
         let (s, e) = plan_auto_roles(&free, &requirements, &requirements, (0, 0), (1, 0), 0);
         assert_eq!(

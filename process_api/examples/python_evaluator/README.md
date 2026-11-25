@@ -13,7 +13,8 @@ create it from the repository root:
 ```
 
 `src/run_evaluator.py` imports the class and calls
-`gammaboard_process.run_evaluator(SinIntegrand)`. The class defines `eval`; the SDK
+`gammaboard_process.run_evaluator(SinIntegrand)`. The class declares its domain/components with `descriptor()` and implements
+`evaluate(..., request)` returning `EvaluationBatch`; the SDK
 handles transport and array conversion. GammaBoard applies integration weights
 and reduces the results.
 

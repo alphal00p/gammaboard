@@ -10,6 +10,7 @@ process protocol and SDK as real integrations.
 | [Python sampler](python_sampler/README.md) | Generation, feedback, recovery, PDF and exact discrete masses | Python + SDK |
 | [Python observables](python_observables/README.md) | Per-sample histogram bundles from a synthetic polynomial | Python + SDK; GammaBoard's `gammaloop` feature |
 | [Rust evaluator](rust_evaluator/README.md) | Direct JSON-RPC and ragged batches without the Python SDK | Rust; optionally Apptainer |
+| [Rust GammaLoop wrapper](rust_gammaloop/README.md) | Native/process comparison, complex values and observable bundles | GammaLoop-enabled wrapper; values-only host needs no GammaLoop |
 
 From the repository root, install the Python SDK in the environment used by the
 workers:
@@ -23,5 +24,5 @@ the absolute interpreter path when using a virtual environment. That interpreter
 and the example source must be accessible to every assigned worker. The commands
 refer to the source checkout relative to the default resource root.
 
-Create a selected run with `gammaboard run create PATH`, then assign workers.
+Create a selected run with `./gb run create PATH`, then assign workers.
 Tutorials are not automatically added to the dashboard menu or database.

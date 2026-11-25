@@ -65,7 +65,7 @@ worker. Concurrency comes from independent workers and queued batches.
 | `Sampler` | `validate_domain(&Domain)`, `generate(usize) -> Generation`, `feedback(&Feedback)`, `snapshot() -> JSON` | `pdf_batch(points)` and `discrete_mass_batch(subspaces)` return unavailable entries; `persisted_output()` returns no output; `diagnostics()` returns `{}`; `checkpoint_committed(snapshot)` is a no-op |
 | `Materializer` | `materialize_batch(&LatentBatch) -> Batch` | `validate_domain(&Domain)` succeeds by default |
 | `BatchTransform` | `apply(Batch) -> Batch` | `validate_domain(&Domain)` succeeds by default |
-| `Evaluator` | `domain() -> Domain`; implement `eval_values(&Batch, components) -> Vec<f64>` or `eval_samples(&Batch, components, emit)` | `eval_samples` adapts `eval_values` by default; metadata/diagnostics return `{}`; the observable training projection defaults to `abs` |
+| `Evaluator` | `descriptor() -> EvaluatorDescriptor`; `evaluate(&Batch, &EvaluationRequest, emit)` | `domain()` comes from the descriptor; metadata/diagnostics return `{}`; `eval_values`/`eval_samples` are convenience callers of the shared contract |
 
 Fallible methods return `Result<..., EngineError>`; metadata/diagnostics return
 JSON directly. `EvaluatorBatch::eval_batch` is a runtime-owned blanket implementation,
@@ -277,18 +277,26 @@ the statistical unit. GammaBoard rejects missing/extra results, non-finite value
 histograms with sample counts other than one, and per-sample squared bin sums
 that do not equal the square of the complete sample contribution.
 
-Python `eval(xs_discrete, xs_continuous)` returns either component arrays or
-`ObservableBatch(values, observables)`. Observable values are `(N,2)` real/imaginary
-values, and `observables` contains N GammaLoop-compatible histogram bundles.
+Python providers implement `descriptor()` and
+`evaluate(xs_discrete, xs_continuous, request) -> EvaluationBatch`. Rust providers
+implement `Evaluator::descriptor` and `Evaluator::evaluate`, emitting `SampleOutput`.
+The descriptor declares domain, components, optional observables/details/diagnostics
+and an optional scalar projection. The runtime plans outputs from each task's
+accumulator and handles synthetic `value` projections centrally. The same provider
+configuration supports training, inference, images and lines.
+
 Each histogram counts the original draw once, including empty fills; correlated
 events from that draw are summed per bin before squaring. Callbacks receive neither
-sampling weights nor partition metadata. Configure `output = { kind = "gammaloop",
-training_projection = "real" }` (real is the default; also imag, abs, abs_sq).
+sampling weights nor partition metadata. Values already contain the evaluator's
+parameterization Jacobian; optional raw integrand/Jacobian details are informational.
 The runtime applies the outer weight once to values, observables and feedback.
+Diagnostics are optional: absence means unavailable, rather than zero measurements.
 
-Rust `Evaluator::eval_samples` emits `SampleOutput` through a runtime-owned sink.
-The default implementation adapts `eval_values` arrays. Native GammaLoop consumes events one sample at a time; the process protocol buffers
-a batch of per-sample bundles.
+Native GammaLoop consumes events one sample at a time; the process protocol buffers
+a batch using typed JSON or compact binary with the same semantics. Existing fixed
+`eval(...)`/`eval_batch` workers are adapted to this shared boundary. Observable model
+imports pass through `evaluation::observables`; a separate model crate is future work.
+See the [selected-output wire contract](../process_api/protocol.md#selected-output-evaluator-contract).
 Only reduced batch statistics and requested feedback cross the worker queue.
 
 ### Aggregation and feedback

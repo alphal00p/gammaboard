@@ -9,9 +9,7 @@ name = "python-evaluator"
 [evaluator]
 kind = "process_evaluator"
 command = ['$(python:python3)', "-u", "$resources/../process_api/examples/python_evaluator/src/run_evaluator.py"]
-domain = { rectangular = { discrete_cardinalities = [2, 3], continuous_dims = 2 } }
 args = { scale = 1.0, bias = 0.0, freq_u = 2.0, freq_v = 1.25 }
-output = {kind = "values", components = ["value"]}
 
 [[task_queue]]
 name = "accumulator"

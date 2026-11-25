@@ -189,7 +189,7 @@ fn derived_histogram(name: &str, original: &Value) -> Result<Value, ApiError> {
         }
     }
     #[cfg(feature = "gammaloop")]
-    serde_json::from_value::<gammalooprs::observables::HistogramSnapshot>(histogram.clone())
+    serde_json::from_value::<crate::evaluation::observables::HistogramSnapshot>(histogram.clone())
         .map_err(|err| invalid(&format!("{err}")))?;
     Ok(histogram)
 }
@@ -381,10 +381,10 @@ mod tests {
 
     #[cfg(feature = "gammaloop")]
     fn example_campaign() -> Value {
-        use crate::evaluation::{AccumulatorState, accumulator::GammaLoopAccumulatorState};
-        use gammalooprs::observables::{
+        use crate::evaluation::observables::{
             HistogramAccumulatorState, ObservablePhase, ObservableValueTransform,
         };
+        use crate::evaluation::{AccumulatorState, accumulator::GammaLoopAccumulatorState};
         let make = |samples: &[f64]| {
             let mut histogram = HistogramAccumulatorState::continuous(
                 "Energy".into(),
@@ -452,7 +452,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "gammaloop")]
     async fn derived_campaign_json_roundtrips_through_gammaloop_and_children_are_optional() {
-        use gammalooprs::observables::ObservableSnapshotBundle;
+        use crate::evaluation::observables::ObservableSnapshotBundle;
         let result = example_campaign();
         let aggregate = prepare_campaign_export(&result, false, "json").unwrap();
         assert!(aggregate.get("children").is_none());
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     #[cfg(feature = "gammaloop")]
     fn derived_discrete_bins_and_small_sample_counts_preserve_their_meaning() {
-        use gammalooprs::observables::{HistogramSnapshot, HistogramSnapshotKind};
+        use crate::evaluation::observables::{HistogramSnapshot, HistogramSnapshotKind};
         let mut histogram = example_campaign()["observables"]["histograms"]["energy"].clone();
         histogram["kind"] = json!("discrete");
         histogram["x_min"] = Value::Null;

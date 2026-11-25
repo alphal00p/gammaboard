@@ -76,7 +76,7 @@ pub async fn require_admin_session(
         return next.run(request).await;
     };
 
-    let Some(token) = cookie_value(request.headers(), COOKIE_NAME) else {
+    let Some(token) = bearer_or_cookie(request.headers()) else {
         return ApiError::Unauthorized("admin login required".to_string()).into_response();
     };
     if verify_session_token(auth, &token).is_none() {
@@ -107,11 +107,8 @@ pub async fn login(
     let token = sign_session_token(auth)?;
     Ok(response_with_cookie(
         session_cookie(&token, SESSION_TTL_SECS, state.secure_cookie),
-        SessionStatus {
-            auth_enabled: true,
-            authenticated: true,
-            allow_local_node_spawn: state.allow_local_node_spawn,
-        },
+        serde_json::json!({"auth_enabled":true,"authenticated":true,
+            "allow_local_node_spawn":state.allow_local_node_spawn,"token":token}),
     ))
 }
 
@@ -133,7 +130,7 @@ pub async fn logout(
 
 pub fn auth_status_from_headers(state: &AppState, headers: &HeaderMap) -> SessionStatus {
     let authenticated = match &state.auth {
-        Some(auth) => cookie_value(headers, COOKIE_NAME)
+        Some(auth) => bearer_or_cookie(headers)
             .and_then(|value| verify_session_token(auth, &value))
             .is_some(),
         None => true,
@@ -145,6 +142,15 @@ pub fn auth_status_from_headers(state: &AppState, headers: &HeaderMap) -> Sessio
     }
 }
 
+fn bearer_or_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned)
+        .or_else(|| cookie_value(headers, COOKIE_NAME))
+}
+
 fn verify_password_hash(encoded: &str, password: &str) -> bool {
     let Ok(hash) = PasswordHash::new(encoded) else {
         return false;
@@ -154,7 +160,7 @@ fn verify_password_hash(encoded: &str, password: &str) -> bool {
         .is_ok()
 }
 
-fn sign_session_token(auth: &AuthConfig) -> Result<String, ApiError> {
+pub(super) fn sign_session_token(auth: &AuthConfig) -> Result<String, ApiError> {
     let now = now_unix_secs();
     encode(
         &Header::new(Algorithm::HS256),

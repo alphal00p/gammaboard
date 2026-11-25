@@ -19,6 +19,45 @@ worker interpreter. `CARGO_TARGET_DIR` is honored. `just benchmark` is shorthand
 
 ## Choose a measurement
 
+For a real GammaLoop workload, the [Rust process wrapper example](../process_api/examples/rust_gammaloop/README.md#compare-the-execution-paths)
+provides matched native/process run cards and numerical parity checks. Its
+values-only mode also runs on a GammaBoard host built without GammaLoop.
+
+For a real-instance A/B measurement with observable accumulation in **both**
+training and inference:
+
+```bash
+cargo build --release --locked --workspace --bins --example gammaloop_process
+python -m benchmarks.gammaloop_ab \
+  --binary target/release/gammaboard \
+  --worker target/release/examples/gammaloop_process \
+  --args /absolute/path/gammaloop-args.json \
+  --seconds 30 --repetitions 3 --output /absolute/path/fresh-ab-results
+```
+
+The argument JSON is the same as the wrapper's `--describe` input. The harness
+copies the state and executables, calibrates identical fixed sample budgets,
+then alternates native/process order. Every trial uses a fresh managed PostgreSQL
+instance, API service, one pinned sampler and one pinned evaluator. The external
+GammaLoop child shares its evaluator's core. Both stages use GammaLoop
+observables; inference restores the grid produced by Havana training. This
+comparison requires the host's `gammaloop` feature until observables are decoupled.
+
+`--seconds` targets each stage, so a training-plus-inference trial is about twice
+that duration, plus instance setup/teardown. Task timestamps measure the whole
+pipeline, including initialization and finalization; calibration and deployment
+startup are excluded from the stage comparison. Raw cards, results, logs,
+checksums, cleanup receipts, CSV measurements and an HTML report are retained.
+Explicit `--cpus INFRA1,INFRA2,SAMPLER,EVALUATOR` and `--port-offset` are optional.
+To compare a new implementation against saved measurements, pass both
+`--train-samples N --inference-samples N` to reuse fixed budgets and skip
+calibration. `--observable-format json` forces the Rust wrapper's JSON fallback;
+`--observable-format binary` advertises compact transport (also the new default).
+
+The [GammaLoop transport diagnostic](../benchmarks/gammaloop_transport/README.md)
+isolates the production adapters and measures JSON conversion/copying costs,
+payload sizes, and a typed-JSON alternative using the saved A/B inputs.
+
 | Command | What it measures |
 | --- | --- |
 | `plan` | Planned cases and measurement budget |
@@ -34,7 +73,7 @@ python -m benchmarks frontier --output results/frontier
 python -m benchmarks sampler-io --io-threads 1 4 --output results/sampler
 python -m benchmarks evaluator-io --output results/evaluator
 python -m benchmarks protocol --batch-sizes 16 1024 32768 131072 --output results/protocol
-python -m benchmarks amortization --workers 1 16 --target-batch-seconds 0.16384 --output results/amortization
+python -m benchmarks amortization --workers 1 --wait 16 --target-batch-seconds 0.16384 --output results/amortization
 ```
 
 `--quick` reduces counts/repetitions; `--max-evaluators`, `--cpu-limit`,

@@ -21,7 +21,7 @@ fi
 # An explicitly supplied database is external to the managed local deployment.
 # E2Es create and migrate private databases on this server (CREATE DATABASE needed).
 if [[ -z "${GAMMABOARD_TEST_DATABASE_URL:-}" ]]; then
-    cargo run --locked -q --profile "$profile" --bin gammaboard -- db start --skip-migrations
+    cargo run --locked -q --profile "$profile" --bin gammaboard -- --runtime-config ops/local/config/runtime.toml db start --skip-migrations
 fi
 run_tests() {
     cargo test --locked --profile "$profile" --test full_stack_cli "$@" \
@@ -32,9 +32,12 @@ case "$mode" in
     core) exclusions=(--skip adapters::); run_tests ;;
     recovery) run_tests recovery::recovery_state_machine ;;
     physics)
-        exclusions=(--skip rust_apptainer --skip full_stack_deploy)
+        exclusions=(--skip rust_apptainer)
         run_tests adapters:: ;;
-    deployment) run_tests adapters::full_stack_deploy ;;
+    deployment)
+        cargo build --locked --profile "$profile" --workspace --bins
+        cargo test --locked --profile "$profile" --test local_instance_cli -- --include-ignored --test-threads=1
+        ;;
     container) run_tests adapters::full_stack_cli_rust_apptainer ;;
     all) run_tests ;;
 esac

@@ -1,0 +1,39 @@
+# Copy to gammaboard.toml at your chosen location and edit the paths and ports.
+# Relative paths always resolve against THIS FILE. No home-directory registry.
+name = "local"
+externally_managed = false
+
+[paths]
+state_dir = "./state/control"
+log_dir = "./state/logs"
+temp_dir = "./state/tmp"
+template_dir = "./resources/templates"
+resource_roots = ["./resources"]
+
+[database]
+mode = "managed"
+host = "127.0.0.1"
+port = 5400
+name = "gammaboard"
+user = "postgres"
+data_dir = "./state/postgres"
+socket_dir = "./state/socket"
+
+[database.tuning]
+max_connections = 128
+
+[server]
+host = "127.0.0.1"
+api_port = 4000
+dashboard_dir = "./dashboard/build"
+# allowed_origins = ["http://localhost:4000", "http://localhost:39491"]
+# [server.auth]
+# admin_password_hash = "..."
+# session_secret = "..."
+
+[logging]
+persist_runtime_logs = true
+
+[shutdown]
+sampler_drain_timeout_seconds = 60
+node_stop_timeout_seconds = 15

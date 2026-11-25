@@ -23,18 +23,18 @@ async fn worker_lifecycle() -> anyhow::Result<()> {
     }
     harness
         .cli()
-        .args(["node", "assign", "missing", "evaluator", "idle"])
+        .args(["worker", "assign", "missing", "idle", "--role", "evaluator"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("not live"));
     harness
         .cli()
-        .args(["node", "assign", "s", "evaluator", "99999"])
+        .args(["worker", "assign", "s", "99999", "--role", "evaluator"])
         .assert()
         .failure();
     let listed = harness
         .cli()
-        .args(["--json", "node", "list"])
+        .args(["--json", "worker", "list"])
         .assert()
         .success()
         .get_output()

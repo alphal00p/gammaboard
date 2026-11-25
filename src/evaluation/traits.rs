@@ -110,48 +110,67 @@ impl EvalBatchOptions<'_> {
 }
 
 pub trait Evaluator: Send {
-    fn domain(&self) -> Domain;
+    fn descriptor(&self) -> super::EvaluatorDescriptor;
+    fn domain(&self) -> Domain {
+        self.descriptor().domain
+    }
     fn metadata(&self) -> JsonValue {
         json!({})
     }
-
     fn diagnostics(&mut self) -> JsonValue {
         json!({})
     }
 
-    /// Unweighted, sample-major values used by runtime-owned evaluation modifiers.
+    /// The single implementation hook. Components are descriptor names; callers
+    /// use evaluate_requested for configuration-level scalar projections.
+    fn evaluate(
+        &mut self,
+        batch: &Batch,
+        request: &super::EvaluationRequest,
+        emit: &mut dyn FnMut(super::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError>;
+
+    /// Convenience collector, implemented through the same evaluation contract.
     fn eval_values(
         &mut self,
-        _batch: &Batch,
-        _components: &[String],
+        batch: &Batch,
+        components: &[String],
     ) -> Result<Vec<f64>, EngineError> {
-        Err(EngineError::invalid_input(
-            "this evaluator must implement eval_values or eval_samples",
-        ))
+        let mut values = Vec::new();
+        super::evaluate_requested(
+            self,
+            batch,
+            &super::EvaluationRequest::values(components.to_vec()),
+            &mut |sample| {
+                values.extend(sample.values);
+                Ok(())
+            },
+        )?;
+        if values.len() != batch.len() * components.len() {
+            return Err(EngineError::eval("incorrect evaluation result count"));
+        }
+        Ok(values)
     }
-
-    /// Emit exactly one unweighted output per input, in input order. Batching is
-    /// an implementation detail: evaluators never return statistical accumulators.
+    /// Compatibility convenience for consumers wanting all available channels.
     fn eval_samples(
         &mut self,
         batch: &Batch,
         components: &[String],
         emit: &mut dyn FnMut(super::SampleOutput) -> Result<(), EngineError>,
     ) -> Result<(), EngineError> {
-        let values = self.eval_values(batch, components)?;
-        if components.is_empty() || values.len() != batch.len() * components.len() {
-            return Err(EngineError::eval(
-                "invalid per-sample evaluator output length",
-            ));
-        }
-        for row in values.chunks_exact(components.len()) {
-            emit(super::SampleOutput::values(row.to_vec()))?;
-        }
-        Ok(())
+        let d = self.descriptor();
+        let request = super::EvaluationRequest {
+            components: components.to_vec(),
+            observables: d.observables,
+            details: d.details,
+            diagnostics: d.diagnostics,
+        };
+        super::evaluate_requested(self, batch, &request, emit)
     }
-
-    fn training_projection(&self) -> super::evaluator::gammaloop::TrainingProjection {
-        super::evaluator::gammaloop::TrainingProjection::Abs
+    fn training_projection(&self) -> super::ObservableTrainingProjection {
+        self.descriptor()
+            .scalar_projection
+            .unwrap_or(super::ObservableTrainingProjection::Abs)
     }
 }
 

@@ -5,7 +5,7 @@ import { fetchOfflineNodes, updateOfflineNode } from "../services/api";
 import { compareNodesByName } from "../utils/nodes";
 
 export const useOfflineNodes = ({ enabled = true } = {}) => {
-  const { authenticated, allowLocalNodeSpawn = true } = useAuth();
+  const { authenticated } = useAuth();
   const resource = usePolledResource({ paused: !enabled, pollMs: 3000, initialData: [], fetchResource: fetchOfflineNodes });
   const { data, error, isLoading, refresh } = resource;
   const [busy, setBusy] = useState(null);
@@ -25,7 +25,6 @@ export const useOfflineNodes = ({ enabled = true } = {}) => {
     if (action === "unassign-offline" && node.pool_run_id == null) return "This worker has no reserved run assignment.";
     if (["start", "restore"].includes(action)) {
       if (!node.can_start) return "No saved launch settings; start this worker through its launcher.";
-      if (node.backend === "local" && !allowLocalNodeSpawn) return "Local worker launch is disabled on this server.";
     }
     return null;
   };

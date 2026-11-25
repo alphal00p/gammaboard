@@ -2,7 +2,7 @@
 
 Run commands from the repository root. Linux x86_64 with `nix develop` is the
 supported setup. Without Nix, install stable Rust, C/C++ build tools, PostgreSQL 16
-server/client tools, nginx, Node.js from [dashboard/.nvmrc](../dashboard/.nvmrc),
+server/client tools and, for optional dashboard builds, Node.js from [dashboard/.nvmrc](../dashboard/.nvmrc),
 npm, and `sqlx-cli` (`cargo install sqlx-cli --no-default-features --features postgres`).
 External Python workers need Python 3.11+ and their evaluator/sampler dependencies.
 Install from Git; crates.io installation is not supported.
@@ -11,30 +11,24 @@ Install from Git; crates.io installation is not supported.
 
 ```bash
 nix develop
-./gammaboard deploy
+./gb start --workers 2 --wait
+./gb run create resources/templates/runs/installation-smoke.toml \
+  --start --export-path "$PWD/installation-smoke.json"
+./gb stop --wait
 ```
 
-The helper builds the backend and dashboard and starts PostgreSQL and nginx.
-Open <http://localhost:8080>. In a second shell with the same environment:
+The unit integral should be **1.0**. Open <http://localhost:4000> while the instance
+is running and dashboard assets are installed. For headless execution, use
+`start --api-only --workers 2 --wait`. Starting services without `--workers`
+launches no workers. Every explicit count launches that many additional workers.
 
-```bash
-./gammaboard run create resources/templates/runs/installation-smoke.toml
-./gammaboard node start-local 2
-./gammaboard node auto-assign installation-smoke
-./gammaboard run wait installation-smoke --until completed
-```
-
-The unit integral should be **1.0**. Inspect it in the dashboard, then stop:
-
-```bash
-./gammaboard node stop -a
-# Ctrl-C in the deployment shell.
-```
-
-The helper defaults to `dev-optim`; use `GAMMABOARD_PROFILE=release` for release
-builds. `deploy --rebuild-frontend` forces a dashboard rebuild. For an installed
-binary, build the dashboard separately with `npm ci && npm run build` in
-`dashboard/`, then run the built `gammaboard deploy`.
+The [local CLI guide](local-cli.md) explains the consolidated `gammaboard.toml`,
+explicit instance selection, output files, shutdown, and database administration.
+The checkout helper defaults to `dev-optim`; use `GAMMABOARD_PROFILE=release` for
+release builds. For installed binaries, build dashboard assets separately and set
+`server.dashboard_dir` in the instance file. Build those assets with `npm ci` and
+`npm run build` inside `dashboard/`. HPC uses the foreground service through the
+[Slurm helper](../ops/slurm/README.md).
 
 ## Default examples
 
@@ -109,13 +103,14 @@ pooled/stratified errors and error-reduction plots. Strata do not
 promise improved precision for every observable. CDF error bars remain unavailable
 without cross-bin covariance.
 
-Validate, create and assign a selected card:
+Validate and start a selected card:
 
 ```bash
-./gammaboard run validate resources/templates/runs/tetrahedron-native.toml --probe
-./gammaboard run create resources/templates/runs/tetrahedron-native.toml
-./gammaboard node start-local 6
-./gammaboard run resume tetrahedron-native --max-evaluators 4
+./gb local check-run resources/templates/runs/tetrahedron-native.toml --probe
+./gb start --api-only --workers 6 --wait
+./gb run create resources/templates/runs/tetrahedron-native.toml \
+  --start --max-evaluators 4 --export-path "$PWD/tetrahedron.json"
+./gb stop --wait
 ```
 
 `--probe` initializes configured runtimes without creating work. The GammaLoop card
@@ -136,6 +131,6 @@ the dashboard catalog. The [stratification A/B benchmark](../benchmarks/stratifi
 uses the older one-dimensional tetrahedron path and calls the components directly;
 it is not a distributed run or a dashboard preset.
 
-For another instance use `./gammaboard --port-offset 1 deploy` and the same offset
-on subsequent CLI commands. See [deployment](deployment.md) for shared machines,
+For another local instance, copy `gammaboard.toml`, choose separate paths and ports,
+and pass `--instance FILE` on each command. Use explicit ports for each instance. See [deployment](deployment.md) for shared machines,
 authentication and cluster profiles.

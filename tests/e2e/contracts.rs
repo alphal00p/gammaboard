@@ -487,8 +487,8 @@ sampler = { config={kind="naive_monte_carlo"} }
         .fetch_one(&pool)
         .await?;
     assert!(saved);
-    assert_eq!(store.restore_saved_workers().await?, 1);
-    assert_eq!(store.restore_saved_workers().await?, 0);
+    assert_eq!(store.restore_saved_workers(true).await?.len(), 1);
+    assert_eq!(store.restore_saved_workers(true).await?.len(), 0);
     let requests = store.list_node_launch_requests().await?;
     let resumed = requests.iter().find(|r| r.id != id).unwrap();
     assert_eq!(resumed.backend, "external");
@@ -514,7 +514,7 @@ sampler = { config={kind="naive_monte_carlo"} }
     store.clear_desired_assignments_for_run(run.run_id).await?;
     assert!(store.get_desired_assignment(&names[0]).await?.is_none());
     store.request_node_shutdown(&names[0]).await?;
-    assert_eq!(store.restore_saved_workers().await?, 0);
+    assert_eq!(store.restore_saved_workers(true).await?.len(), 0);
     pool.close().await;
     db.cleanup().await?;
     Ok(())

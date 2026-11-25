@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
-
-from gammaboard_process import Evaluator, ObservableBatch
+from gammaboard_process import (
+    EvaluationBatch,
+    Evaluator,
+    EvaluatorDescriptor,
+    RectangularDomain,
+)
 
 N_BINS = 20
 X_MIN, X_MAX = 0.0, 1.0
@@ -85,14 +89,21 @@ def _histogram_snapshot(xs: np.ndarray, weights: np.ndarray, mask: np.ndarray) -
 class PolynomialEvaluator(Evaluator):
     """f(x)=6x(1-x) with one unweighted histogram contribution per draw."""
 
-    def __init__(self, *, domain):
-        domain.require_rectangular_shape()
+    def __init__(self, *, domain=None):
+        self.domain = domain or RectangularDomain((), 1)
+        if self.domain.require_rectangular_shape() != ([], 1):
+            raise ValueError("polynomial expects one continuous coordinate")
 
-    def eval(self, xs_discrete, xs_continuous):
+    def descriptor(self):
+        return EvaluatorDescriptor(
+            self.domain, ["real", "imag"], observables=True, scalar_projection="real"
+        )
+
+    def evaluate(self, xs_discrete, xs_continuous, request):
         x = xs_continuous[:, 0]
         values = _f(x)
-        return ObservableBatch(
-            values=np.column_stack((values, np.zeros(len(x)))),
+        return EvaluationBatch(
+            values={"real": values, "imag": np.zeros(len(x))},
             observables=[
                 {
                     "histograms": {
@@ -104,5 +115,7 @@ class PolynomialEvaluator(Evaluator):
                     }
                 }
                 for position, value in zip(x, values)
-            ],
+            ]
+            if request.observables
+            else None,
         )

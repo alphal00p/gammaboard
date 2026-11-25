@@ -21,6 +21,7 @@ mod campaign;
 mod config_panels;
 mod histogram_export;
 mod histogram_import;
+pub mod manage;
 mod panels;
 mod performance_panels;
 mod routes;
@@ -77,7 +78,7 @@ use crate::runtime_context::RuntimeContext;
 const DEFAULT_SERVER_CONFIG_TOML: &str = include_str!("../config_defaults/server.toml");
 const REPOSITORY_URL: &str = "https://github.com/alphal00p/gammaboard";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(skip)]
@@ -102,8 +103,6 @@ pub struct ServerConfig {
     pub node_templates_dir: String,
     #[serde(default)]
     pub frontend: ServerFrontendConfig,
-    #[serde(default)]
-    pub database: ServerDatabaseConfig,
     #[serde(default)]
     pub cleanup: node_api::GracefulNodeShutdownParams,
     pub auth: Option<ServerAuthConfig>,
@@ -135,8 +134,8 @@ fn default_api_port() -> u16 {
 
 fn default_allowed_origins() -> Vec<String> {
     vec![
-        "http://localhost:8080".to_string(),
-        "http://127.0.0.1:8080".to_string(),
+        "http://localhost:4000".to_string(),
+        "http://127.0.0.1:4000".to_string(),
     ]
 }
 
@@ -148,15 +147,7 @@ fn default_frontend_build_dir() -> String {
     "../../../dashboard/build".to_string()
 }
 
-fn default_frontend_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-fn default_frontend_port() -> u16 {
-    8080
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerAuthConfig {
     pub admin_password_hash: String,
@@ -169,50 +160,18 @@ fn default_session_version() -> String {
     "1".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerFrontendConfig {
     #[serde(default = "default_frontend_build_dir")]
     pub build_dir: String,
-    #[serde(default = "default_frontend_host")]
-    pub host: String,
-    #[serde(default = "default_frontend_port")]
-    pub port: u16,
-    #[serde(default)]
-    pub advertise_hosts: Vec<String>,
-    #[serde(default)]
-    pub access_log: bool,
 }
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ServerDatabaseConfig {
-    #[serde(default = "default_database_ensure_started")]
-    pub ensure_started: bool,
-}
-
 impl Default for ServerFrontendConfig {
     fn default() -> Self {
         Self {
             build_dir: default_frontend_build_dir(),
-            host: default_frontend_host(),
-            port: default_frontend_port(),
-            advertise_hosts: Vec::new(),
-            access_log: false,
         }
     }
-}
-
-impl Default for ServerDatabaseConfig {
-    fn default() -> Self {
-        Self {
-            ensure_started: default_database_ensure_started(),
-        }
-    }
-}
-
-fn default_database_ensure_started() -> bool {
-    true
 }
 
 impl ServerConfig {
@@ -252,21 +211,8 @@ impl ServerConfig {
         SocketAddr::new(self.api_host, self.api_port)
     }
 
-    pub fn advertised_urls(&self, port: u16) -> Vec<String> {
-        let hosts = if self.frontend.advertise_hosts.is_empty() {
-            vec![default_advertise_host(&self.frontend.host)]
-        } else {
-            self.frontend.advertise_hosts.clone()
-        };
-        hosts
-            .into_iter()
-            .map(|host| format!("http://{host}:{port}"))
-            .collect()
-    }
-
     pub fn security_warnings(&self) -> Vec<String> {
-        let remotely_accessible =
-            !self.api_host.is_loopback() || !host_is_loopback(&self.frontend.host);
+        let remotely_accessible = !self.api_host.is_loopback();
         if !remotely_accessible {
             return Vec::new();
         }
@@ -303,21 +249,6 @@ impl ServerConfig {
     }
 }
 
-fn host_is_loopback(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
-}
-
-fn default_advertise_host(host: &str) -> String {
-    if host == "0.0.0.0" {
-        "localhost".to_string()
-    } else {
-        host.to_string()
-    }
-}
-
 fn normalize_templates_dir(path: &str) -> anyhow::Result<PathBuf> {
     let template_dir = PathBuf::from(path);
     if template_dir.is_absolute() {
@@ -328,11 +259,37 @@ fn normalize_templates_dir(path: &str) -> anyhow::Result<PathBuf> {
     Ok(resources_root.join(template_dir))
 }
 
+/// A local deployment owner already holds the signing secret in its private
+/// configuration. This avoids storing a second bootstrap credential or IPC socket.
+pub fn bootstrap_token(config: &ServerConfig) -> anyhow::Result<Option<String>> {
+    config
+        .auth
+        .as_ref()
+        .map(|auth| {
+            auth::sign_session_token(&AuthConfig::from_server_config(auth, &config.name))
+                .map_err(Into::into)
+        })
+        .transpose()
+}
+
 pub async fn serve(
     store: PgStore,
     config: ServerConfig,
     runtime: RuntimeContext,
 ) -> anyhow::Result<()> {
+    spawn(store, config, runtime, false, None).await?.await??;
+    Ok(())
+}
+
+/// Start the API and optional static dashboard in the owning service process.
+/// Binding completes before this returns, so callers can report readiness safely.
+pub async fn spawn(
+    store: PgStore,
+    config: ServerConfig,
+    runtime: RuntimeContext,
+    dashboard: bool,
+    instance: Option<crate::instance::Instance>,
+) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     store
         .bind_deployment(std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok().as_deref())
         .await?;
@@ -349,6 +306,7 @@ pub async fn serve(
         anyhow::bail!("server.allowed_origins must not be empty");
     }
     let state = AppState {
+        instance,
         store: store.clone(),
         cleanup: config.cleanup.clone(),
         auth: config
@@ -358,7 +316,8 @@ pub async fn serve(
         server_name: config.name.clone(),
         allowed_origins,
         secure_cookie: config.secure_cookie,
-        allow_local_node_spawn: config.allow_local_node_spawn,
+        allow_local_node_spawn: config.allow_local_node_spawn
+            && !runtime.runtime_config().externally_managed,
         api_bind: bind.to_string(),
         server_config_path: config.server_config_path.clone(),
         run_templates_dir: PathBuf::from(&config.run_templates_dir),
@@ -369,7 +328,19 @@ pub async fn serve(
         campaign_cache: campaign::CampaignCache::default(),
     };
 
-    let app = routes::build_app(state);
+    let mut app = routes::build_app(state);
+    if dashboard
+        && Path::new(&config.frontend.build_dir)
+            .join("index.html")
+            .is_file()
+    {
+        let root = PathBuf::from(&config.frontend.build_dir);
+        app = app.fallback_service(
+            tower_http::services::ServeDir::new(&root).not_found_service(
+                tower_http::services::ServeFile::new(root.join("index.html")),
+            ),
+        );
+    }
 
     println!("server listening on http://{}", bind);
     println!("api available at http://{}/api", bind);
@@ -379,15 +350,16 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("failed to bind server socket at {bind}"))?;
-    axum::serve(listener, app)
-        .await
-        .context("api server exited with error")?;
-
-    Ok(())
+    Ok(tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .context("API service exited")
+    }))
 }
 
 #[derive(Clone)]
 pub(crate) struct AppState {
+    instance: Option<crate::instance::Instance>,
     store: PgStore,
     cleanup: node_api::GracefulNodeShutdownParams,
     pub(crate) auth: Option<AuthConfig>,
@@ -1594,6 +1566,9 @@ async fn auto_assign_run(
         .await
         .inspect_err(|err| log_control_api_error("run_auto_assign", err))?;
 
+    crate::local_control::mark_started(&state.store, result.run_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     tracing::info!(
         source = "control",
         control_surface = "dashboard",
@@ -1748,7 +1723,6 @@ async fn start_saved_worker(
             sqlx::Error::Protocol(message) => ApiError::BadRequest(message),
             e => ApiError::Internal(e.to_string()),
         })?;
-    crate::api::node_launch::resolve_local_requests(&state.store, &state.runtime).await?;
     json_response(serde_json::json!({"request_id":id}))
 }
 
@@ -1860,17 +1834,19 @@ async fn create_and_maybe_resolve_node_launch_request(
     payload: AutoRunNodesRequest,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     json_response(
-        crate::api::node_launch::launch(
-            &state.store,
-            &state.runtime,
-            state.allow_local_node_spawn,
-            payload,
-        )
-        .await?,
+        crate::api::node_launch::launch(&state.store, state.allow_local_node_spawn, payload)
+            .await?,
     )
 }
 
 async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::local_control::require_local_processes(
+        state.runtime.runtime_config().externally_managed,
+        false,
+        "restart PostgreSQL locally",
+    )
+    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
     let runtime = state.runtime.runtime_config();
     let local = runtime.local_postgres.clone();
     let database_url = runtime.database.url.clone();
@@ -1914,6 +1890,14 @@ async fn save_workers_for_restart(
 async fn shutdown_control_process(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Ok(status) = crate::local_control::status(&state.store).await
+        && status["supervisor_reachable"] == true
+    {
+        let id = crate::local_control::request_stop(&state.store, None, false, None)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        return json_response(serde_json::json!({"shutdown_requested":true,"request_id":id}));
+    }
     tracing::warn!(
         source = "control",
         control_surface = "dashboard",
@@ -2022,6 +2006,28 @@ async fn export_histogram_bundle(
     json_response(response)
 }
 
+async fn instance_control_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    json_response(
+        crate::local_control::status(&state.store)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?,
+    )
+}
+async fn acknowledge_instance_cleanup(
+    State(state): State<AppState>,
+    AxumJson(body): AxumJson<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = body["request_id"]
+        .as_str()
+        .ok_or_else(|| ApiError::BadRequest("request_id is required".into()))?;
+    crate::local_control::acknowledge_cleanup(&state.store, id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    json_response(serde_json::json!({"acknowledged":true}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2107,7 +2113,7 @@ mod tests {
         let mut config: ServerConfig =
             toml::from_str(DEFAULT_SERVER_CONFIG_TOML).expect("default server config");
         config.server_config_path = PathBuf::new();
-        config.frontend.host = "0.0.0.0".to_string();
+        config.api_host = "0.0.0.0".parse().unwrap();
 
         let warnings = config.security_warnings();
         assert!(
@@ -2171,8 +2177,8 @@ config = { cores = "$(cores:1)" }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
             "resources/templates/nodes/local-two-workers.toml",
-            "ops/ubelix/resources/templates/nodes/cpu-workers.toml",
-            "ops/ubelix/resources/templates/nodes/free-gpu-plus-cpu.toml",
+            "ops/slurm/resources/templates/nodes/cpu-workers.toml",
+            "ops/slurm/resources/templates/nodes/free-gpu-plus-cpu.toml",
         ] {
             let toml = std::fs::read_to_string(root.join(relative_path)).expect("template file");
             let payload = AutoRunNodesRequest {

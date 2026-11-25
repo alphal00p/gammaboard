@@ -1,38 +1,16 @@
-# ITPhlies Deploy
+# ITPhlies deployment
 
-This folder contains ITPhlies-specific deploy configuration.
-Shared deployment and operations notes live in [../../docs/deployment.md](../../docs/deployment.md) and [../../docs/operations.md](../../docs/operations.md).
-
-## Files
-
-- `config/server.toml`: backend API, frontend exposure, and deploy cleanup profile.
-
-## Commands
-
-From repo root:
+`instance.toml` replaces the previous server-only profile. It serves the API and
+optional dashboard together on port 8080, retains the existing PostgreSQL data
+path, and declares separate control/log/temp directories.
 
 ```bash
-GAMMABOARD_PROFILE=release ./gammaboard \
-  deploy \
-  --server-config ops/itphlies/config/server.toml
-
-GAMMABOARD_PROFILE=release ./gammaboard \
-  --port-offset 1 \
-  deploy \
-  --server-config ops/itphlies/config/server.toml
+GAMMABOARD_PROFILE=release ./gb --instance ops/itphlies/instance.toml start
+./gb --instance ops/itphlies/instance.toml stop --wait
 ```
 
-The deploy command is foreground-supervised. Stop it with `Ctrl-C`; the CLI then shuts down nginx, the backend, worker assignments, and local Postgres.
-Nginx access logs are disabled in the checked-in ITPhlies deploy profile so the foreground terminal stays readable.
-
-## Notes
-
-- Runtime config uses `ops/local/config/runtime.toml` when present, with embedded
-  defaults for omitted fields. Pass `--runtime-config` for another configuration.
-- `--port-offset 1` shifts frontend/API/Postgres from `8080/4000/5400` to `8081/4001/5401` and suffixes local Postgres state paths with `-1`.
-- If deploy fails with `Address already in use`, free the conflicting frontend, API, or Postgres port and retry.
-- If deploy fails during DB start, inspect `resources/db/logfile`; an offset
-  appends `-N` to that path. For example, with `--port-offset 1`:
-  ```bash
-  tail -n 100 resources/db/logfile-1
-  ```
+Build dashboard assets separately in `dashboard/`. The checked-in profile is for
+a trusted network; copy it to a private location to configure `[server.auth]`.
+For another instance, copy the file and explicitly choose distinct ports and
+state/data paths. There is no frontend port offset or nginx process.
+See [deployment](../../docs/deployment.md) and [CLI guide](../../docs/local-cli.md).

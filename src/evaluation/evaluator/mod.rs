@@ -64,97 +64,75 @@ impl EvaluatorConfig {
                 params.discrete_dims,
             )),
             Self::Symbolica { params } => Ok(Domain::continuous(params.args.len())),
-            Self::ProcessEvaluator { params } => Ok(params.domain.clone()),
+            Self::ProcessEvaluator { params } => params
+                .domain
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| params.resolve_descriptor().map(|d| d.domain)),
         }
     }
 
+    pub fn resolve_descriptor(&self) -> Result<crate::EvaluatorDescriptor, EngineError> {
+        if let Self::ProcessEvaluator { params } = self {
+            return params.resolve_descriptor();
+        }
+        self.descriptor_for_domain(self.resolve_domain()?)
+    }
+
+    /// Reuse an already validated run domain when checking output capabilities.
+    /// This must not reload a native physics state for every task preflight.
+    pub fn descriptor_for_domain(
+        &self,
+        domain: Domain,
+    ) -> Result<crate::EvaluatorDescriptor, EngineError> {
+        let d = match self {
+            Self::Gammaloop { params } => {
+                let mut d = crate::EvaluatorDescriptor::complex(domain, params.training_projection);
+                d.observables = true;
+                d.details = true;
+                d.diagnostics = true;
+                d
+            }
+            Self::Unit { .. } => crate::EvaluatorDescriptor::values(domain, vec!["value".into()]),
+            Self::Symbolica { params } => crate::EvaluatorDescriptor::values(
+                domain,
+                match &params.source {
+                    symbolica_config::SymbolicaSource::Expressions { components, .. } => {
+                        components.clone()
+                    }
+                    _ => vec!["value".into(), "real".into(), "imag".into()],
+                },
+            ),
+            Self::ProcessEvaluator { params } => return params.resolve_descriptor(),
+        };
+        d.validate()?;
+        Ok(d)
+    }
+    pub fn discover(&mut self) -> Result<crate::EvaluatorDescriptor, EngineError> {
+        let descriptor = self.resolve_descriptor()?;
+        if let Self::ProcessEvaluator { params } = self {
+            // Explicit legacy output cards remain offline-validatable. Modern
+            // cards cache discovery so each task does not spawn another probe.
+            if params.output.is_none() {
+                params.domain = Some(descriptor.domain.clone());
+                params.descriptor = Some(descriptor.clone());
+            }
+        }
+        Ok(descriptor)
+    }
     pub fn validate_accumulator_config(
         &self,
         config: &AccumulatorConfig,
+        domain: &Domain,
     ) -> Result<(), EngineError> {
-        match self {
-            Self::ProcessEvaluator { params } => match &params.output {
-                process::ProcessOutput::Gammaloop { .. } => {
-                    if matches!(config, AccumulatorConfig::Gammaloop) {
-                        Ok(())
-                    } else {
-                        Err(EngineError::invalid_input(
-                            "GammaLoop process output requires a gammaloop accumulator",
-                        ))
-                    }
-                }
-                process::ProcessOutput::Values { components } => {
-                    validate_value_accumulator(self.kind_str(), config, components)
-                }
-            },
-            Self::Symbolica { params } => match &params.source {
-                symbolica_config::SymbolicaSource::Expressions { components, .. } => {
-                    validate_value_accumulator(self.kind_str(), config, components)
-                }
-                _ => validate_symbolica_accumulator(self.kind_str(), config),
-            },
-            Self::Unit { .. } if matches!(config, AccumulatorConfig::Empty) => Ok(()),
-            Self::Unit { .. } => {
-                validate_value_accumulator(self.kind_str(), config, &["value".into()])
-            }
-            Self::Gammaloop { .. } => Ok(()),
+        self.descriptor_for_domain(domain.clone())?.plan(config)?;
+        #[cfg(not(feature = "gammaloop"))]
+        if matches!(config, AccumulatorConfig::Gammaloop) {
+            return Err(EngineError::build(
+                "observable accumulation requires gammaloop feature",
+            ));
         }
-    }
-}
-
-fn validate_symbolica_accumulator(
-    evaluator_kind: &str,
-    config: &AccumulatorConfig,
-) -> Result<(), EngineError> {
-    if matches!(config, AccumulatorConfig::Empty) {
-        return Ok(());
-    }
-
-    let supported = match config {
-        AccumulatorConfig::Vector { components, .. }
-        | AccumulatorConfig::FullVector { components } => {
-            components == &["value".to_string()]
-                || components == &["real".to_string(), "imag".to_string()]
-        }
-        _ => false,
-    };
-    if supported {
         Ok(())
-    } else {
-        Err(EngineError::invalid_input(format!(
-            "evaluator.kind = \"{evaluator_kind}\" supports scalar accumulators, or vector/full_vector components [\"value\"] or [\"real\", \"imag\"], got \"{}\"",
-            config.kind_str()
-        )))
-    }
-}
-
-fn validate_value_accumulator(
-    evaluator_kind: &str,
-    config: &AccumulatorConfig,
-    components: &[String],
-) -> Result<(), EngineError> {
-    match config {
-        AccumulatorConfig::Vector {
-            components: accumulator_components,
-            ..
-        }
-        | AccumulatorConfig::FullVector {
-            components: accumulator_components,
-        } if accumulator_components == components => Ok(()),
-        AccumulatorConfig::Vector {
-            components: accumulator_components,
-            ..
-        }
-        | AccumulatorConfig::FullVector {
-            components: accumulator_components,
-        } => Err(EngineError::invalid_input(format!(
-            "evaluator.kind = \"{evaluator_kind}\" components {:?} do not match accumulator components {:?}",
-            components, accumulator_components
-        ))),
-        other => Err(EngineError::invalid_input(format!(
-            "evaluator.kind = \"{evaluator_kind}\" requires accumulator config \"vector\" or \"full_vector\", got \"{}\"",
-            other.kind_str()
-        ))),
     }
 }
 
@@ -181,6 +159,24 @@ mod output_tests {
     use super::*;
 
     #[test]
+    fn gammaloop_output_validation_reuses_the_resolved_domain() {
+        let evaluator = EvaluatorConfig::Gammaloop {
+            params: GammaLoopParams {
+                state_folder: "/missing-state-output-validation-must-not-load".into(),
+                ..Default::default()
+            },
+        };
+        evaluator
+            .validate_accumulator_config(
+                &AccumulatorConfig::FullVector {
+                    components: vec!["real".into()],
+                },
+                &Domain::continuous(3),
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn process_output_contract_accepts_both_storage_modes_and_rejects_mismatches() {
         let evaluator: EvaluatorConfig = serde_json::from_value(serde_json::json!({
             "kind": "process_evaluator", "command": ["worker"],
@@ -194,16 +190,21 @@ mod output_tests {
                 components: vec!["value".into()],
             },
         ] {
-            evaluator.validate_accumulator_config(&config).unwrap();
+            evaluator
+                .validate_accumulator_config(&config, &Domain::continuous(1))
+                .unwrap();
         }
         for config in [
-            AccumulatorConfig::Empty,
             AccumulatorConfig::Gammaloop,
             AccumulatorConfig::FullVector {
                 components: vec!["other".into()],
             },
         ] {
-            assert!(evaluator.validate_accumulator_config(&config).is_err());
+            assert!(
+                evaluator
+                    .validate_accumulator_config(&config, &Domain::continuous(1))
+                    .is_err()
+            );
         }
     }
 }

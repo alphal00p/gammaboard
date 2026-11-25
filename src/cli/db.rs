@@ -12,6 +12,15 @@ pub struct DbArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
+    /// Create the configured logical database (instance mode)
+    Create,
+    /// Apply supported migrations (instance mode)
+    Migrate,
+    /// Delete the complete managed local PostgreSQL cluster
+    Purge {
+        #[arg(long)]
+        yes: bool,
+    },
     /// Show local Postgres cluster status
     Status,
     /// Start local Postgres and run migrations
@@ -51,6 +60,10 @@ pub enum DbCommand {
 pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
     let local = &config.local_postgres;
     match args.command {
+        DbCommand::Create | DbCommand::Migrate => {
+            anyhow::bail!("use --instance FILE for database create/migrate")
+        }
+        DbCommand::Purge { yes } => local_db::delete_db(local, yes),
         DbCommand::Status => local_db::status_db(local, &config.database.url),
         DbCommand::Start { skip_migrations } if skip_migrations => {
             local_db::start_postgres_cluster(local, &config.database.url)
@@ -65,5 +78,3 @@ pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
         DbCommand::Reset { yes } => local_db::reset_db(local, yes, &config.database.url),
     }
 }
-
-pub(crate) use local_db::{require_commands, start_db, stop_db};

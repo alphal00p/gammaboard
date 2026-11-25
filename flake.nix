@@ -133,7 +133,6 @@
           rust-analyzer
           virtualenv
           postgresql
-          nginx
           apptainerCompat
           sqlx-cli
           nodejs

@@ -5,10 +5,20 @@ from typing import Any
 import numpy as np
 
 from .batch_codec import BatchCodec
-from .domain import Domain
-from .feedback import Feedback, StratumAssignments
 from .batches import Batch, GenerationStatus, SampleBatch
-from .gammaloop import ObservableBatch
+from .domain import Domain
+from .evaluation import (
+    BINARY_ENCODING,
+    EVALUATION_PROTOCOL,
+    EvaluationBatch,
+    EvaluationEncoder,
+    EvaluationRequest,
+    EvaluatorDescriptor,
+    json_response,
+    normalize_values,
+    validate_batch,
+)
+from .feedback import Feedback, StratumAssignments
 from .protocol import (
     PROTOCOL,
     ProtocolIo,
@@ -58,81 +68,118 @@ def _serve(io: ProtocolIo, handle: Any) -> None:
 
 
 class _EvaluatorWorker:
+    """One selected-output API, with a v10 adapter for existing evaluators/hosts."""
+
     def __init__(self, target: Any) -> None:
         self.target = target
         self.io = ProtocolIo()
         self.evaluator = None
-        self.codec: BatchCodec | None = None
+        self.codec = None
+        self.descriptor = None
+        self.encoder = EvaluationEncoder()
+        self.modern = False
         self.components = ["value"]
-        self._output_kind: str = "values"
+        self._output_kind = "values"
 
     def run(self) -> None:
         _serve(self.io, self.handle)
 
-    def handle(
-        self, method: str, params: dict[str, Any], req_binary: bytes = b""
-    ) -> dict[str, Any]:
+    def handle(self, method, params, req_binary=b""):
         if method == "initialize":
             if params.get("protocol") != PROTOCOL:
                 raise ValueError(f"unsupported protocol: {params.get('protocol')!r}")
             if params.get("role") != "evaluator":
                 raise ValueError(f"expected evaluator role, got {params.get('role')!r}")
-            domain = Domain.from_dict(params["domain"])
-            self.codec = BatchCodec(domain)
-            self._output_kind = str(params["output"]["kind"])
+            domain = (
+                Domain.from_dict(params["domain"]) if params.get("domain") else None
+            )
+            output = params.get("output") or {"kind": "values", "components": ["value"]}
+            self._output_kind = output["kind"]
             if self._output_kind not in ("values", "gammaloop"):
                 raise ValueError("unknown evaluator output kind")
-            if self._output_kind == "values":
-                self.components = [
-                    str(value) for value in params["output"]["components"]
-                ]
-                if not self.components:
-                    raise ValueError("components must not be empty")
-            self.evaluator = instantiate_user_object(
-                self.target,
-                domain=domain,
-                init_args=params.get("args") or {},
+            self.components = (
+                ["real", "imag"]
+                if self._output_kind == "gammaloop"
+                else output["components"]
             )
-            if not callable(getattr(self.evaluator, "eval", None)):
-                raise TypeError("evaluator must implement eval")
-            metadata = _call_optional(self.evaluator, "metadata", {})
-            return {"ok": True, "metadata": metadata}
+            self.evaluator = instantiate_user_object(
+                self.target, domain=domain, init_args=params.get("args") or {}
+            )
+            descriptor = _call_optional(self.evaluator, "descriptor", None)
+            self.modern = descriptor is not None
+            if isinstance(descriptor, dict):
+                descriptor = EvaluatorDescriptor(**descriptor)
+            if self.modern:
+                if not isinstance(descriptor, EvaluatorDescriptor):
+                    raise TypeError("descriptor must return EvaluatorDescriptor")
+                if domain is not None and domain != descriptor.domain:
+                    raise ValueError(
+                        "configured domain does not match evaluator descriptor"
+                    )
+            else:
+                if domain is None:
+                    raise ValueError("legacy evaluators require an explicit domain")
+                descriptor = EvaluatorDescriptor(
+                    domain,
+                    self.components,
+                    observables=self._output_kind == "gammaloop",
+                )
+            self.descriptor = descriptor
+            self.codec = BatchCodec(descriptor.domain)
+            self.encoder = EvaluationEncoder()
+            response = {
+                "ok": True,
+                "metadata": _call_optional(self.evaluator, "metadata", {}),
+            }
+            if self.modern:
+                response.update(
+                    evaluation_protocol=EVALUATION_PROTOCOL,
+                    descriptor=descriptor.to_dict(),
+                    evaluation_encodings=[BINARY_ENCODING, "json"],
+                )
+            return response
         if self.evaluator is None:
             raise RuntimeError("worker not initialized")
         if method == "diagnostics":
             return {"diagnostics": _call_optional(self.evaluator, "diagnostics", {})}
-        if method == "eval_batch":
-            nr_samples = params["nr_samples"]
-            batch = self.codec.decode(params, req_binary, weighted=False)
-            result = self.evaluator.eval(batch.xs_discrete, batch.xs_continuous)
-            if self._output_kind == "gammaloop":
-                if not isinstance(result, ObservableBatch):
-                    raise TypeError("observable evaluator must return ObservableBatch")
-                raw = np.asarray(result.values, dtype="<f8")
-                if raw.shape != (nr_samples, 2) or not np.isfinite(raw).all():
-                    raise ValueError(
-                        "observable values must be finite (N,2) real/imag values"
-                    )
-                if len(result.observables) != nr_samples:
-                    raise ValueError("observables must contain one bundle per input")
-                for bundle in result.observables:
-                    for histogram in bundle["histograms"].values():
-                        if histogram["sample_count"] != 1:
-                            raise ValueError(
-                                "observable output must describe exactly one sample"
-                            )
-                return {
-                    "observables": result.observables,
-                    "__binary__": np.ascontiguousarray(raw).tobytes(),
-                }
-            values = _normalize_evaluator_values(
-                result, nr_samples, self.components
+        if method not in ("evaluate", "eval_batch"):
+            raise ValueError(f"unknown method: {method}")
+        if method == "evaluate":
+            request = EvaluationRequest(**params["outputs"])
+            encoding = params.get("encoding", "json")
+            if encoding not in ("json", BINARY_ENCODING):
+                raise ValueError("unsupported evaluation encoding")
+        else:
+            request = EvaluationRequest(
+                self.components, observables=self._output_kind == "gammaloop"
             )
-            values_row_major = np.ascontiguousarray(
-                values.reshape((nr_samples * len(self.components),)), dtype="<f8"
+        request.validate(self.descriptor)
+        batch = self.codec.decode(params, req_binary, weighted=False)
+        result = (
+            self.evaluator.evaluate(batch.xs_discrete, batch.xs_continuous, request)
+            if self.modern
+            else self.evaluator.eval(batch.xs_discrete, batch.xs_continuous)
+        )
+        if not isinstance(result, EvaluationBatch):
+            if self.modern or request.observables:
+                raise TypeError(
+                    "evaluator must return EvaluationBatch (ObservableBatch for legacy workers)"
+                )
+            result = EvaluationBatch(result)
+        values = normalize_values(
+            result.values, params["nr_samples"], request.components
+        )
+        if method == "evaluate":
+            return (
+                self.encoder.encode(result, request, values)
+                if encoding == BINARY_ENCODING
+                else json_response(result, request, values)
             )
-            return {"__binary__": values_row_major.tobytes()}
-        raise ValueError(f"unknown method: {method}")
+        validate_batch(result, request, len(values))
+        response = {"__binary__": np.ascontiguousarray(values, dtype="<f8").tobytes()}
+        if request.observables:
+            response["observables"] = result.observables
+        return response
 
 
 class _SamplerWorker:
@@ -382,29 +429,7 @@ class _BatchTransformWorker:
         return self.codec.encode(batch, nr_samples)
 
 
-def _normalize_evaluator_values(
-    values: Any, nr_samples: int, components: list[str]
-) -> np.ndarray:
-    if isinstance(values, dict):
-        columns = [
-            np.asarray(values[name], dtype=np.float64).reshape((nr_samples,))
-            for name in components
-        ]
-        values = np.stack(columns, axis=1)
-    array = np.asarray(values, dtype=np.float64)
-    if len(components) == 1 and array.shape == (nr_samples,):
-        array = array.reshape((nr_samples, 1))
-    if array.shape != (nr_samples, len(components)):
-        raise ValueError(
-            f"eval returned shape {array.shape}, expected ({nr_samples},) or ({nr_samples}, {len(components)})"
-        )
-    finite = np.isfinite(array)
-    if not finite.all():
-        sample, component = np.argwhere(~finite)[0]
-        raise ValueError(
-            f"sample {sample}, component {components[component]!r}: eval returned non-finite value"
-        )
-    return array
+_normalize_evaluator_values = normalize_values
 
 
 def _call_optional(obj: Any, name: str, fallback: Any, *args: Any) -> Any:

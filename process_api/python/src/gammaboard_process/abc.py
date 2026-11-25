@@ -5,22 +5,23 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Self
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import NDArray
 
+from .batches import Batch, GenerationStatus, SampleBatch
 from .domain import Domain
 from .feedback import Feedback
-from .batches import Batch, GenerationStatus, SampleBatch
 
 if TYPE_CHECKING:
-    from .gammaloop import ObservableBatch
+    from .evaluation import EvaluationBatch, EvaluationRequest, EvaluatorDescriptor
 
 
 class Evaluator(ABC):
     """Optional base class for process evaluators.
 
     Inheritance is not required. ``run_evaluator`` accepts any class with a
-    compatible ``eval`` method. Fresh workers construct evaluators as
-    ``ClassName(domain=..., **args)``.
+    compatible ``descriptor`` and ``evaluate`` methods; legacy ``eval`` is supported.
+    Fresh workers construct evaluators as ``ClassName(domain=..., **args)``;
+    domain is None during discovery.
     """
 
     def metadata(self) -> Any:
@@ -30,11 +31,19 @@ class Evaluator(ABC):
     def diagnostics(self) -> dict[str, Any]:
         return {}
 
-    @abstractmethod
-    def eval(
-        self, xs_discrete: np.ndarray, xs_continuous: np.ndarray
-    ) -> ArrayLike | dict[str, ArrayLike] | ObservableBatch:
-        """Return unweighted values or ObservableBatch, one result per input."""
+    def descriptor(self) -> EvaluatorDescriptor | None:
+        """Return EvaluatorDescriptor; None selects the legacy eval adapter."""
+        return None
+
+    def evaluate(
+        self, xs_discrete, xs_continuous, request: EvaluationRequest
+    ) -> EvaluationBatch:
+        """Return EvaluationBatch with requested components and per-sample channels."""
+        raise NotImplementedError("implement evaluate for a descriptor-based evaluator")
+
+    def eval(self, xs_discrete, xs_continuous):
+        """Legacy fixed-output hook; prefer descriptor() and evaluate()."""
+        raise NotImplementedError("implement eval for a legacy evaluator")
 
 
 class Sampler(ABC):
@@ -151,7 +160,7 @@ class Materializer(ABC):
 
     Inheritance is not required. ``run_materializer`` accepts any class with a
     compatible ``materialize_batch`` method. Fresh workers construct
-    materializers as ``ClassName(domain=..., **args)``.
+    materializers as ``ClassName(domain=..., **args)``; domain is None during discovery.
     """
 
     @abstractmethod
@@ -164,7 +173,7 @@ class BatchTransform(ABC):
 
     Inheritance is not required. ``run_batch_transform`` accepts any class with
     a compatible ``transform_batch`` method. Fresh workers construct transforms
-    as ``ClassName(domain=..., **args)``.
+    as ``ClassName(domain=..., **args)``; domain is None during discovery.
     """
 
     @abstractmethod

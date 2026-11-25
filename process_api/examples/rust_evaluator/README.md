@@ -15,7 +15,8 @@ the container option below.
 
 It demonstrates the direct process protocol shape:
 
-- `src/protocol.rs` reads and writes `Content-Length` framed JSON-RPC.
+- `../common/wire.rs` reads and writes `Content-Length` framed JSON-RPC;
+  `src/protocol.rs` defines this example's payloads.
 - `src/evaluator.rs` owns config parsing and a vectorized ragged-domain function.
 - `src/main.rs` only connects the protocol to the evaluator.
 

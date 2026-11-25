@@ -491,7 +491,7 @@ kind = "naive_monte_carlo"
 
     harness
         .cli()
-        .args(["node", "auto-assign", &parent_run_id.to_string()])
+        .args(["run", "start", &parent_run_id.to_string()])
         .assert()
         .success();
 

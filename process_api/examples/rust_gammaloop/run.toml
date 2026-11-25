@@ -1,0 +1,23 @@
+# Set both absolute paths. Domain and outputs are discovered from the worker.
+name = "gammaloop-process"
+
+[evaluator]
+kind = "process_evaluator"
+command = ["/absolute/path/gammaloop_process"]
+[evaluator.args]
+state_folder = "/absolute/path/gg_hhh"
+integrand_name = "1L"
+training_projection = "abs"
+[evaluator.args.preprocessing]
+read_only = true
+
+[sampler_aggregator_runner_params.queue]
+fixed_batch_size = 512
+max_generation_size = 4096
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = { max_samples = 65536 }
+accumulator = { config = { kind = "vector", components = ["real", "imag"], training_projection = { kind = "norm" } } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 42 } }

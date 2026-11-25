@@ -1,0 +1,31 @@
+# Copy alongside your instance file and edit every site-dependent value.
+instance_file = "gammaboard.toml"
+workspace_root = "/shared/YOUR_USER/gammaboard"
+image = "/shared/YOUR_USER/gammaboard/images/gammaboard.sif"
+job_env_file = "environment.sh"
+binds = ["/shared/YOUR_USER/gammaboard"]
+
+[control]
+account = "YOUR_ACCOUNT"
+partition = "YOUR_PARTITION"
+cpus_per_task = 4
+mem = "8G"
+time = "02:00:00"
+
+[worker]
+account = "YOUR_ACCOUNT"
+partition = "YOUR_PARTITION"
+cpus_per_task = 2
+mem = "8G"
+time = "01:00:00"
+
+[build]
+account = "YOUR_ACCOUNT"
+partition = "YOUR_PARTITION"
+cpus_per_task = 32
+mem = "128G"
+time = "02:00:00"
+
+[access]
+ssh_target = "YOUR_USER@login.YOUR_CLUSTER"
+local_port = 8080

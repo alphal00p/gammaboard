@@ -626,7 +626,7 @@ impl GammaLoopEvaluator {
         ))
     }
 
-    fn evaluate(
+    fn evaluate_native_batch(
         &mut self,
         batch: &Batch,
         components: &[String],
@@ -690,26 +690,6 @@ impl GammaLoopEvaluator {
         }
         Ok(results)
     }
-
-    fn values(&self, results: &[EvaluationResult], components: &[String]) -> Vec<f64> {
-        if components.len() == 1 {
-            results
-                .iter()
-                .map(|r| {
-                    self.training_projection
-                        .project(Self::project_result_value(r))
-                })
-                .collect()
-        } else {
-            results
-                .iter()
-                .flat_map(|r| {
-                    let v = Self::project_result_value(r);
-                    [v.re, v.im]
-                })
-                .collect()
-        }
-    }
 }
 
 fn havana_sample(
@@ -736,61 +716,67 @@ fn set_top_level_sample_weight(sample: &mut Sample<F<f64>>, integrator_weight: F
 }
 
 impl Evaluator for GammaLoopEvaluator {
-    fn domain(&self) -> Domain {
-        self.domain.clone()
+    fn descriptor(&self) -> crate::EvaluatorDescriptor {
+        let mut d =
+            crate::EvaluatorDescriptor::complex(self.domain.clone(), self.training_projection);
+        d.observables = true;
+        d.details = true;
+        d.diagnostics = true;
+        d
     }
-
     fn metadata(&self) -> JsonValue {
         serde_json::to_value(&self.metadata).unwrap_or_else(|_| json!({}))
     }
-
-    fn eval_values(
+    fn evaluate(
         &mut self,
         batch: &Batch,
-        components: &[String],
-    ) -> Result<Vec<f64>, EngineError> {
-        let results = self.evaluate(batch, components, EvalBatchOptions::default())?;
-        Ok(self.values(&results, components))
-    }
-
-    fn training_projection(&self) -> TrainingProjection {
-        self.training_projection
-    }
-
-    fn eval_samples(
-        &mut self,
-        batch: &Batch,
-        components: &[String],
-        emit: &mut dyn FnMut(crate::evaluation::SampleOutput) -> Result<(), EngineError>,
+        request: &crate::EvaluationRequest,
+        emit: &mut dyn FnMut(crate::SampleOutput) -> Result<(), EngineError>,
     ) -> Result<(), EngineError> {
-        let mut observables = Self::call_external("new_observable_accumulator", || {
-            self.integrand.new_observable_accumulator()
-        })?;
-        let empty = observables.snapshot_bundle();
+        request.validate(&self.descriptor())?;
+        let mut observables = if request.observables {
+            Some(Self::call_external("new_observable_accumulator", || {
+                self.integrand.new_observable_accumulator()
+            })?)
+        } else {
+            None
+        };
+        let empty = observables.as_ref().map(|o| o.snapshot_bundle());
         for point in batch.points() {
-            // Consume events immediately: memory is bounded by one native sample.
-            let results = self.evaluate(
+            let results = self.evaluate_native_batch(
                 &Batch::new(vec![point.clone()]),
-                components,
+                &["real".into(), "imag".into()],
                 EvalBatchOptions::default(),
             )?;
             let result = &results[0];
-            let mut sample =
-                crate::evaluation::SampleOutput::values(self.values(&results, components));
-            sample.evaluation = Some(crate::evaluation::SampleEvaluation {
-                integrand_value_re: result.integrand_result.re.0,
-                integrand_value_im: result.integrand_result.im.0,
-                parameterization_jacobian: result.parameterization_jacobian.map(|j| j.0),
-            });
-            sample.diagnostics =
-                GammaLoopAccumulatorState::diagnostics_from_evaluation_results(&results);
-            Self::call_external("reset_observable_sample", || {
-                observables.restore_snapshot_bundle(&empty)
-            })?;
-            Self::call_external("accumulate_observable_sample", || {
-                observables.accumulate_sample(&result.event_groups, &F(1.0))
-            })?;
-            sample.observables = Some(observables.snapshot_bundle());
+            let value = Self::project_result_value(result);
+            let mut sample = crate::SampleOutput::values(
+                request
+                    .components
+                    .iter()
+                    .map(|name| if name == "real" { value.re } else { value.im })
+                    .collect(),
+            );
+            if request.details {
+                sample.evaluation = Some(crate::SampleEvaluation {
+                    integrand_value_re: result.integrand_result.re.0,
+                    integrand_value_im: result.integrand_result.im.0,
+                    parameterization_jacobian: result.parameterization_jacobian.map(|j| j.0),
+                });
+            }
+            if request.diagnostics {
+                sample.diagnostics =
+                    Some(GammaLoopAccumulatorState::diagnostics_from_evaluation_results(&results));
+            }
+            if let Some(observables) = &mut observables {
+                Self::call_external("reset_observable_sample", || {
+                    observables.restore_snapshot_bundle(empty.as_ref().unwrap())
+                })?;
+                Self::call_external("accumulate_observable_sample", || {
+                    observables.accumulate_sample(&result.event_groups, &F(1.0))
+                })?;
+                sample.observables = Some(observables.snapshot_bundle());
+            }
             emit(sample)?;
         }
         Ok(())

@@ -10,8 +10,6 @@ target = { kind = "vector", components = { real = 1.0, imag = 0.0 } }
 [evaluator]
 kind = "process_evaluator"
 command = ['$(python:python3)', "-u", "$resources/../process_api/examples/python_observables/src/run_evaluator.py"]
-domain = { rectangular = { discrete_cardinalities = [], continuous_dims = 1 } }
-output = { kind = "gammaloop" }
 
 [[task_queue]]
 name = "accumulator"
@@ -25,3 +23,14 @@ name = "sample"
 kind = "sample"
 stop_condition = { max_samples = 16384 }
 sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }
+
+# Same evaluator, value-only selection: no histogram construction for plotting.
+[[task_queue]]
+name = "polynomial-line"
+kind = "plot_line"
+accumulator = { components = ["real", "imag"] }
+display = "components"
+[task_queue.geometry]
+offset = [0.0]
+direction = [1.0]
+linspace = { start = 0.0, stop = 1.0, count = 101 }

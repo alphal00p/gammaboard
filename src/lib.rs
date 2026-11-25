@@ -21,6 +21,9 @@ pub mod compatibility;
 pub mod config;
 pub mod core;
 pub mod evaluation;
+pub mod instance;
+#[doc(hidden)]
+pub mod local_control;
 #[doc(hidden)]
 pub mod local_db;
 pub mod preprocess;
@@ -66,12 +69,12 @@ pub use core::{
 pub use core::{EngineError, StoreError};
 pub use evaluation::{
     Accumulator, AccumulatorState, Batch, BatchError, BatchResult, BatchTransform,
-    DiagnosticSample, EmptyAccumulatorState, EvalBatchOptions, Evaluator, EvaluatorBatch,
-    FullAccumulatorProgress, FullVectorAccumulatorState, GammaLoopAccumulatorDigest,
-    GammaLoopAccumulatorState, IngestScalar, IngestVector, Materializer, NamedScalarAccumulator,
-    ObservableTrainingProjection, Point, SampleEvaluation, SampleOutput, ScalarAccumulatorState,
-    VectorAccumulatorState, WeightFactor, extract_accumulator_metric,
-    extract_accumulator_metric_with_runtime,
+    DiagnosticSample, EmptyAccumulatorState, EvalBatchOptions, EvaluationRequest, Evaluator,
+    EvaluatorBatch, EvaluatorDescriptor, FullAccumulatorProgress, FullVectorAccumulatorState,
+    GammaLoopAccumulatorDigest, GammaLoopAccumulatorState, IngestScalar, IngestVector,
+    Materializer, NamedScalarAccumulator, ObservableTrainingProjection, Point, SampleEvaluation,
+    SampleOutput, ScalarAccumulatorState, VectorAccumulatorState, WeightFactor, evaluate_requested,
+    extract_accumulator_metric, extract_accumulator_metric_with_runtime,
 };
 pub use sampling::{
     DiscreteSubspace, Feedback, Generation, LatentBatch, LatentBatchPayload, PdfPoint, Sampler,

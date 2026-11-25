@@ -86,16 +86,20 @@ async fn offline_workers_start_saved_recipes_and_reject_live_or_pending_actions(
             .is_err(),
         "a stale Restore action cannot start a worker after cancellation"
     );
-    assert!(
-        store
-            .start_offline_node("saved-1", "saved-id", false, false)
-            .await
-            .is_err()
-    );
     let resumed = store
-        .start_offline_node("saved-1", "saved-id", true, false)
+        .start_offline_node("saved-1", "saved-id", false, false)
         .await
         .unwrap();
+    let backend: String =
+        sqlx::query_scalar("SELECT backend FROM node_launch_requests WHERE id=$1")
+            .bind(resumed)
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        backend, "external",
+        "restoration follows the current instance policy"
+    );
     assert!(
         store
             .start_offline_node("saved-1", "saved-id", true, false)
@@ -263,8 +267,8 @@ async fn saved_worker_restoration_never_starts_separately_stopped_workers() {
             .await
             .is_err()
     );
-    assert_eq!(store.restore_saved_workers().await.unwrap(), 2);
-    assert_eq!(store.restore_saved_workers().await.unwrap(), 0);
+    assert_eq!(store.restore_saved_workers(true).await.unwrap().len(), 2);
+    assert_eq!(store.restore_saved_workers(true).await.unwrap().len(), 0);
     for (index, name) in names.iter().enumerate() {
         let (request, saved): (i64, bool) =
             sqlx::query_as("SELECT launch_request_id,resume_requested FROM nodes WHERE name=$1")
@@ -2668,7 +2672,7 @@ async fn resumed_worker_requires_a_new_registration_before_its_launch_is_fulfill
         .unwrap();
     sqlx::query("UPDATE nodes SET resume_requested=true,lease_expires_at=now()-interval '1 second' WHERE name=$1")
         .bind(&name).execute(store.pool()).await.unwrap();
-    assert_eq!(store.restore_saved_workers().await.unwrap(), 1);
+    assert_eq!(store.restore_saved_workers(true).await.unwrap().len(), 1);
     let new: i64 = sqlx::query_scalar("SELECT launch_request_id FROM nodes WHERE name=$1")
         .bind(&name)
         .fetch_one(store.pool())
@@ -2769,7 +2773,7 @@ async fn launch_history_preserves_outstanding_requests_and_worker_identity() {
         .execute(store.pool())
         .await
         .unwrap();
-    assert_eq!(store.restore_saved_workers().await.unwrap(), 1);
+    assert_eq!(store.restore_saved_workers(true).await.unwrap().len(), 1);
     let replacement: i64 = sqlx::query_scalar("SELECT launch_request_id FROM nodes WHERE name=$1")
         .bind(&name)
         .fetch_one(store.pool())
@@ -3847,16 +3851,23 @@ async fn claim_reconciliation_preserves_slow_work_and_releases_only_untracked_cl
 
 struct CountingEvaluator(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 impl gammaboard::evaluation::Evaluator for CountingEvaluator {
-    fn domain(&self) -> gammaboard::Domain {
-        gammaboard::Domain::rectangular(1, 0)
+    fn descriptor(&self) -> gammaboard::EvaluatorDescriptor {
+        gammaboard::EvaluatorDescriptor::values(
+            gammaboard::Domain::continuous(1),
+            vec!["value".into()],
+        )
     }
-    fn eval_values(
+    fn evaluate(
         &mut self,
         batch: &Batch,
-        _components: &[String],
-    ) -> Result<Vec<f64>, gammaboard::core::EngineError> {
+        _: &gammaboard::EvaluationRequest,
+        emit: &mut dyn FnMut(gammaboard::SampleOutput) -> Result<(), gammaboard::EngineError>,
+    ) -> Result<(), gammaboard::EngineError> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(vec![0.; batch.len()])
+        for _ in batch.points() {
+            emit(gammaboard::SampleOutput::values(vec![0.]))?;
+        }
+        Ok(())
     }
 }
 
@@ -4691,4 +4702,39 @@ async fn estimator_terminology_migration_preserves_statistics_and_user_names() {
         assert_eq!(untouched, raw);
     }
     tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated migrated PostgreSQL database"]
+async fn cancel_launch_is_idempotent_and_fenced_against_controller_claims() {
+    let (_guard, store) = locked_test_store().await;
+    let local = store
+        .reserve_worker_launch(
+            "local",
+            vec![serde_json::json!({"count":1,"name_prefix":"cancel-local"})],
+        )
+        .await
+        .unwrap();
+    store.cancel_pending_launch(local).await.unwrap();
+    store.cancel_pending_launch(local).await.unwrap();
+    assert!(store.claim_local_worker_launch().await.unwrap().is_none());
+    let external = store
+        .reserve_worker_launch(
+            "external",
+            vec![serde_json::json!({"count":1,"name_prefix":"cancel-external"})],
+        )
+        .await
+        .unwrap();
+    store
+        .claim_external_launch("test-controller", Some(external))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(store.cancel_pending_launch(external).await.is_err());
+    let state: String = sqlx::query_scalar("SELECT state FROM node_launch_requests WHERE id=$1")
+        .bind(external)
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(state, "starting");
 }

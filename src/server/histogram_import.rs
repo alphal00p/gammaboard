@@ -201,7 +201,7 @@ mod tests {
     #[test]
     #[cfg(feature = "gammaloop")]
     fn imports_gammaloop_export_without_changing_estimates() {
-        use gammalooprs::observables::{
+        use crate::evaluation::observables::{
             HistogramAccumulatorState, ObservablePhase, ObservableSnapshotBundle,
             ObservableValueTransform,
         };

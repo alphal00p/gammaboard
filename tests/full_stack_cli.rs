@@ -21,7 +21,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use symbolica::numerical_integration::{ContinuousGrid, DiscreteGrid, Grid, Sample};
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::NamedTempFile;
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::time::{Instant, sleep};
 use url::Url;

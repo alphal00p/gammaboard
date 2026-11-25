@@ -278,16 +278,19 @@ fn reduce_results(
 ) -> Result<GammaLoopAccumulatorState, EngineError> {
     struct Fixture<'a>(&'a [EvaluationResult], TrainingProjection);
     impl Evaluator for Fixture<'_> {
-        fn domain(&self) -> Domain {
-            Domain::continuous(0)
+        fn descriptor(&self) -> crate::EvaluatorDescriptor {
+            let mut d = crate::EvaluatorDescriptor::complex(Domain::continuous(0), self.1);
+            d.observables = true;
+            d.details = true;
+            d
         }
         fn training_projection(&self) -> TrainingProjection {
             self.1
         }
-        fn eval_samples(
+        fn evaluate(
             &mut self,
             _: &Batch,
-            _: &[String],
+            _: &crate::EvaluationRequest,
             emit: &mut dyn FnMut(crate::evaluation::SampleOutput) -> Result<(), EngineError>,
         ) -> Result<(), EngineError> {
             for result in self.0 {

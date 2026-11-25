@@ -55,14 +55,14 @@ All roles receive:
 | --- | --- |
 | `protocol` | Exactly `gammaboard-jsonrpc-v10` |
 | `role` | One of the four role strings above |
-| `domain` | The structural domain described below |
+| `domain` | Structural domain; optional/null for descriptor-based evaluator discovery |
 | `args` | User construction arguments, as a JSON object |
 
 Additional parameters:
 
 | Role | Parameters |
 | --- | --- |
-| Evaluator | `output: {kind:"values", components:["value",...]}` or `{kind:"gammaloop"}` |
+| Legacy evaluator | `output: {kind:"values", components:["value",...]}` or `{kind:"gammaloop"}` |
 | Sampler | `evaluator_metadata`: JSON from the evaluator; `initialization`: tagged `fresh`, `restore`, or `from_stage` object |
 | Materializer / transform | No additional initialization fields |
 
@@ -99,6 +99,90 @@ return unspecified entries. These probabilities agree with generated full weight
 they are neither observed frequencies nor Voronoi-region volumes. The frozen plan
 is queried once and checkpointed. Independent frozen sampling is a documented
 statistical assumption, not a capability flag.
+
+## Selected-output evaluator contract
+
+New evaluators opt in during `initialize` with:
+
+```json
+{"ok":true,"evaluation_protocol":"gammaboard-evaluation-v1",
+ "descriptor":{"domain":{"rectangular":{"discrete_cardinalities":[],"continuous_dims":1}},
+               "components":["real","imag"],"scalar_projection":"abs",
+               "observables":true,"details":true,"diagnostics":true},
+ "evaluation_encodings":["gammaboard-evaluation-binary-v1","json"],"metadata":{}}
+```
+
+The descriptor declares available channels, not a fixed output mode. Components
+are nonempty unique names. `scalar_projection` is optional (`real`, `imag`, `abs`,
+`abs_sq`) and requires `real`/`imag`; the host expands synthetic `value` requests
+and projects centrally. A declared real `value` component takes precedence.
+Optional `observable_schema` is a cleared snapshot bundle; otherwise the binary
+response establishes its schema lazily. Missing capability booleans default to false.
+
+The run card needs only `command` and `args`. Optional `domain` and `descriptor`
+are assertions checked against the worker. Run validation discovers and caches the
+descriptor by starting the executable on the service host. Supply an explicit
+`descriptor` when that host cannot execute the worker; runtime initialization still
+checks it. Discovery performs normal worker initialization, so use read-only state
+loading and explicit paths. Legacy cards with both `domain` and `output` remain
+validatable without starting a worker.
+
+Each `evaluate` request contains the usual `nr_samples` and coordinate offsets,
+plus `outputs` and `encoding`. Its input binary is unchanged:
+
+```json
+{"nr_samples":2,"outputs":{"components":["imag","real"],"observables":false,
+                             "details":true,"diagnostics":true},"encoding":"json"}
+```
+
+A JSON response is `{"samples":[{"values":[...],"details":{...},"diagnostics":{...},
+"observables":{...}}, ...]}` with no binary block. Omit unrequested channels.
+There must be exactly one finite value row per input, in original input order and
+requested component order. Unsupported channels fail explicitly. Different calls
+on the same initialized evaluator may select different components/channels.
+
+`details` contains `integrand_value_re`, `integrand_value_im` and optional/null
+`parameterization_jacobian`. Values already include any evaluator parameterization
+Jacobian; details describe the raw integrand and do not trigger another multiplication.
+Only GammaBoard applies outer sampling weights, stratum masking and reduction.
+Observable bundles describe one original draw (`sample_count=1`), including empty
+draws; correlated fills are summed before squaring the per-bin contribution.
+
+`diagnostics` is the per-sample GammaLoopDiagnostics record below: `count_total=1`,
+nonnegative counters and finite nonnegative timings. Missing diagnostics are
+unavailable, not measured zero. The two optional canonical preparation timings
+may individually be absent/null; an explicit zero means measured zero.
+
+### Compact selected output
+
+A binary response is `{"encoding":"gammaboard-evaluation-binary-v1"}`, optionally
+with `observable_schema` on the first observable response. All numbers are little
+endian, rows are concatenated without padding, and each row has:
+
+1. `C` f64 values in requested component order.
+2. If observables: the sparse histogram records from the compact observable format
+   below, **without** its two leading real/imag f64 values. Histogram names are sorted.
+3. If details: two f64 raw integrand components, then optional Jacobian.
+4. If diagnostics: nine i64 counters in this order: `count_total`,
+   `count_double_precision`, `count_quad_precision`, `count_arb_precision`,
+   `count_nan`, `count_nan_or_unstable`, `count_loop_momenta_escalated`,
+   `total_generated_events`, `total_accepted_events`; five f64 timings:
+   `total_eval_time_ms`, `total_integrand_eval_time_ms`, `total_evaluator_eval_time_ms`,
+   `total_parameterization_time_ms`, `total_event_processing_time_ms`; then optional
+   `total_canonical_sampling_preparation_time_ms` and
+   `total_canonical_physical_preparation_time_ms`.
+
+Each optional f64 uses a u8 tag (`0` absent, `1` followed by f64 present).
+No extra bytes are permitted. Schema is retained across changes in output selection;
+empty batches need no schema. Binary requires stable histogram metadata. Select JSON
+for changing layouts. Both encodings have identical semantics.
+
+This is an evaluator-only negotiated extension; sampler/materializer/transform
+remain on v10 unchanged. Without the extension, GammaBoard adapts `eval_batch`
+results to the shared contract. Existing observable workers can serve projected
+scalar/subset tasks, but cannot provide missing details or diagnostics. The Rust
+GammaLoop wrapper also retains `eval_batch` for older hosts. New Python providers
+implement `descriptor()` and `evaluate(...)`; old `eval(...)` providers still work.
 
 ## Domains and sample arrays
 
@@ -166,7 +250,8 @@ one `Feedback` object: `.values` is masked by requested/actual index equality;
 partition, `stratum_prefixes` is null and only the value block is present. Splitting
 and recovery preserve the complete feedback object and original draw boundaries.
 
-The `components` field on ordinary evaluation requests agrees with initialization.
+The `components` field on legacy `eval_batch` requests agrees with initialization.
+Selected-output `evaluate` requests instead choose a subset/order per call.
 Every evaluator returns exactly one unweighted result per input. Observable bundles
 use the GammaLoop histogram snapshot schema, but each histogram has sample_count=1.
 Sum all correlated fills within each bin before squaring; include empty draws.
@@ -174,9 +259,51 @@ The host validates these counts and moments and applies sampling weights,
 classification, masking, feedback projection and per-stratum reduction centrally.
 Evaluators never receive outer weights or stratification metadata and cannot
 return aggregate statistics. See the [observable example](examples/python_observables/src/demo_evaluator.py)
-and [typed output](python/src/gammaboard_process/gammaloop.py).
-Initialization may specify `output.training_projection` for observable output:
+and [typed output](python/src/gammaboard_process/evaluation.py).
+Legacy initialization may specify `output.training_projection` for observable output:
 `real` (default), `imag`, `abs`, or `abs_sq`; this is interpreted by the Rust host.
+
+### Optional compact observable transport
+
+An evaluator can advertise
+`observable_encodings: ["gammaboard-observables-binary-v1"]` in its successful
+initialize result. A supporting host opts in by adding
+`observable_encoding: "gammaboard-observables-binary-v1"` to each observable
+`eval_batch` request. Without that request field, the evaluator must retain the
+JSON observable contract above. Initialization requests and the v10 protocol
+identifier are unchanged; existing Python/older workers remain compatible.
+
+A compact response has `observable_encoding` with the same value. Its first
+successful nonempty response also contains `observable_schema`, a GammaLoop
+`ObservableSnapshotBundle` with all sample/entry/mitigation counters and moments
+zeroed. It contains the histogram and bin metadata; subsequent responses omit
+it. Histogram names are traversed in ascending UTF-8 lexical order. The layout
+is immutable for the process lifetime; use JSON mode for dynamic layouts.
+The response omits the legacy `observables` array.
+
+The binary block is sample-major, with no padding. Each original sample contains:
+
+1. Two little-endian f64 values: real and imaginary, including the
+   parameterization Jacobian, before outer sampling weights.
+2. For each histogram in schema order: three little-endian u64 counters
+   (`in_range_entry_count`, `nan_value_count`, `mitigated_pair_count`), then a
+   little-endian u32 populated-bin count.
+3. For each populated bin: u32 bin index, u64 `entry_count`, f64 `sum_weights`,
+   f64 `sum_weights_squared`, u64 `mitigated_fill_count`, all little-endian.
+
+Bin indices address the schema's `bins` vector followed by underflow and overflow.
+Indices must be strictly increasing and in range. A bin is omitted only when all
+its counters and moments are zero; zero-valued fills with nonzero counts remain
+present. Every histogram implicitly has `sample_count=1`, including empty draws.
+All floats must be finite. Moments still square the complete correlated sample
+contribution, and the existing host validation, weighting, masking and reduction
+rules apply unchanged. Counters must fit the host's integer range.
+
+The host requires exactly `nr_samples` rows and rejects truncated/trailing data,
+duplicate or out-of-range indices, changed/repeated schemas, and unnegotiated
+encodings. An empty batch has an empty binary block; schema discovery can wait
+until the first nonempty batch. Schema and binary streams reset when a worker is
+restarted. No aggregate histogram statistics cross this interface.
 
 Generation results are one of:
 

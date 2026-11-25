@@ -359,3 +359,50 @@ fn gammaloop_process_preserves_weights_and_feedback_options() -> Result {
     assert!(state.covariance().is_some());
     Ok(())
 }
+
+#[cfg(feature = "gammaloop")]
+#[test]
+#[ignore = "requires Python and NumPy; set GAMMABOARD_PROCESS_PYTHON"]
+fn selected_python_evaluator_discovers_domain_and_switches_output_channels() -> Result {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config: EvaluatorConfig = serde_json::from_value(json!({
+        "kind":"process_evaluator", "command":["env".to_owned(), format!("PYTHONPATH={}",root.join("process_api/python/src").display()), env::var("GAMMABOARD_PROCESS_PYTHON").unwrap_or_else(|_|"python3".into()),
+        "-u",root.join("process_api/examples/python_observables/src/run_evaluator.py")],"cwd":root,
+    }))?;
+    assert_eq!(config.resolve_domain()?, Domain::continuous(1));
+    let mut evaluator = config.build()?;
+    let batch = Batch::new(vec![
+        Point::new(vec![0.25], vec![], 2.),
+        Point::new(vec![0.75], vec![], 3.),
+    ]);
+    for _ in 0..2 {
+        assert_eq!(
+            evaluator.eval_values(&batch, &["value".into()])?,
+            vec![1.125, 1.125]
+        );
+        let reduced = evaluator.eval_batch(
+            &batch,
+            &AccumulatorConfig::Gammaloop,
+            EvalBatchOptions::default(),
+        )?;
+        let gammaboard::AccumulatorState::Gammaloop(state) = reduced.accumulator else {
+            panic!()
+        };
+        assert_eq!(
+            state.diagnostics.count_total, 0,
+            "unavailable diagnostics must remain unavailable"
+        );
+        let h = &state.bundle.histograms["x"];
+        assert_eq!(h.sample_count, 2);
+        assert_eq!(h.bins.iter().map(|b| b.sum_weights).sum::<f64>(), 5.625);
+        assert_eq!(
+            h.bins.iter().map(|b| b.sum_weights_squared).sum::<f64>(),
+            2.25_f64.powi(2) + 3.375_f64.powi(2)
+        );
+        assert_eq!(
+            evaluator.eval_values(&batch, &["imag".into(), "real".into()])?,
+            vec![0., 1.125, 0., 1.125]
+        );
+    }
+    Ok(())
+}

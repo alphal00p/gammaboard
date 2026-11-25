@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import numpy as np
-
-from gammaboard_process import Evaluator, log
+from gammaboard_process import (
+    EvaluationBatch,
+    Evaluator,
+    EvaluatorDescriptor,
+    RectangularDomain,
+    log,
+)
 
 
 class SinIntegrand(Evaluator):
@@ -18,7 +23,7 @@ class SinIntegrand(Evaluator):
     def __init__(
         self,
         *,
-        domain,
+        domain=None,
         scale: float = 1.0,
         bias: float = 0.0,
         freq_u: float = 2.0,
@@ -26,6 +31,7 @@ class SinIntegrand(Evaluator):
         branch_weights: list[list[float]] | None = None,
         phase_offsets: list[list[float]] | None = None,
     ) -> None:
+        self.domain = domain = domain or RectangularDomain((2, 3), 2)
         discrete_cardinalities, continuous_dims = domain.require_rectangular_shape()
         if [int(value) for value in discrete_cardinalities] != [2, 3] or int(
             continuous_dims
@@ -64,7 +70,10 @@ class SinIntegrand(Evaluator):
             raise ValueError(f"{name} must contain only finite values")
         return array
 
-    def eval(self, xs_discrete: np.ndarray, xs_continuous: np.ndarray) -> np.ndarray:
+    def descriptor(self):
+        return EvaluatorDescriptor(self.domain, ["value"])
+
+    def evaluate(self, xs_discrete, xs_continuous, request):
         if xs_discrete.ndim != 2 or xs_discrete.shape[1] != 2:
             raise ValueError(
                 f"expected discrete shape (nr_samples, 2), got {xs_discrete.shape}"
@@ -118,4 +127,4 @@ class SinIntegrand(Evaluator):
             f"batch {self._batches}: n={result.shape[0]}, mean={float(np.mean(result)):.3e}",
             level="debug",
         )
-        return result
+        return EvaluationBatch({"value": result})

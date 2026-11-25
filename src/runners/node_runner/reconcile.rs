@@ -572,6 +572,7 @@ impl<S: NodeRunnerStore> NodeRunner<S> {
             sampler,
             observable_state,
             evaluator_config,
+            &spec.domain,
             sampler_config,
             batch_transforms,
             effective_sampler_runner_params,

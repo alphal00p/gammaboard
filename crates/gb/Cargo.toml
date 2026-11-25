@@ -1,0 +1,21 @@
+[package]
+name = "gammaboard-client"
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+description = "Lightweight GammaBoard management client and protocol"
+
+[[bin]]
+name = "gb"
+path = "src/main.rs"
+
+[dependencies]
+clap_complete = "4.6"
+anyhow = "1"
+clap = { version = "4.5", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+toml = "1.1"
+tempfile = "3"

@@ -401,11 +401,54 @@ fn compile_complex_evaluator(
 }
 
 impl Evaluator for SymbolicaEngine {
-    fn domain(&self) -> Domain {
-        Domain::continuous(self.args.len())
+    fn descriptor(&self) -> crate::EvaluatorDescriptor {
+        crate::EvaluatorDescriptor::values(
+            Domain::continuous(self.args.len()),
+            self.vector_components
+                .clone()
+                .unwrap_or_else(|| vec!["value".into(), "real".into(), "imag".into()]),
+        )
     }
 
-    fn eval_values(
+    fn evaluate(
+        &mut self,
+        batch: &Batch,
+        request: &crate::EvaluationRequest,
+        emit: &mut dyn FnMut(crate::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        request.validate(&self.descriptor())?;
+        let full = self.vector_components.clone().unwrap_or_else(|| {
+            if request.components == ["value"] {
+                vec!["value".into()]
+            } else {
+                vec!["real".into(), "imag".into()]
+            }
+        });
+        let values = self.calculate_values(batch, &full)?;
+        for row in values.chunks_exact(full.len()) {
+            let mut selected = Vec::new();
+            for name in &request.components {
+                if let Some(i) = full.iter().position(|v| v == name) {
+                    selected.push(row[i]);
+                } else if name == "value" && full == ["real", "imag"] {
+                    if row[1] != 0. {
+                        return Err(EngineError::eval(
+                            "complex symbolica expression requires real/imag components",
+                        ));
+                    }
+                    selected.push(row[0]);
+                } else {
+                    return Err(EngineError::eval("unsupported Symbolica component"));
+                }
+            }
+            emit(crate::SampleOutput::values(selected))?;
+        }
+        Ok(())
+    }
+}
+
+impl SymbolicaEngine {
+    fn calculate_values(
         &mut self,
         batch: &Batch,
         components: &[String],

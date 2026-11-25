@@ -123,6 +123,17 @@ impl ProcessWorker {
         params: Value,
         binary: &[u8],
     ) -> Result<(Value, Vec<u8>), String> {
+        self.request_typed_with_binary(method, params, binary)
+    }
+
+    /// Deserialize the result directly into the role's response type, without
+    /// constructing or cloning a generic JSON tree for the payload.
+    pub(crate) fn request_typed_with_binary<T: serde::de::DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Value,
+        binary: &[u8],
+    ) -> Result<(T, Vec<u8>), String> {
         let _activity = crate::runners::activity::PhaseGuard::enter(
             self.activity.clone(),
             if self.label.contains("sampler") {
@@ -141,15 +152,7 @@ impl ProcessWorker {
             });
             self.write_frame(&request, binary)?;
             let deadline = Instant::now() + self.request_timeout;
-            let (response, response_binary) = self.read_response(id, deadline)?;
-            if let Some(error) = response.get("error") {
-                return Err(format_json_rpc_error(error));
-            }
-            let result = response
-                .get("result")
-                .cloned()
-                .ok_or_else(|| format!("{} response missing 'result'", self.label))?;
-            Ok((result, response_binary))
+            self.read_response(id, deadline)
         })();
         outcome.map_err(|error:String| {
             let status=self.child.try_wait().ok().flatten().map(|s|s.to_string()).unwrap_or_else(|| "running or unavailable".into());
@@ -190,11 +193,11 @@ impl ProcessWorker {
             .map_err(|error| format!("failed flushing {label} request: {error}"))
     }
 
-    fn read_response(
+    fn read_response<T: serde::de::DeserializeOwned>(
         &mut self,
         expected_id: u64,
         deadline: Instant,
-    ) -> Result<(Value, Vec<u8>), String> {
+    ) -> Result<(T, Vec<u8>), String> {
         loop {
             let Some((content_len, binary_len)) = self.read_frame_header(deadline)? else {
                 return Err(self.worker_terminated_message(&format!(
@@ -204,13 +207,32 @@ impl ProcessWorker {
             };
             let payload = self.read_frame_bytes(content_len, "frame payload", deadline)?;
             let binary = self.read_frame_bytes(binary_len, "binary payload", deadline)?;
-            let response = serde_json::from_slice::<Value>(&payload).map_err(|error| {
-                format!(
-                    "failed to parse {} response frame as JSON: {error}; payload='{}'",
-                    self.label,
-                    bounded_diagnostic(&String::from_utf8_lossy(&payload), 1024)
-                )
-            })?;
+            let raw: std::collections::BTreeMap<String, &serde_json::value::RawValue> =
+                serde_json::from_slice(&payload).map_err(|error| {
+                    format!(
+                        "failed to parse {} response frame as JSON: {error}; payload='{}'",
+                        self.label,
+                        bounded_diagnostic(&String::from_utf8_lossy(&payload), 1024)
+                    )
+                })?;
+            // Only the small envelope/progress fields need dynamic JSON. RawValue
+            // borrows the result bytes, preserving null vs absent and RPC checks.
+            let mut header = serde_json::Map::new();
+            for key in ["jsonrpc", "id", "method", "params"] {
+                if let Some(value) = raw.get(key) {
+                    header.insert(
+                        key.into(),
+                        serde_json::from_str(value.get())
+                            .map_err(|e| format!("invalid response {key}: {e}"))?,
+                    );
+                }
+            }
+            for key in ["result", "error"] {
+                if raw.contains_key(key) {
+                    header.insert(key.into(), Value::Null);
+                }
+            }
+            let response = Value::Object(header);
             if response.get("id").is_none()
                 && response.get("method").and_then(Value::as_str) == Some("progress")
             {
@@ -221,7 +243,15 @@ impl ProcessWorker {
                 continue;
             }
             validate_response_envelope(&self.label, &response, expected_id)?;
-            return Ok((response, binary));
+            if let Some(error) = raw.get("error") {
+                return Err(format_json_rpc_error(
+                    &serde_json::from_str(error.get())
+                        .map_err(|e| format!("invalid error response: {e}"))?,
+                ));
+            }
+            let result = serde_json::from_str(raw["result"].get())
+                .map_err(|e| format!("failed to decode {} result: {e}", self.label))?;
+            return Ok((result, binary));
         }
     }
 
@@ -897,6 +927,57 @@ mod tests {
             .expect_err("result+error should fail")
             .contains("exactly one")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_results_preserve_null_errors_and_envelope_validation() {
+        #[derive(serde::Deserialize)]
+        struct Data {
+            numbers: Vec<u64>,
+        }
+        for (payload, expected) in [
+            (
+                json!({"jsonrpc":"2.0","id":1,"result":{"numbers":[1,2,3]}}),
+                "typed",
+            ),
+            (json!({"jsonrpc":"2.0","id":1,"result":null}), "null"),
+            (
+                json!({"jsonrpc":"2.0","id":1,"error":{"message":"fixture failure"}}),
+                "fixture failure",
+            ),
+            (
+                json!({"jsonrpc":"2.0","id":1,"result":{},"error":{}}),
+                "exactly one",
+            ),
+        ] {
+            let payload = payload.to_string();
+            let script = format!(
+                "printf 'Content-Length: {}\\r\\n\\r\\n{}'; cat >/dev/null",
+                payload.len(),
+                payload
+            );
+            let (mut worker, _) = test_worker(
+                &script,
+                Duration::from_millis(20),
+                Duration::from_millis(20),
+            );
+            if expected == "typed" {
+                let (value, _): (Data, _) = worker
+                    .request_typed_with_binary("test", json!({}), &[])
+                    .unwrap();
+                assert_eq!(value.numbers, [1, 2, 3]);
+            } else if expected == "null" {
+                assert!(worker.request("test", json!({})).unwrap().is_null());
+            } else {
+                assert!(
+                    worker
+                        .request("test", json!({}))
+                        .unwrap_err()
+                        .contains(expected)
+                );
+            }
+        }
     }
 
     #[cfg(unix)]

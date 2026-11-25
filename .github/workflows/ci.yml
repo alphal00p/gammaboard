@@ -97,7 +97,10 @@ jobs:
             ! rg '^symbolica v' <<< "$dependencies"
           fi
           cargo clippy "${flags[@]}" --all-targets -- -D warnings
-          cargo test "${flags[@]}"
+          client_dependencies=$(cargo tree -p gammaboard-client --edges normal --prefix none)
+          ! rg '^(gammaboard v|sqlx|symbolica|gammaloop)' <<< "$client_dependencies"
+          cargo clippy -p gammaboard-client --all-targets -- -D warnings
+          cargo test --workspace "${flags[@]}"
           cargo test "${flags[@]}" --test process_api -- --ignored
 
   frontend:
@@ -171,10 +174,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install --upgrade pytest
-      - run: python -m pytest -q ops/ubelix/tests
+      - run: python -m pytest -q ops/slurm/tests
       - name: Validate UBELIX Python and shell entry points
         run: |
-          python -m py_compile ops/ubelix/ubelix.py
-          for script in ops/ubelix/build/*.sh ops/ubelix/build/*.sbatch ops/ubelix/slurm/*.sbatch; do
+          python -m py_compile ops/slurm/slurm.py
+          for script in ops/slurm/build/*.sh ops/slurm/build/*.sbatch ops/slurm/slurm/*.sbatch; do
             bash -n "$script"
           done

@@ -72,15 +72,15 @@ fn start_postgres(local: &LocalPostgresConfig, database_url: &str) -> Result<()>
     let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
     let mut startup_options = format!(
         "-k {} -p {} -c max_connections={} -c listen_addresses={} -c shared_buffers={} -c effective_cache_size={} -c work_mem={} -c checkpoint_timeout={} -c max_wal_size={} -c wal_compression={} -c synchronous_commit={}",
-        socket_dir.display(),
+        shell_word(&socket_dir.to_string_lossy()),
         connection.port,
         local.max_connections,
-        local.listen_addresses,
-        local.shared_buffers,
-        local.effective_cache_size,
-        local.work_mem,
-        local.checkpoint_timeout,
-        local.max_wal_size,
+        shell_word(&local.listen_addresses),
+        shell_word(&local.shared_buffers),
+        shell_word(&local.effective_cache_size),
+        shell_word(&local.work_mem),
+        shell_word(&local.checkpoint_timeout),
+        shell_word(&local.max_wal_size),
         if local.wal_compression { "on" } else { "off" },
         if local.synchronous_commit {
             "on"
@@ -109,7 +109,7 @@ fn ensure_database(local: &LocalPostgresConfig, database_url: &str) -> Result<()
     let connection = LocalDbConnection::from_url(database_url)?;
     if !database_exists(local, database_url)? {
         let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
-        println!("creating database '{}'", connection.database);
+        eprintln!("creating database '{}'", connection.database);
         run_command(
             Command::new("createdb")
                 .arg("-h")
@@ -122,7 +122,7 @@ fn ensure_database(local: &LocalPostgresConfig, database_url: &str) -> Result<()
             "createdb",
         )?;
     } else {
-        println!("database '{}' already exists", connection.database);
+        eprintln!("database '{}' already exists", connection.database);
     }
     Ok(())
 }
@@ -130,7 +130,7 @@ fn ensure_database(local: &LocalPostgresConfig, database_url: &str) -> Result<()
 fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &str) -> Result<()> {
     ensure_database(local, database_url)?;
     let connection = LocalDbConnection::from_url(database_url)?;
-    println!("applying migrations");
+    eprintln!("applying migrations");
     let migrations_dir = resolve_migrations_dir();
     run_command(
         Command::new("sqlx")
@@ -143,7 +143,7 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
         "sqlx migrate run",
     )?;
 
-    println!("enabling pg_stat_statements extension");
+    eprintln!("enabling pg_stat_statements extension");
     let socket_dir = ensure_absolute_dir(&local.socket_dir)?;
     run_command(
         Command::new("psql")
@@ -163,7 +163,7 @@ fn ensure_database_and_migrations(local: &LocalPostgresConfig, database_url: &st
     Ok(())
 }
 
-fn resolve_migrations_dir() -> String {
+pub fn resolve_migrations_dir() -> String {
     if let Ok(path) = std::env::var("GAMMABOARD_MIGRATIONS_DIR")
         && !path.trim().is_empty()
     {
@@ -186,18 +186,18 @@ pub fn start_postgres_cluster(local: &LocalPostgresConfig, database_url: &str) -
     require_commands(&["initdb", "pg_ctl"])?;
     ensure_postgres_data_dir_permissions(local)?;
     if !is_cluster_initialized(local) {
-        println!("postgres cluster not initialized; creating new cluster");
+        eprintln!("postgres cluster not initialized; creating new cluster");
         init_db(local, database_url)?;
     } else {
-        println!("postgres cluster already initialized");
+        eprintln!("postgres cluster already initialized");
     }
     ensure_pg_hba_rule(local)?;
 
     if !is_db_running(local)? {
-        println!("postgres is stopped; starting");
+        eprintln!("postgres is stopped; starting");
         start_postgres(local, database_url)?;
     } else {
-        println!("postgres already running");
+        eprintln!("postgres already running");
     }
 
     Ok(())
@@ -222,18 +222,19 @@ fn command_in_path(command: &str) -> bool {
 
 pub fn stop_db(local: &LocalPostgresConfig) -> Result<()> {
     if !Path::new(&local.data_dir).exists() {
-        println!("postgres already stopped (data directory missing)");
+        eprintln!("postgres already stopped (data directory missing)");
         return Ok(());
     }
     if !is_db_running(local)? {
-        println!("postgres already stopped");
+        eprintln!("postgres already stopped");
         return Ok(());
     }
-    println!("stopping postgres");
+    eprintln!("stopping postgres");
     let status = Command::new("pg_ctl")
         .arg("-D")
         .arg(&local.data_dir)
         .arg("stop")
+        .stdout(Stdio::from(std::io::stderr()))
         .status()
         .context("failed to spawn pg_ctl stop")?;
     if status.success() {
@@ -257,13 +258,13 @@ pub fn delete_db(local: &LocalPostgresConfig, assume_yes: bool) -> Result<()> {
     let removed_data = remove_path_if_exists(&local.data_dir)?;
     let removed_socket = remove_path_if_exists(&local.socket_dir)?;
     if !removed_data && !removed_socket {
-        println!("nothing to delete (no local postgres state found)");
+        eprintln!("nothing to delete (no local postgres state found)");
     } else {
         if removed_data {
-            println!("deleted {}", local.data_dir);
+            eprintln!("deleted {}", local.data_dir);
         }
         if removed_socket {
-            println!("deleted {}", local.socket_dir);
+            eprintln!("deleted {}", local.socket_dir);
         }
     }
     Ok(())
@@ -363,7 +364,7 @@ fn is_cluster_initialized(local: &LocalPostgresConfig) -> bool {
     Path::new(&local.data_dir).join("PG_VERSION").is_file()
 }
 
-fn is_db_running(local: &LocalPostgresConfig) -> Result<bool> {
+pub fn is_db_running(local: &LocalPostgresConfig) -> Result<bool> {
     let output = Command::new("pg_ctl")
         .arg("-D")
         .arg(&local.data_dir)
@@ -434,6 +435,7 @@ fn yes_no(value: bool) -> &'static str {
 
 fn run_command(command: &mut Command, label: &str) -> Result<()> {
     let status = command
+        .stdout(Stdio::from(std::io::stderr()))
         .status()
         .with_context(|| format!("failed to spawn {label}"))?;
     if status.success() {
@@ -565,6 +567,60 @@ impl LocalDbConnection {
             port,
         })
     }
+}
+
+/// Instance mode uses bundled migrations, independent of the caller's directory.
+pub async fn migrate_instance(database_url: &str) -> Result<()> {
+    use sqlx::Connection;
+    let mut connection = sqlx::PgConnection::connect(database_url).await?;
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+    let has_history: bool =
+        sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL")
+            .fetch_one(&mut connection)
+            .await?;
+    let applied: Vec<i64> = if has_history {
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success")
+            .fetch_all(&mut connection)
+            .await?
+    } else {
+        Vec::new()
+    };
+    if MIGRATOR.iter().any(|m| !applied.contains(&m.version)) {
+        let active:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()").fetch_one(&mut connection).await?;
+        anyhow::ensure!(
+            active == 0,
+            "pending migrations require stopping other database clients first"
+        );
+    }
+    MIGRATOR.run(&mut connection).await.context("database migrations failed; incompatible databases need matching software or an explicit reset")?;
+    Ok(())
+}
+
+pub async fn create_instance_database(database_url: &str) -> Result<()> {
+    use sqlx::{Connection, migrate::MigrateDatabase};
+    if !sqlx::Postgres::database_exists(database_url).await? {
+        sqlx::Postgres::create_database(database_url).await?;
+    }
+    migrate_instance(database_url).await?;
+    let mut connection = sqlx::PgConnection::connect(database_url).await?;
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+        .execute(&mut connection)
+        .await?;
+    Ok(())
+}
+
+fn shell_word(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// Unlike the legacy best-effort stop helper, instance shutdown must confirm exit.
+pub fn stop_instance_database(local: &LocalPostgresConfig) -> Result<()> {
+    stop_db(local)?;
+    anyhow::ensure!(
+        !is_db_running(local)?,
+        "PostgreSQL did not stop; data and control state were retained"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

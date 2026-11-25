@@ -116,7 +116,7 @@ sampler = { config = { kind = "havana_inference" } }
     // Use auto-assign to let the system pick appropriate nodes.
     harness
         .cli()
-        .args(["node", "auto-assign", &run_id.to_string()])
+        .args(["run", "start", &run_id.to_string()])
         .assert()
         .success();
 

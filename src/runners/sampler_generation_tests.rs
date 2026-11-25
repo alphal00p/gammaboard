@@ -251,6 +251,7 @@ fn runner(
         AccumulatorState::empty_scalar(),
         serde_json::from_value(json!({"kind":"unit", "continuous_dims":2, "discrete_dims":0}))
             .unwrap(),
+        &Domain::continuous(2),
         config,
         vec![],
         params.clone(),

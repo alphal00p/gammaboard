@@ -116,19 +116,36 @@ class Session:
         if shared_buffers is not None:
             with self.runtime.open("a") as stream:
                 stream.write(f"shared_buffers = {json.dumps(shared_buffers)}\n")
+        self.instance=self.directory/"instance.toml"
+        self.endpoint=f"http://127.0.0.1:{4000+offset}"
+        self.instance.write_text(f'''name="benchmark"
+[paths]
+state_dir={json.dumps(str(self.directory/"control"))}
+log_dir={json.dumps(str(self.directory/"logs"))}
+temp_dir={json.dumps(str(self.directory/"tmp"))}
+template_dir={json.dumps(str(ROOT/"resources/templates"))}
+resource_roots=[{json.dumps(str(self.directory/"resources"))}]
+[database]
+mode="managed"
+port={5400+offset}
+name="gammaboard_db"
+data_dir={json.dumps(str(self.directory/"resources/db/postgres"))}
+socket_dir={json.dumps(str(self.directory/"socket"))}
+[database.tuning]
+max_connections={max_connections}
+{f'shared_buffers={json.dumps(shared_buffers)}' if shared_buffers else ''}
+[server]
+api_port={4000+offset}
+''')
         self.infrastructure_cpus = infrastructure_cpus
         self.workers = []
 
     def argv(self, *args):
-        return [
-            str(self.binary),
-            "--runtime-config",
-            str(self.runtime),
-            "--port-offset",
-            str(self.offset),
-            "--json",
-            *map(str, args),
-        ]
+        if args[0] == "benchmark" or args[:2] == ("node","run"):
+            return [str(self.binary),"--instance",str(self.instance),"--json",*map(str,args)]
+        if args[0] in ("start","db"):
+            return [str(self.binary),"--instance",str(self.instance),"--json",*map(str,args)]
+        return [str(self.binary.with_name("gb")),"--endpoint",self.endpoint,"--json",*map(str,args)]
 
     def cli(self, *args, timeout=90, cpus=None):
         remaining = self.deadline - time.monotonic()
@@ -143,11 +160,12 @@ class Session:
         )
         if result.returncode:
             raise RuntimeError(f"GammaBoard {args}: {result.stdout}\n{result.stderr}")
-        return json.loads(result.stdout)
+        value=json.loads(result.stdout)
+        return value["created"] if args[:2]==("run","create") else value
 
     def db_command(self, command):
         result = subprocess.run(
-            pinned_command(self.infrastructure_cpus, self.argv("db", command)),
+            pinned_command(self.infrastructure_cpus, self.argv("start","--api-only") if command=="start" else self.argv("stop")),
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -157,6 +175,12 @@ class Session:
             log.write(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError(f"database {command} failed; inspect database.log")
+        if command=="stop":
+            deadline=time.monotonic()+20
+            receipt=self.directory/"control/status.json"
+            while not receipt.exists() or json.loads(receipt.read_text()).get("state")!="stopped":
+                if time.monotonic()>deadline:raise RuntimeError("service process shutdown not confirmed")
+                time.sleep(.1)
 
     def __enter__(self):
         try:
@@ -164,7 +188,7 @@ class Session:
                 if sock.connect_ex(("127.0.0.1", 5400 + self.offset)) == 0:
                     raise RuntimeError("database port occupied; choose another --port-offset")
             self.db_command("start")
-            self.cli("node", "list")
+            self.cli("worker", "list")
             return self
         except BaseException:
             self.__exit__(*sys.exc_info())
@@ -177,7 +201,7 @@ class Session:
         self.deadline = time.monotonic() + 90
         if self.workers:
             try:
-                self.cli("node", "stop", "--all")
+                self.cli("worker", "stop", "--all")
                 deadline = time.monotonic() + 75
                 for worker in self.workers:
                     worker.wait(timeout=max(0.01, deadline - time.monotonic()))
@@ -250,7 +274,7 @@ class Session:
         while time.monotonic() < deadline:
             if any(worker.poll() is not None for worker in self.workers):
                 raise RuntimeError("a pinned worker exited; inspect its log")
-            if len(self.cli("node", "list")) == len(nodes):
+            if len(self.cli("worker", "list")) == len(nodes):
                 return
             time.sleep(0.25)
         raise TimeoutError("pinned worker registration timed out")

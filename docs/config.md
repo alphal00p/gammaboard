@@ -1,7 +1,7 @@
 # Run and task configuration
 
 Run cards use TOML 1.1. Start from [run/task templates](../resources/templates),
-then validate with `gammaboard run validate CARD`. Runner defaults are listed in
+then validate with `gb run validate CARD`. Runner defaults are listed in
 [run.toml](../src/config_defaults/run.toml); hosting settings are in
 [deployment](deployment.md). Dashboard controls and imports/exports are in
 [operations](operations.md#read-results-and-plots).

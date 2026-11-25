@@ -103,11 +103,26 @@ impl Evaluator for UnitEvaluator {
         serde_json::json!({"synthetic":true,"timing":self.timing_stats})
     }
 
-    fn domain(&self) -> Domain {
-        self.domain.clone()
+    fn descriptor(&self) -> crate::EvaluatorDescriptor {
+        crate::EvaluatorDescriptor::values(self.domain.clone(), vec!["value".into()])
     }
 
-    fn eval_values(
+    fn evaluate(
+        &mut self,
+        batch: &Batch,
+        request: &crate::EvaluationRequest,
+        emit: &mut dyn FnMut(crate::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        request.validate(&self.descriptor())?;
+        for value in self.calculate_values(batch, &request.components)? {
+            emit(crate::SampleOutput::values(vec![value]))?;
+        }
+        Ok(())
+    }
+}
+
+impl UnitEvaluator {
+    fn calculate_values(
         &mut self,
         batch: &Batch,
         components: &[String],

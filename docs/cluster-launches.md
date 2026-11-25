@@ -1,6 +1,7 @@
 # External worker launch contract
 
-External launchers use authenticated API calls under `/api`. The server accepts
+The Slurm helper and ordinary management clients use authenticated HTTP under
+`/api`. Workers retain direct PostgreSQL access for computation. The server accepts
 the current grouped node-launch TOML, validates/normalizes resources and atomically
 reserves each worker name and connection capacity. There is no flat-argument
 fallback. The ordinary local launcher uses the same canonical resource recipe.
@@ -52,7 +53,7 @@ watcher. Connected means launched, not that the worker stays alive indefinitely.
 
 ## Deployment and build identity
 
-The UBELIX helper scopes a deployment to canonical workspace plus port offset and
+The Slurm helper scopes a deployment to canonical workspace plus port offset and
 stores a unique generation ID, control job, image digest and config snapshots.
 The active pointer and submissions use a workspace filesystem lock; shutdown and
 submission cannot interleave. Service images have fixed paths and can only be
@@ -73,4 +74,20 @@ deployments do not enforce this cohort restriction.
 Build identity covers the application revision/features. Image SHA-256 separately
 pins its container dependencies. Neither is authentication against a trusted
 operator who can edit the database or deployment files. See the
-[UBELIX operator guide](../ops/ubelix/README.md) for publication, shutdown and repairs.
+[UBELIX operator guide](../ops/slurm/README.md) for publication, shutdown and repairs.
+
+## Durable instance shutdown
+
+The control service publishes its identity, heartbeat, and status in PostgreSQL.
+`gb stop --wait` submits a durable request through the API and closes admission
+for new work. After selected work and exports finish, the service requests worker
+shutdown and sets `cleanup_required`. The helper verifies and cancels its owned
+scheduler jobs, then acknowledges that exact shutdown ID through HTTP. PostgreSQL
+remains available until acknowledgment; an old receipt cannot acknowledge a
+replacement request.
+
+Management requires the API, but dashboard assets are optional. The API reports
+application completion before exiting. Deployment owners confirm process/job
+termination, and local receipts remain on shared storage after PostgreSQL stops.
+During Slurm signal shutdown, the helper continues the cleanup handshake even
+after its normal request-launching loop has stopped.

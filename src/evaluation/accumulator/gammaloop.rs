@@ -1,7 +1,7 @@
 use super::{Accumulator, GammaLoopDiagnostics, VectorAccumulatorState};
 use crate::core::{AccumulatorMomentConfig, EngineError, RunSpec};
+use crate::evaluation::observables::{HistogramSnapshot, ObservableSnapshotBundle};
 use gammalooprs::integrands::evaluation::{EvaluationResult, StabilityStatus};
-use gammalooprs::observables::{HistogramSnapshot, ObservableSnapshotBundle};
 use gammalooprs::settings::runtime::Precision;
 use serde::{Deserialize, Serialize};
 
@@ -230,7 +230,7 @@ fn cleared_histogram_snapshot(histogram: &HistogramSnapshot) -> HistogramSnapsho
     cleared
 }
 
-fn clear_histogram_bin(bin: &mut gammalooprs::observables::HistogramBinSnapshot) {
+fn clear_histogram_bin(bin: &mut crate::evaluation::observables::HistogramBinSnapshot) {
     bin.entry_count = 0;
     bin.sum_weights = 0.0;
     bin.sum_weights_squared = 0.0;
@@ -309,11 +309,11 @@ pub(super) fn validate_histogram_bundle(
 #[cfg(test)]
 mod tests {
     use super::{GammaLoopAccumulatorState, GammaLoopDiagnostics};
-    use crate::evaluation::{Accumulator, VectorAccumulatorState};
-    use gammalooprs::observables::{
+    use crate::evaluation::observables::{
         HistogramBinSnapshot, HistogramSnapshot, HistogramStatisticsSnapshot, ObservablePhase,
         ObservableSnapshotBundle, ObservableValueTransform,
     };
+    use crate::evaluation::{Accumulator, VectorAccumulatorState};
     use std::collections::BTreeMap;
 
     fn state(
@@ -329,7 +329,7 @@ mod tests {
                 histograms: BTreeMap::from([(
                     "pt".to_string(),
                     HistogramSnapshot {
-                        kind: gammalooprs::observables::HistogramSnapshotKind::Continuous,
+                        kind: crate::evaluation::observables::HistogramSnapshotKind::Continuous,
                         title: "pt".to_string(),
                         type_description: "HwU".to_string(),
                         phase: ObservablePhase::Real,

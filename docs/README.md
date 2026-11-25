@@ -18,7 +18,7 @@
 | Measure throughput and overhead | [Benchmarking](benchmarking.md) |
 
 Deployment profiles: [local](../ops/local/README.md),
-[ITPhlies](../ops/itphlies/README.md), and [UBELIX](../ops/ubelix/README.md).
+[ITPhlies](../ops/itphlies/README.md), and [UBELIX](../ops/slurm/README.md).
 
 ## Extend GammaBoard
 
@@ -37,3 +37,7 @@ The [dashboard catalog](../resources/templates/README.md),
 [GammaLoop preparation tool](../tools/prepare-gammaloop/README.md), and
 [stratification benchmark](../benchmarks/stratification/README.md) have separate
 purposes; none automatically creates database runs when the server starts.
+
+See [Local instances and CLI](local-cli.md) for the consolidated local workflow and explicit instance files.
+
+- [Management API](management-api.md): lightweight clients, file ownership, authentication, and shutdown semantics.

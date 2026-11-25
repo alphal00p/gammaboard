@@ -2,14 +2,9 @@
 name = "local"
 api_host = "127.0.0.1"
 api_port = 4000
-allowed_origins = ["http://localhost:8080", "http://127.0.0.1:8080"]
+allowed_origins = ["http://localhost:4000", "http://127.0.0.1:4000"]
 secure_cookie = false
 allow_local_node_spawn = true
 
 [frontend]
 build_dir = "dashboard/build"
-host = "127.0.0.1"
-port = 8080
-
-[database]
-ensure_started = true

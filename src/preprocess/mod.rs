@@ -70,7 +70,7 @@ pub struct PreparedRun {
 pub fn prepare_run(config: RunDefinition) -> Result<PreparedRun, EngineError> {
     crate::services::validation::validate_resources(&config)?;
     let kind = config.kind();
-    let (integration_params, task_queue) = match config.body {
+    let (mut integration_params, mut task_queue) = match config.body {
         RunDefinitionBody::Integration(definition) => (definition.params, definition.task_queue),
         RunDefinitionBody::Controller(task) => {
             let mut params: IntegrationParams =
@@ -87,6 +87,32 @@ pub fn prepare_run(config: RunDefinition) -> Result<PreparedRun, EngineError> {
             )
         }
     };
+    if let Some(evaluator @ crate::EvaluatorConfig::ProcessEvaluator { .. }) =
+        &mut integration_params.evaluator
+    {
+        evaluator.discover()?;
+    }
+    for task in &mut task_queue {
+        match &mut task.task {
+            RunTaskSpec::Sample {
+                evaluator: Some(crate::core::EvaluatorSourceSpec::Config { config }),
+                ..
+            }
+            | RunTaskSpec::Image {
+                evaluator: Some(crate::core::EvaluatorSourceSpec::Config { config }),
+                ..
+            }
+            | RunTaskSpec::PlotLine {
+                evaluator: Some(crate::core::EvaluatorSourceSpec::Config { config }),
+                ..
+            } => {
+                if matches!(config, crate::EvaluatorConfig::ProcessEvaluator { .. }) {
+                    config.discover()?;
+                }
+            }
+            _ => {}
+        }
+    }
     for task in &task_queue {
         task.validate().map_err(EngineError::invalid_input)?;
         for child in crate::api::run_definition::preflight_children(&task.task)

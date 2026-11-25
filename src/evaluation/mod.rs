@@ -1,6 +1,13 @@
 pub mod accumulator;
+pub mod contract;
+#[cfg(feature = "gammaloop")]
+pub mod observables;
+pub mod wire;
+pub use contract::{EvaluationRequest, EvaluatorDescriptor, evaluate_requested};
 pub(crate) mod batch;
 pub(crate) mod evaluator;
+#[cfg(feature = "gammaloop")]
+pub mod observable_wire;
 pub mod stratification;
 pub(crate) mod traits;
 

@@ -85,7 +85,7 @@ sampler={config={kind="havana_inference",seed=8},from_stage="train"}
         .to_string();
     harness
         .cli()
-        .args(["node", "auto-assign", &run.to_string()])
+        .args(["run", "start", &run.to_string()])
         .assert()
         .success();
     wait_stratified_completion(&harness, run).await?;
@@ -309,7 +309,7 @@ sampler={{config={{kind="havana_inference",seed=18}},from_stage="train"}}
     harness.start_nodes(&["crash-s", "crash-e"]).await?;
     harness
         .cli()
-        .args(["node", "auto-assign", &run.to_string()])
+        .args(["run", "start", &run.to_string()])
         .assert()
         .success();
     wait_stratified_completion(&harness, run).await?;

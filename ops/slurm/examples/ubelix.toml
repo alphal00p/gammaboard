@@ -1,0 +1,34 @@
+# UBELIX example. Verify resource/account access for your allocation.
+instance_file = "gammaboard.toml"
+workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard"
+image = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard/images/gammaboard.sif"
+job_env_file = "environment.sh"
+binds = ["/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard"]
+
+[control]
+account = "gratis"
+partition = "epyc2"
+qos = "job_gratis"
+cpus_per_task = 2
+mem = "4G"
+time = "01:00:00"
+
+[worker]
+account = "gratis"
+partition = "epyc2"
+qos = "job_gratis"
+cpus_per_task = 2
+mem = "8G"
+time = "01:00:00"
+
+[build]
+account = "gratis"
+partition = "epyc2"
+qos = "job_gratis"
+cpus_per_task = 32
+mem = "128G"
+time = "02:00:00"
+
+[access]
+ssh_target = "YOUR_USER@submit03.unibe.ch"
+local_port = 8080

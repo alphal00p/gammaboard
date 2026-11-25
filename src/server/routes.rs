@@ -13,6 +13,8 @@ pub(super) fn build_app(state: AppState) -> Router {
         .route("/auth/logout", post(logout));
 
     let protected = Router::new()
+        .route("/v1/manage", post(manage::handle))
+        .route("/v1/database/backup", post(manage::backup))
         .route("/settings", get(settings::get_settings_overview))
         .route("/runs", get(get_runs).post(create_run))
         .route("/runs/:id", get(get_run_summary).delete(delete_run))
@@ -103,6 +105,11 @@ pub(super) fn build_app(state: AppState) -> Router {
             post(histogram_import::import_hwu)
                 .layer(DefaultBodyLimit::max(histogram_import::MAX_IMPORT_BYTES)),
         )
+        .route("/admin/control/status", get(instance_control_status))
+        .route(
+            "/admin/control/acknowledge-cleanup",
+            post(acknowledge_instance_cleanup),
+        )
         .route("/admin/db/restart", post(restart_db))
         .route(
             "/admin/workers/save-for-restart",
@@ -111,11 +118,23 @@ pub(super) fn build_app(state: AppState) -> Router {
         .route("/admin/control/shutdown", post(shutdown_control_process))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
+            instance_admission,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
             require_admin_session,
         ));
 
     Router::new()
-        .nest("/api", public.merge(protected))
+        .nest(
+            "/api",
+            public.merge(protected).fallback(|| async {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error":"unknown API route"})),
+                )
+            }),
+        )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(cors_layer(state.allowed_origins.clone()))
         .layer(middleware::from_fn(request_context_middleware))
@@ -133,4 +152,41 @@ fn cors_layer(allowed_origins: Vec<axum::http::HeaderValue>) -> CorsLayer {
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
         .allow_origin(AllowOrigin::list(allowed_origins))
+}
+
+async fn instance_admission(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    let mutating = matches!(
+        *request.method(),
+        axum::http::Method::POST | axum::http::Method::PUT
+    );
+    let starts_work = path.ends_with("/runs")
+        || path.ends_with("/tasks")
+        || path.ends_with("/auto-assign")
+        || path.ends_with("/assign")
+        || path.ends_with("/auto-run")
+        || path.ends_with("/start")
+        || path.ends_with("/restore")
+        || path.ends_with("/node-launch-requests");
+    let guard = if mutating && starts_work {
+        match crate::local_control::admit(&state.store).await {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({"error":error.to_string()})),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        None
+    };
+    let response = next.run(request).await;
+    drop(guard);
+    response
 }

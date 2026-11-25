@@ -1,0 +1,21 @@
+# Same sampling and accumulation as run.toml; only the evaluator differs.
+name = "gammaloop-native"
+
+[evaluator]
+kind = "gammaloop"
+state_folder = "/absolute/path/gg_hhh"
+integrand_name = "1L"
+training_projection = "abs"
+[evaluator.preprocessing]
+read_only = true
+
+[sampler_aggregator_runner_params.queue]
+fixed_batch_size = 512
+max_generation_size = 4096
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+stop_condition = { max_samples = 65536 }
+accumulator = { config = { kind = "vector", components = ["real", "imag"], training_projection = { kind = "norm" } } }
+sampler = { config = { kind = "naive_monte_carlo", seed = 42 } }

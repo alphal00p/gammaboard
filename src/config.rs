@@ -1,5 +1,5 @@
 use anyhow::Context;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::ErrorKind,
@@ -10,9 +10,11 @@ pub const DEFAULT_RUNTIME_CONFIG_PATH: &str = "ops/local/config/runtime.toml";
 pub const DEFAULT_SERVER_CONFIG_PATH: &str = "ops/local/config/server.toml";
 const DEFAULT_RUNTIME_CONFIG_TOML: &str = include_str!("config_defaults/runtime.toml");
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
+    #[serde(default)]
+    pub externally_managed: bool,
     #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
@@ -23,14 +25,14 @@ pub struct RuntimeConfig {
     pub local_postgres: LocalPostgresConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     #[serde(default = "default_database_url")]
     pub url: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TracingConfig {
     #[serde(default = "default_persist_runtime_logs")]
@@ -41,9 +43,15 @@ pub struct TracingConfig {
     pub db_external_level: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temp_dir: Option<PathBuf>,
     #[serde(default = "default_resource_roots")]
     pub roots: Vec<String>,
 }
@@ -52,6 +60,9 @@ impl Default for ResourceConfig {
     fn default() -> Self {
         Self {
             roots: default_resource_roots(),
+            control_dir: None,
+            log_dir: None,
+            temp_dir: None,
         }
     }
 }
@@ -60,7 +71,7 @@ fn default_resource_roots() -> Vec<String> {
     vec!["resources".to_string()]
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalPostgresConfig {
     #[serde(default = "default_postgres_data_dir")]

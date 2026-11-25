@@ -144,7 +144,7 @@ pub struct StratifiedAccumulatorState {
     pub pooled: Option<Box<super::GammaLoopAccumulatorState>>,
     /// Conditional-weight raw statistics, indexed by the plan’s stratum order.
     #[cfg(feature = "gammaloop")]
-    pub histograms: Vec<gammalooprs::observables::ObservableSnapshotBundle>,
+    pub histograms: Vec<crate::evaluation::observables::ObservableSnapshotBundle>,
 }
 impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -156,7 +156,7 @@ impl<'de> Deserialize<'de> for StratifiedAccumulatorState {
             strata: Vec<StratumMoments>,
             pooled: Option<Box<super::GammaLoopAccumulatorState>>,
             #[cfg(feature = "gammaloop")]
-            histograms: Vec<gammalooprs::observables::ObservableSnapshotBundle>,
+            histograms: Vec<crate::evaluation::observables::ObservableSnapshotBundle>,
         }
         let saved = Saved::deserialize(deserializer)?;
         let state = Self {
@@ -310,7 +310,7 @@ impl StratifiedAccumulatorState {
             {
                 return Err(EngineError::eval("incomplete stratified histogram state"));
             }
-            gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+            crate::evaluation::observables::ObservableSnapshotBundle::sum_independent_estimates(
                 &self.histograms,
             )
             .map_err(|e| EngineError::eval(e.to_string()))?;

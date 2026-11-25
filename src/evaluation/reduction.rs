@@ -4,20 +4,23 @@ use crate::core::{AccumulatorConfig, EngineError};
 
 /// One original draw. Observable snapshots describe this sample alone, before
 /// outer weights or masking; correlated event fills are already summed per bin.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SampleOutput {
     pub values: Vec<f64>,
+    #[serde(default, rename = "details", skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<super::SampleEvaluation>,
-    pub diagnostics: super::GammaLoopDiagnostics,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<super::GammaLoopDiagnostics>,
     #[cfg(feature = "gammaloop")]
-    pub observables: Option<gammalooprs::observables::ObservableSnapshotBundle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observables: Option<crate::evaluation::observables::ObservableSnapshotBundle>,
 }
 impl SampleOutput {
     pub fn values(values: Vec<f64>) -> Self {
         Self {
             values,
             evaluation: None,
-            diagnostics: Default::default(),
+            diagnostics: None,
             #[cfg(feature = "gammaloop")]
             observables: None,
         }
@@ -63,7 +66,8 @@ pub(super) fn evaluate_batch<T: Evaluator + ?Sized>(
     #[cfg(feature = "gammaloop")]
     let mut histograms = Vec::new();
     let mut count = 0;
-    evaluator.eval_samples(batch, &components, &mut |sample| {
+    let request = evaluator.descriptor().plan(config)?;
+    super::evaluate_requested(evaluator, batch, &request, &mut |sample| {
         let point = batch
             .points()
             .get(count)
@@ -104,7 +108,9 @@ pub(super) fn evaluate_batch<T: Evaluator + ?Sized>(
             if let Some(values) = &mut feedback {
                 values.push(projected * point.total_weight());
             }
-            state.diagnostics.merge_in_place(sample.diagnostics);
+            if let Some(diagnostics) = sample.diagnostics {
+                state.diagnostics.merge_in_place(diagnostics);
+            }
             #[cfg(feature = "gammaloop")]
             {
                 let mut bundle = sample.observables.ok_or_else(|| {
@@ -190,7 +196,10 @@ pub(super) fn evaluate_batch<T: Evaluator + ?Sized>(
 }
 
 #[cfg(feature = "gammaloop")]
-fn rescale_bundle(bundle: &mut gammalooprs::observables::ObservableSnapshotBundle, factor: f64) {
+fn rescale_bundle(
+    bundle: &mut crate::evaluation::observables::ObservableSnapshotBundle,
+    factor: f64,
+) {
     for histogram in bundle.histograms.values_mut() {
         histogram.rescale(factor);
     }
@@ -198,7 +207,7 @@ fn rescale_bundle(bundle: &mut gammalooprs::observables::ObservableSnapshotBundl
 
 #[cfg(feature = "gammaloop")]
 fn validate_sample_bundle(
-    bundle: &gammalooprs::observables::ObservableSnapshotBundle,
+    bundle: &crate::evaluation::observables::ObservableSnapshotBundle,
 ) -> Result<(), EngineError> {
     for histogram in bundle.histograms.values() {
         if histogram.sample_count != 1 {
@@ -230,24 +239,30 @@ fn validate_sample_bundle(
 mod tests {
     use super::*;
     use crate::evaluation::EvaluatorBatch;
-    use crate::{Domain, Point};
-    use gammalooprs::observables::{
+    use crate::evaluation::observables::{
         HistogramAccumulatorState, ObservablePhase, ObservableSnapshotBundle,
         ObservableValueTransform,
     };
+    use crate::{Domain, Point};
 
     struct Fixture {
         extra: isize,
         bad_moment: bool,
     }
     impl Evaluator for Fixture {
-        fn domain(&self) -> Domain {
-            Domain::continuous(1)
+        fn descriptor(&self) -> crate::EvaluatorDescriptor {
+            let mut d = crate::EvaluatorDescriptor::complex(
+                Domain::continuous(1),
+                super::super::ObservableTrainingProjection::Abs,
+            );
+            d.observables = true;
+            d.details = false;
+            d
         }
-        fn eval_samples(
+        fn evaluate(
             &mut self,
             batch: &Batch,
-            _: &[String],
+            _: &crate::EvaluationRequest,
             emit: &mut dyn FnMut(SampleOutput) -> Result<(), EngineError>,
         ) -> Result<(), EngineError> {
             for i in 0..(batch.len() as isize + self.extra).max(0) as usize {

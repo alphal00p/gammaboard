@@ -21,3 +21,9 @@ chosen card from the repository root:
 
 The two Voronoi centres partition the **integrand values**, not x directly.
 GammaBoard owns integration weights, masking, zero accounting and aggregation.
+
+The descriptor declares `real`/`imag` values, histograms and a real scalar projection.
+The worker computes histograms only for requests with `observables=True`. Both cards
+discover the domain and capabilities automatically; the ordinary card also plots
+values from the same evaluator without generating histograms. Diagnostics are
+unavailable for this synthetic example, rather than reported as zero measurements.

@@ -40,7 +40,7 @@ run = '''{child}'''
             .await?;
         harness
             .cli()
-            .args(["node", "auto-assign", &parent.to_string()])
+            .args(["run", "start", &parent.to_string()])
             .assert()
             .success();
         if max_active == 2 {
@@ -129,7 +129,7 @@ run = '''{child}'''
         .await?;
     harness
         .cli()
-        .args(["node", "auto-assign", &run.to_string()])
+        .args(["run", "start", &run.to_string()])
         .assert()
         .success();
     wait_for_task_state(&harness, run, "completed", Duration::from_secs(30)).await?;
@@ -216,7 +216,7 @@ run = '''{child}'''
 "#)));
             let parent = harness.run_id("retry-parent").await?;
             harness.start_nodes(&["retry-parent", "retry-sampler", "retry-evaluator"]).await?;
-            harness.cli().args(["node", "auto-assign", &parent.to_string()]).assert().success();
+            harness.cli().args(["run", "start", &parent.to_string()]).assert().success();
             harness.wait_for(
                 format!("retry after {failure_point} timeout"),
                 Duration::from_secs(20),
@@ -345,7 +345,7 @@ seed = 2
     let run_id = harness.run_id("integration-campaign-result-e2e").await?;
     harness
         .cli()
-        .args(["node", "auto-assign", &run_id.to_string()])
+        .args(["run", "start", &run_id.to_string()])
         .assert()
         .success();
 
@@ -560,7 +560,7 @@ sampler = { config = { kind = "naive_monte_carlo", seed = 2 } }
     let parent_id = harness.run_id("campaign-worker-recovery-e2e").await?;
     harness
         .cli()
-        .args(["node", "auto-assign", &parent_id.to_string()])
+        .args(["run", "start", &parent_id.to_string()])
         .assert()
         .success();
 
@@ -803,7 +803,7 @@ run = "name = \"inline-stages\"\n\n[evaluator]\nkind = \"symbolica\"\nargs = [\"
     let parent_id = harness.run_id("stage-campaign").await?;
     harness
         .cli()
-        .args(["node", "auto-assign", &parent_id.to_string()])
+        .args(["run", "start", &parent_id.to_string()])
         .assert()
         .success();
     wait_for_task_state(&harness, parent_id, "completed", Duration::from_secs(60)).await?;
@@ -923,7 +923,7 @@ sampler = { config = { kind = "naive_monte_carlo", seed = 0 } }
             harness.start_nodes(&["source-s", "source-e"]).await?;
             harness
                 .cli()
-                .args(["node", "auto-assign", &parent_id.to_string()])
+                .args(["run", "start", &parent_id.to_string()])
                 .assert()
                 .success();
             wait_for_task_state(&harness, parent_id, "completed", Duration::from_secs(60)).await?;

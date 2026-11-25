@@ -1,0 +1,20 @@
+# Trusted-network profile. Copy to a private location to add authentication.
+name = "itphlies"
+externally_managed = false
+[paths]
+state_dir = "../../state/itphlies/control"
+log_dir = "../../state/itphlies/logs"
+temp_dir = "../../state/itphlies/tmp"
+template_dir = "../../resources/templates"
+resource_roots = ["../../resources"]
+[database]
+mode = "managed"
+port = 5400
+name = "gammaboard_db"
+data_dir = "../../resources/db/postgres"
+socket_dir = "../../resources/db/socket"
+[server]
+host = "0.0.0.0"
+api_port = 8080
+dashboard_dir = "../../dashboard/build"
+allowed_origins = ["http://localhost:8080", "http://itphlies:8080", "http://itphlies.tailb3264.ts.net:8080"]

@@ -313,7 +313,7 @@ fn physical_histograms_and_training_feedback_apply_outer_weights_once() {
     // A failed batch must not contaminate the next native observable batch.
     assert!(
         evaluator
-            .evaluate(
+            .evaluate_native_batch(
                 &Batch::new(vec![Point::new(vec![], vec![0, 0], 1.0)]),
                 &["real".into(), "imag".into()],
                 EvalBatchOptions::default(),
@@ -454,10 +454,11 @@ fn observable_bins_use_conditional_statistics_and_keep_pooled_reference() {
         close(bin.sum_weights, sums[i]);
         close(bin.sum_weights_squared, squares[i]);
     }
-    let estimates = gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
-        &state.histograms,
-    )
-    .unwrap();
+    let estimates =
+        crate::evaluation::observables::ObservableSnapshotBundle::sum_independent_estimates(
+            &state.histograms,
+        )
+        .unwrap();
     for b in 0..histogram.bins.len() {
         let mut total_mean = 0.;
         let mut total_variance = 0.;
@@ -534,7 +535,7 @@ fn observable_bins_use_conditional_statistics_and_keep_pooled_reference() {
         close(a.sum_weights_squared, b.sum_weights_squared);
     }
     let restored_estimates =
-        gammalooprs::observables::ObservableSnapshotBundle::sum_independent_estimates(
+        crate::evaluation::observables::ObservableSnapshotBundle::sum_independent_estimates(
             &restored.histograms,
         )
         .unwrap();
@@ -670,14 +671,14 @@ fn quad_override_uses_native_stability_levels_and_preserves_the_reference_value(
     );
     let batch = Batch::new(vec![Point::new(vec![0.5, 0.4, 0.6], vec![0, 0], 2.0)]);
     let expected = double
-        .evaluate(
+        .evaluate_native_batch(
             &batch,
             &["real".into(), "imag".into()],
             EvalBatchOptions::default(),
         )
         .unwrap();
     let actual = quad
-        .evaluate(
+        .evaluate_native_batch(
             &batch,
             &["real".into(), "imag".into()],
             EvalBatchOptions::default(),

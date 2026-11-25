@@ -1074,7 +1074,7 @@ impl TaskPreflightContext {
         config: &AccumulatorConfig,
     ) -> Result<(), ApiError> {
         evaluator
-            .validate_accumulator_config(config)
+            .validate_accumulator_config(config, &self.run_domain)
             .map_err(|err| ApiError::BadRequest(err.to_string()))?;
         Ok(())
     }
@@ -2045,8 +2045,6 @@ discrete_dims = 0
                 },
             }])
             .expect_err("gammaloop accumulator should fail for scalar unit evaluator");
-        assert!(error.to_string().contains(
-            "requires accumulator config \"vector\" or \"full_vector\", got \"gammaloop\""
-        ));
+        assert!(error.to_string().contains("requested components"));
     }
 }

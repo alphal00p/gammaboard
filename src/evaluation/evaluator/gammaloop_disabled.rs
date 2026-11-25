@@ -17,15 +17,15 @@ impl GammaLoopEvaluator {
 }
 
 impl Evaluator for GammaLoopEvaluator {
-    fn domain(&self) -> Domain {
-        Domain::continuous(0)
+    fn descriptor(&self) -> crate::EvaluatorDescriptor {
+        crate::EvaluatorDescriptor::values(Domain::continuous(0), vec!["value".into()])
     }
-
-    fn eval_values(
+    fn evaluate(
         &mut self,
-        _batch: &Batch,
-        _components: &[String],
-    ) -> Result<Vec<f64>, EngineError> {
+        _: &Batch,
+        _: &crate::EvaluationRequest,
+        _: &mut dyn FnMut(crate::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
         Err(gammaloop_disabled_error())
     }
 }

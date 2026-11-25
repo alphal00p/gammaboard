@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — consistent request-oriented CLI
+
+- Worker launch/start/restore submit durable requests using instance policy; a service-owned controller fulfills local requests.
+- Added uniform optional launch waiting and queued-request inspection/wait/cancel; cancellation is fenced against controller claims.
+- Separated offline administration/probes (`gb local`) from API management, and removed management forwarding from the service executable.
+- Made restart whole-instance only; corrected connection/credential precedence, offline config validation, JSON error handling, and HTTP wait deadlines.
+
+## Unreleased — unified control service
+
+- Combined lifecycle coordination, API hosting, and optional dashboard serving in one process and port.
+- Added independently buildable `gb` HTTP client; management no longer needs direct PostgreSQL access.
+- Kept worker/database communication unchanged; Slurm management and cleanup use HTTP exclusively.
+- Split local result downloads from durable server exports (`--export-path`).
+- Removed the Unix control socket, separate API child, and standard nginx deployment stack.
+
+## Externally managed instances and reusable Slurm helper
+
+- Add `externally_managed` and per-invocation `--allow-local-processes` gates,
+  including aliases, worker execution/restoration, probes, and dashboard launches.
+- Move ordinary run control, deferred exports, admission and graceful shutdown to
+  PostgreSQL so clients do not require a local supervisor socket.
+- Rename the reusable helper to `ops/slurm/slurm.py`, add explicit helper/instance
+  configuration and frozen environment files, and retain the UBELIX compatibility
+  entry point. Launch-request fetching remains HTTP-based pending the next pass.
+
+
+## Local CLI consolidation
+
+- Add file-selected local instances, independent database/web service starts,
+  explicit additive worker launches, graceful stop/wait, and worker restoration.
+- Add create-and-start runs with durable atomic JSON result exports, result retrieval,
+  configuration/log/template commands, and logical database maintenance.
+- Preserve exact floating-point values across JSON transport so frozen stratification
+  plans retain their identities during distributed tetrahedron inference.
+- Preserve legacy deployment and Slurm workflows for a separate HPC consolidation.
+
+
 ## 0.3.0 — Unreleased
 
 See the [validation and risk report](docs/validation/2026-10-15-consolidation.md)

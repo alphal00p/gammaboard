@@ -1,3 +1,7 @@
+[workspace]
+members = ["crates/gb"]
+resolver = "3"
+
 [package]
 name = "gammaboard"
 version = "0.3.0"
@@ -12,12 +16,21 @@ keywords = ["integration", "monte-carlo", "distributed", "scientific"]
 categories = ["science", "command-line-utilities"]
 include = [
     "/src/**",
+    "/gb",
+    "/gammaboard",
+    "/gammaboard.toml",
+    "/ops/local/instance.example.toml",
     "/tools/prepare-gammaloop/**",
+    "/process_api/examples/rust_gammaloop/**",
+    "/process_api/examples/common/**",
+    "/tools/launch.sh",
+    "/crates/gb/**",
     "/benchmarks/stratification/main.rs",
+    "/benchmarks/gammaloop_transport/**",
     "/tests/fixtures/json_worker.py",
     "/migrations/**",
     "/resources/templates/**",
-    "/ops/ubelix/resources/templates/**",
+    "/ops/slurm/resources/templates/**",
     "/Cargo.toml",
     "/Cargo.lock",
     "/build.rs",
@@ -32,6 +45,8 @@ symbolica = ["dep:symbolica"]
 gammaloop = ["symbolica", "dep:gammalooprs", "dep:gammaloop_api"]
 
 [dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+gammaboard-client = { path = "crates/gb", version = "0.3.0" }
 sha2 = "0.10"
 gammalooprs = { git = "https://github.com/alphal00p/gammaloop", rev = "227e3534a5fb39f64710b6754cc63f34ed4c95a7", package = "gammalooprs", optional = true }
 
@@ -41,7 +56,7 @@ sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "c
 rand = { package = "rand", version = "0.9" }
 rand_xoshiro = { version = "0.7", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip", "raw_value"] }
 bincode = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 axum = "0.7"
@@ -57,7 +72,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 num = "0.4.3"
 tempfile = "3"
 anyhow = "1"
-comfy-table = "7"
 uuid = { version = "1", features = ["v4", "serde"] }
 argon2 = "0.5"
 rpassword = "7"
@@ -83,6 +97,17 @@ crate-type = ["rlib"]
 [[example]]
 name = "prepare_gammaloop"
 path = "tools/prepare-gammaloop/main.rs"
+required-features = ["gammaloop"]
+
+[[example]]
+name = "gammaloop_process"
+path = "process_api/examples/rust_gammaloop/main.rs"
+required-features = ["gammaloop"]
+test = true
+
+[[example]]
+name = "gammaloop_transport"
+path = "benchmarks/gammaloop_transport/main.rs"
 required-features = ["gammaloop"]
 
 [[example]]

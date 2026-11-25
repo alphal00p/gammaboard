@@ -16,4 +16,4 @@ The local server reads these files through its resource root. UBELIX installs a
 portable subset of this same run catalog and its own worker presets into the
 workspace. Workspace copies are editable and are not refreshed by a Git pull;
 use `install-examples` or reseed the template directory as described in the
-[UBELIX guide](../../ops/ubelix/README.md#example-runs).
+[UBELIX guide](../../ops/slurm/README.md#example-runs).

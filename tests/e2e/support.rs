@@ -17,15 +17,6 @@ pub(super) fn unused_local_port() -> anyhow::Result<u16> {
     Ok(port)
 }
 
-pub(super) fn nginx_available() -> bool {
-    std::process::Command::new("nginx")
-        .arg("-v")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
 pub(super) fn resolve_bin_path() -> anyhow::Result<PathBuf> {
     // Cargo builds this executable for integration tests in the selected profile.
     Ok(std::env::var_os("CARGO_BIN_EXE_gammaboard")
@@ -114,6 +105,8 @@ pub(super) struct FullStackHarness {
     pub(super) bin_path: PathBuf,
     pub(super) children: Vec<ManagedChild>,
     pub(super) runtime_config_path: PathBuf,
+    instance_path: PathBuf,
+    endpoint: String,
     pub(super) temp_files: Vec<NamedTempFile>,
     pub(super) artifacts: PathBuf,
 }
@@ -151,15 +144,71 @@ impl FullStackHarness {
         eprintln!("E2E artifacts: {}", artifacts.display());
         let temp_files = vec![cli_config];
 
-        Ok(Self {
+        let instance_file = temp_config(&format!(
+            r#"
+name="test"
+[paths]
+state_dir={state:?}
+log_dir={logs:?}
+temp_dir={temp:?}
+template_dir={templates:?}
+resource_roots=[{resources:?}]
+[database]
+mode="external"
+url={url:?}
+[server]
+host="127.0.0.1"
+api_port={port}
+[logging]
+persist_runtime_logs=true
+"#,
+            state = artifacts.join("control"),
+            logs = artifacts.join("logs"),
+            temp = artifacts.join("tmp"),
+            templates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/templates"),
+            resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"),
+            url = db.database_url,
+            port = unused_local_port()?
+        ));
+        let instance_path = instance_file.path().to_owned();
+        let mut temp_files = temp_files;
+        temp_files.push(instance_file);
+        let mut harness = Self {
             db,
             pool,
             bin_path,
             children: Vec::new(),
             runtime_config_path,
+            instance_path,
             temp_files,
             artifacts,
+            endpoint: String::new(),
+        };
+        harness.start_control().await?;
+        Ok(harness)
+    }
+
+    async fn start_control(&mut self) -> anyhow::Result<String> {
+        let config: toml::Value = toml::from_str(&std::fs::read_to_string(&self.instance_path)?)?;
+        let port = config["server"]["api_port"].as_integer().unwrap();
+        self.endpoint = format!("http://127.0.0.1:{port}");
+        let mut command = TokioCommand::new(&self.bin_path);
+        command.arg("--instance").arg(&self.instance_path).args([
+            "start",
+            "--foreground",
+            "--api-only",
+        ]);
+        let child = self.spawn_logged("control", &mut command)?;
+        self.children.push(ManagedChild {
+            label: "control".into(),
+            child,
+        });
+        self.wait_for("control API", Duration::from_secs(30), || {
+            let base = self.endpoint.clone();
+            async move { Ok(http_get(&base, "/api/health").await.is_ok()) }
         })
+        .await?;
+        Ok(self.endpoint.clone())
     }
 
     fn spawn_logged(&self, label: &str, command: &mut TokioCommand) -> anyhow::Result<Child> {
@@ -205,8 +254,15 @@ impl FullStackHarness {
     }
 
     pub(super) fn cli(&self) -> Command {
-        let mut cmd = Command::new(&self.bin_path);
-        cmd.arg("--runtime-config").arg(&self.runtime_config_path);
+        let mut cmd = Command::new(self.bin_path.with_file_name("gb"));
+        cmd.arg("--endpoint").arg(&self.endpoint);
+        if let Ok(instance) = gammaboard::instance::Instance::load(&self.instance_path)
+            && let Ok(Some(token)) = gammaboard::server::bootstrap_token(&instance.server)
+        {
+            let path = self.artifacts.join("cli.token");
+            std::fs::write(&path, token).unwrap();
+            cmd.arg("--token-file").arg(path);
+        }
         cmd
     }
 
@@ -294,50 +350,33 @@ impl FullStackHarness {
         auth: (&str, &str),
         allow_local_node_spawn: bool,
     ) -> anyhow::Result<String> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        let addr = listener.local_addr()?;
-        drop(listener);
-        let server_config = temp_server_config(
-            &addr.ip().to_string(),
-            addr.port(),
-            "http://localhost:3000",
-            false,
-            allow_local_node_spawn,
-            auth,
+        if let Some(index) = self
+            .children
+            .iter()
+            .position(|child| child.label == "control")
+        {
+            let mut owner = self.children.remove(index);
+            owner.child.kill().await?;
+            let _ = owner.child.wait().await;
+        }
+        let mut config: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&self.instance_path)?)?;
+        config["server"]["api_port"] = toml::Value::Integer(unused_local_port()? as i64);
+        config["server"]["allowed_origins"] =
+            toml::Value::Array(vec![toml::Value::String("http://localhost:3000".into())]);
+        config["server"]["allow_local_node_spawn"] = toml::Value::Boolean(allow_local_node_spawn);
+        config["server"].as_table_mut().unwrap().insert(
+            "auth".into(),
+            toml::Value::Table(toml::Table::from_iter([
+                (
+                    "admin_password_hash".into(),
+                    toml::Value::String(auth.0.into()),
+                ),
+                ("session_secret".into(), toml::Value::String(auth.1.into())),
+            ])),
         );
-
-        let mut child = TokioCommand::new(&self.bin_path);
-        child
-            .arg("--runtime-config")
-            .arg(&self.runtime_config_path)
-            .arg("server")
-            .arg("--server-config")
-            .arg(server_config.path())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-
-        // GitHub artifact uploads reject colons in filenames.
-        let log_label = format!("server-{addr}").replace(':', "-");
-        let child = self.spawn_logged(&log_label, &mut child)?;
-        self.temp_files.push(server_config);
-        self.children.push(ManagedChild {
-            label: format!("server:{addr}"),
-            child,
-        });
-
-        let base_url = format!("http://{addr}");
-        self.wait_for("server health", Duration::from_secs(15), || {
-            let base_url = base_url.clone();
-            async move {
-                match http_get(&base_url, "/api/health").await {
-                    Ok(response) => Ok(response.contains("\"status\":\"ok\"")),
-                    Err(_) => Ok(false),
-                }
-            }
-        })
-        .await?;
-
-        Ok(base_url)
+        std::fs::write(&self.instance_path, toml::to_string(&config)?)?;
+        self.start_control().await
     }
 
     pub(super) async fn wait_for<F, Fut>(
@@ -657,7 +696,7 @@ impl FullStackHarness {
 
     pub(super) fn assign_node(&self, node: &str, role: &str, run_name: &str) {
         self.cli()
-            .args(["node", "assign", node, role, run_name])
+            .args(["worker", "assign", node, run_name, "--role", role])
             .assert()
             .success();
     }
@@ -906,48 +945,6 @@ sampler = {{ config = {{ kind = "havana_inference" }} }}
     let inference_grid = harness.latest_task_sampler_grid(run_id, "infer-a").await?;
     assert_eq!(inference_samples, 64);
     Ok((training_grid, inference_grid))
-}
-
-pub(super) fn temp_server_config(
-    host: &str,
-    port: u16,
-    allowed_origin: &str,
-    secure_cookie: bool,
-    allow_local_node_spawn: bool,
-    auth: (&str, &str),
-) -> NamedTempFile {
-    let (admin_password_hash, session_secret) = auth;
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let run_templates_dir = manifest_dir.join("resources/templates/runs");
-    let task_templates_dir = manifest_dir.join("resources/templates/tasks");
-    let node_templates_dir = manifest_dir.join("resources/templates/nodes");
-    let contents = format!(
-        "api_host = {host:?}\napi_port = {port}\nallowed_origins = [{allowed_origin:?}]\nsecure_cookie = {secure_cookie}\nallow_local_node_spawn = {allow_local_node_spawn}\nrun_templates_dir = {run_templates_dir:?}\ntask_templates_dir = {task_templates_dir:?}\nnode_templates_dir = {node_templates_dir:?}\n\n[auth]\nadmin_password_hash = {admin_password_hash:?}\nsession_secret = {session_secret:?}\n"
-    );
-    temp_config(&contents)
-}
-
-pub(super) fn temp_deploy_server_config(
-    frontend_build_dir: &std::path::Path,
-    server_config: &std::path::Path,
-    frontend_port: u16,
-) -> NamedTempFile {
-    let contents = std::fs::read_to_string(server_config).expect("read temp server config");
-    let contents = format!(
-        "{contents}\n[frontend]\nbuild_dir = {:?}\nhost = \"127.0.0.1\"\nport = {frontend_port}\nadvertise_hosts = [\"localhost\"]\naccess_log = false\n\n[database]\nensure_started = false\n\n[cleanup]\nsampler_drain_timeout_seconds = 5\nnode_stop_timeout_seconds = 5\npoll_interval_ms = 100\n",
-        frontend_build_dir,
-    );
-    temp_config(&contents)
-}
-
-pub(super) fn temp_frontend_build() -> TempDir {
-    let dir = tempfile::tempdir().expect("create temp frontend build");
-    std::fs::write(
-        dir.path().join("index.html"),
-        "<!doctype html><html><body>gammaboard e2e</body></html>",
-    )
-    .expect("write index.html");
-    dir
 }
 
 pub(super) fn temp_cli_config(database_url: &str, persist_runtime_logs: bool) -> NamedTempFile {

@@ -32,7 +32,7 @@ impl PgStore {
         &self,
         name: &str,
         uuid: &str,
-        allow_local: bool,
+        local: bool,
         restore_only: bool,
     ) -> Result<i64, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
@@ -42,7 +42,7 @@ impl PgStore {
         ).bind(name).bind(uuid).fetch_optional(&mut *tx).await?;
         let Some(OfflineLaunchRecipe {
             launch_group: Some(group),
-            backend: Some(backend),
+            backend: Some(_backend),
             args: Some(mut args),
             pending,
             restore_requested,
@@ -60,15 +60,10 @@ impl PgStore {
                 "This worker is no longer saved for restart. Refresh the worker list.".into(),
             ));
         }
-        if backend == "local" && !allow_local {
-            return Err(sqlx::Error::Protocol(
-                "Local worker launch is disabled on this server.".into(),
-            ));
-        }
         super::connection_budget::check_worker_connection_budget(&mut tx, 1).await?;
         args["groups"] = json!([group]);
         let id: i64 = sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count,args) VALUES ('pending',$1,1,$2) RETURNING id")
-            .bind(backend).bind(args).fetch_one(&mut *tx).await?;
+            .bind(if local {"local"} else {"external"}).bind(args).fetch_one(&mut *tx).await?;
         sqlx::query("UPDATE nodes SET resume_requested=false,launch_request_id=$2,shutdown_requested_at=NULL,updated_at=now() WHERE name=$1")
             .bind(name).bind(id).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -200,7 +195,7 @@ impl PgStore {
     }
 
     /// Clear the marker in the same transaction that durably enqueues its replacement.
-    pub async fn restore_saved_workers(&self) -> Result<usize, sqlx::Error> {
+    pub async fn restore_saved_workers(&self, local: bool) -> Result<Vec<i64>, sqlx::Error> {
         let mut tx = self.pool().begin().await?;
         super::connection_budget::lock(&mut tx).await?;
         let rows: Vec<(String, Value, String, Value)> = sqlx::query_as("SELECT n.name,n.launch_group,r.backend,r.args FROM nodes n JOIN node_launch_requests r ON r.id=n.launch_request_id WHERE n.resume_requested AND n.lease_expires_at <= now() AND n.launch_group IS NOT NULL AND NOT worker_launch_pending(n.name,n.launch_request_id,n.last_seen) ORDER BY n.name FOR UPDATE OF n")
@@ -209,11 +204,13 @@ impl PgStore {
             super::connection_budget::check_worker_connection_budget(&mut tx, rows.len() as i64)
                 .await?;
         }
-        for (name, group, backend, original_args) in &rows {
+        let mut ids = Vec::new();
+        for (name, group, _backend, original_args) in &rows {
             let mut args = original_args.clone();
             args["groups"] = json!([group]);
             let id: i64 = sqlx::query_scalar("INSERT INTO node_launch_requests (state,backend,requested_count,args) VALUES ('pending',$1,1,$2) RETURNING id")
-                .bind(backend).bind(args).fetch_one(&mut *tx).await?;
+                .bind(if local {"local"} else {"external"}).bind(args).fetch_one(&mut *tx).await?;
+            ids.push(id);
             sqlx::query("UPDATE nodes SET resume_requested=false,launch_request_id=$2,shutdown_requested_at=NULL,updated_at=now() WHERE name=$1")
                 .bind(name).bind(id).execute(&mut *tx).await?;
         }
@@ -229,7 +226,26 @@ impl PgStore {
                 "cannot restore workers without a recorded launch request; start them through the normal launcher"
             );
         }
-        Ok(rows.len())
+        Ok(ids)
+    }
+
+    pub async fn cancel_pending_launch(&self, id: i64) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool().begin().await?;
+        super::connection_budget::lock(&mut tx).await?;
+        let state: Option<String> =
+            sqlx::query_scalar("SELECT state FROM node_launch_requests WHERE id=$1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        match state.as_deref() {
+            Some("canceled")=>return Ok(()),
+            Some("pending")=>{},
+            None=>return Err(sqlx::Error::Protocol("launch request not found".into())),
+            _=>return Err(sqlx::Error::Protocol("request has already been claimed; inspect its workers and use worker stop or the deployment owner for submitted jobs".into())),
+        }
+        sqlx::query("UPDATE node_launch_requests SET state='canceled',error='canceled by user before execution',updated_at=now() WHERE id=$1").bind(id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE nodes SET resume_requested=false,shutdown_requested_at=now(),updated_at=now() WHERE launch_request_id=$1").bind(id).execute(&mut *tx).await?;
+        tx.commit().await
     }
 
     pub async fn claim_local_worker_launch(&self) -> Result<Option<(i64, Value)>, sqlx::Error> {

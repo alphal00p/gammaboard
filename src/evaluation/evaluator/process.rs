@@ -41,9 +41,51 @@ impl ProcessOutput {
 pub struct ProcessEvaluatorParams {
     #[serde(flatten)]
     pub process: crate::ProcessConfig,
-    pub domain: Domain,
-    #[serde(default)]
-    pub output: ProcessOutput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<Domain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<ProcessOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor: Option<crate::EvaluatorDescriptor>,
+}
+
+impl ProcessEvaluatorParams {
+    pub(crate) fn legacy_descriptor(&self) -> crate::EvaluatorDescriptor {
+        let domain = self.domain.clone().unwrap_or_else(|| Domain::continuous(0));
+        match self.output.clone().unwrap_or_default() {
+            ProcessOutput::Values { components } => {
+                crate::EvaluatorDescriptor::values(domain, components)
+            }
+            ProcessOutput::Gammaloop {
+                training_projection,
+            } => {
+                let mut d = crate::EvaluatorDescriptor::complex(domain, training_projection);
+                d.observables = true;
+                d
+            }
+        }
+    }
+    pub(crate) fn resolve_descriptor(&self) -> Result<crate::EvaluatorDescriptor, EngineError> {
+        if let Some(descriptor) = &self.descriptor {
+            descriptor.validate()?;
+            if self
+                .domain
+                .as_ref()
+                .is_some_and(|domain| domain != &descriptor.domain)
+            {
+                return Err(EngineError::build(
+                    "configured domain differs from descriptor domain",
+                ));
+            }
+            return Ok(descriptor.clone());
+        }
+        if self.domain.is_some() && self.output.is_some() {
+            let d = self.legacy_descriptor();
+            d.validate()?;
+            return Ok(d);
+        }
+        Ok(ProcessEvaluator::from_params(self.clone())?.descriptor())
+    }
 }
 
 pub struct ProcessEvaluator {
@@ -53,7 +95,7 @@ pub struct ProcessEvaluator {
 impl ProcessEvaluator {
     pub fn from_params(params: ProcessEvaluatorParams) -> Result<Self, EngineError> {
         params.process.validate()?;
-        if let ProcessOutput::Values { components } = &params.output {
+        if let Some(ProcessOutput::Values { components }) = &params.output {
             AccumulatorConfig::vector(components.clone(), crate::TrainingProjection::Norm)
                 .validate()
                 .map_err(EngineError::build)?;
@@ -65,8 +107,8 @@ impl ProcessEvaluator {
 }
 
 impl Evaluator for ProcessEvaluator {
-    fn domain(&self) -> Domain {
-        self.worker.domain.clone()
+    fn descriptor(&self) -> crate::EvaluatorDescriptor {
+        self.worker.descriptor.clone()
     }
 
     fn metadata(&self) -> Value {
@@ -86,7 +128,54 @@ impl Evaluator for ProcessEvaluator {
         }
     }
 
-    fn eval_values(
+    fn evaluate(
+        &mut self,
+        batch: &Batch,
+        request: &crate::EvaluationRequest,
+        emit: &mut dyn FnMut(crate::SampleOutput) -> Result<(), EngineError>,
+    ) -> Result<(), EngineError> {
+        request.validate(&self.descriptor())?;
+        if self.worker.modern {
+            let inputs = pack_eval_inputs(batch, &self.worker.domain);
+            let mut params = serde_json::json!({"nr_samples":batch.len(),"outputs":request,"encoding":self.worker.encoding});
+            add_required_offsets(&mut params, &inputs);
+            let (response, binary) = self
+                .worker
+                .process
+                .request_typed_with_binary::<crate::evaluation::wire::EvaluationResponse>(
+                    "evaluate",
+                    params,
+                    &inputs.binary,
+                )
+                .map_err(EngineError::eval)?;
+            return self
+                .worker
+                .decoder
+                .decode(response, &binary, batch.len(), request, emit);
+        }
+        let full = match &self.worker.output {
+            ProcessOutput::Values { components } => components.clone(),
+            ProcessOutput::Gammaloop { .. } => vec!["real".into(), "imag".into()],
+        };
+        let indices = request
+            .components
+            .iter()
+            .map(|c| full.iter().position(|v| v == c).unwrap())
+            .collect::<Vec<_>>();
+        self.legacy_samples(batch, &full, &mut |mut sample| {
+            sample.values = indices.iter().map(|i| sample.values[*i]).collect();
+            #[cfg(feature = "gammaloop")]
+            if !request.observables {
+                sample.observables = None;
+            }
+            request.validate_sample(&sample)?;
+            emit(sample)
+        })
+    }
+}
+
+impl ProcessEvaluator {
+    fn legacy_values(
         &mut self,
         batch: &Batch,
         components: &[String],
@@ -102,16 +191,7 @@ impl Evaluator for ProcessEvaluator {
             .eval_batch(&pack_eval_inputs(batch, &self.worker.domain), batch.len())
     }
 
-    fn training_projection(&self) -> super::gammaloop::TrainingProjection {
-        match self.worker.output {
-            ProcessOutput::Gammaloop {
-                training_projection,
-            } => training_projection,
-            _ => super::gammaloop::TrainingProjection::Abs,
-        }
-    }
-
-    fn eval_samples(
+    fn legacy_samples(
         &mut self,
         batch: &Batch,
         components: &[String],
@@ -129,20 +209,30 @@ impl Evaluator for ProcessEvaluator {
                 let mut params =
                     serde_json::json!({"nr_samples":batch.len(), "components":components});
                 add_required_offsets(&mut params, &inputs);
+                if self.worker.binary_observables {
+                    params["observable_encoding"] =
+                        serde_json::json!(crate::evaluation::observable_wire::ENCODING);
+                }
                 let (response, binary) = self
                     .worker
                     .process
-                    .request_with_binary("eval_batch", params, &inputs.binary)
+                    .request_typed_with_binary::<crate::evaluation::observable_wire::ObservableResponse>("eval_batch", params, &inputs.binary)
                     .map_err(EngineError::eval)?;
+                if self.worker.binary_observables {
+                    return self.worker.observable_decoder.decode(
+                        response,
+                        &binary,
+                        batch.len(),
+                        emit,
+                    );
+                }
+                if response.observable_encoding.is_some() || response.observable_schema.is_some() {
+                    return Err(EngineError::eval("unnegotiated observable encoding"));
+                }
                 let values = unpack_f64_le(&binary, "observable values")?;
-                let bundles: Vec<gammalooprs::observables::ObservableSnapshotBundle> =
-                    serde_json::from_value(
-                        response
-                            .get("observables")
-                            .cloned()
-                            .ok_or_else(|| EngineError::eval("missing per-sample observables"))?,
-                    )
-                    .map_err(|e| EngineError::eval(e.to_string()))?;
+                let bundles = response
+                    .observables
+                    .ok_or_else(|| EngineError::eval("missing per-sample observables"))?;
                 if bundles.len() != batch.len() || values.len() != 2 * batch.len() {
                     return Err(EngineError::eval(
                         "observable result count must match input samples",
@@ -160,7 +250,7 @@ impl Evaluator for ProcessEvaluator {
                 "observable output requires the gammaloop feature",
             ));
         }
-        let values = self.eval_values(batch, components)?;
+        let values = self.legacy_values(batch, components)?;
         for row in values.chunks_exact(components.len()) {
             emit(crate::evaluation::SampleOutput::values(row.to_vec()))?;
         }
@@ -251,6 +341,14 @@ struct ProcessRuntimeWorker {
     domain: Domain,
     output: ProcessOutput,
     metadata: Value,
+    descriptor: crate::EvaluatorDescriptor,
+    modern: bool,
+    encoding: String,
+    decoder: crate::evaluation::wire::Decoder,
+    #[cfg(feature = "gammaloop")]
+    binary_observables: bool,
+    #[cfg(feature = "gammaloop")]
+    observable_decoder: crate::evaluation::observable_wire::Decoder,
 }
 
 impl ProcessRuntimeWorker {
@@ -267,23 +365,99 @@ impl ProcessRuntimeWorker {
         )?;
         let mut worker = Self {
             process,
-            domain: params.domain.clone(),
-            output: params.output.clone(),
+            domain: params
+                .domain
+                .clone()
+                .unwrap_or_else(|| Domain::continuous(0)),
+            output: params.output.clone().unwrap_or_default(),
             metadata: default_process_args(),
+            descriptor: params.legacy_descriptor(),
+            modern: false,
+            encoding: "json".into(),
+            decoder: Default::default(),
+            #[cfg(feature = "gammaloop")]
+            binary_observables: false,
+            #[cfg(feature = "gammaloop")]
+            observable_decoder: Default::default(),
         };
-        worker.send_init(params.process.args.clone())?;
+        worker.send_init(params)?;
         Ok(worker)
     }
 
-    fn send_init(&mut self, args: Value) -> Result<(), EngineError> {
+    fn send_init(&mut self, params: &ProcessEvaluatorParams) -> Result<(), EngineError> {
         let init_params = serde_json::json!({
             "protocol": PROCESS_PROTOCOL, "role": "evaluator", "output": self.output,
-            "domain": self.domain, "args": args,
+            "domain": params.domain, "args": params.process.args,
         });
         let response = self
             .process
             .request("initialize", init_params)
             .map_err(EngineError::build)?;
+        #[cfg(feature = "gammaloop")]
+        {
+            self.binary_observables = matches!(self.output, ProcessOutput::Gammaloop { .. })
+                && response
+                    .get("observable_encodings")
+                    .and_then(Value::as_array)
+                    .is_some_and(|encodings| {
+                        encodings.iter().any(|e| {
+                            e.as_str() == Some(crate::evaluation::observable_wire::ENCODING)
+                        })
+                    });
+        }
+        if let Some(protocol) = response.get("evaluation_protocol").and_then(Value::as_str) {
+            if protocol != crate::evaluation::contract::EVALUATION_PROTOCOL {
+                return Err(EngineError::build("unsupported evaluation contract"));
+            }
+            self.modern = true;
+            self.descriptor = serde_json::from_value(
+                response
+                    .get("descriptor")
+                    .cloned()
+                    .ok_or_else(|| EngineError::build("missing evaluator descriptor"))?,
+            )
+            .map_err(|e| EngineError::build(e.to_string()))?;
+            self.descriptor.validate()?;
+            if let Some(domain) = &params.domain
+                && domain != &self.descriptor.domain
+            {
+                return Err(EngineError::build(
+                    "configured domain differs from discovered domain",
+                ));
+            }
+            if let Some(ProcessOutput::Gammaloop {
+                training_projection,
+            }) = &params.output
+            {
+                self.descriptor.scalar_projection = Some(*training_projection);
+            }
+            self.encoding = if response
+                .get("evaluation_encodings")
+                .and_then(Value::as_array)
+                .is_some_and(|v| {
+                    v.iter()
+                        .any(|v| v.as_str() == Some(crate::evaluation::wire::ENCODING))
+                }) {
+                crate::evaluation::wire::ENCODING.into()
+            } else {
+                "json".into()
+            };
+            self.domain = self.descriptor.domain.clone();
+            self.decoder = crate::evaluation::wire::Decoder::with_schema(
+                self.descriptor.observable_schema.clone(),
+            );
+        } else if params.domain.is_none() {
+            return Err(EngineError::build(
+                "legacy evaluator requires an explicit domain",
+            ));
+        }
+        if let Some(expected) = &params.descriptor
+            && expected != &self.descriptor
+        {
+            return Err(EngineError::build(
+                "worker descriptor differs from configured descriptor",
+            ));
+        }
         self.metadata = Self::expect_ack(response).map_err(EngineError::build)?;
         Ok(())
     }
@@ -403,12 +577,22 @@ args = { scale = 1.0 }
 
         assert_eq!(params.process.command, ["python", "-u", "worker.py"]);
         assert_eq!(params.process.cwd.as_deref(), Some("$resources"));
-        assert_eq!(params.domain.fixed_rectangular_dims(), Some((2, 2)));
         assert_eq!(
-            params.domain.fixed_discrete_cardinalities(),
+            params.domain.as_ref().unwrap().fixed_rectangular_dims(),
+            Some((2, 2))
+        );
+        assert_eq!(
+            params
+                .domain
+                .as_ref()
+                .unwrap()
+                .fixed_discrete_cardinalities(),
             Some(vec![2, 3])
         );
-        assert_eq!(params.output.components(), ["value"]);
+        assert!(
+            params.output.is_none(),
+            "omitted output selects descriptor discovery"
+        );
         assert!(params.process.args.is_object());
     }
 
@@ -428,7 +612,10 @@ domain = { discrete = { axis_label = "d0", branches = [
         )
         .expect("process evaluator config should parse inhomogeneous domain");
 
-        assert_eq!(params.domain.fixed_rectangular_dims(), None);
+        assert_eq!(
+            params.domain.as_ref().unwrap().fixed_rectangular_dims(),
+            None
+        );
     }
 
     #[test]

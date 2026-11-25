@@ -2,11 +2,11 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, expect, test, vi } from "vitest";
 import OfflineNodesPanel from "./OfflineNodesPanel";
 import { fetchOfflineNodes, updateOfflineNode } from "../services/api";
-vi.mock("../auth/AuthProvider", () => ({ useAuth: () => ({authenticated:true,allowLocalNodeSpawn:true}) }));
+vi.mock("../auth/AuthProvider", () => ({ useAuth: () => ({authenticated:true,allowLocalNodeSpawn:false}) }));
 vi.mock("../services/api", () => ({ fetchOfflineNodes:vi.fn(),updateOfflineNode:vi.fn() }));
 const node = {node_name:"old",node_uuid:"identity",status:"offline",restore_requested:true,pool_run_id:3,pool_run_name:"Example",pool_role:"sampler_aggregator",can_start:true,backend:"local"};
 beforeEach(()=>{vi.resetAllMocks();fetchOfflineNodes.mockResolvedValue([node,{node_name:"manual",node_uuid:"manual",status:"offline",can_start:false,restore_requested:false}]);});
-test("individual Start preserves node identity even without a restoration marker", async()=>{
+test("individual Start queues the saved recipe under current policy, even when its previous backend was local", async()=>{
   const stopped = { ...node, restore_requested: false };
   fetchOfflineNodes.mockResolvedValue([stopped, {node_name:"manual",node_uuid:"manual",status:"offline",can_start:false}]);
   let finish;updateOfflineNode.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
