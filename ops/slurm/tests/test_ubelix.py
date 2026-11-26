@@ -1010,3 +1010,39 @@ def test_seeding_an_existing_empty_template_directory(workspace):
     assert (target / "nodes/cpu-workers.toml").is_file()
     assert (target / "runs/tetrahedron-unstratified.toml").is_file()
     assert any((target / "tasks").iterdir())
+
+
+def test_environment_selects_config_and_explicit_flag_wins(workspace, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "CONFIG_PATH", None)
+    selected = tmp_path / "config directory" / "slurm.toml"
+    selected.parent.mkdir()
+    selected.write_text(toml_dump({"workspace_root": "../environment-state"}))
+    monkeypatch.setenv("GAMMABOARD_SLURM_CONFIG", str(selected))
+    monkeypatch.chdir(tmp_path)
+    u.main(["install-examples"])
+    assert settings.config_path() == selected
+    assert (tmp_path / "environment-state/resources/templates/runs/tetrahedron-native.toml").exists()
+    u.main(["--config", str(settings.OPS_ROOT / "local.toml"), "install-examples"])
+    assert settings.workspace_root() == workspace
+    assert (workspace / "resources/templates/runs/tetrahedron-native.toml").exists()
+    monkeypatch.setenv("GAMMABOARD_SLURM_CONFIG", str(tmp_path / "missing.toml"))
+    with pytest.raises(SystemExit, match="helper configuration not found"):
+        u.main(["status"])
+    monkeypatch.setenv("GAMMABOARD_SLURM_CONFIG", "")
+    assert u.parser().parse_args(["status"]).config is None
+    monkeypatch.delenv("GAMMABOARD_SLURM_CONFIG")
+    assert u.parser().parse_args(["status"]).config is None
+
+
+def test_batch_entry_points_ignore_config_environment(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "CONFIG_PATH", None)
+    monkeypatch.setenv("GAMMABOARD_SLURM_CONFIG", str(tmp_path / "missing.toml"))
+    def frozen(*_):
+        assert settings.CONFIG_PATH is None
+        return 0
+    monkeypatch.setattr(u, "run_control", frozen)
+    monkeypatch.setattr(u, "run_worker", frozen)
+    monkeypatch.setattr(u.builds, "execute", frozen)
+    assert u.main(["run-control", "--manifest", "frozen.json"]) == 0
+    assert u.main(["run-worker", "--spec", "frozen.json"]) == 0
+    assert u.main(["run-build", "--record", "frozen.json"]) == 0

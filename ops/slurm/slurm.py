@@ -802,7 +802,11 @@ def repair_submission(args, slurm, manifest):
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    if args.config is not None: settings.configure(args.config)
+    if args.command in ("run-control", "run-build", "run-worker"):
+        # Batch jobs use their frozen records, never the submitter's config selection.
+        settings.configure(None)
+    elif args.config is not None:
+        settings.configure(args.config)
     slurm = Slurm()
     try:
         if args.command == "run-control":
@@ -901,7 +905,10 @@ def offset(value):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", type=Path, help="helper TOML; paths resolve relative to this file")
+    p.add_argument(
+        "--config", type=Path, default=os.environ.get("GAMMABOARD_SLURM_CONFIG") or None,
+        help="helper TOML (overrides GAMMABOARD_SLURM_CONFIG); paths resolve relative to this file",
+    )
     commands = p.add_subparsers(dest="command", required=True)
     for name in (
         "up",

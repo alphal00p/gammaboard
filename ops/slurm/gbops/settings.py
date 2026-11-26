@@ -16,13 +16,13 @@ def configure(path):
     CONFIG_PATH = Path(path).expanduser().resolve() if path else None
 
 def config_path():
-    # Legacy local.toml is accepted for compatibility; new usage passes --config.
+    # Legacy local.toml is accepted when neither --config nor the environment selects a file.
     return CONFIG_PATH or OPS_ROOT / "local.toml"
 
 def local_config():
     path = config_path()
     if not path.is_file():
-        raise ValueError(f"helper configuration not found: {path}; pass --config FILE (see examples/)")
+        raise ValueError(f"helper configuration not found: {path}; pass --config FILE or set GAMMABOARD_SLURM_CONFIG (see examples/)")
     return tomllib.loads(path.read_text())
 
 def local_path(value):

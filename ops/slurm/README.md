@@ -18,7 +18,8 @@ cd gammaboard
 module load Python
 python3 --version             # must be 3.11.8 or newer
 apptainer --version
-export GB_WORK=/storage/research/itp_localunitaritydata/$USER/gammaboard
+export GB_WORK=/storage/research/itp_localunitaritydata/$USER/gammaboard-workspace
+export GAMMABOARD_SLURM_CONFIG="$GB_WORK/slurm.toml"
 mkdir -p "$GB_WORK"
 cp ops/slurm/examples/ubelix.toml "$GB_WORK/slurm.toml"
 cp ops/slurm/examples/gammaboard.toml "$GB_WORK/gammaboard.toml"
@@ -28,7 +29,8 @@ cp ops/slurm/examples/environment.sh "$GB_WORK/environment.sh"
 Choose a shared path you can access; the storage path above is an institute-specific
 example. Edit the copied files: replace all `YOUR_USER` and `/shared/...` paths,
 make `workspace_root`, `image`, `binds` and the instance paths agree, set
-`access.ssh_target`, and choose account/partition/QoS limits available to you.
+`access.ssh_target` to your actual login username (which may differ from the storage
+directory name), and choose account/partition/QoS limits available to you.
 Put the same working Python module command in `environment.sh`. UBELIX provides
 Apptainer on PATH without a module; see its official [container guide](https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/container-jobs/)
 and [module guide](https://hpc-unibe-ch.github.io/software/Lmod_modules/).
@@ -39,9 +41,9 @@ in the instance file for a shared deployment.
 Submit the build, wait for its record to say `completed`, then start the control job:
 
 ```bash
-python3 ops/slurm/slurm.py --config "$GB_WORK/slurm.toml" build gammaboard
+python3 ops/slurm/slurm.py build gammaboard
 # Inspect the printed job with squeue/sacct and artifacts/builds/BUILD_ID/build.json.
-python3 ops/slurm/slurm.py --config "$GB_WORK/slurm.toml" up --startup-timeout 1800
+python3 ops/slurm/slurm.py up --startup-timeout 1800
 ```
 
 The build and service run in Slurm allocations. `up` prints a `client_instance`, an
@@ -73,7 +75,7 @@ successful completion. Omit `--max-evaluators` to use compatible free capacity.
 Leave the allocation running for dashboard inspection, then finish with:
 
 ```bash
-python3 ops/slurm/slurm.py --config "$GB_WORK/slurm.toml" down --wait
+python3 ops/slurm/slurm.py down --wait
 ```
 
 Use `up --restore-workers` to restore saved worker requests in a later allocation.
@@ -81,6 +83,22 @@ No automatic resubmission occurs when an allocation expires.
 
 
 ## Configuration
+
+Select the helper configuration once per shell:
+
+```bash
+export GAMMABOARD_SLURM_CONFIG=/absolute/path/to/slurm.toml
+python3 ops/slurm/slurm.py up
+python3 ops/slurm/slurm.py status
+python3 ops/slurm/slurm.py down --wait
+```
+
+An explicit `--config FILE` overrides the environment variable. Relative config
+paths resolve from the invoking directory; paths inside the file resolve against
+that file. Prefer an absolute config path when changing directories. A selected
+missing file is an error; it never falls back silently. An unset or empty variable
+keeps the existing `ops/slurm/local.toml` fallback. Queued jobs use their frozen
+records and ignore this environment selection.
 
 Keep two files:
 
