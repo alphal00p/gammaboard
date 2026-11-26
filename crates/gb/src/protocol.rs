@@ -182,6 +182,16 @@ pub enum TaskAction {
         id: i64,
         settings: serde_json::Value,
     },
+    CampaignChildrenPreview {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+        edit: serde_json::Value,
+    },
+    CampaignChildrenApply {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+        edit: serde_json::Value,
+    },
     Remove {
         #[serde(deserialize_with = "deserialize_id")]
         id: i64,

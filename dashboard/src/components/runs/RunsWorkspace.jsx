@@ -104,13 +104,13 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const isIntegration = !run.kind || run.kind === "integration";
-  const editable = authenticated && isIntegration && run.parent_run_id == null && !run.archived;
+  const editable = authenticated && isIntegration && !run.archived && (run.parent_run_id == null || run.spawn_kind === "integration_campaign");
   const taskList = asArray(tasks);
   const requestedTask = navigation?.taskId ?? selectedId;
   const selectedTask = taskList.find((task) => String(task.id) === String(requestedTask)) ?? getCurrentTask(taskList);
-  const campaignView = !run.archived && run.kind === "integration_campaign" && ["diagnostics", "scheduling"].includes(taskTab);
+  const campaignView = !run.archived && run.kind === "integration_campaign" && ["diagnostics", "scheduling", "children"].includes(taskTab);
   const taskOutput = useTaskOutput({ runId: run.run_id, taskId: selectedTask?.id ?? null,
-    section: view === "summary" ? "summary" : campaignView || (taskTab === "scheduling" && run.kind !== "integration_campaign") ? "result" : taskTab,
+    section: view === "summary" ? "summary" : campaignView || (["scheduling", "children"].includes(taskTab) && (run.archived || run.kind !== "integration_campaign")) ? "result" : taskTab,
     pollMs: run.kind === "integration_campaign" ? 10000 : 3000,
     refreshKey: selectedTask?.state, paused: !["tasks", "summary"].includes(view) || (view === "tasks" && campaignView) });
   const selectTask = (taskId) => { setSelectedId(taskId); onNavigate?.({ taskId: String(taskId) }); };
@@ -163,7 +163,7 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
         "& .MuiAlert-action": { width: { xs: "100%", sm: "auto" }, justifyContent: "flex-end", ml: { xs: 0, sm: "auto" } },
       }} action={
         <Button color="inherit" onClick={() => onSelectRun?.(run.parent_run_id)}>Manage parent workers</Button>
-      }>Workers are allocated by the parent. Its controller manages this task queue. Duplicate this run as a standalone run to change it.</Alert>}
+      }>{run.spawn_kind === "integration_campaign" ? "Workers are allocated by the parent campaign." : "Workers are allocated by the parent. Its controller manages this task queue. Duplicate this run as a standalone run to change it."}</Alert>}
       <Box sx={{ ml: "auto", display: "flex", justifyContent: "flex-end" }}>{runActions}</Box>
     </Box>
     <WorkspaceTabs id="run" label="Run sections" value={view} onChange={setView}

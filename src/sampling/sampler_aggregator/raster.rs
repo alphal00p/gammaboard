@@ -93,6 +93,10 @@ pub struct PdfAdaptationImageOutputState {
     pub pdf_values: Vec<Option<f64>>,
     pub strata: Option<PdfStrataOutput>,
     pub target_label: Option<String>,
+    #[serde(default)]
+    pub projection: Option<crate::sampling::pdf_reference::PdfProjection>,
+    #[serde(default)]
+    pub reference: Option<crate::sampling::pdf_reference::PdfReference>,
     pub pdf_steps: Option<PdfSteps>,
 }
 
@@ -121,6 +125,10 @@ pub struct PdfAdaptationImagePersistedOutput {
     pub pdf_values: Vec<Option<f64>>,
     pub strata: Option<PdfStrataOutput>,
     pub target_label: Option<String>,
+    #[serde(default)]
+    pub projection: Option<crate::sampling::pdf_reference::PdfProjection>,
+    #[serde(default)]
+    pub reference: Option<crate::sampling::pdf_reference::PdfReference>,
     pub pdf_steps: Option<PdfSteps>,
 }
 
@@ -175,6 +183,23 @@ impl<G: RasterGeometry> RasterSampler<G> {
 }
 
 impl<G: RasterGeometry> PdfAdaptationRasterSampler<G> {
+    pub(crate) fn with_target_statistics(
+        mut self,
+        state: Option<&crate::evaluation::AccumulatorState>,
+    ) -> Self {
+        self = self.with_target_config(state.map(|s| s.config()));
+        self.output_state.projection = state.and_then(crate::sampling::pdf_reference::projection);
+        self.output_state.reference = state.and_then(crate::sampling::pdf_reference::reference);
+        if let Some(projection) = &self.output_state.projection {
+            self.output_state.target_label = Some(if projection.nonnegative {
+                projection.label.clone()
+            } else {
+                format!("|{}|", projection.label)
+            });
+        }
+        self
+    }
+
     pub(crate) fn with_target_config(
         mut self,
         config: Option<crate::core::AccumulatorConfig>,
@@ -342,6 +367,8 @@ impl PdfAdaptationImageOutputState {
             pdf_values: vec![None; total_samples],
             strata: None,
             target_label: None,
+            projection: None,
+            reference: None,
             pdf_steps: None,
         }
     }
@@ -358,6 +385,8 @@ impl PdfAdaptationImageOutputState {
             pdf_values: self.pdf_values.clone(),
             strata: self.strata.clone(),
             target_label: self.target_label.clone(),
+            projection: self.projection.clone(),
+            reference: self.reference.clone(),
             pdf_steps: self.pdf_steps.clone(),
         }
     }

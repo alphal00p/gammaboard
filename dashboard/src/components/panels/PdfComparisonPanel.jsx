@@ -1,728 +1,756 @@
-import { PanelHeader, ControlBar } from "../common/PanelChrome";
-import { memo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Button,
   Card,
   CardContent,
+  Checkbox,
+  FormControlLabel,
   MenuItem,
+  Popover,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
+  Switch,
   TextField,
-  Typography
-} from '@mui/material';
+  Typography,
+} from "@mui/material";
+import { PanelHeader, ControlBar } from "../common/PanelChrome";
 import DisclosureField from "../common/DisclosureField";
-import { fieldHelp } from "./fieldHelp";
-import LazyChart from './LazyChart';
-import FigureExportActions from './FigureExportActions';
-import HistogramPanel from './HistogramPanel';
-import HeatmapColorLimitControl from './HeatmapColorLimitControl';
-import { formatScientific } from '../../utils/formatters';
-import { finite, prefixLabel, stratumColor, STRATUM_COLORS } from './strataUtils';
-import { COVERAGE, diagnosticHistograms, pdfComparison, sharedColorLimits } from './pdfDiagnostics';
-import { lineComparisonOption, planeComparisonOption } from './pdfPlotOptions';
+import LazyChart from "./LazyChart";
+import { DiagnosticSelect } from "./DiagnosticControls";
+import { finite, prefixLabel } from "./strataUtils";
 import {
-  ScopeSelector,
-  STRATA_PAGE_SIZE,
-  navigationEvents,
-  scopeIndices
-} from './DiagnosticControls';
-import { FULL_ZOOM } from './panelView';
-const numeric = (v) => (finite(v) ? formatScientific(v, 5) : 'Unavailable');
-const percent = (v) => (finite(v) ? `${(v * 100).toFixed(3)}%` : 'Unavailable');
-const Figure = ({ name, option, payload, onEvents }) => {
-  const chart = useRef(null),
-    element = useRef(null);
+  formatScientific,
+  formatComparisonDecimal,
+} from "../../utils/formatters";
+import { FULL_ZOOM, readDataZoomRanges } from "./panelView";
+import { pdfComparison } from "./pdfDiagnostics";
+import {
+  comparisonModels,
+  colorGradient,
+  curveOption,
+  distributionOption,
+  DENSITY_MAPS,
+  mismatchValue,
+  planeOption,
+  rasterImage,
+} from "./pdfDisplay";
+import PdfExportMenu from "./PdfExportMenu";
+
+const num = (v) => (finite(v) ? formatScientific(v, 3) : "Unavailable");
+const gridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
+  gap: 2,
+};
+
+function Colorbar({ model, onLimits, linked, onLink }) {
+  const [anchor, setAnchor] = useState(null),
+    [min, setMin] = useState(""),
+    [max, setMax] = useState("");
+  const [error, setError] = useState(false);
+  if (model.kind === "sign")
+    return (
+      <Typography variant="caption">
+        − orange · 0 white · + blue · unavailable grey
+      </Typography>
+    );
+  const lower = model.log ? 10 ** model.limits.min : model.limits.min;
+  const upper = model.log ? 10 ** model.limits.max : model.limits.max;
+  const zero = -model.limits.min / (model.limits.max - model.limits.min);
+  const open = (event) => {
+    setMin(String(lower));
+    setMax(String(upper));
+    setError(false);
+    setAnchor(event.currentTarget);
+  };
   return (
-    <Box
-      ref={element}
-      sx={{
-        minWidth: 0
-      }}
-    >
-      <PanelHeader title={name} sx={{ mb: 0 }}>
-        <FigureExportActions
-          baseName={name}
-          payload={payload}
-          echartsRef={chart}
-          elementRef={element}
-        />
-      </PanelHeader>
-      <LazyChart
-        ref={chart}
-        option={option}
-        style={{
-          height: 360
+    <>
+      <Box
+        component="button"
+        aria-label={`${model.kind} color limits`}
+        onClick={open}
+        sx={{
+          display: "block",
+          width: "100%",
+          border: 0,
+          bgcolor: "transparent",
+          color: "text.primary",
+          cursor: "pointer",
+          px: 2,
+          py: 0.5,
         }}
-        onEvents={onEvents}
-        notMerge
-      />
+      >
+        <Box
+          sx={{
+            height: 12,
+            background: colorGradient(model),
+            borderRadius: 0.5,
+          }}
+        />
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            position: "relative",
+            typography: "caption",
+          }}
+        >
+          <span>{num(lower)}</span>
+          <span>{num(upper)}</span>
+          {model.kind === "mismatch" && zero > 0.12 && zero < 0.88 && (
+            <Box
+              component="span"
+              sx={{ position: "absolute", left: `${zero * 100}%` }}
+            >
+              0
+            </Box>
+          )}
+        </Box>
+      </Box>
+      <Popover
+        open={Boolean(anchor)}
+        anchorEl={anchor}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+      >
+        <Stack spacing={1.5} sx={{ p: 2, width: 300 }}>
+          <Typography variant="subtitle2">
+            Color limits{model.log ? " (density units)" : ""}
+          </Typography>
+          <TextField
+            label="Min"
+            value={min}
+            onChange={(e) => setMin(e.target.value)}
+          />
+          <TextField
+            label="Max"
+            value={max}
+            onChange={(e) => setMax(e.target.value)}
+          />
+          {model.kind !== "mismatch" && (
+            <FormControlLabel
+              label="Link Target / Sampler"
+              control={
+                <Checkbox
+                  checked={linked}
+                  onChange={(e) => onLink(e.target.checked)}
+                />
+              }
+            />
+          )}
+          {error && (
+            <Alert severity="error">
+              Enter finite Min &lt; Max{model.log ? ", both positive" : ""}.
+            </Alert>
+          )}
+          <Stack direction="row" spacing={1}>
+            <Button
+              onClick={() => {
+                onLimits(null);
+                setAnchor(null);
+              }}
+            >
+              Auto
+            </Button>
+            <Button
+              onClick={() => {
+                const a = Number(min),
+                  b = Number(max);
+                if (
+                  !min.trim() ||
+                  !max.trim() ||
+                  !Number.isFinite(a) ||
+                  !Number.isFinite(b) ||
+                  a >= b ||
+                  (model.log && a <= 0)
+                ) {
+                  setError(true);
+                  return;
+                }
+                onLimits({ min: a, max: b });
+                setAnchor(null);
+              }}
+            >
+              Apply
+            </Button>
+          </Stack>
+        </Stack>
+      </Popover>
+    </>
+  );
+}
+
+const Figure = memo(function Figure({
+  title,
+  option,
+  zoom,
+  onNavigate,
+  model,
+  children,
+  exportButton,
+}) {
+  const chart = useRef(null),
+    tooltip = useRef(null),
+    frame = useRef(null),
+    pending = useRef(null);
+  const callbacks = useRef({ onNavigate });
+  useEffect(() => {
+    callbacks.current = { onNavigate };
+  }, [onNavigate]);
+  const events = useMemo(
+    () => ({
+      datazoom: (event) => {
+        pending.current = readDataZoomRanges(event);
+        if (!frame.current)
+          frame.current = requestAnimationFrame(() => {
+            frame.current = null;
+            callbacks.current.onNavigate?.(pending.current);
+          });
+      },
+    }),
+    [],
+  );
+  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  const syncY = Boolean(model);
+  const syncZoom = useCallback(() => {
+    const instance = chart.current?.getEchartsInstance?.();
+    if (!instance || !zoom) return;
+    instance.dispatchAction(
+      {
+        type: "dataZoom",
+        batch: [
+          { dataZoomId: "x-inside", start: zoom.x.start, end: zoom.x.end },
+          { dataZoomId: "x-slider", start: zoom.x.start, end: zoom.x.end },
+          ...(syncY
+            ? [
+                {
+                  dataZoomId: "y-inside",
+                  start: zoom.y.start,
+                  end: zoom.y.end,
+                },
+                {
+                  dataZoomId: "y-slider",
+                  start: zoom.y.start,
+                  end: zoom.y.end,
+                },
+              ]
+            : []),
+        ],
+      },
+      { silent: true },
+    );
+  }, [zoom, syncY]);
+  useEffect(syncZoom, [syncZoom, option]);
+  const move = (event) => {
+    if (!model || !tooltip.current) return;
+    const instance = chart.current?.getEchartsInstance?.(),
+      rect = event.currentTarget.getBoundingClientRect();
+    const pixel = [event.clientX - rect.left, event.clientY - rect.top];
+    if (!instance?.containPixel({ gridIndex: 0 }, pixel)) {
+      tooltip.current.hidden = true;
+      return;
+    }
+    const [ix, iy] = instance
+      .convertFromPixel({ gridIndex: 0 }, pixel)
+      .map(Math.round);
+    const i = iy * model.c.axes.x.length + ix;
+    if (
+      ix < 0 ||
+      ix >= model.c.axes.x.length ||
+      iy < 0 ||
+      iy >= model.c.axes.y.length
+    ) {
+      tooltip.current.hidden = true;
+      return;
+    }
+    const v =
+      model.kind === "mismatch"
+        ? mismatchValue(model.c, i, model.metric)
+        : model.values[i];
+    tooltip.current.textContent = `u=${num(model.c.axes.x[ix])}, v=${num(model.c.axes.y[iy])}\n${model.kind}: ${v === Infinity ? "+∞" : v === -Infinity ? "−∞" : num(v)}\n${model.c.status[i]}`;
+    tooltip.current.style.left = `${Math.min(pixel[0] + 10, Math.max(0, rect.width - 240))}px`;
+    tooltip.current.style.top = `${Math.min(pixel[1] + 10, 280)}px`;
+    tooltip.current.hidden = false;
+  };
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <PanelHeader title={title} sx={{ mb: 0 }}>
+        {exportButton}
+      </PanelHeader>
+      <Box
+        sx={{ position: "relative" }}
+        onMouseMove={move}
+        onMouseLeave={() => {
+          if (tooltip.current) tooltip.current.hidden = true;
+        }}
+      >
+        <LazyChart
+          ref={chart}
+          option={option}
+          replaceMerge={["series"]}
+          onChartReady={syncZoom}
+          style={{ height: 340 }}
+          onEvents={onNavigate ? events : undefined}
+        />
+        <Box
+          ref={tooltip}
+          hidden
+          sx={{
+            position: "absolute",
+            pointerEvents: "none",
+            zIndex: 2,
+            bgcolor: "background.paper",
+            boxShadow: 2,
+            p: 1,
+            whiteSpace: "pre-line",
+            typography: "caption",
+          }}
+        />
+      </Box>
+      {children}
     </Box>
   );
-};
-const PdfComparisonPanel = memo(function PdfComparisonPanel({ title, state, value = {}, onValueChange }) {
-  const prefixes = state.data.strata?.prefixes || [];
-  const scope = prefixes.length ? (value?.scope ?? 'overall') : 'overall';
-  const indices = scopeIndices(scope, prefixes.length, value?.page);
-  const choices = scope === 'overall' ? ['overall'] : indices.map(String);
-  const line = state.geometry.kind === 'line';
-  const view = [
-    'density',
-    'mismatch',
-    'histogram',
-    'coverage',
-    ...(prefixes.length ? ['membership'] : [])
-  ].includes(value?.view)
-    ? value.view
-    : 'density';
-  const hasReference =
-    finite(state.data.global_abs_integrand_norm) && state.data.global_abs_integrand_norm > 0;
-  const requested = ['shape', 'conditional', 'joint', 'reference'].includes(value?.normalization)
-    ? value.normalization
-    : 'shape';
+});
+
+const PlaneFigure = memo(function PlaneFigure({ model, zoom, ...props }) {
+  const raster = useMemo(() => rasterImage(model), [model]);
+  const option = useMemo(() => planeOption(model, {}, raster), [model, raster]);
+  return <Figure {...props} model={model} zoom={zoom} option={option} />;
+});
+
+function PdfComparisonPanel({ title, state, value = {}, onValueChange }) {
+  const { data, geometry } = state;
+  const prefixes = data.strata?.prefixes || [];
+  const scope =
+    prefixes.length &&
+    value?.scope != null &&
+    Number.isInteger(Number(value?.scope)) &&
+    Number(value.scope) >= 0 &&
+    Number(value.scope) < prefixes.length
+      ? String(value.scope)
+      : "overall";
+  const reference =
+    state.data.reference ||
+    (finite(state.data.global_abs_integrand_norm) &&
+    state.data.global_abs_integrand_norm > 0
+      ? { value: state.data.global_abs_integrand_norm, source: "legacy_source" }
+      : null);
+  const projection = state.data.projection;
+  const hasSign = projection
+    ? !projection.nonnegative
+    : state.data.integrand_values.some((v) => finite(v) && v < 0);
   const mode =
-    (!hasReference && requested === 'reference') ||
-    (['mismatch', 'histogram'].includes(view) && ['conditional', 'joint'].includes(requested))
-      ? 'shape'
-      : requested;
-  const metric = value?.metric === 'relative' ? 'relative' : 'log_ratio';
-  const log = view === 'density' && Boolean(value?.log);
-  const stratumColours = !line && view === 'density' && prefixes.length > 0 && value?.colourEncoding === 'strata';
-  const update = (patch) =>
-    onValueChange?.(
-      state.panel_id,
-      {
-        ...value,
-        ...patch
-      },
-      false
-    );
-  const compared = choices.map((k) => pdfComparison(state, k, mode));
-  const projection = state.data.target_label || 'Absolute source training projection';
-  const events = navigationEvents(value, update);
-  const changeView = (next) =>
-    update({
-      view: next,
-      normalization:
-        ['mismatch', 'histogram'].includes(next) && ['conditional', 'joint'].includes(mode)
-          ? 'shape'
-          : mode
-    });
-  const rawDensity = view === 'density' && ['conditional', 'joint'].includes(mode);
-  const colorContext = `${view}:${mode}:${log}:${metric}`;
-  const limitsFor = (role) =>
-    sharedColorLimits(
-      compared.flatMap((c) =>
-        view === 'mismatch'
-          ? [metric === 'log_ratio' ? c.logRatio : c.relative]
-          : rawDensity
-            ? [role === 'target' ? c.target : c.pdf]
-            : [c.target, c.pdf]
+    value?.normalization === "reference" && reference
+      ? "reference"
+      : value?.normalization == null && reference
+        ? "reference"
+        : "slice";
+  const metric = value?.metric === "relative" ? "relative" : "log_ratio";
+  const auxiliary =
+    value?.auxiliary === "sign" && hasSign ? "sign" : "mismatch";
+  const log = Boolean(value?.log),
+    palette = value?.palette || "Viridis",
+    linked = value?.linked !== false;
+  const limits = value?.limits;
+  const settings = useMemo(
+    () => ({
+      normalization: mode,
+      metric,
+      auxiliary,
+      log,
+      palette,
+      linked,
+      limits,
+      histogramLog: Boolean(value?.histogramLog),
+      histogramWeighted: value?.histogramWeighted !== false,
+    }),
+    [
+      mode,
+      metric,
+      auxiliary,
+      log,
+      palette,
+      linked,
+      limits,
+      value?.histogramLog,
+      value?.histogramWeighted,
+    ],
+  );
+  // Navigation is deliberately absent: changing the view never recalculates a grid or histogram.
+  const comparison = useMemo(
+    () => pdfComparison({ data, geometry }, scope, mode),
+    [data, geometry, scope, mode],
+  );
+  const models = useMemo(
+    () => comparisonModels({ data, geometry }, scope, settings, comparison),
+    [data, geometry, scope, settings, comparison],
+  );
+  const line = state.geometry.kind === "line";
+  const curves = useMemo(
+    () => ({
+      density: line ? curveOption(models, settings) : null,
+      auxiliary: line ? curveOption(models, settings, true) : null,
+    }),
+    [models, settings, line],
+  );
+  const histogramLog = Boolean(value?.histogramLog);
+  const histogramWeighted = value?.histogramWeighted !== false;
+  const densityHistogram = useMemo(
+    () =>
+      distributionOption(
+        { c: comparison },
+        { histogramLog, histogramWeighted },
       ),
-      {
-        log,
-        symmetric: view === 'mismatch',
-        manual: value?.colorLimits?.context === colorContext ? value.colorLimits?.[role] : null
-      }
-    );
-  const limits = limitsFor('pdf'),
-    targetLimits = rawDensity ? limitsFor('target') : limits;
-  const details =
-    scope === 'overall' && prefixes.length
-      ? prefixes.slice(0, STRATA_PAGE_SIZE).map((_, k) => pdfComparison(state, String(k), mode))
-      : compared;
-  const summaries = compared.map((c) => ({
-    scope: c.scope,
-    prefix: c.k == null ? null : prefixes[c.k],
-    probability: c.probability,
-    target_integral: c.targetIntegral,
-    pdf_integral: c.pdfIntegral,
-    grid_pdf_integral: c.gridPdfIntegral,
-    pdf_integral_method: c.pdfIntegralMethod,
-    pdf_divisor: c.pdfDivisor,
-    target_divisor: c.targetDivisor,
-    target_share: c.targetShare,
-    actual_cell_mass: c.actualMass,
-    leakage: c.leakage,
-    counts: c.counts
-  }));
-  const rawExport = {
-    ...state,
-    view: {
-      ...value,
-      scope,
-      view,
-      normalization: mode
+    [comparison, histogramLog, histogramWeighted],
+  );
+  const mismatchHistogram = useMemo(
+    () =>
+      distributionOption(
+        {
+          c: comparison,
+          mismatch: {
+            values:
+              metric === "relative" ? comparison.relative : comparison.logRatio,
+          },
+        },
+        { metric, histogramWeighted },
+        true,
+      ),
+    [comparison, metric, histogramWeighted],
+  );
+  const options = { ...curves, densityHistogram, mismatchHistogram };
+  const current = useRef(value);
+  useEffect(() => {
+    current.current = value;
+  }, [value]);
+  const update = useCallback(
+    (patch) =>
+      onValueChange?.(state.panel_id, { ...current.current, ...patch }, false),
+    [onValueChange, state.panel_id],
+  );
+  const navigate = useCallback(
+    (ranges) => {
+      if (ranges.x || (!line && ranges.y))
+        update({
+          ...(ranges.x ? { zoom: ranges.x } : {}),
+          ...(!line && ranges.y ? { yZoom: ranges.y } : {}),
+        });
     },
-    diagnostics: summaries
-  };
-  const exportFor = (c) => ({
-    normalization: mode,
-    colour_encoding: stratumColours ? 'stratum_hue_density' : 'density',
-    density_scale: log ? 'logarithmic' : 'linear',
-    scope: c.scope,
-    prefix: c.k == null ? null : prefixes[c.k],
-    geometry: state.geometry,
-    pdf_steps: c.stepPoints,
-    points: c.axes.x.flatMap((x, ix) =>
-      (c.axes.y || [null]).map((y, iy) => {
-        const i = iy * c.axes.x.length + ix;
-        return {
-          x,
-          y,
-          target: c.target[i],
-          pdf: c.pdf[i],
-          relative_mismatch: c.relative[i],
-          log_ratio: c.logRatio[i],
-          coverage: c.status[i],
-          actual_stratum: c.actual[i] ?? null
-        };
-      })
-    )
-  });
+    [update, line],
+  );
+  const zoom = useMemo(
+    () => ({ x: value?.zoom || FULL_ZOOM, y: value?.yZoom || FULL_ZOOM }),
+    [value?.zoom, value?.yZoom],
+  );
+  const change = (patch) => update({ ...patch, limits: {} });
+  const setLimits = (role, next) =>
+    update({
+      limits: {
+        ...limits,
+        [linked && role !== "mismatch" ? "density" : role]: next,
+      },
+    });
+  const bar = (model) => (
+    <Colorbar
+      model={model}
+      linked={linked}
+      onLink={(next) => change({ linked: next })}
+      onLimits={(next) => setLimits(model.kind, next)}
+    />
+  );
+  const exports = (plot) => (
+    <PdfExportMenu
+      state={state}
+      settings={settings}
+      scope={scope}
+      zoom={zoom}
+      plot={plot}
+    />
+  );
+  const counts = models.c.counts;
   return (
     <Card>
       <CardContent>
         <Stack spacing={2}>
           <PanelHeader title={title} sx={{ mb: 0 }}>
-            <FigureExportActions baseName="pdf-comparison" payload={rawExport} imageFormat={null}
-              onResetView={() => update({ zoom: FULL_ZOOM, yZoom: FULL_ZOOM, histogram: {} })} />
+            {exports(null)}
           </PanelHeader>
           <ControlBar>
-            <ScopeSelector prefixes={prefixes} scope={scope} page={value?.page} onChange={update} />
             <TextField
               select
-              label="View"
-              size="small"
-              sx={{
-                minWidth: 180
-              }}
-              value={view}
-              onChange={(e) => changeView(e.target.value)}
+              label="Normalization"
+              value={mode}
+              sx={{ minWidth: 230 }}
+              onChange={(e) => change({ normalization: e.target.value })}
             >
-              <MenuItem value="density">Density comparison</MenuItem>
-              <MenuItem value="mismatch">Sampling mismatch</MenuItem>
-              <MenuItem value="histogram">Distributions</MenuItem>
-              <MenuItem value="coverage">Coverage</MenuItem>
-              {prefixes.length > 0 && <MenuItem value="membership">Stratum membership</MenuItem>}
+              <MenuItem value="reference" disabled={!reference}>
+                Source integral reference
+              </MenuItem>
+              <MenuItem value="slice">Slice</MenuItem>
             </TextField>
-            {!['coverage', 'membership'].includes(view) && (
-              <TextField
-                select
-                label="Normalization"
-                size="small"
-                sx={{
-                  minWidth: 225
-                }}
-                value={mode}
-                onChange={(e) =>
-                  update({
-                    normalization: e.target.value
-                  })
-                }
-              >
-                <MenuItem value="shape">Shape on this slice</MenuItem>
-                <MenuItem value="reference" disabled={!hasReference}>
-                  Source integral reference
-                </MenuItem>
-                {view === 'density' && <MenuItem value="conditional">Conditional density</MenuItem>}
-                {view === 'density' && <MenuItem value="joint">Joint density</MenuItem>}
-              </TextField>
+            {prefixes.length > 0 && (
+              <DiagnosticSelect
+                label="Stratum"
+                value={scope}
+                onChange={(next) => change({ scope: next })}
+                options={[
+                  { value: "overall", label: "Overall" },
+                  ...prefixes.map((p, k) => ({
+                    value: String(k),
+                    label: `Stratum ${prefixLabel(p)}`,
+                  })),
+                ]}
+              />
             )}
-            {view === 'density' && (
-              <TextField
-                select
-                label="Density scale"
-                size="small"
-                sx={{
-                  minWidth: 160
-                }}
-                value={log ? 'log' : 'linear'}
-                onChange={(e) =>
-                  update({
-                    log: e.target.value === 'log'
-                  })
-                }
-              >
-                <MenuItem value="linear">Linear</MenuItem>
-                <MenuItem value="log">Logarithmic</MenuItem>
-              </TextField>
-            )}
-            {view === 'mismatch' && (
-              <TextField
-                select
-                label="Metric"
-                size="small"
-                value={metric}
-                onChange={(e) =>
-                  update({
-                    metric: e.target.value
-                  })
-                }
-              >
-                <MenuItem value="relative">PDF / target − 1</MenuItem>
-                <MenuItem value="log_ratio">log₁₀(PDF / target)</MenuItem>
-              </TextField>
-            )}
-            {view === 'histogram' && (
-              <TextField
-                select
-                label="Quantity"
-                size="small"
-                value={value?.histogramQuantity || 'density'}
-                onChange={(e) =>
-                  update({
-                    histogramQuantity: e.target.value,
-                    histogram: {}
-                  })
-                }
-              >
-                <MenuItem value="density">Target and PDF values</MenuItem>
-                <MenuItem value="relative">Relative mismatch</MenuItem>
-                <MenuItem value="log_ratio">Log ratio</MenuItem>
-              </TextField>
-            )}
-            {!line && view === 'density' && prefixes.length > 0 && (
-              <TextField
-                select
-                label="Colour encoding"
-                size="small"
-                sx={{ minWidth: 225 }}
-                value={stratumColours ? 'strata' : 'density'}
-                onChange={(e) => update({ colourEncoding: e.target.value })}
-              >
-                <MenuItem value="density">Density only</MenuItem>
-                <MenuItem value="strata">Stratum hue + density</MenuItem>
-              </TextField>
-            )}
-          </ControlBar>
-          {stratumColours && (
-            <Stack spacing={1}>
-              <Typography variant="caption">
-                Hue shows the actual integrand stratum in both plots. Saturation increases with
-                density on the selected scale; white is the low end. Sampler density in another
-                stratum's colour shows leakage. Unknown membership is grey.
+            <DisclosureField
+              inline
+              label="Normalization details"
+              ariaLabel="Normalization details"
+              value={
+                reference && mode === "reference"
+                  ? `Reference ${num(reference.value)} · SE ${finite(reference.error) ? `${formatComparisonDecimal((100 * reference.error) / reference.value)}%` : "unavailable"}`
+                  : "Mean-one slice comparison"
+              }
+            >
+              <Typography variant="body2">
+                Target:{" "}
+                {state.data.target_label || "Absolute training projection"}.
+                Source reference compares absolute density levels; Slice
+                compares shapes and removes overall normalization differences.
+                These are slices, not marginals. Zooming does not change
+                normalization.
               </Typography>
-              <Stack direction="row" gap={2} flexWrap="wrap">
-                {prefixes.slice(0, STRATUM_COLORS.length).map((prefix, k) => (
-                  <Stack key={prefix.join(',')} direction="row" gap={0.5} alignItems="center">
-                    <Box sx={{ width: 12, height: 12, bgcolor: stratumColor(k) }} />
-                    <Typography variant="caption">{prefixLabel(prefix)}</Typography>
-                  </Stack>
-                ))}
-              </Stack>
-              {prefixes.length > STRATUM_COLORS.length && (
-                <Typography variant="caption">
-                  Colours repeat after {STRATUM_COLORS.length} strata. Hover for the exact prefix or use Scope.
+              {reference && (
+                <Typography variant="body2">
+                  Reference source: {reference.source.replaceAll("_", " ")}
+                  {reference.task_name ? ` · ${reference.task_name}` : ""}
+                  {reference.task_id ? ` (task ${reference.task_id})` : ""}.
+                  Value: {String(reference.value)}; standard error:{" "}
+                  {reference.error == null
+                    ? "unavailable"
+                    : String(reference.error)}
+                  {reference.sample_count != null
+                    ? `; samples: ${reference.sample_count}`
+                    : ""}
+                  .
                 </Typography>
               )}
-            </Stack>
-          )}
-          <Typography variant="body2">
-            Target: {projection}.{' '}
-            {['coverage', 'membership'].includes(view)
-              ? 'Coverage and membership use the raw evaluated values.'
-              : mode === 'shape'
-                ? 'Each density is normalized over the displayed parameter slice.'
-                : mode === 'reference'
-                  ? 'The target is divided by the source estimate of its full-domain absolute integral; the sampler remains a joint density.'
-                  : 'The PDF is raw; the unnormalized importance target uses its own scale.'}{' '}
-            These are slices, not marginals. Zooming does not change normalization.
-          </Typography>
-          {view === 'density' && (
-            <Typography variant="caption" color="text.secondary">
-              {state.data.pdf_steps
-                ? 'Native Havana densities use exact bin edges and bin integrals.'
-                : line
-                  ? 'PDF curves interpolate sampled grid values.'
-                  : 'Heatmaps show queried grid values.'}{' '}
-              {log
-                ? 'Zeros are omitted on logarithmic scales; Coverage distinguishes zero and unavailable values.'
-                : ''}
-            </Typography>
-          )}
-          {view === 'mismatch' && metric === 'relative' && (
-            <Typography variant="caption" color="text.secondary">
-              Near-zero targets can produce very large relative mismatches. Use log ratio or the
-              vertical zoom to inspect smaller differences.
-            </Typography>
-          )}
-          {!line && ['density', 'mismatch'].includes(view) && (
-            <DisclosureField section label="Colour limits · linked across comparable plots">
-                <Stack spacing={2}>
-                  {(rawDensity ? ['pdf', 'target'] : ['pdf']).map((role) => {
-                    const l = role === 'target' ? targetLimits : limits;
-                    const set = (side, v) =>
-                      update({
-                        colorLimits: {
-                          context: colorContext,
-                          ...(value?.colorLimits?.context === colorContext
-                            ? value.colorLimits
-                            : {}),
-                          [role]: {
-                            min: l.min,
-                            max: l.max,
-                            [side]: v
-                          }
-                        }
-                      });
-                    return (
-                      <Box key={role}>
-                        <Typography variant="body2">
-                          {rawDensity
-                            ? role === 'target'
-                              ? 'Importance target'
-                              : 'Sampler density'
-                            : 'Shared scale'}
-                          {log ? ' (log₁₀ limits)' : ''}
-                        </Typography>
-                        <Stack direction="row" gap={2} flexWrap="wrap">
-                          <HeatmapColorLimitControl
-                            side="min"
-                            limit={l.min}
-                            otherLimit={l.max}
-                            defaultScale={l.auto}
-                            zeroOrigin={false}
-                            onChange={(v) => set('min', v)}
-                          />
-                          <HeatmapColorLimitControl
-                            side="max"
-                            limit={l.max}
-                            otherLimit={l.min}
-                            defaultScale={l.auto}
-                            zeroOrigin={false}
-                            onChange={(v) => set('max', v)}
-                          />
-                        </Stack>
-                      </Box>
-                    );
-                  })}
-                  <Button
-                    onClick={() =>
-                      update({
-                        colorLimits: null
-                      })
-                    }
-                  >
-                    Auto limits
-                  </Button>
-                </Stack>
-            </DisclosureField>
-          )}
-          {view === 'membership' && prefixes.length > 8 && scope === 'overall' && (
-            <Typography variant="caption">
-              Hover for full prefix labels, or select a stratum to highlight it. Colours repeat for
-              large partitions.
-            </Typography>
-          )}
-          <Stack spacing={3}>
-            {compared.map((c) => {
-              const name = c.k == null ? 'Overall' : `Stratum ${prefixLabel(prefixes[c.k])}`;
-              const states = COVERAGE.filter((s) => s.id !== 'covered' && c.counts[s.id] > 0)
-                .map((s) => `${s.label}: ${c.counts[s.id]}`)
-                .join(' · ');
-              const numericalMissing = c.status.filter(
-                (status, i) =>
-                  status === 'covered' &&
-                  !finite((metric === 'relative' ? c.relative : c.logRatio)[i])
-              ).length;
-              const payload = exportFor(c);
-              const categories =
-                view === 'membership'
-                  ? c.k == null
-                    ? prefixes.map((p, k) => ({
-                        label: prefixLabel(p),
-                        color: stratumColor(k)
-                      }))
-                    : [
-                        {
-                          label: 'Other strata',
-                          color: '#d8dde3'
-                        },
-                        {
-                          label: prefixLabel(prefixes[c.k]),
-                          color: stratumColor(c.k)
-                        }
-                      ]
-                  : COVERAGE;
-              const categorical = ['coverage', 'membership'].includes(view);
-              const categoryValues =
-                view === 'membership'
-                  ? c.actual.map((k) => (k == null ? null : c.k == null ? k : Number(k === c.k)))
-                  : c.status.map((s) => COVERAGE.findIndex((v) => v.id === s));
-              const histogramQuantity = value?.histogramQuantity || 'density';
-              const histValues =
-                histogramQuantity === 'density'
-                  ? [c.target, c.pdf]
-                  : [histogramQuantity === 'relative' ? c.relative : c.logRatio];
-              const hist = view === 'histogram' ? diagnosticHistograms(histValues) : null;
-              return (
-                <Box
-                  key={c.scope}
-                  sx={{
-                    minWidth: 0
-                  }}
-                >
-                  <Typography variant="subtitle1">
-                    {name}
-                    {c.k != null ? ` · p = ${numeric(c.probability)}` : ''}
-                  </Typography>
-                  {view === 'mismatch' && numericalMissing > 0 && (
-                    <Typography variant="caption" color="text.secondary">
-                      Numerically unavailable ratios: {numericalMissing}. Check normalization or use
-                      log ratio to avoid division overflow.
-                    </Typography>
-                  )}
-                  {states && (
-                    <Typography variant="body2" color="text.secondary">
-                      Grid points — {states}.{' '}
-                      {view === 'mismatch' || view === 'histogram'
-                        ? 'Undefined/infinite ratios are excluded from numeric curves and remain visible in Coverage.'
-                        : ''}
-                    </Typography>
-                  )}
-                  {['density', 'mismatch'].includes(view) &&
-                    (!c.pdf.some(finite) || !c.target.some(finite)) && (
-                      <Alert severity="info">
-                        {c.zeroTarget && mode === 'shape'
-                          ? `${c.k == null ? 'The target is zero' : 'This stratum has no target support'} at the evaluated slice points. Unit-area normalization is undefined, so the target curve is omitted. The sampler PDF still shows where points are proposed.`
-                          : 'Normalization or density unavailable: check completion, positive slice integrals and exact prefix masses in the details below.'}
-                      </Alert>
-                    )}
-                  {view === 'histogram' ? (
-                    <>
-                      <Typography variant="caption">
-                        Distribution across deterministic grid points. No Monte Carlo error bars.{' '}
-                        {histogramQuantity === 'density'
-                          ? ''
-                          : 'Nonfinite ratios are counted above.'}
-                      </Typography>
-                      <HistogramPanel
-                        title={`${name} — ${histogramQuantity === 'density' ? 'Target / PDF distributions' : 'Mismatch distribution'}`}
-                        state={{
-                          kind: 'histogram',
-                          panel_id: `${state.panel_id}-histogram`,
-                          bins: hist[0],
-                          controls: {
-                            scale: true,
-                            x_scale: true,
-                            pdf_cdf: true,
-                            ratio: true,
-                            relative_error: false,
-                            export: true,
-                            reset_view: true,
-                            sort: false
-                          },
-                          overlay_alignment: 'shared_edges',
-                          overlay_histograms:
-                            hist.length > 1
-                              ? [
-                                  {
-                                    name: 'Sampler PDF',
-                                    bins: hist[1],
-                                    suppress_error_bars: true
-                                  }
-                                ]
-                              : []
-                        }}
-                        value={value?.histogram || {}}
-                        onValueChange={(_id, next) =>
-                          update({
-                            histogram: next
-                          })
-                        }
-                      />
-                    </>
-                  ) : line ? (
-                    <Figure
-                      name={name}
-                      option={lineComparisonOption(c, {
-                        view,
-                        metric,
-                        mode,
-                        log,
-                        prefixes,
-                        value
-                      })}
-                      payload={payload}
-                      onEvents={events}
-                    />
-                  ) : categorical ? (
-                    <Figure
-                      name={`${name} — ${view}`}
-                      option={planeComparisonOption(c, categoryValues, {
-                        label: view,
-                        categories,
-                        value,
-                        prefixes
-                      })}
-                      payload={payload}
-                      onEvents={events}
-                    />
-                  ) : view === 'mismatch' ? (
-                    <Figure
-                      name={`${name} — mismatch`}
-                      option={planeComparisonOption(
-                        c,
-                        metric === 'relative' ? c.relative : c.logRatio,
-                        {
-                          label: metric === 'relative' ? 'PDF / target − 1' : 'log₁₀(PDF / target)',
-                          limits,
-                          value,
-                          mismatch: true,
-                          prefixes
-                        }
-                      )}
-                      payload={payload}
-                      onEvents={events}
-                    />
-                  ) : (
-                    <Box
-                      sx={{
-                        display: 'grid',
-                        gridTemplateColumns: {
-                          xs: '1fr',
-                          md: '1fr 1fr'
-                        },
-                        gap: 2
-                      }}
-                    >
-                      <Figure
-                        name={`${name} — target`}
-                        option={planeComparisonOption(c, c.target, {
-                          label: 'Target',
-                          limits: targetLimits,
-                          log,
-                          value,
-                          prefixes,
-                          stratumColours
-                        })}
-                        payload={payload}
-                        onEvents={events}
-                      />
-                      <Figure
-                        name={`${name} — sampler`}
-                        option={planeComparisonOption(c, c.pdf, {
-                          label: 'Sampler density',
-                          limits,
-                          log,
-                          value,
-                          prefixes,
-                          stratumColours
-                        })}
-                        payload={payload}
-                        onEvents={events}
-                      />
-                    </Box>
-                  )}
-                </Box>
-              );
-            })}
-          </Stack>
-          <DisclosureField section label="Normalization and leakage details">
-              <Stack spacing={2}>
-                <DisclosureField label="Source target integral" value={numeric(state.data.global_abs_integrand_norm)}>
-                  <Typography variant="caption">This is the source estimate of the absolute-projection integral, not the magnitude of a signed integral. Full value: {String(state.data.global_abs_integrand_norm)}.</Typography>
-                </DisclosureField>
-                <Box
-                  sx={{
-                    overflowX: 'auto'
-                  }}
-                >
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        {[
-                          'Scope',
-                          'Raw target slice integral',
-                          'PDF slice integral',
-                          'Grid PDF integral',
-                          'Target divisor',
-                          'PDF divisor'
-                        ].map((s) => (
-                          <TableCell key={s}>{s}</TableCell>
-                        ))}
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {compared.map((c) => (
-                        <TableRow key={c.scope}>
-                          <TableCell>
-                            {c.k == null ? 'Overall' : prefixLabel(prefixes[c.k])}
-                          </TableCell>
-                          <TableCell><DisclosureField inline label="Raw target slice integral details" value={numeric(c.targetIntegral)}><Typography variant="caption">{fieldHelp("", "Raw target slice integral")} Full value: {String(c.targetIntegral)}</Typography></DisclosureField></TableCell>
-                          <TableCell>
-                            <DisclosureField inline label="PDF slice integral details" value={numeric(c.pdfIntegral)}>
-                              <Typography variant="caption">{fieldHelp("", "PDF slice integral")} Method: {c.pdfIntegralMethod}. Full value: {String(c.pdfIntegral)}.</Typography>
-                            </DisclosureField>
-                          </TableCell>
-                          <TableCell><DisclosureField inline label="Grid PDF integral details" value={numeric(c.gridPdfIntegral)}><Typography variant="caption">{fieldHelp("", "Grid PDF integral")} Full value: {String(c.gridPdfIntegral)}</Typography></DisclosureField></TableCell>
-                          <TableCell><DisclosureField inline label="Target divisor details" value={numeric(c.targetDivisor)}><Typography variant="caption">{fieldHelp("", "Target divisor")} Full value: {String(c.targetDivisor)}</Typography></DisclosureField></TableCell>
-                          <TableCell><DisclosureField inline label="PDF divisor details" value={numeric(c.pdfDivisor)}><Typography variant="caption">{fieldHelp("", "PDF divisor")} Full value: {String(c.pdfDivisor)}</Typography></DisclosureField></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Box>
-                {prefixes.length > 0 && (
-                  <Box
-                    sx={{
-                      overflowX: 'auto'
-                    }}
-                  >
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          {[
-                            'Stratum',
-                            'Exact requested p',
-                            'Target share on slice',
-                            'Mixture mass in actual cell',
-                            'Proposal outside intended cell'
-                          ].map((s) => (
-                            <TableCell key={s}>{s}</TableCell>
-                          ))}
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {details.map((c) => (
-                          <TableRow key={c.scope}>
-                            <TableCell>
-                              {c.k == null ? 'Overall' : prefixLabel(prefixes[c.k])}
-                            </TableCell>
-                            <TableCell><DisclosureField inline label="Exact requested p details" value={percent(c.probability)}><Typography variant="caption">{fieldHelp("", "Exact requested p")} Full fraction: {String(c.probability)}</Typography></DisclosureField></TableCell>
-                            <TableCell><DisclosureField inline label="Target share on slice details" value={percent(c.targetShare)}><Typography variant="caption">{fieldHelp("", "Target share on slice")} Full fraction: {String(c.targetShare)}</Typography></DisclosureField></TableCell>
-                            <TableCell><DisclosureField inline label="Mixture mass in actual cell details" value={percent(c.actualMass)}><Typography variant="caption">{fieldHelp("", "Mixture mass in actual cell")} Full fraction: {String(c.actualMass)}</Typography></DisclosureField></TableCell>
-                            <TableCell><DisclosureField inline label="Proposal outside intended cell details" value={percent(c.leakage)}><Typography variant="caption">{fieldHelp("", "Proposal outside intended cell")} Full fraction: {String(c.leakage)}</Typography></DisclosureField></TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                    <Typography variant="caption">
-                      Cell masses and leakage are grid estimates on this slice, not full-domain
-                      probabilities.{' '}
-                      {scope === 'overall' && prefixes.length > STRATA_PAGE_SIZE
-                        ? `Showing the first ${STRATA_PAGE_SIZE} strata; use Scope to inspect the others.`
-                        : ''}
-                    </Typography>
-                  </Box>
-                )}
-                <Typography variant="caption">
-                  Boundary positions are estimated from adjacent classified grid points; narrow or
-                  unsampled regions can be missed. Sampler densities remain unmasked outside their
-                  intended strata.
+              {prefixes.length > 0 && (
+                <Typography variant="body2">
+                  Source mode retains joint stratum PDFs, including their
+                  allocation probabilities. Mismatch therefore includes
+                  allocation and within-stratum shape. Slice mode removes the
+                  overall scale difference.
                 </Typography>
-              </Stack>
+              )}
+            </DisclosureField>
+          </ControlBar>
+          <ControlBar>
+            {!line && (
+              <TextField
+                select
+                label="Colormap"
+                value={palette}
+                onChange={(e) => update({ palette: e.target.value })}
+              >
+                {Object.keys(DENSITY_MAPS).map((name) => (
+                  <MenuItem key={name} value={name}>
+                    {name}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
+            <TextField
+              select
+              label="Scale"
+              sx={{ minWidth: 160 }}
+              value={log ? "log" : "linear"}
+              onChange={(e) => change({ log: e.target.value === "log" })}
+            >
+              <MenuItem value="linear">Linear</MenuItem>
+              <MenuItem value="log">Logarithmic</MenuItem>
+            </TextField>
+            <TextField
+              select
+              label="Auxiliary"
+              value={auxiliary}
+              onChange={(e) => update({ auxiliary: e.target.value })}
+            >
+              <MenuItem value="mismatch">Sampling mismatch</MenuItem>
+              {hasSign && <MenuItem value="sign">Projection sign</MenuItem>}
+            </TextField>
+            <TextField
+              select
+              label="Mismatch metric"
+              value={metric}
+              onChange={(e) => change({ metric: e.target.value })}
+            >
+              <MenuItem value="log_ratio">log₁₀(PDF / target)</MenuItem>
+              <MenuItem value="relative">PDF / target − 1</MenuItem>
+            </TextField>
+            <Button
+              onClick={() => update({ zoom: FULL_ZOOM, yZoom: FULL_ZOOM })}
+            >
+              Reset view
+            </Button>
+          </ControlBar>
+          {(!models.c.target.some(finite) || !models.c.pdf.some(finite)) && (
+            <Alert severity="info">
+              Normalization unavailable for one or both fields. Slice
+              normalization requires complete data and a positive mean.
+            </Alert>
+          )}
+          <Box sx={gridStyle}>
+            {line ? (
+              <>
+                <Figure
+                  title="Target / Sampler"
+                  option={options.density}
+                  zoom={zoom}
+                  onNavigate={navigate}
+                  exportButton={exports("density")}
+                />
+                <Figure
+                  title={
+                    auxiliary === "sign"
+                      ? "Projection sign"
+                      : "Sampling mismatch"
+                  }
+                  option={options.auxiliary}
+                  zoom={zoom}
+                  onNavigate={navigate}
+                  exportButton={exports(auxiliary)}
+                />
+              </>
+            ) : (
+              <>
+                <PlaneFigure
+                  title="Target"
+                  model={models.target}
+                  zoom={zoom}
+                  onNavigate={navigate}
+                  exportButton={exports("target")}
+                >
+                  {bar(models.target)}
+                </PlaneFigure>
+                <PlaneFigure
+                  title="Sampler"
+                  model={models.sampler}
+                  zoom={zoom}
+                  onNavigate={navigate}
+                  exportButton={exports("sampler")}
+                >
+                  {bar(models.sampler)}
+                </PlaneFigure>
+                <PlaneFigure
+                  title={
+                    auxiliary === "sign"
+                      ? "Projection sign"
+                      : "Sampling mismatch"
+                  }
+                  model={models[auxiliary]}
+                  zoom={zoom}
+                  onNavigate={navigate}
+                  exportButton={exports(auxiliary)}
+                >
+                  {bar(models[auxiliary])}
+                </PlaneFigure>
+              </>
+            )}
+          </Box>
+          <DisclosureField
+            section
+            label="Coverage"
+            value={`Zero PDF: ${counts.uncovered} · zero target: ${counts.leakage} · both zero: ${counts.both_zero} · unavailable: ${counts.missing}`}
+          >
+            <Typography variant="body2">
+              Positive target with zero PDF is red (−1 relative mismatch, −∞ log
+              ratio). Zero target with positive PDF is blue (+∞). Both zero
+              gives an undefined ratio; missing values are grey. On logarithmic
+              density plots, zero is light grey. Finite histogram densities
+              exclude nonfinite values; logarithmic value histograms also
+              exclude zeros.
+            </Typography>
+            {scope !== "overall" && (
+              <Typography variant="body2">
+                Requested stratum probability: {num(models.c.probability)}. PDF
+                leakage on this slice: {num(models.c.leakage)}. Target divisor:{" "}
+                {num(models.c.targetDivisor)}. PDF divisor:{" "}
+                {num(models.c.pdfDivisor)}.
+              </Typography>
+            )}
           </DisclosureField>
+          <ControlBar>
+            <TextField
+              select
+              label="Scale"
+              sx={{ minWidth: 160 }}
+              value={settings.histogramLog ? "log" : "linear"}
+              onChange={(e) =>
+                update({ histogramLog: e.target.value === "log" })
+              }
+            >
+              <MenuItem value="linear">Linear</MenuItem>
+              <MenuItem value="log">Logarithmic</MenuItem>
+            </TextField>
+            <FormControlLabel
+              label="Weight by sampler density"
+              control={
+                <Switch
+                  checked={histogramWeighted}
+                  onChange={(e) =>
+                    update({ histogramWeighted: e.target.checked })
+                  }
+                />
+              }
+            />
+            <DisclosureField
+              inline
+              label="Histogram definitions"
+              value="Distributions across grid points"
+            >
+              <Typography variant="body2">
+                With weighting enabled, each grid point contributes its sampler
+                density to both histograms, using the selected stratum's joint
+                PDF. Disabling weighting gives every grid point equal weight.
+                Bin densities are divided by the total included weight and
+                actual bin width. Zero-density regions have zero weight; use
+                unweighted histograms and Coverage to inspect them. These are
+                deterministic grid diagnostics with no Monte Carlo error bars.
+                Spatial zoom does not change their population.
+              </Typography>
+              <Typography variant="body2">
+                Target zeros: {models.c.target.filter((v) => v === 0).length};
+                Sampler zeros: {models.c.pdf.filter((v) => v === 0).length}.
+                Nonfinite mismatch values:{" "}
+                {models.mismatch.values.filter((v) => !finite(v)).length}.
+              </Typography>
+            </DisclosureField>
+          </ControlBar>
+          {histogramWeighted &&
+            !comparison.joint.some((v) => finite(v) && v > 0) && (
+              <Alert severity="info">
+                No positive sampler density is available for weighted
+                histograms. Disable weighting to inspect the grid values.
+              </Alert>
+            )}
+          <Box sx={gridStyle}>
+            <Figure
+              title="Target / Sampler distribution"
+              option={options.densityHistogram}
+              exportButton={exports("densityHistogram")}
+            />
+            <Figure
+              title="Mismatch distribution"
+              option={options.mismatchHistogram}
+              exportButton={exports("mismatchHistogram")}
+            />
+          </Box>
         </Stack>
       </CardContent>
     </Card>
   );
-});
+}
 
-export default PdfComparisonPanel;
+export default memo(PdfComparisonPanel);

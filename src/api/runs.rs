@@ -402,10 +402,16 @@ pub async fn append_tasks(
         })?;
     let domain = run
         .domain
+        .clone()
         .ok_or_else(|| ApiError::Internal(format!("run {run_id} is missing domain")))?;
     let existing = store.list_run_tasks(run_id).await?;
     TaskPreflightContext::from_existing_tasks(&existing, integration_params.evaluator, domain)?
         .validate_batch(&tasks)?;
+    if run.spawn_kind.as_deref() == Some("integration_campaign") {
+        let mut next = existing.iter().map(task_definition).collect::<Vec<_>>();
+        next.extend(tasks.iter().cloned());
+        validate_queue_definition(&run, &next)?;
+    }
     if tasks.is_empty() {
         return Err(ApiError::BadRequest("provide at least one task".into()));
     }
@@ -436,6 +442,11 @@ pub async fn remove_run(
     run_id: i32,
 ) -> Result<RemovedRun, ApiError> {
     let run = load_run_progress(store, run_id).await?;
+    if run.parent_run_id.is_some() && run.spawn_kind.as_deref() == Some("integration_campaign") {
+        return Err(ApiError::BadRequest(
+            "delete this child through its campaign's Edit children tab".into(),
+        ));
+    }
     store.remove_run(run_id).await?;
     Ok(RemovedRun {
         run_id,
@@ -504,11 +515,31 @@ pub async fn export_run_definition(
             if run.kind() == "integration_campaign" {
                 for task in store.list_run_tasks(run_id).await? {
                     if let crate::core::RunTaskSpec::IntegrationCampaign {
+                        mut children,
                         allocation,
                         stop_condition,
                         ..
                     } = task.task
                     {
+                        let runs = store
+                            .get_child_runs_for_task(run_id, task.id, "integration_campaign")
+                            .await?;
+                        for child in &mut children {
+                            if let Some(run) = runs
+                                .iter()
+                                .find(|run| run.spawn_label.as_deref() == Some(child.name.as_str()))
+                            {
+                                child.run = crate::core::tasks::ChildRunSource::Inline(
+                                    Box::pin(export_run_definition(store, run.run_id)).await?,
+                                );
+                                child.replacements.clear();
+                            }
+                        }
+                        table.insert(
+                            "children".into(),
+                            toml::Value::try_from(children)
+                                .map_err(|e| ApiError::Internal(e.to_string()))?,
+                        );
                         table.insert(
                             "allocation".into(),
                             toml::Value::try_from(allocation)
@@ -621,7 +652,7 @@ pub async fn append_task_duplicate(
     .await
 }
 
-fn task_definition(task: &RunTask) -> RunTaskInput {
+pub(crate) fn task_definition(task: &RunTask) -> RunTaskInput {
     RunTaskInput {
         name: Some(task.name.clone()),
         task: task.task.clone(),
@@ -663,7 +694,7 @@ fn ensure_editable_queue(run: &RunProgress) -> Result<(), ApiError> {
             "only integration runs have an editable task queue".into(),
         ));
     }
-    if run.parent_run_id.is_some() {
+    if run.parent_run_id.is_some() && run.spawn_kind.as_deref() != Some("integration_campaign") {
         return Err(ApiError::BadRequest("this task queue is managed by its parent; duplicate the child as a standalone run to edit it".into()));
     }
     Ok(())
@@ -733,7 +764,25 @@ pub async fn edit_pending_task(
     Ok(())
 }
 
-fn validate_queue_definition(run: &RunProgress, tasks: &[RunTaskInput]) -> Result<(), ApiError> {
+pub(crate) fn validate_queue_definition(
+    run: &RunProgress,
+    tasks: &[RunTaskInput],
+) -> Result<(), ApiError> {
+    if run.spawn_kind.as_deref() == Some("integration_campaign")
+        && !tasks.iter().any(|task| {
+            matches!(
+                task.task,
+                crate::core::RunTaskSpec::Sample {
+                    publish_result: true,
+                    ..
+                }
+            )
+        })
+    {
+        return Err(ApiError::BadRequest(
+            "a campaign child must retain a publishing sample task".into(),
+        ));
+    }
     let params: IntegrationParams = serde_json::from_value(
         run.integration_params
             .clone()
@@ -744,7 +793,64 @@ fn validate_queue_definition(run: &RunProgress, tasks: &[RunTaskInput]) -> Resul
         .domain
         .clone()
         .ok_or_else(|| ApiError::Internal("run has no domain".into()))?;
+    if run.spawn_kind.as_deref() == Some("integration_campaign") {
+        let raw = canonical_run_toml(
+            &run.run_name,
+            &params,
+            run.target.as_ref(),
+            run.target_error.as_ref(),
+            tasks,
+        )?;
+        campaign_component_schema(parse_run_add_config_toml(&raw)?)?;
+    }
     TaskPreflightContext::from_existing_tasks(&[], params.evaluator, domain)?.validate_batch(tasks)
+}
+
+pub(crate) fn campaign_component_schema(config: RunDefinition) -> Result<Vec<String>, ApiError> {
+    let prepared = prepare_run(config)?;
+    let mut context = TaskPreflightContext::from_existing_tasks(
+        &[],
+        prepared.integration_params.evaluator,
+        prepared.domain,
+    )?;
+    let mut schema = None;
+    for task in &prepared.task_queue {
+        context.validate_task(task)?;
+        if matches!(
+            task.task,
+            crate::core::RunTaskSpec::Sample {
+                publish_result: true,
+                ..
+            }
+        ) {
+            let accumulator = context
+                .current_accumulator
+                .as_ref()
+                .ok_or_else(|| ApiError::BadRequest("publishing task has no accumulator".into()))?;
+            let mut components = match accumulator {
+                AccumulatorConfig::Gammaloop => vec!["real".to_string(), "imag".to_string()],
+                _ => accumulator
+                    .components()
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(
+                            "publishing accumulator has no combinable components".into(),
+                        )
+                    })?
+                    .to_vec(),
+            };
+            components.sort();
+            if schema
+                .as_ref()
+                .is_some_and(|previous| *previous != components)
+            {
+                return Err(ApiError::BadRequest(
+                    "publishing tasks change the campaign component schema".into(),
+                ));
+            }
+            schema = Some(components);
+        }
+    }
+    schema.ok_or_else(|| ApiError::BadRequest("child has no publishing task".into()))
 }
 
 async fn preflight_task_batch(

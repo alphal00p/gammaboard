@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs, fetchCampaign, updateOfflineNode, editRunTask, createRun, saveTemplateFile } from "./api";
+import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs, fetchCampaign, updateOfflineNode, editRunTask, createRun, saveTemplateFile, previewCampaignEdit, applyCampaignEdit } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -125,4 +125,16 @@ test("dashboard mutations use the canonical contract and preserve bigint task ID
     .mockResolvedValueOnce({ ok: true, json: async () => ({ created: { run_id: 12 } }) });
   expect(await createRun("name='new'")).toEqual({ run_id: 12 });
   expect(JSON.parse(fetch.mock.lastCall[1].body)).toMatchObject({ operation: "run_create", base_dir: "/shared/templates/runs", start: false });
+});
+
+
+test("campaign child edits use management actions and preserve preview and retry tokens", async () => {
+  const fetch = vi.fn().mockResolvedValue({ok: true, json: async () => ({})});
+  vi.stubGlobal("fetch", fetch);
+  const edit = {action: "add_task", children: [2], request_id: "retry-token", expected: {revision: "preview-token"}};
+  for (const [call, action] of [[previewCampaignEdit, "campaign_children_preview"], [applyCampaignEdit, "campaign_children_apply"]]) {
+    await call(1, "9007199254740993", edit);
+    expect(fetch.mock.lastCall[0]).toBe("/api/v1/manage");
+    expect(JSON.parse(fetch.mock.lastCall[1].body)).toEqual({operation: "task", run: "1", action: {action, id: "9007199254740993", edit}});
+  }
 });

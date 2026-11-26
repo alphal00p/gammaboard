@@ -231,3 +231,44 @@ test('conditional PDFs divide only by exact prefix mass, keep leakage and gate o
   expect(missing.zeroTarget).toBe(false);
   expect(missing.counts.missing).toBe(3);
 });
+
+test('slice normalization is mean-one and source normalization leaves joint allocations intact',()=>{
+  const slice=pdfComparison(state,'0','slice');
+  expect(slice.target.reduce((a,b)=>a+b)/3).toBeCloseTo(1);
+  expect(slice.pdf.reduce((a,b)=>a+b)/3).toBeCloseTo(1);
+  const ref=pdfComparison({...state,data:{...state.data,reference:{value:4}}},'0','reference');
+  expect(ref.target).toEqual([0.5,0,0]);
+  expect(ref.pdf).toEqual([0.5,0.2,0.05]);
+  expect(ref.sign).toEqual([-1,0,0]);
+});
+
+test('logarithmic histograms share geometric bins and integrate to one per unit value',()=>{
+  const hist=diagnosticHistograms([[0,0.01,1,100],[0.1,10]],4,true);
+  expect(hist[0].map(b=>[b.start,b.stop])).toEqual(hist[1].map(b=>[b.start,b.stop]));
+  for(const bins of hist)expect(bins.reduce((sum,b)=>sum+b.value*(b.stop-b.start),0)).toBeCloseTo(1);
+  expect(hist[0][0].start).toBeCloseTo(0.01);
+});
+
+test('sampler-weighted histograms normalize by included PDF mass and retain uniform mode',()=>{
+  const values=[[0,1],[1,0]],weights=[1,3];
+  const weighted=diagnosticHistograms(values,2,false,weights);
+  expect(weighted[0].map(b=>b.value*(b.stop-b.start))).toEqual([0.25,0.75]);
+  expect(weighted[1].map(b=>b.value*(b.stop-b.start))).toEqual([0.75,0.25]);
+  expect(diagnosticHistograms(values,2)[0].map(b=>b.value*(b.stop-b.start))).toEqual([0.5,0.5]);
+  expect(diagnosticHistograms(values,2,false,[0,0])).toEqual([[],[]]);
+  const log=diagnosticHistograms([[0,1,10]],2,true,[100,1,3])[0];
+  expect(log.reduce((sum,b)=>sum+b.value*(b.stop-b.start),0)).toBeCloseTo(1);
+  expect(diagnosticHistograms(values,2,false,[1e308,1e308])[0].every(b=>Number.isFinite(b.value))).toBe(true);
+});
+
+test.each([false, true])('weighting retains bin edges when extreme values have zero density (log=%s)', log => {
+  const values = [[0, 0.01, 1, 10, 100], [0, 0.1, 2, 20, 1000]];
+  const uniform = diagnosticHistograms(values, 4, log);
+  const weighted = diagnosticHistograms(values, 4, log, [0, 0, 1, 3, 0]);
+  for (let i = 0; i < values.length; i++) {
+    expect(weighted[i].map(b => [b.start, b.stop])).toEqual(uniform[i].map(b => [b.start, b.stop]));
+    expect(weighted[i].at(-1).stop).toBeCloseTo(1000);
+    expect(weighted[i].at(-1).value).toBe(0);
+    expect(weighted[i].reduce((sum, b) => sum + b.value * (b.stop - b.start), 0)).toBeCloseTo(1);
+  }
+});

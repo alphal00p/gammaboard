@@ -36,35 +36,41 @@ pub(super) async fn export_campaign(
     let mut inputs = Vec::with_capacity(children.len());
     let mut exported_children = Vec::new();
     for child in children {
-        let run = runs.get(&child.name).ok_or_else(|| {
-            ApiError::BadRequest(format!("Child '{}' has not been created yet", child.name))
-        })?;
+        let Some(run) = runs.get(&child.name) else {
+            inputs.push((child.name.as_str(), child.coefficient, None));
+            continue;
+        };
         let (published, _, _) =
             crate::runners::controller_child::load_published_child_result(&state.store, run.run_id)
                 .await?;
-        let accumulator = published.accumulator.ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "Child '{}' has no published accumulator",
-                child.name
-            ))
-        })?;
-        if request.include_children {
-            let bundle =
-                crate::services::results::observable_payload(&accumulator).ok_or_else(|| {
-                    ApiError::BadRequest(format!("Child '{}' has no observable bundle", child.name))
-                })?;
-            exported_children.push(serde_json::json!({"name": child.name, "coefficient": child.coefficient, "source": published.source, "bundle": bundle}));
+        if request.include_children
+            && let Some(bundle) = published
+                .accumulator
+                .as_ref()
+                .and_then(crate::services::results::observable_payload)
+        {
+            exported_children.push(serde_json::json!({"name":child.name,"coefficient":child.coefficient,"source":published.source,"bundle":bundle}));
         }
-        inputs.push((child.coefficient, accumulator));
+        inputs.push((
+            child.name.as_str(),
+            child.coefficient,
+            published.accumulator,
+        ));
     }
     let references = inputs
         .iter()
-        .map(|(coefficient, accumulator)| (*coefficient, accumulator))
+        .map(|(name, coefficient, accumulator)| (*name, *coefficient, accumulator.as_ref()))
         .collect::<Vec<_>>();
     let observables = crate::services::results::combine_independent_observables(&references)
         .ok_or_else(|| {
             ApiError::BadRequest("Children do not yet have usable observable bundles".into())
         })?;
+    // An absent bundle must not prevent exporting the available child bundles.
+    exported_children.retain(|child| {
+        observables["coverage"]["contributing"]
+            .as_array()
+            .is_some_and(|names| names.contains(&child["name"]))
+    });
     let result =
         serde_json::json!({"observables": observables, "observable_children": exported_children});
     let format = request.format.trim().to_ascii_lowercase();
@@ -86,7 +92,22 @@ fn prepare_campaign_export(
         .filter(|value| value.get("histograms").is_some())
         .cloned()
         .ok_or_else(|| ApiError::BadRequest("This result has no campaign observables".into()))?;
-    if format == "json" {
+    let unavailable_errors = bundle["histograms"].as_object().is_some_and(|histograms| {
+        histograms.values().any(|histogram| {
+            histogram["bins"].as_array().is_some_and(|bins| {
+                bins.iter()
+                    .chain(
+                        ["underflow_bin", "overflow_bin"]
+                            .into_iter()
+                            .filter_map(|key| histogram.get(key)),
+                    )
+                    .any(|bin| bin.get("error").is_none_or(Value::is_null))
+            })
+        })
+    });
+    // Normalized JSON can preserve unavailable errors. Do not manufacture raw
+    // moments (or zero errors) until all uncertainties can be represented.
+    if format == "json" && !unavailable_errors {
         let histograms = bundle["histograms"]
             .as_object_mut()
             .ok_or_else(|| ApiError::BadRequest("invalid histogram bundle".into()))?;
@@ -201,7 +222,19 @@ pub(super) fn write_hwu(bundle: &Value) -> Result<String, ApiError> {
         .as_object()
         .ok_or_else(|| ApiError::BadRequest("expected a histograms object".into()))?;
     let mut contents = String::new();
+    if let Some(coverage) = bundle.get("coverage") {
+        writeln!(contents, "# Campaign coverage: {coverage}").unwrap();
+    }
     for (name, histogram) in histograms {
+        if let Some(coverage) = histogram.get("coverage") {
+            writeln!(
+                contents,
+                "# Observable {} coverage: {}",
+                hwu_metadata(name),
+                coverage
+            )
+            .unwrap();
+        }
         let bins = histogram["bins"]
             .as_array()
             .ok_or_else(|| ApiError::BadRequest(format!("histogram '{name}' has no bins array")))?;
@@ -417,8 +450,8 @@ mod tests {
         };
         let mut left = make(&[1.0, 3.0]);
         let mut right = make(&[2.0, 4.0, 6.0]);
-        // One observable is absent and one has incompatible geometry. Neither
-        // belongs in the aggregate, but the original child bundles retain them.
+        // An absent observable contributes a labelled partial result. Conflicting
+        // geometry still prevents combining that observable.
         if let AccumulatorState::Gammaloop(state) = &mut left {
             let original = state.bundle.histograms["energy"].clone();
             state
@@ -439,8 +472,8 @@ mod tests {
                 .insert("different_bins".into(), incompatible);
         }
         let observables = crate::services::results::combine_independent_observables(&[
-            (2.0, &left),
-            (-0.5, &right),
+            ("left", 2.0, Some(&left)),
+            ("right", -0.5, Some(&right)),
         ])
         .unwrap();
         json!({"observables": observables, "observable_children": [
@@ -459,10 +492,10 @@ mod tests {
         assert_eq!(aggregate["statistics_kind"], "derived_moments");
         assert_eq!(
             aggregate["omitted_incompatible_histograms"],
-            json!(["different_bins", "only_left"])
+            json!(["different_bins"])
         );
         let decoded: ObservableSnapshotBundle = serde_json::from_value(aggregate.clone()).unwrap();
-        assert_eq!(decoded.histograms.len(), 1);
+        assert_eq!(decoded.histograms.len(), 2);
         let histogram = &decoded.histograms["energy"];
         assert_eq!(histogram.sample_count, 5);
         assert_eq!(histogram.bins[0].entry_count, 5);
@@ -494,7 +527,7 @@ mod tests {
             assert_eq!(imported["histograms"]["Energy"]["bins"][0]["value"], 2.0);
             assert_eq!(
                 imported["histograms"].as_object().unwrap().len(),
-                if include { 6 } else { 1 }
+                if include { 7 } else { 2 }
             );
             if include {
                 assert_eq!(
@@ -564,5 +597,24 @@ mod tests {
             serde_json::from_value(derived_histogram("one", &histogram).unwrap()).unwrap();
         assert_eq!(decoded.bins[0].average(1), 2.0);
         assert_eq!(decoded.bins[0].error(1), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod partial_export_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn campaign_partial_json_retains_unknown_errors_and_coverage() {
+        let result = json!({"observables":{"statistics_kind":"independent_child_estimates",
+            "coverage":{"partial":true,"contributing":["A"],"missing":["B"],"total_children":2},
+            "histograms":{"h":{"sample_count":1,"coverage":{"partial":true,"contributing_count":1,"total_children":2},
+                "bins":[{"start":0.,"stop":1.,"value":3.,"error":null}]}}}});
+        let payload = prepare_campaign_export(&result, false, "json").unwrap();
+        assert_eq!(payload, result["observables"]);
+        assert!(
+            write_hwu(&payload).is_err(),
+            "HwU must not invent an error for the first sample"
+        );
     }
 }

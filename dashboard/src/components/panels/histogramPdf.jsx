@@ -70,6 +70,7 @@ export const renderHistogramBundlePdf = async ({ payload, panelId, value, upload
       let top = 52 + (title.length - 1) * 18;
       pdf.setFontSize(9);
       const notes = [payload.estimator_note,
+        histogram.coverage?.partial ? `Partial result: ${histogram.coverage.contributing_count}/${histogram.coverage.total_children} children. Errors cover included contributions only.` : null,
         plots.approximateErrors ? "Merged-bin errors assume uncorrelated bins." : null,
         plots.cumulativeErrorsUnavailable ? "Cumulative uncertainties are unavailable without covariance between bins." : null,
         plots.unmatchedComparison ? "Comparison ratios require matching intervals or exact sums of finer bins." : null,

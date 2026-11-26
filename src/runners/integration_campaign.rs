@@ -96,7 +96,7 @@ where
             .unwrap_or_default();
 
         let mut states = Vec::with_capacity(children.len());
-        let mut failure = None;
+        let mut failure: Option<String> = None;
         for child in children {
             let run_id = *by_label
                 .get(&child.name)
@@ -124,17 +124,11 @@ where
                 .ok()
                 .map(|results| TaskMeasurementOutput::Completed { results })
             });
-            persisted.output = match persisted.output {
-                failed @ Some(TaskMeasurementOutput::Failed { .. }) => failed,
-                _ => projected,
-            };
+            persisted.output = projected;
             let observed = persisted.controller_output();
             let child_failure_reason = observed
                 .failure_reason
                 .map(|reason| format!("campaign child '{}' failed: {reason}", child.name));
-            if let Some(reason) = &child_failure_reason {
-                failure.get_or_insert_with(|| reason.clone());
-            }
             states.push(ChildState {
                 final_stage_ready,
                 work_samples,
@@ -189,14 +183,20 @@ where
             .store
             .allocate_campaign_samples(self.task.id, &[])
             .await?;
-        let unallocated = stop_condition
-            .max_total_samples
-            .map(|cap| cap.saturating_sub(grants.values().sum::<i64>()));
+        let retired_produced = self.store.campaign_removed_produced(self.task.id).await?;
+        let unallocated = stop_condition.max_total_samples.map(|cap| {
+            cap.saturating_sub(grants.values().sum::<i64>())
+                .saturating_sub(retired_produced)
+                .max(0)
+        });
         let outstanding = states.iter().any(|child| {
-            child.task_state != RunTaskState::Completed
-                && grants.get(&child.run_id).copied().unwrap_or(0) > child.work_samples
+            !matches!(
+                child.task_state,
+                RunTaskState::Completed | RunTaskState::Failed
+            ) && grants.get(&child.run_id).copied().unwrap_or(0) > child.work_samples
         });
 
+        let complete = states.iter().all(|child| child.results().is_some());
         let combined_results = combine_measurements(&states);
         let combined_measurement = combined_results
             .clone()
@@ -204,13 +204,58 @@ where
         let result_snapshot_id = self
             .persist_derived_result(&states, combined_results.as_deref(), previous_output)
             .await?;
-        let total_samples = states.iter().map(|child| child.work_samples).sum::<i64>();
+        let total_samples = states.iter().map(|child| child.work_samples).sum::<i64>()
+            + self.store.campaign_removed_samples(self.task.id).await?;
+        let rescheduling = self.store.campaign_is_draining(self.task.id).await?;
+        if rescheduling {
+            // Recover a drain even if its original worker expired. Draining
+            // needs one evaluator per child, regardless of the new steady-state
+            // requirement; acknowledged children can yield their workers.
+            let targets = self.store.campaign_drain_targets(self.task.id).await?;
+            if !targets.is_empty() {
+                let mut selected = targets
+                    .into_iter()
+                    .take(worker_counts.0.min(worker_counts.1))
+                    .collect::<Vec<_>>();
+                for id in &previous_selected {
+                    if selected.len() >= worker_counts.0.min(worker_counts.1) {
+                        break;
+                    }
+                    if !selected.contains(id) && !self.store.run_drain_requested(*id).await? {
+                        selected.push(*id);
+                    }
+                }
+                apply_controller_assignment_plan(
+                    &self.store,
+                    ControllerAssignmentPlan::new(self.run_id, selected),
+                )
+                .await?;
+            }
+            let mut output = build_output(
+                &states,
+                &previous_selected,
+                total_samples,
+                worker_counts,
+                combined_measurement,
+                result_snapshot_id,
+                allocation,
+            );
+            output.draining = true;
+            self.persist_output(&output).await?;
+            return Ok(false);
+        }
         let pilots_complete = states.iter().all(|child| {
-            child.final_stage_ready && child.sample_count() >= allocation.min_samples_per_child
+            child.results().is_some()
+                && (child.task_state == RunTaskState::Failed
+                    || (child.final_stage_ready
+                        && child.sample_count() >= allocation.min_samples_per_child))
         });
-        let final_results_ready = states.iter().all(|child| child.final_stage_ready);
+        let final_results_ready = states.iter().all(|child| {
+            child.final_stage_ready
+                || (child.task_state == RunTaskState::Failed && child.results().is_some())
+        });
 
-        if (combined_results.is_none() || !final_results_ready)
+        if (!complete || combined_results.is_none() || !final_results_ready)
             && stop_condition
                 .max_total_samples
                 .is_some_and(|limit| total_samples >= limit)
@@ -231,12 +276,19 @@ where
                 allocation,
             );
             self.persist_output(&output).await?;
-            return finish_controller(&self.store, self.run_id, self.task.id, Err(&reason)).await;
+            let _ = reason;
+            apply_controller_assignment_plan(
+                &self.store,
+                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
+            )
+            .await?;
+            return Ok(false);
         }
 
-        let target_reached = combined_results.as_deref().is_some_and(|results| {
-            campaign_should_stop(results, total_samples, pilots_complete, stop_condition)
-        });
+        let target_reached = complete
+            && combined_results.as_deref().is_some_and(|results| {
+                campaign_should_stop(results, total_samples, pilots_complete, stop_condition)
+            });
         // Finish granted work before publishing a terminal estimate. After draining,
         // recheck the error target against all accepted samples before deciding to stop.
         let draining = outstanding
@@ -280,15 +332,18 @@ where
         let can_allocate = unallocated != Some(0) && !draining;
         let eligible = states
             .iter()
-            .filter(|child| child.task_state != RunTaskState::Completed)
+            .filter(|child| {
+                !matches!(
+                    child.task_state,
+                    RunTaskState::Completed | RunTaskState::Failed
+                )
+            })
             .filter(|child| {
                 can_allocate || grants.get(&child.run_id).copied().unwrap_or(0) > child.work_samples
             })
             .map(|child| child.run_id)
             .collect::<BTreeSet<_>>();
         if eligible.is_empty() {
-            let reason =
-                "integration campaign exhausted all child runs before reaching its stop condition";
             let output = build_output(
                 &states,
                 &[],
@@ -299,7 +354,12 @@ where
                 allocation,
             );
             self.persist_output(&output).await?;
-            return finish_controller(&self.store, self.run_id, self.task.id, Err(reason)).await;
+            apply_controller_assignment_plan(
+                &self.store,
+                ControllerAssignmentPlan::new(self.run_id, Vec::new()),
+            )
+            .await?;
+            return Ok(false);
         }
 
         let selected = schedule_children(
@@ -407,48 +467,71 @@ where
         previous: Option<&IntegrationCampaignOutput>,
     ) -> Result<Option<String>, StoreError> {
         let previous_id = previous.and_then(|output| output.result_snapshot_id.clone());
-        let Some(metrics) = metrics else {
-            return Ok(previous_id);
-        };
-        let sources = states
-            .iter()
-            .map(|state| state.result_source.clone())
-            .collect::<Vec<_>>();
-        let unchanged =
-            previous.is_some_and(|output| {
+        let unchanged = previous_id.is_some()
+            && previous.is_some_and(|output| {
                 output.children.len() == states.len()
                     && output.children.iter().zip(states).all(|(old, new)| {
                         old.child.result_source.as_ref() == Some(&new.result_source)
                     })
-                    && matches!(
-                        output.combined_measurement.as_ref(),
-                        Some(TaskMeasurementOutput::Completed { results }) if results == metrics
-                    )
+                    && match (output.combined_measurement.as_ref(), metrics) {
+                        (Some(TaskMeasurementOutput::Completed { results }), Some(metrics)) => {
+                            results == metrics
+                        }
+                        (None, None) => true,
+                        _ => false,
+                    }
             });
         if unchanged {
             return Ok(previous_id);
         }
-        let Some(observable_inputs) = states
+        let observable_inputs = states
             .iter()
-            .map(|state| Some((state.coefficient, state.accumulator.as_ref()?)))
-            .collect::<Option<Vec<_>>>()
-        else {
-            return Ok(previous_id);
-        };
-        if observable_inputs
-            .iter()
-            .any(|(_, accumulator)| accumulator.sample_count() <= 0)
-        {
-            return Ok(previous_id);
+            .map(|state| {
+                (
+                    state.name.as_str(),
+                    state.coefficient,
+                    state.accumulator.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let observables = combine_independent_observables(&observable_inputs);
+        if metrics.is_none() && observables.is_none() {
+            return Ok(None);
         }
+        let sources = states
+            .iter()
+            .filter(|state| {
+                state.results().is_some()
+                    || observables
+                        .as_ref()
+                        .and_then(|bundle| bundle["coverage"]["contributing"].as_array())
+                        .is_some_and(|names| {
+                            names
+                                .iter()
+                                .any(|name| name.as_str() == Some(state.name.as_str()))
+                        })
+            })
+            .map(|state| state.result_source.clone())
+            .collect();
         let result = DerivedResultSnapshot {
             sources,
-            metrics: metrics.to_vec(),
-            observables: combine_independent_observables(&observable_inputs),
+            metrics: metrics.unwrap_or_default().to_vec(),
+            observables,
         };
-        let payload = serde_json::to_value(result).map_err(|err| {
+        let mut payload = serde_json::to_value(result).map_err(|err| {
             StoreError::store(format!("failed to serialize campaign result: {err}"))
         })?;
+        let contributing = states
+            .iter()
+            .filter(|child| child.results().is_some())
+            .map(|child| child.name.clone())
+            .collect::<Vec<_>>();
+        let missing = states
+            .iter()
+            .filter(|child| child.results().is_none())
+            .map(|child| child.name.clone())
+            .collect::<Vec<_>>();
+        payload["coverage"] = serde_json::json!({"contributing":contributing,"missing":missing,"total_children":states.len(),"partial":!missing.is_empty()});
         let id = self
             .store
             .persist_task_result_snapshot(self.run_id, self.task.id, &payload)
@@ -578,19 +661,20 @@ fn schedule_children(
 }
 
 fn combine_measurements(states: &[ChildState]) -> Option<Vec<MeasurementResult>> {
-    if states.iter().any(|child| child.results().is_none()) {
-        return None;
-    }
+    let states = states
+        .iter()
+        .filter(|child| child.results().is_some())
+        .collect::<Vec<_>>();
     let first = states.first()?.results()?;
     let mut combined = Vec::with_capacity(first.len());
     for template in first {
         let mut value = 0.0;
-        let mut variance = 0.0;
+        let mut variance = Some(0.0);
         let mut sample_count = 0i64;
         let mut pooled_mean = 0.0;
         let mut pooled_variance = Some(0.0);
         let mut has_pooled = false;
-        for child in states {
+        for child in &states {
             let result = child.results()?.iter().find(|result| {
                 result.name == template.name && result.component == template.component
             })?;
@@ -606,7 +690,9 @@ fn combine_measurements(states: &[ChildState]) -> Option<Vec<MeasurementResult>>
             pooled_variance = pooled_variance
                 .zip(error)
                 .map(|(sum, e)| sum + child.coefficient.powi(2) * e.powi(2));
-            variance += child.coefficient.powi(2) * result.uncertainty?.powi(2);
+            variance = variance
+                .zip(result.uncertainty)
+                .map(|(sum, error)| sum + child.coefficient.powi(2) * error.powi(2));
             sample_count = sample_count.saturating_add(result.sample_count);
         }
         combined.push(MeasurementResult {
@@ -618,7 +704,7 @@ fn combine_measurements(states: &[ChildState]) -> Option<Vec<MeasurementResult>>
             name: template.name,
             component: template.component.clone(),
             value,
-            uncertainty: Some(variance.sqrt()),
+            uncertainty: variance.map(f64::sqrt),
             sample_count,
         });
     }
@@ -667,6 +753,10 @@ fn build_output(
 ) -> IntegrationCampaignOutput {
     let selected = selected.iter().copied().collect::<BTreeSet<_>>();
     IntegrationCampaignOutput {
+        contributing_children: states
+            .iter()
+            .filter(|child| child.results().is_some())
+            .count(),
         applied_scheduling: serde_json::Value::Null,
         completed_children: states
             .iter()
@@ -719,7 +809,13 @@ mod tests {
     use super::*;
     use crate::core::AccumulatorMetricName;
 
-    fn child(run_id: i32, coefficient: f64, value: f64, error: f64, samples: i64) -> ChildState {
+    pub(super) fn child(
+        run_id: i32,
+        coefficient: f64,
+        value: f64,
+        error: f64,
+        samples: i64,
+    ) -> ChildState {
         ChildState {
             final_stage_ready: true,
             work_samples: samples,
@@ -1075,7 +1171,9 @@ mod tests {
                 .score(IntegrationCampaignAllocationAlgorithm::LargestVariance)
                 .is_none()
         );
-        assert!(combine_measurements(&[child]).is_none());
+        let combined = combine_measurements(&[child]).unwrap();
+        assert!(combined[0].uncertainty.is_none());
+        assert!(!campaign_should_stop(&combined, 128, true, &stop));
         for _ in 0..2 {
             state.push(0, &[0.], 2., true).unwrap();
         }
@@ -1114,5 +1212,94 @@ mod tests {
             .to_json()
             .expect("json");
         assert!(value.pointer("/bundle/histograms").is_some());
+    }
+}
+
+#[cfg(test)]
+mod partial_result_tests {
+    use super::*;
+    #[test]
+    fn means_are_available_without_errors_and_missing_children_are_not_zero_measurements() {
+        let mut states = vec![
+            super::tests::child(1, 2., 3., 0.4, 10),
+            super::tests::child(2, 1., 9., 0.2, 0),
+        ];
+        states[1].measurement = None;
+        let results = combine_measurements(&states).unwrap();
+        assert_eq!(results[0].value, 6.);
+        assert_eq!(results[0].sample_count, 10);
+        assert_eq!(results[0].uncertainty, Some(0.8));
+        if let Some(TaskMeasurementOutput::Completed { results }) = &mut states[0].measurement {
+            results[0].uncertainty = None;
+        }
+        let results = combine_measurements(&states).unwrap();
+        assert_eq!(results[0].value, 6.);
+        assert!(results[0].uncertainty.is_none());
+        states[0].task_state = RunTaskState::Failed;
+        assert!(combine_measurements(&states).is_some());
+    }
+}
+
+#[cfg(all(test, feature = "gammaloop"))]
+mod observable_publication_tests {
+    use super::*;
+    use crate::evaluation::{AccumulatorState, accumulator::GammaLoopAccumulatorState};
+    use gammalooprs::observables::{
+        HistogramAccumulatorState, ObservablePhase, ObservableValueTransform,
+    };
+    #[tokio::test]
+    async fn campaign_observables_publish_even_without_a_scalar_measurement() {
+        let mut histogram = HistogramAccumulatorState::continuous(
+            "Energy".into(),
+            "HwU".into(),
+            ObservablePhase::Real,
+            ObservableValueTransform::Identity,
+            0.,
+            1.,
+            false,
+            false,
+            1,
+        );
+        histogram.fill_continuous_sample(&[(0.5, 3.)]).unwrap();
+        histogram.update_results();
+        let mut accumulator = GammaLoopAccumulatorState::default();
+        accumulator
+            .estimate
+            .ingest_vector(&[3., 0.], &crate::Point::new(vec![0.5], vec![], 1.))
+            .unwrap();
+        accumulator
+            .bundle
+            .histograms
+            .insert("energy".into(), histogram.snapshot());
+        let mut available = super::tests::child(1, 2., 0., 0., 1);
+        available.measurement = None;
+        available.accumulator = Some(AccumulatorState::Gammaloop(accumulator));
+        available.task_state = RunTaskState::Failed;
+        let mut pending = super::tests::child(2, 1., 0., 0., 0);
+        pending.measurement = None;
+        pending.accumulator = None;
+        let states = [available, pending];
+        let store = crate::test_support::RecordingStore::default();
+        let task:RunTask=serde_json::from_value(serde_json::json!({"id":10,"run_id":10,"name":"campaign","sequence_nr":1,"state":"active","nr_produced_samples":0,"nr_completed_samples":0,"created_at":"2026-11-25T00:00:00Z","task_toml":"","task":{"kind":"integration_campaign","children":[],"stop_condition":{"max_total_samples":100}}})).unwrap();
+        let runner = IntegrationCampaignRunner::new(store.clone(), 10, task);
+        assert!(combine_measurements(&states).is_none());
+        assert_eq!(
+            runner
+                .persist_derived_result(&states, None, None)
+                .await
+                .unwrap(),
+            Some("1".into())
+        );
+        let snapshots = store.result_snapshots.lock().unwrap();
+        let result = &snapshots[0];
+        assert_eq!(result["metrics"], serde_json::json!([]));
+        assert_eq!(
+            result["observables"]["histograms"]["energy"]["bins"][0]["value"],
+            6.
+        );
+        assert!(result["observables"]["histograms"]["energy"]["bins"][0]["error"].is_null());
+        assert_eq!(result["observables"]["coverage"]["contributing_count"], 1);
+        assert_eq!(result["observables"]["coverage"]["total_children"], 2);
+        assert_eq!(result["observables"]["coverage"]["partial"], true);
     }
 }

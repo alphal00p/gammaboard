@@ -428,6 +428,9 @@ const TablePanel = ({
   return (
     <Card variant="outlined">
       <CardContent>
+        {payload?.coverage?.partial && <Typography variant="subtitle2" sx={{mb:1}}>Partial result — {payload.coverage.contributing?.length ?? 0}/{payload.coverage.total_children} children</Typography>}
+        {isHistogramBundle && payload?.histograms?.[selectedObservable?.name]?.coverage?.partial && <Typography variant="body2" sx={{mb:1}}>Selected observable: partial result — {payload.histograms[selectedObservable.name].coverage.contributing_count}/{payload.histograms[selectedObservable.name].coverage.total_children} children</Typography>}
+
         {!isHistogramBundle && weightBasis && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{weightBasis}</Typography>}
         {!isHistogramBundle && payload?.estimator_note && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>{payload.estimator_note}</Typography>}
         <PanelHeader title={title}>

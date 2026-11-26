@@ -326,3 +326,6 @@ export const fetchCampaign = (runId, taskId, { section = "settings", group, sele
   ])}`, "Failed to fetch campaign", signal);
 export const updateCampaignScheduling = (runId, taskId, payload) => taskAction(runId, { action: "campaign_scheduling", id: String(taskId), settings: payload }, "Failed to update campaign scheduling");
 export const updateCampaignTuning = (runId, taskId, payload) => taskAction(runId, { action: "campaign_tuning", id: String(taskId), settings: payload }, "Failed to update campaign queue tuning");
+
+export const previewCampaignEdit = (runId, taskId, payload) => taskAction(runId, { action: "campaign_children_preview", id: String(taskId), edit: payload }, "Failed to validate child edits");
+export const applyCampaignEdit = (runId, taskId, payload) => taskAction(runId, { action: "campaign_children_apply", id: String(taskId), edit: payload }, "Failed to edit children");

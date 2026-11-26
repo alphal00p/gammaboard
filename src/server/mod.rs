@@ -964,7 +964,7 @@ async fn get_run_task_output(
                 request.section.as_deref(),
                 Some("result" | "strata" | "summary")
             ));
-    let latest_persisted_snapshot = if compact {
+    let mut latest_persisted_snapshot = if compact {
         state
             .store
             .latest_plot_snapshot(run_id, task.id)
@@ -978,6 +978,21 @@ async fn get_run_task_output(
             .into_iter()
             .next()
     };
+    if matches!(
+        task.task,
+        crate::core::RunTaskSpec::PdfAdaptationImage { .. }
+            | crate::core::RunTaskSpec::PdfAdaptationPlotLine { .. }
+    ) && let Some(snapshot) = &mut latest_persisted_snapshot
+    {
+        task_panels::pdf_adaptation::enrich_output(
+            &state.store,
+            &task,
+            &mut snapshot.persisted_output,
+            run.target.as_ref(),
+            run.target_error.as_ref(),
+        )
+        .await?;
+    }
     let latest_stage_snapshot = if latest_persisted_snapshot.is_none() {
         state
             .store

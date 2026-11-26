@@ -128,3 +128,21 @@ actual process/allocation termination and acknowledge external cleanup through
 CLI HTTP requests have bounded response timeouts, including each polling request.
 Wait deadlines bound the whole wait; a timeout does not cancel accepted launch,
 deletion, export or shutdown work.
+
+## Campaign child edits
+
+Child editing uses `operation: "task"` with `campaign_children_preview` and
+`campaign_children_apply` actions. Both include the campaign task `id` and an
+`edit` object, using the same bigint ID handling and authentication as other task
+mutations. For example:
+
+```json
+{"operation":"task","run":"42","action":{"action":"campaign_children_preview","id":"57","edit":{"action":"remove_task","task_name":"extra","children":[43,44]}}}
+```
+
+The preview lists applicability and returns an opaque revision. Submit the same
+edit with `expected` set to the preview and a stable `request_id` to
+`campaign_children_apply`. Retries reuse that ID. Changed definitions or
+eligibility require a fresh preview. Archived campaigns and adoption of archived
+runs are rejected. These operations participate in instance admission/draining;
+they do not use the retired per-task mutation routes.

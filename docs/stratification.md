@@ -274,8 +274,9 @@ queries without a separate stratification capability declaration. Native uniform
 sampling returns its joint PDF on
 rectangular and ragged discrete domains as well as purely continuous domains.
 
-Display-only shape normalization uses trapezoid weights for the target on line
-parameter `t` or plane parameters `(u,v)`. Native Havana line diagnostics also
+Display-only Slice normalization divides each field by its mean over the
+evaluated grid. Slice-integral/leakage diagnostics retain trapezoid quadrature in
+line parameter `t` or plane parameters `(u,v)`. Native Havana line diagnostics also
 retain the union of intersected grid edges and the joint PDF on each resulting
 interval. This provides exact piecewise-constant rendering and bin integration
 without additional integrand evaluations or a new sampler API. Generic samplers
@@ -291,12 +292,14 @@ mass readouts use classified raster quadrature and are explicitly slice estimate
 For ratios, positive target with zero PDF is uncovered, positive PDF with zero
 target is leakage/zero target, both zero is undefined, and missing inputs remain
 unavailable. Numeric curves omit infinite/undefined ratios while the Coverage
-view and counts preserve those cases. Diagnostic histograms are distributions of
-finite raster values, not independent Monte Carlo observations, and carry no
-Poisson or Monte Carlo error bars.
+colors and counts preserve those cases. Diagnostic histograms are distributions of
+finite raster values, weighted by the selected joint PDF by default (or uniformly
+when weighting is disabled). These are not independent Monte Carlo observations
+and carry no Poisson or Monte Carlo error bars.
 
 JSON/CSV diagnostic exports retain normalization metadata, raw queried densities,
-exact native PDF intervals where available, actual prefixes and diagnostic statuses.
+actual prefixes and diagnostic statuses. Native PDF intervals remain in persisted
+raster output and are used for line-plot rendering.
 View settings do not change the stored statistics.
 
 Stratum histories use snapshot timestamps for elapsed time and the latest

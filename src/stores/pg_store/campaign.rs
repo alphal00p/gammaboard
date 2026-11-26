@@ -7,20 +7,25 @@ use crate::core::{
 use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 
-async fn campaign_task(
+pub(super) async fn campaign_task(
     tx: &mut Transaction<'_, Postgres>,
     run: i32,
     task: i64,
 ) -> Result<(String, RunTaskSpec), StoreError> {
-    let row: Option<(String, Value, String)> = sqlx::query_as(
-        "SELECT name,task,state FROM run_tasks WHERE id=$1 AND run_id=$2 FOR UPDATE",
+    let row: Option<(String, Value, String, bool)> = sqlx::query_as(
+        "SELECT t.name,t.task,t.state,r.archived FROM run_tasks t JOIN runs r ON r.id=t.run_id WHERE t.id=$1 AND t.run_id=$2 FOR UPDATE OF t,r",
     )
     .bind(task)
     .bind(run)
     .fetch_optional(&mut **tx)
     .await?;
-    let (name, spec, state) =
+    let (name, spec, state, archived) =
         row.ok_or_else(|| StoreError::NotFound("Campaign task not found".into()))?;
+    if archived {
+        return Err(StoreError::invalid_input(
+            "archived result runs are read-only",
+        ));
+    }
     if !["pending", "active"].contains(&state.as_str()) {
         return Err(StoreError::invalid_input(
             "Only pending or active campaigns can be changed",
@@ -35,7 +40,7 @@ async fn campaign_task(
     Ok((name, spec))
 }
 
-async fn lock_controller(tx: &mut Transaction<'_, Postgres>) -> Result<(), StoreError> {
+pub(crate) async fn lock_controller(tx: &mut Transaction<'_, Postgres>) -> Result<(), StoreError> {
     sqlx::query("SET LOCAL lock_timeout='5s'")
         .execute(&mut **tx)
         .await?;
@@ -100,15 +105,10 @@ impl PgStore {
                 "Scheduling settings changed since this form was opened. Reload before applying.",
             ));
         }
-        if let Some(cap) = stop_condition.max_total_samples {
-            let reserved: i64 = sqlx::query_scalar("SELECT COALESCE(sum(GREATEST(COALESCE(b.granted_samples,0), COALESCE((SELECT sum(t.nr_produced_samples) FROM run_tasks t WHERE t.run_id=r.id),0))),0)::bigint FROM runs r LEFT JOIN campaign_sample_budgets b ON b.child_run_id=r.id WHERE r.parent_task_id=$1")
-                .bind(task).fetch_one(&mut *tx).await?;
-            if cap < reserved {
-                return Err(StoreError::invalid_input(format!(
-                    "Sample cap must cover {reserved} already produced or reserved samples"
-                )));
-            }
-        }
+        // Revise current reservations at a durable drain boundary. Keep workers
+        // in place until all generated work and feedback have been processed.
+        sqlx::query("INSERT INTO run_drain_requests(run_id) SELECT r.id FROM runs r WHERE r.parent_task_id=$1 AND EXISTS(SELECT 1 FROM nodes n WHERE (n.active_run_id=r.id OR n.desired_run_id=r.id) AND n.lease_expires_at>now()) ON CONFLICT DO NOTHING")
+            .bind(task).execute(&mut *tx).await?;
         if let RunTaskSpec::IntegrationCampaign {
             allocation: a,
             stop_condition: s,
@@ -310,7 +310,7 @@ async fn apply_rules(
     Ok(json!({"updated":updated,"skipped":skipped}))
 }
 
-async fn save_task(
+pub(super) async fn save_task(
     tx: &mut Transaction<'_, Postgres>,
     id: i64,
     name: String,

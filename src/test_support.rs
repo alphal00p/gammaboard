@@ -31,6 +31,7 @@ pub(crate) struct CheckpointRecording {
 
 #[derive(Clone, Default)]
 pub(crate) struct RecordingStore {
+    pub(crate) result_snapshots: Arc<Mutex<Vec<JsonValue>>>,
     pub checkpoints: Arc<Mutex<Option<CheckpointRecording>>>,
     pub(crate) campaign_allowance: Arc<Mutex<Option<i64>>>,
     pub(crate) nodes: Option<Vec<RegisteredNode>>,
@@ -73,6 +74,16 @@ impl RecordingStore {
 
     pub(crate) fn fetch_completed_calls(&self) -> usize {
         *self.fetch_completed_calls.lock().expect("recording lock")
+    }
+}
+
+#[async_trait]
+impl crate::core::RunSpecStore for RecordingStore {
+    async fn load_run_spec(
+        &self,
+        _run_id: i32,
+    ) -> Result<Option<crate::core::RunSpec>, StoreError> {
+        unreachable!("unused in test")
     }
 }
 
@@ -264,9 +275,11 @@ impl AggregationStore for RecordingStore {
         &self,
         _run_id: i32,
         _task_id: i64,
-        _result: &JsonValue,
+        result: &JsonValue,
     ) -> Result<i64, StoreError> {
-        unreachable!("unused in test")
+        let mut snapshots = self.result_snapshots.lock().unwrap();
+        snapshots.push(result.clone());
+        Ok(snapshots.len() as i64)
     }
 
     async fn load_sampler_checkpoint(

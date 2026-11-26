@@ -96,6 +96,7 @@ where
         if !self.is_current_leader().await? {
             return Ok(());
         }
+        self.store.maintain_campaign_controls().await?;
         let mut first_error = None;
         for run_id in self.store.get_control_plane_run_ids().await? {
             if let Err(err) = self.reconcile_run(run_id).await {
@@ -120,6 +121,9 @@ where
     }
 
     async fn reconcile_run(&self, run_id: i32) -> Result<(), StoreError> {
+        if self.store.run_drain_requested(run_id).await? {
+            return Ok(());
+        }
         let mut completed_control_task = false;
         if let Some(task) = self.store.load_active_run_task(run_id).await? {
             if task.task.runs_in_control_plane() {

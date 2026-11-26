@@ -167,6 +167,10 @@ pub struct SamplerAggregatorRunner<S> {
     base_queue_config: SamplerQueueConfig,
     last_task_config_refresh_at: Instant,
     waiting_for_campaign_budget: bool,
+    drain_requested: bool,
+    drain_saved: bool,
+    drain_revision: Option<i64>,
+    last_drain_poll: Option<Instant>,
     campaign_managed: Option<bool>,
     busy: BusyTime,
     node_uuid: String,
@@ -464,6 +468,10 @@ where
 
         Ok(Self {
             waiting_for_campaign_budget: false,
+            drain_requested: false,
+            drain_saved: false,
+            drain_revision: None,
+            last_drain_poll: None,
             campaign_managed: None,
             run_id,
             epoch: uuid::Uuid::new_v4().to_string(),
@@ -766,6 +774,18 @@ where
         crate::runners::activity::set("waiting");
         self.notify_checkpoint_committed();
         self.refresh_live_queue_tuning().await?;
+        if self
+            .last_drain_poll
+            .is_none_or(|at| at.elapsed() >= Duration::from_millis(250))
+        {
+            let revision = self.store.run_drain_revision(self.run_id).await?;
+            if revision != self.drain_revision {
+                self.drain_saved = false;
+            }
+            self.drain_revision = revision;
+            self.drain_requested = revision.is_some();
+            self.last_drain_poll = Some(Instant::now());
+        }
         let QueueTickResult {
             completed,
             queue_counts: queue_before_tick,
@@ -827,6 +847,26 @@ where
             .performance_sync_ms
             .observe_duration(publication_time);
         crate::runners::activity::set("waiting");
+        if self.drain_requested
+            && produced_batches == 0
+            && queue_before_produce.open() == 0
+            && !self.runtime_state.generation.has_pending()
+            && !self.runtime_state.generation.has_outstanding()
+        {
+            // Do not complete the task: this is a resumable scheduling boundary.
+            if !self.drain_saved {
+                self.persist_sampler_checkpoint(CheckpointKind::Periodic)
+                    .await?;
+                self.store
+                    .acknowledge_run_drain(
+                        self.run_id,
+                        self.drain_revision.expect("draining revision"),
+                    )
+                    .await?;
+                self.drain_saved = true;
+            }
+            return Ok(false);
+        }
         let finished = self.check_tick_terminal_state(
             queue_before_produce,
             ingest_stats.completed_batches,
@@ -1353,6 +1393,10 @@ where
             return Ok((0, true));
         }
         if !self.runtime_state.generation.has_pending() {
+            if self.drain_requested {
+                self.waiting_for_campaign_budget = true;
+                return Ok((0, true));
+            }
             if self.runtime_state.generation.finished {
                 return Ok((0, false));
             }

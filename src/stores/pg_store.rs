@@ -1,6 +1,7 @@
 //! Postgres-backed implementations of store contracts.
 
 pub(crate) mod campaign;
+pub(crate) mod campaign_edits;
 mod external_launch;
 mod read;
 mod run_admission;
@@ -1259,6 +1260,46 @@ impl AggregationStore for PgStore {
 
 #[async_trait::async_trait]
 impl RunTaskStore for PgStore {
+    async fn maintain_campaign_controls(&self) -> Result<(), StoreError> {
+        self.reconcile_campaign_controls().await
+    }
+    async fn run_drain_requested(&self, run: i32) -> Result<bool, StoreError> {
+        Ok(
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_drain_requests WHERE run_id=$1)")
+                .bind(run)
+                .fetch_one(&self.pool)
+                .await?,
+        )
+    }
+    async fn run_drain_revision(&self, run: i32) -> Result<Option<i64>, StoreError> {
+        Ok(
+            sqlx::query_scalar("SELECT id FROM run_drain_requests WHERE run_id=$1")
+                .bind(run)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+    async fn acknowledge_run_drain(&self, run: i32, revision: i64) -> Result<(), StoreError> {
+        sqlx::query("UPDATE run_drain_requests SET acknowledged=true WHERE run_id=$1 AND id=$2")
+            .bind(run)
+            .bind(revision)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+    async fn campaign_drain_targets(&self, task: i64) -> Result<Vec<i32>, StoreError> {
+        Ok(sqlx::query_scalar("SELECT r.id FROM runs r JOIN run_drain_requests d ON d.run_id=r.id WHERE r.parent_task_id=$1 AND NOT d.acknowledged ORDER BY r.id").bind(task).fetch_all(&self.pool).await?)
+    }
+    async fn campaign_is_draining(&self, task: i64) -> Result<bool, StoreError> {
+        Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_drain_requests d JOIN runs r ON r.id=d.run_id WHERE r.parent_task_id=$1) OR EXISTS(SELECT 1 FROM campaign_child_edits WHERE campaign_task_id=$1 AND state='pending')").bind(task).fetch_one(&self.pool).await?)
+    }
+    async fn campaign_removed_produced(&self, task: i64) -> Result<i64, StoreError> {
+        Ok(sqlx::query_scalar("SELECT COALESCE(sum(produced_samples),0)::bigint FROM campaign_removed_work WHERE campaign_task_id=$1").bind(task).fetch_one(&self.pool).await?)
+    }
+    async fn campaign_removed_samples(&self, task: i64) -> Result<i64, StoreError> {
+        Ok(sqlx::query_scalar("SELECT COALESCE(sum(completed_samples),0)::bigint FROM campaign_removed_work WHERE campaign_task_id=$1").bind(task).fetch_one(&self.pool).await?)
+    }
+
     async fn apply_campaign_queue_tuning(&self, task_id: i64) -> Result<(), StoreError> {
         self.apply_campaign_tuning_rules(task_id).await
     }

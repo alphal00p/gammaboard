@@ -7,15 +7,16 @@ import WorkspaceTabs, { TabLoadingScope, WorkspacePanel } from "./common/Workspa
 import { TASK_OUTPUT_TABS, taskPanelSection } from "./panels/panelSections";
 
 const CampaignDiagnostics = lazy(() => import("./runs/CampaignPanels"));
+const CampaignChildren = lazy(() => import("./runs/CampaignChildren"));
 const CampaignScheduling = lazy(() => import("./runs/CampaignScheduling"));
 
 function TaskOutputSource(props) {
   const [localView, setLocalView] = useState("result");
   const view = props.view ?? localView;
-  const campaign = props.task?.task_kind === "integration_campaign";
-  const custom = campaign && ["diagnostics", "scheduling"].includes(view);
+  const campaign = !props.readOnly && props.task?.task_kind === "integration_campaign";
+  const custom = campaign && ["diagnostics", "scheduling", "children"].includes(view);
   const output = useTaskOutput({ runId: props.runId, taskId: props.task?.id ?? null,
-    section: custom || (!campaign && view === "scheduling") ? "result" : view, paused: custom, pollMs: campaign ? 10000 : 3000, refreshKey: props.task?.state });
+    section: custom || (!campaign && ["scheduling", "children"].includes(view)) ? "result" : view, paused: custom, pollMs: campaign ? 10000 : 3000, refreshKey: props.task?.state });
   return <TaskOutputContent {...props} view={view} onViewChange={props.onViewChange ?? ((next) => setLocalView(next))} output={output} />;
 }
 
@@ -37,11 +38,11 @@ const TaskOutputContent = ({ runId, task, title = "Selected task output", onSele
     if (state.kind === "strata") return state.frames?.some((frame) => frame.rows?.length > 0);
     return true;
   }));
-  const tabs = campaign ? [...TASK_OUTPUT_TABS, ["scheduling", "Scheduling"]] : TASK_OUTPUT_TABS;
+  const tabs = campaign ? [...TASK_OUTPUT_TABS, ["scheduling", "Scheduling"], ["children", "Edit children"]] : TASK_OUTPUT_TABS;
   const disabledTabs = Object.fromEntries(tabs.filter(([key]) => key !== "result" &&
-    (!(campaign && ["diagnostics", "scheduling"].includes(key)) && (availableSections ? !availableSections.includes(key) : key === "strata" && !hasStrata)))
+    (!(campaign && ["diagnostics", "scheduling", "children"].includes(key)) && (availableSections ? !availableSections.includes(key) : key === "strata" && !hasStrata)))
     .map(([key]) => [key, key === "strata" ? "No stratum output for this task yet." : "Not provided by this task."]));
-  const view = (!campaign && requestedView === "scheduling") || (!isLoading && disabledTabs[requestedView]) ? "result" : requestedView;
+  const view = (!campaign && ["scheduling", "children"].includes(requestedView)) || (!isLoading && disabledTabs[requestedView]) ? "result" : requestedView;
   useEffect(() => {
     if (view !== requestedView) {
       if (onViewChange) onViewChange(view, { replace: true });
@@ -52,7 +53,7 @@ const TaskOutputContent = ({ runId, task, title = "Selected task output", onSele
   if (!task) {
     return <Alert severity="info">Select a task to inspect its output panels.</Alert>;
   }
-  const customView = campaign && ["diagnostics", "scheduling"].includes(view);
+  const customView = campaign && ["diagnostics", "scheduling", "children"].includes(view);
   const progressIds = new Set(panelSpecs.filter((spec) => spec.kind === "progress").map((spec) => spec.panel_id));
   const visiblePanelIds = new Set(panelSpecs.filter((spec) => !progressIds.has(spec.panel_id) && taskPanelSection(spec) === view).map((spec) => spec.panel_id));
   const label = tabs.find(([key]) => key === view)?.[1] || "Result";
@@ -73,6 +74,7 @@ const TaskOutputContent = ({ runId, task, title = "Selected task output", onSele
       level="detail" panelId="task-output-panel" />
     <Box role="tabpanel" id="task-output-panel" aria-labelledby={`task-output-tab-${view}`} aria-label={title}>
     {campaign && <>
+      <WorkspacePanel id="task-output" value="children" active={view === "children"}><CampaignChildren runId={runId} taskId={task.id} /></WorkspacePanel>
       <WorkspacePanel id="task-output" value="scheduling" active={view === "scheduling"}><CampaignScheduling runId={runId} taskId={task.id} /></WorkspacePanel>
       <WorkspacePanel id="task-output" value="diagnostics" active={view === "diagnostics"}><CampaignDiagnostics runId={runId} taskId={task.id} /></WorkspacePanel>
     </>}

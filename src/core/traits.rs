@@ -349,6 +349,31 @@ pub enum TaskQueueChange {
 
 #[async_trait]
 pub trait RunTaskStore: Send + Sync {
+    async fn maintain_campaign_controls(&self) -> Result<(), StoreError> {
+        Ok(())
+    }
+    async fn run_drain_requested(&self, _run: i32) -> Result<bool, StoreError> {
+        Ok(false)
+    }
+    async fn run_drain_revision(&self, _run: i32) -> Result<Option<i64>, StoreError> {
+        Ok(None)
+    }
+    async fn acknowledge_run_drain(&self, _run: i32, _revision: i64) -> Result<(), StoreError> {
+        Ok(())
+    }
+    async fn campaign_drain_targets(&self, _task: i64) -> Result<Vec<i32>, StoreError> {
+        Ok(Vec::new())
+    }
+    async fn campaign_is_draining(&self, _task: i64) -> Result<bool, StoreError> {
+        Ok(false)
+    }
+    async fn campaign_removed_produced(&self, _task: i64) -> Result<i64, StoreError> {
+        Ok(0)
+    }
+    async fn campaign_removed_samples(&self, _task: i64) -> Result<i64, StoreError> {
+        Ok(0)
+    }
+
     /// Apply durable campaign overrides before any child receives new work.
     async fn apply_campaign_queue_tuning(&self, _task_id: i64) -> Result<(), StoreError> {
         Ok(())

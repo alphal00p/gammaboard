@@ -4348,18 +4348,20 @@ async fn campaign_dashboard_edits_preserve_grants_and_apply_only_selected_fields
         max_total_samples: Some(300),
         ..Default::default()
     };
-    assert!(
-        store
-            .update_campaign_scheduling(
-                parent,
-                parent_task,
-                expected.clone(),
-                allocation.clone(),
-                stop.clone()
-            )
-            .await
-            .is_err()
-    );
+    store
+        .update_campaign_scheduling(
+            parent,
+            parent_task,
+            expected.clone(),
+            allocation.clone(),
+            stop.clone(),
+        )
+        .await
+        .unwrap();
+    let current = store.load_run_task(parent_task).await.unwrap().unwrap();
+    let current = serde_json::to_value(current.task).unwrap();
+    let expected =
+        json!({"allocation":current["allocation"],"stop_condition":current["stop_condition"]});
     stop.max_total_samples = Some(800);
     store
         .update_campaign_scheduling(
@@ -4542,67 +4544,47 @@ async fn campaign_scheduling_edits_reassign_immediately_without_waiting_for_gran
         .update_campaign_scheduling(run, task.id, expected, allocation.clone(), stop.clone())
         .await
         .unwrap();
-    // No controller tick or sample completion after the edit: assignment changes
-    // must already be visible when update_campaign_scheduling returns.
-    let after = store.load_run_task(task.id).await.unwrap().unwrap();
-    assert_eq!(
-        after
-            .controller_output
-            .as_ref()
-            .unwrap()
-            .integration_campaign()
-            .unwrap()
-            .running_children,
-        1
-    );
-    let placements: i64 = sqlx::query_scalar("SELECT count(DISTINCT desired_run_id) FROM nodes WHERE desired_role='sampler_aggregator' AND desired_run_id <> $1")
-        .bind(run).fetch_one(store.pool()).await.unwrap();
-    assert_eq!(placements, 1);
+    assert!(store.campaign_is_draining(task.id).await.unwrap());
     assert_eq!(
         store.allocate_campaign_samples(task.id, &[]).await.unwrap(),
         grants
     );
-
-    let expected = json!({"allocation":allocation,"stop_condition":stop});
-    allocation.max_active_runs = 3;
-    allocation.min_evaluators_per_run = 2;
-    store
-        .update_campaign_scheduling(run, task.id, expected, allocation.clone(), stop.clone())
-        .await
-        .unwrap();
-    let after = store.load_run_task(task.id).await.unwrap().unwrap();
-    assert_eq!(
-        after
-            .controller_output
-            .as_ref()
-            .unwrap()
-            .integration_campaign()
-            .unwrap()
-            .running_children,
-        1
-    );
-    let expected = json!({"allocation":allocation,"stop_condition":stop});
-    allocation.min_evaluators_per_run = 1;
-    store
-        .update_campaign_scheduling(run, task.id, expected, allocation, stop)
-        .await
-        .unwrap();
-    let after = store.load_run_task(task.id).await.unwrap().unwrap();
-    assert_eq!(
-        after
-            .controller_output
-            .as_ref()
-            .unwrap()
-            .integration_campaign()
-            .unwrap()
-            .running_children,
-        3
-    );
-    let expanded = store.allocate_campaign_samples(task.id, &[]).await.unwrap();
-    for (child, grant) in grants.into_iter().filter(|(_, grant)| *grant > 0) {
-        assert_eq!(expanded[&child], grant);
+    for child in selected {
+        let revision = store.run_drain_revision(*child).await.unwrap().unwrap();
+        store.acknowledge_run_drain(*child, revision).await.unwrap();
     }
-    assert_eq!(expanded.values().sum::<i64>(), 300);
+    store.maintain_campaign_controls().await.unwrap();
+    IntegrationCampaignRunner::new(
+        store.clone(),
+        run,
+        store.load_run_task(task.id).await.unwrap().unwrap(),
+    )
+    .tick()
+    .await
+    .unwrap();
+    assert!(!store.campaign_is_draining(task.id).await.unwrap());
+    let placements:i64=sqlx::query_scalar("SELECT count(DISTINCT desired_run_id) FROM nodes WHERE desired_role='sampler_aggregator' AND desired_run_id<>$1").bind(run).fetch_one(store.pool()).await.unwrap();
+    assert_eq!(placements, 1);
+    assert_eq!(
+        store
+            .allocate_campaign_samples(task.id, &[])
+            .await
+            .unwrap()
+            .values()
+            .sum::<i64>(),
+        100,
+        "unused grants were reclaimed, not completed"
+    );
+    // Already-produced work may exceed a reduced reservation/cap; it must not
+    // cause a protocol error or issue negative/new credit.
+    sqlx::query("UPDATE campaign_sample_budgets SET granted_samples=120 WHERE campaign_task_id=$1 AND granted_samples>0").bind(task.id).execute(store.pool()).await.unwrap();
+    sqlx::query("UPDATE run_tasks SET task=jsonb_set(task,'{stop_condition,max_total_samples}','50') WHERE id=$1").bind(task.id).execute(store.pool()).await.unwrap();
+    let before = store.allocate_campaign_samples(task.id, &[]).await.unwrap();
+    let after = store
+        .allocate_campaign_samples(task.id, &[(selected[0], 10000)])
+        .await
+        .unwrap();
+    assert_eq!(after, before);
     sqlx::query("DELETE FROM nodes")
         .execute(store.pool())
         .await
@@ -4869,4 +4851,432 @@ async fn concurrent_creation_keys_are_atomic_and_deleted_keys_are_tombstones() {
             .is_err()
     );
     assert!(store.creation_receipt(&key, &payload).await.is_err());
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn campaign_live_edits_preserve_results_validate_bulk_and_adopt_runs() {
+    use gammaboard::api::runs::{create_run, parse_run_add_config_toml};
+    use gammaboard::core::{AggregationStore, RunTaskState};
+    use gammaboard::runners::integration_campaign::IntegrationCampaignRunner;
+    use serde_json::json;
+    let (_guard, store) = locked_test_store().await;
+    let confirm = |mut value: serde_json::Value, preview: serde_json::Value, id: &str| {
+        value["expected"] = browser_preview_numbers(preview);
+        value["request_id"] = json!(id);
+        value
+    };
+    let card = "name='child'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nname='infer'\nkind='sample'\nstop_condition={max_samples=1000}\naccumulator={config='scalar'}\nsampler={config={kind='naive_monte_carlo'}}\n";
+    let parent_card = format!(
+        "kind='integration_campaign'\nname='live-edits'\nstop_condition={{max_total_samples=10000}}\n[[children]]\nname='A'\nrun='''{card}'''\n[[children]]\nname='B'\nrun='''{card}'''\n"
+    );
+    let parent = create_run(&store, parse_run_add_config_toml(&parent_card).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    let task = store.activate_next_run_task(parent).await.unwrap().unwrap();
+    IntegrationCampaignRunner::new(store.clone(), parent, task.clone())
+        .tick()
+        .await
+        .unwrap();
+    let children = store
+        .get_child_runs_for_task(parent, task.id, "integration_campaign")
+        .await
+        .unwrap();
+    let a = children[0].run_id;
+    let b = children[1].run_id;
+    let source = store.list_run_tasks(a).await.unwrap().remove(0);
+    let mut accumulator = gammaboard::evaluation::AccumulatorState::empty_scalar();
+    if let gammaboard::evaluation::AccumulatorState::Vector(ref mut vector) = accumulator {
+        vector
+            .ingest_vector(&[2.], &Point::new(vec![0.], vec![], 1.))
+            .unwrap();
+        vector
+            .ingest_vector(&[4.], &Point::new(vec![0.], vec![], 1.))
+            .unwrap();
+    }
+    store
+        .persist_task_result_snapshot(a, source.id, &accumulator.to_json().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE run_tasks SET nr_produced_samples=2,nr_completed_samples=2 WHERE id=$1")
+        .bind(source.id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store
+        .fail_run_task(source.id, "test failure after publication")
+        .await
+        .unwrap();
+    IntegrationCampaignRunner::new(
+        store.clone(),
+        parent,
+        store.load_run_task(task.id).await.unwrap().unwrap(),
+    )
+    .tick()
+    .await
+    .unwrap();
+    let latest = store.load_run_task(task.id).await.unwrap().unwrap();
+    assert_eq!(latest.state, RunTaskState::Active);
+    let output = latest.controller_output.unwrap();
+    let output = output.integration_campaign().unwrap();
+    assert_eq!(output.contributing_children, 1);
+    assert_eq!(
+        output
+            .children
+            .iter()
+            .find(|c| c.child.child_run_id == Some(a))
+            .unwrap()
+            .child
+            .status,
+        gammaboard::core::ControllerChildState::Failed
+    );
+    let TaskMeasurementOutput::Completed { results } =
+        output.combined_measurement.as_ref().unwrap()
+    else {
+        panic!("partial result missing")
+    };
+    assert_eq!(results[0].value, 3.);
+    let add = json!({"action":"add_task","toml":"[task]\nname='extra'\nkind='sample'\nstop_condition={max_samples=10}","children":[b]});
+    let mut edit = serde_json::from_value(add.clone()).unwrap();
+    let preview = store
+        .preview_campaign_edit(parent, task.id, &edit)
+        .await
+        .unwrap();
+    assert_eq!(preview["children"][0]["applicable"], false);
+    assert_eq!(preview["children"][1]["applicable"], true);
+    edit = serde_json::from_value(confirm(add.clone(), preview, "bulk-add")).unwrap();
+    let response = store
+        .apply_campaign_edit(parent, task.id, edit.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .apply_campaign_edit(parent, task.id, edit)
+            .await
+            .unwrap(),
+        response
+    );
+    assert_eq!(store.list_run_tasks(b).await.unwrap().len(), 2);
+    let remove = json!({"action":"remove_task","task_name":"extra","children":[b]});
+    let mut edit = serde_json::from_value(remove.clone()).unwrap();
+    let preview = store
+        .preview_campaign_edit(parent, task.id, &edit)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE run_tasks SET state='active' WHERE run_id=$1 AND name='extra'")
+        .bind(b)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    edit = serde_json::from_value(confirm(remove.clone(), preview, "stale-remove")).unwrap();
+    assert!(
+        store
+            .apply_campaign_edit(parent, task.id, edit)
+            .await
+            .is_err()
+    );
+    let standalone = create_run(&store, parse_run_add_config_toml(card).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    store
+        .announce_node("adopting-sampler", "adopting-sampler", &Default::default())
+        .await
+        .unwrap();
+    store
+        .assign_worker_pool(
+            "adopting-sampler",
+            WorkerRole::SamplerAggregator,
+            standalone,
+        )
+        .await
+        .unwrap();
+    store.activate_next_run_task(standalone).await.unwrap();
+    sqlx::query("UPDATE nodes SET active_run_id=$1,active_role='sampler_aggregator' WHERE name='adopting-sampler'").bind(standalone).execute(store.pool()).await.unwrap();
+    let adopt = json!({"action":"adopt","run_id":standalone,"label":"C","coefficient":2.});
+    let mut edit = serde_json::from_value(adopt.clone()).unwrap();
+    let preview = store
+        .preview_campaign_edit(parent, task.id, &edit)
+        .await
+        .unwrap();
+    edit = serde_json::from_value(confirm(adopt.clone(), preview, "adopt")).unwrap();
+    store
+        .apply_campaign_edit(parent, task.id, edit)
+        .await
+        .unwrap();
+    store.maintain_campaign_controls().await.unwrap();
+    assert!(
+        store
+            .get_run_progress(standalone)
+            .await
+            .unwrap()
+            .unwrap()
+            .parent_run_id
+            .is_none()
+    );
+    let revision = store.run_drain_revision(standalone).await.unwrap().unwrap();
+    store
+        .acknowledge_run_drain(standalone, revision)
+        .await
+        .unwrap();
+    store.maintain_campaign_controls().await.unwrap();
+    assert!(
+        store
+            .get_run_progress(standalone)
+            .await
+            .unwrap()
+            .unwrap()
+            .parent_run_id
+            .is_none(),
+        "acknowledging does not reparent a still-live sampler"
+    );
+    sqlx::query(
+        "UPDATE nodes SET active_run_id=NULL,active_role=NULL WHERE name='adopting-sampler'",
+    )
+    .execute(store.pool())
+    .await
+    .unwrap();
+    store.maintain_campaign_controls().await.unwrap();
+    assert_eq!(
+        store
+            .get_run_progress(standalone)
+            .await
+            .unwrap()
+            .unwrap()
+            .parent_run_id,
+        Some(parent)
+    );
+    assert_eq!(store.list_run_tasks(standalone).await.unwrap().len(), 1);
+    let delete = json!({"action":"delete","run_id":a});
+    let mut edit = serde_json::from_value(delete.clone()).unwrap();
+    let preview = store
+        .preview_campaign_edit(parent, task.id, &edit)
+        .await
+        .unwrap();
+    edit = serde_json::from_value(confirm(delete.clone(), preview, "delete")).unwrap();
+    store
+        .apply_campaign_edit(parent, task.id, edit)
+        .await
+        .unwrap();
+    store.maintain_campaign_controls().await.unwrap();
+    assert!(store.get_run_progress(a).await.unwrap().is_none());
+    assert_eq!(store.campaign_removed_samples(task.id).await.unwrap(), 2);
+    IntegrationCampaignRunner::new(
+        store.clone(),
+        parent,
+        store.load_run_task(task.id).await.unwrap().unwrap(),
+    )
+    .tick()
+    .await
+    .unwrap();
+    assert_eq!(
+        store
+            .get_child_runs_for_task(parent, task.id, "integration_campaign")
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "deleted child must not be recreated"
+    );
+    store.remove_run(parent).await.unwrap();
+}
+
+/// Model JSON.parse/JSON.stringify for integer-valued numbers in these fixtures.
+/// JavaScript serializes e.g. 1.0 as 1, unlike a direct Rust Value roundtrip.
+fn browser_preview_numbers(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::Number(ref number) if number.is_f64() => {
+            let float = number.as_f64().unwrap();
+            if float.fract() == 0.0 && float.abs() <= 9_007_199_254_740_991.0 {
+                Value::from(float as i64)
+            } else {
+                value
+            }
+        }
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(browser_preview_numbers).collect())
+        }
+        Value::Object(values) => Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, browser_preview_numbers(value)))
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn campaign_child_template_confirmation_survives_browser_json_roundtrip() {
+    use gammaboard::api::runs::{create_run, export_run_definition, parse_run_add_config_toml};
+    use gammaboard::runners::integration_campaign::IntegrationCampaignRunner;
+    use serde_json::json;
+    let (_guard, store) = locked_test_store().await;
+    let card = "name='template'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nname='infer'\nkind='sample'\nstop_condition={max_samples=1000}\naccumulator={config='scalar'}\nsampler={config={kind='naive_monte_carlo'}}\n";
+    let parent_card = format!(
+        "kind='integration_campaign'\nname='browser-preview'\nstop_condition={{max_total_samples=10000}}\n[[children]]\nname='original'\ncoefficient=1.0\nrun='''{card}'''\n"
+    );
+    let parent = create_run(&store, parse_run_add_config_toml(&parent_card).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    let task = store.activate_next_run_task(parent).await.unwrap().unwrap();
+    IntegrationCampaignRunner::new(store.clone(), parent, task.clone())
+        .tick()
+        .await
+        .unwrap();
+    let source = store
+        .get_child_runs_for_task(parent, task.id, "integration_campaign")
+        .await
+        .unwrap()
+        .remove(0);
+    let toml = export_run_definition(&store, source.run_id).await.unwrap();
+    let mut request = json!({"action":"create", "run_id":source.run_id, "label":"copy", "coefficient":1, "toml":toml});
+    let preview = store
+        .preview_campaign_edit(
+            parent,
+            task.id,
+            &serde_json::from_value(request.clone()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let browser_preview = browser_preview_numbers(preview.clone());
+    assert_ne!(
+        preview, browser_preview,
+        "the fixture must exercise changed numeric representations"
+    );
+    request["expected"] = browser_preview;
+    request["request_id"] = json!("browser-create");
+    let response = store
+        .apply_campaign_edit(
+            parent,
+            task.id,
+            serde_json::from_value(request.clone()).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response["created"], "copy");
+    assert_eq!(
+        store
+            .apply_campaign_edit(parent, task.id, serde_json::from_value(request).unwrap())
+            .await
+            .unwrap(),
+        response,
+        "retry must remain idempotent after a database JSON roundtrip"
+    );
+    IntegrationCampaignRunner::new(
+        store.clone(),
+        parent,
+        store.load_run_task(task.id).await.unwrap().unwrap(),
+    )
+    .tick()
+    .await
+    .unwrap();
+    let children = store
+        .get_child_runs_for_task(parent, task.id, "integration_campaign")
+        .await
+        .unwrap();
+    assert_eq!(children.len(), 2);
+    let created = children
+        .iter()
+        .find(|child| child.spawn_label.as_deref() == Some("copy"))
+        .unwrap();
+    assert_eq!(
+        store.list_run_tasks(created.run_id).await.unwrap()[0].name,
+        "infer"
+    );
+
+    // Real changes still require another preview, even when both payloads have
+    // passed through JavaScript and only the requested coefficient changed.
+    let mut changed = json!({"action":"create", "label":"different", "coefficient":1, "toml":toml});
+    let preview = store
+        .preview_campaign_edit(
+            parent,
+            task.id,
+            &serde_json::from_value(changed.clone()).unwrap(),
+        )
+        .await
+        .unwrap();
+    changed["expected"] = browser_preview_numbers(preview);
+    changed["request_id"] = json!("changed-coefficient");
+    changed["coefficient"] = json!(2);
+    assert!(
+        store
+            .apply_campaign_edit(parent, task.id, serde_json::from_value(changed).unwrap())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("review a fresh preview")
+    );
+    store.remove_run(parent).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated postgres database with project migrations applied"]
+async fn campaign_edits_reject_archived_parents_and_adoption_sources() {
+    use gammaboard::api::runs::{create_run, parse_run_add_config_toml};
+    use serde_json::json;
+    let (_guard, store) = locked_test_store().await;
+    let card = "name='archive-source'\n[evaluator]\nkind='unit'\ncontinuous_dims=1\n[[task_queue]]\nname='infer'\nkind='sample'\nstop_condition={max_samples=10}\naccumulator={config='scalar'}\nsampler={config={kind='naive_monte_carlo'}}\n";
+    let parent_card = format!(
+        "kind='integration_campaign'\nname='archive-parent'\nstop_condition={{max_total_samples=1000}}\n[[children]]\nname='A'\nrun='''{card}'''\n[[children]]\nname='B'\nrun='''{card}'''\n"
+    );
+    let parent = create_run(&store, parse_run_add_config_toml(&parent_card).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    let source = create_run(&store, parse_run_add_config_toml(card).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    let task = store.list_run_tasks(parent).await.unwrap().remove(0);
+    sqlx::query("UPDATE runs SET archived=true WHERE id=$1")
+        .bind(source)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let edit =
+        serde_json::from_value(json!({"action":"adopt","run_id":source,"label":"extra"})).unwrap();
+    assert!(
+        store
+            .preview_campaign_edit(parent, task.id, &edit)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("archived")
+    );
+    sqlx::query("UPDATE runs SET archived=true WHERE id=$1")
+        .bind(parent)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let mut edit =
+        serde_json::from_value(json!({"action":"create","label":"extra","toml":card})).unwrap();
+    assert!(
+        store
+            .preview_campaign_edit(parent, task.id, &edit)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("archived")
+    );
+    edit.request_id = Some("archived-rejected".into());
+    assert!(
+        store
+            .apply_campaign_edit(parent, task.id, edit)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("archived")
+    );
+    sqlx::query("UPDATE runs SET archived=false WHERE id=ANY($1)")
+        .bind(vec![parent, source])
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.remove_run(source).await.unwrap();
+    store.remove_run(parent).await.unwrap();
 }

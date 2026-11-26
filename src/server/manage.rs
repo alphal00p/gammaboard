@@ -547,6 +547,12 @@ async fn task(state: &AppState, run: i32, action: TaskAction) -> Result<Value> {
         TaskAction::CampaignTuning { id, settings } => {
             Ok(campaign::tuning(state, run, id, serde_json::from_value(settings)?).await?)
         }
+        TaskAction::CampaignChildrenPreview { id, edit } => {
+            Ok(campaign::preview_edit(state, run, id, serde_json::from_value(edit)?).await?)
+        }
+        TaskAction::CampaignChildrenApply { id, edit } => {
+            Ok(campaign::apply_edit(state, run, id, serde_json::from_value(edit)?).await?)
+        }
         TaskAction::Remove { id } => {
             run_api::remove_pending_task(store, run, id).await?;
             Ok(json!({"run_id":run,"task_id":id,"removed":true}))

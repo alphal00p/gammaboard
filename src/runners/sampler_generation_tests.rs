@@ -764,3 +764,29 @@ async fn failed_periodic_checkpoint_keeps_the_last_boundary_and_retries_with_bac
         2
     );
 }
+
+#[tokio::test]
+async fn campaign_drain_finishes_buffered_draw_without_generating_more() {
+    let mut run = runner(0, 32_768, 40_000);
+    run.produce(BatchQueueCounts::default()).await.unwrap();
+    let generated =
+        run.task.nr_produced_samples + run.runtime_state.generation.pending_samples() as i64;
+    let draws = draw_count(&mut run);
+    run.drain_requested = true;
+    run.runtime_state.accumulator_checkpoint_state = AccumulatorCheckpointState::Ready;
+    for _ in 0..100 {
+        run.produce(BatchQueueCounts::default()).await.unwrap();
+        if !run.runtime_state.generation.has_pending() {
+            break;
+        }
+    }
+    assert_eq!(run.task.nr_produced_samples, generated);
+    assert_eq!(draw_count(&mut run), draws);
+    assert_eq!(run.produce(BatchQueueCounts::default()).await.unwrap().0, 0);
+    assert!(run.waiting_for_campaign_budget);
+    assert!(
+        !run.check_tick_terminal_state(BatchQueueCounts::default(), 0, 0, true)
+            .unwrap()
+    );
+    run.queue.flush().await.unwrap();
+}

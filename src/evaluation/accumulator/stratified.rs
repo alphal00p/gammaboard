@@ -804,6 +804,12 @@ mod tests {
         }
         let old: StratifiedAccumulatorState = serde_json::from_value(old).unwrap();
         assert!((old.training_ess().unwrap() - 1.0).abs() < 1e-12);
+        let reference = crate::sampling::pdf_reference::reference(
+            &crate::evaluation::AccumulatorState::Stratified(Box::new(old.clone())),
+        )
+        .unwrap();
+        assert_eq!(reference.value, *old.mean().unwrap().last().unwrap());
+        assert_eq!(reference.error, Some(0.0));
     }
 
     #[test]

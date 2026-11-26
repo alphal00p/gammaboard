@@ -8,6 +8,34 @@ vi.mock("./histogramPdf", () => ({ renderHistogramBundlePdf: vi.fn() }));
 vi.mock("./FigureExportActions", async (original) => ({ ...await original(), downloadBlob: vi.fn(), downloadTextFile: vi.fn() }));
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
+test("campaign observables label partial coverage for the displayed fallback selection", () => {
+  const payload = {
+    coverage: { partial: false, contributing: ["A", "B"], contributing_count: 2, total_children: 2 },
+    histograms: {
+      energy: { title: "Energy", coverage: { partial: true, contributing_count: 1, total_children: 2 },
+        bins: [{ start: 0, stop: 1, value: 3, error: null }] },
+      angle: { title: "Angle", coverage: { partial: false, contributing_count: 2, total_children: 2 },
+        bins: [{ start: 0, stop: 1, value: 4, error: 0.1 }] },
+    },
+  };
+  const state = { panel_id: "campaign_histograms", columns: ["Observable"], rows: [["energy"], ["angle"]],
+    selected_value: { selected_histogram: "no-longer-available" }, payload };
+  const { rerender } = render(<TablePanel state={state} />);
+  expect(screen.getByText("Selected observable: partial result — 1/2 children")).toBeInTheDocument();
+  expect(screen.queryByText(/^Partial result —/)).not.toBeInTheDocument();
+  const complete = { ...payload, histograms: { ...payload.histograms, energy: { ...payload.histograms.energy,
+    coverage: { partial: false, contributing_count: 2, total_children: 2 }, bins: [{ start: 0, stop: 1, value: 5, error: 0.2 }] } } };
+  rerender(<TablePanel state={{ ...state, payload: complete }} />);
+  expect(screen.queryByText(/Selected observable: partial result/)).not.toBeInTheDocument();
+});
+
+test("campaign observable bundles show partial coverage before every child publishes", () => {
+  render(<TablePanel state={{ panel_id: "campaign_histograms", columns: ["Observable"], rows: [["energy"]],
+    payload: { coverage: { partial: true, contributing: ["A"], total_children: 3 },
+      histograms: { energy: { title: "Energy", bins: [{ start: 0, stop: 1, value: 3, error: null }] } } } }} />);
+  expect(screen.getByText("Partial result — 1/3 children")).toBeInTheDocument();
+});
+
 test("campaign JSON/HwU fetch on demand and default to aggregate only", async () => {
   const source = { run_id: 7, task_id: "9007199254740993" };
   const payload = { export_source: source, actions: { export: true }, histograms: {

@@ -116,6 +116,21 @@ const panelStateEquals = (left, right) => {
   if (left === right) return true;
   if (!isPlainObject(left) || !isPlainObject(right)) return false;
   if (left.kind !== right.kind || panelIdOf(left) !== panelIdOf(right)) return false;
+  if (left.kind === "pdf_comparison") {
+    const a=left.data, b=right.data;
+    if(!a||!b)return a===b;
+    const {integrand_values: av,pdf_values: ap,strata: as,pdf_steps: ast,...am}=a;
+    const {integrand_values: bv,pdf_values: bp,strata: bs,pdf_steps: bst,...bm}=b;
+    return JSON.stringify(left.geometry)===JSON.stringify(right.geometry)
+      && JSON.stringify(am)===JSON.stringify(bm)
+      && arraysEqual(av,bv) && arraysEqual(ap,bp)
+      && arraysEqualBy(as?.prefixes,bs?.prefixes,arraysEqual)
+      && arraysEqual(as?.probabilities,bs?.probabilities)
+      && arraysEqual(as?.actual_strata,bs?.actual_strata)
+      && arraysEqualBy(as?.pdf_values,bs?.pdf_values,arraysEqual)
+      && arraysEqual(ast?.edges,bst?.edges)
+      && arraysEqualBy(ast?.densities,bst?.densities,arraysEqual);
+  }
   if (left.kind === "image2d" && right.kind === "image2d") {
     return (
       left.width === right.width &&
@@ -163,7 +178,7 @@ const applyUpdates = (previousStates, updates, resetRequired) => {
     if (update?.mode === "append") {
       next.set(panelId, mergePanelState(next.get(panelId), panel));
     } else {
-      const previousPanel = next.get(panelId);
+      const previousPanel = next.get(panelId) ?? asArray(previousStates).find(state => panelIdOf(state) === panelId);
       next.set(panelId, panelStateEquals(previousPanel, panel) ? previousPanel : panel);
     }
   }

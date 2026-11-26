@@ -255,3 +255,23 @@ test("archived runs expose inspection without task or worker mutation controls",
   expect(screen.queryByRole("button", { name: "Add tasks" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Assign / resume" })).not.toBeInTheDocument();
 });
+
+test("integration campaign children expose the ordinary add and pending-task delete actions", async () => {
+  fixtures.tasks = [task];
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  api.deleteRunTask.mockResolvedValue({});
+  renderRun(2, { runs: runs.map((run) => run.run_id === 2 ? { ...run, spawn_kind: "integration_campaign" } : run) });
+  expect(await screen.findByRole("button", { name: "Add tasks", exact: true })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Delete task train" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Delete task train" }));
+  await waitFor(() => expect(api.deleteRunTask).toHaveBeenCalledWith(2, task.id));
+  expect(screen.queryByText(/Its controller manages this task queue/)).not.toBeInTheDocument();
+});
+
+
+test("archived campaign children retain read-only task queues", async () => {
+  fixtures.tasks = [task];
+  renderRun(2, {runs: runs.map(run => run.run_id === 2 ? {...run, archived: true, spawn_kind: "integration_campaign"} : run)});
+  expect(await screen.findByRole("button", {name: "Delete task train"})).toBeDisabled();
+  expect(screen.queryByRole("button", {name: "Add tasks"})).not.toBeInTheDocument();
+});

@@ -50,7 +50,7 @@ export const usePolling = ({ enabled = true, intervalMs, poll, reset = null, pau
     clearScheduled();
     runTokenRef.current += 1;
     if (controllerRef.current) controllerRef.current.abort();
-    run(runTokenRef.current);
+    return run(runTokenRef.current);
   }, [clearScheduled, enabled, active, run]);
 
   useEffect(() => {

@@ -1801,6 +1801,8 @@ pub struct IntegrationCampaignChildOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationCampaignOutput {
+    #[serde(default)]
+    pub contributing_children: usize,
     /// Settings used for the last successful assignment check. A changed value
     /// forces selection to be reconsidered even while sample grants remain.
     #[serde(default)]

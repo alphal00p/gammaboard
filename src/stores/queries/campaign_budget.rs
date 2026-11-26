@@ -34,8 +34,7 @@ pub(crate) async fn allocate_campaign_samples(
     sqlx::query(
         "UPDATE campaign_sample_budgets b SET granted_samples=(
              SELECT COALESCE(sum(nr_produced_samples),0)::bigint FROM run_tasks WHERE run_id=b.child_run_id)
-         WHERE b.campaign_task_id=$1 AND NOT EXISTS (
-             SELECT 1 FROM run_tasks WHERE run_id=b.child_run_id AND state<>'completed')",
+         WHERE b.campaign_task_id=$1 AND (NOT EXISTS (SELECT 1 FROM run_tasks WHERE run_id=b.child_run_id AND state<>'completed') OR (EXISTS(SELECT 1 FROM run_tasks WHERE run_id=b.child_run_id AND state='failed') AND NOT EXISTS(SELECT 1 FROM nodes WHERE active_run_id=b.child_run_id AND lease_expires_at>now())))",
     ).bind(task_id).execute(&mut *tx).await?;
     let rows: Vec<(i32, i64)> = sqlx::query_as(
         "SELECT child_run_id,granted_samples FROM campaign_sample_budgets WHERE campaign_task_id=$1",
@@ -45,12 +44,10 @@ pub(crate) async fn allocate_campaign_samples(
         .values()
         .try_fold(0_i64, |total, n| total.checked_add(*n))
         .ok_or_else(|| sqlx::Error::Protocol("campaign sample accounting overflow".into()))?;
-    if total > limit {
-        return Err(sqlx::Error::Protocol(
-            "campaign has already produced more than its sample cap".into(),
-        ));
-    }
-    let mut remaining = limit - total;
+    let retired: i64 = sqlx::query_scalar("SELECT COALESCE(sum(produced_samples),0)::bigint FROM campaign_removed_work WHERE campaign_task_id=$1")
+        .bind(task_id).fetch_one(&mut *tx).await?;
+    // Draining may overshoot a revised cap. Charge it, without inventing credit.
+    let mut remaining = limit.saturating_sub(total).saturating_sub(retired).max(0);
     if active {
         for &(child, requested_total) in requests {
             let grant = grants.get_mut(&child).ok_or_else(|| {

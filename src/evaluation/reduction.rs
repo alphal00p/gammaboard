@@ -442,8 +442,8 @@ mod tests {
             assert!((row[2] - mean).abs() < 1e-8);
             assert!((row[3] - variance.sqrt()).abs() < 1e-8);
             let combined = crate::services::results::combine_independent_observables(&[
-                (2., state),
-                (-1., state),
+                ("left", 2., Some(state)),
+                ("right", -1., Some(state)),
             ])
             .unwrap();
             assert!(

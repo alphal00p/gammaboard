@@ -5,17 +5,73 @@ use std::collections::BTreeSet;
 /// Combine normalized observables from independent accumulator results.
 /// Values add with signed coefficients and variances add in quadrature.
 pub(crate) fn combine_independent_observables(
-    inputs: &[(f64, &AccumulatorState)],
+    inputs: &[(&str, f64, Option<&AccumulatorState>)],
 ) -> Option<JsonValue> {
+    let bundles = inputs
+        .iter()
+        .map(|(name, coefficient, accumulator)| {
+            (
+                *name,
+                *coefficient,
+                accumulator.and_then(observable_payload),
+            )
+        })
+        .collect::<Vec<_>>();
+    combine_observable_bundles(&bundles)
+}
+
+fn observable_coverage(
+    inputs: &[(&str, f64, Option<JsonValue>)],
+    included: &BTreeSet<usize>,
+) -> JsonValue {
+    json!({
+        "contributing": inputs.iter().enumerate().filter(|(i,_)| included.contains(i)).map(|(_, (name,_,_))| *name).collect::<Vec<_>>(),
+        "missing": inputs.iter().enumerate().filter(|(i,_)| !included.contains(i)).map(|(_, (name,_,_))| *name).collect::<Vec<_>>(),
+        "contributing_count": included.len(), "total_children": inputs.len(), "partial": included.len()<inputs.len(),
+    })
+}
+
+fn histogram_ready(histogram: &JsonValue) -> bool {
+    let Some(count) = histogram
+        .get("sample_count")
+        .and_then(JsonValue::as_f64)
+        .filter(|n| *n > 0.)
+    else {
+        return false;
+    };
+    let Some(bins) = histogram
+        .get("bins")
+        .and_then(JsonValue::as_array)
+        .filter(|bins| !bins.is_empty())
+    else {
+        return false;
+    };
+    bins.iter()
+        .chain(
+            ["underflow_bin", "overflow_bin"]
+                .into_iter()
+                .filter_map(|key| histogram.get(key)),
+        )
+        .all(|bin| {
+            bin_estimate(bin, count).is_some_and(|(mean, error)| {
+                mean.is_finite() && error.is_none_or(|error| error.is_finite() && error >= 0.)
+            })
+        })
+}
+
+fn combine_observable_bundles(inputs: &[(&str, f64, Option<JsonValue>)]) -> Option<JsonValue> {
+    let empty = Map::new();
     let child_histograms = inputs
         .iter()
-        .map(|(_, accumulator)| {
-            observable_payload(accumulator)?
-                .get("histograms")
+        .map(|(_, _, bundle)| {
+            bundle
+                .as_ref()
+                .and_then(|bundle| bundle.get("histograms"))
                 .and_then(JsonValue::as_object)
-                .cloned()
+                .unwrap_or(&empty)
         })
-        .collect::<Option<Vec<_>>>()?;
+        .collect::<Vec<_>>();
+    // Identity is the observable name, never its display title.
     let names = child_histograms
         .iter()
         .flat_map(|histograms| histograms.keys().cloned())
@@ -23,28 +79,42 @@ pub(crate) fn combine_independent_observables(
     if names.is_empty() {
         return None;
     }
-
     let mut histograms = Map::new();
     let mut omitted = Vec::new();
+    let mut contributing = BTreeSet::new();
     for name in names {
-        let histograms_with_coefficients = child_histograms
+        let available = child_histograms
             .iter()
-            .zip(inputs)
-            .map(|(histograms, (coefficient, _))| {
+            .enumerate()
+            .filter_map(|(index, histograms)| {
                 histograms
                     .get(&name)
-                    .map(|histogram| (*coefficient, histogram))
+                    .filter(|histogram| histogram_ready(histogram))
+                    .map(|histogram| (index, histogram))
             })
-            .collect::<Option<Vec<_>>>();
-        match histograms_with_coefficients
-            .as_deref()
-            .and_then(combine_histogram)
-        {
-            Some(histogram) => {
+            .collect::<Vec<_>>();
+        if available.is_empty() {
+            continue;
+        }
+        let weighted = available
+            .iter()
+            .map(|(index, histogram)| (inputs[*index].1, *histogram))
+            .collect::<Vec<_>>();
+        match combine_histogram(&weighted) {
+            Some(mut histogram) => {
+                let included = available
+                    .iter()
+                    .map(|(index, _)| *index)
+                    .collect::<BTreeSet<_>>();
+                histogram["coverage"] = observable_coverage(inputs, &included);
+                contributing.extend(included);
                 histograms.insert(name, histogram);
             }
             None => omitted.push(name),
         }
+    }
+    if histograms.is_empty() && omitted.is_empty() {
+        return None;
     }
     let primary_histogram_name = ["higgs_pt", "integral"]
         .into_iter()
@@ -52,12 +122,10 @@ pub(crate) fn combine_independent_observables(
         .map(str::to_string)
         .or_else(|| histograms.keys().next().cloned());
     Some(json!({
-        "estimator": "independent_sum",
-        "statistics_kind": "independent_child_estimates",
-        "estimator_note": "Independent child observable estimates are summed with the campaign coefficients; errors are combined in quadrature.",
-        "primary_histogram_name": primary_histogram_name,
-        "histograms": histograms,
-        "omitted_incompatible_histograms": omitted,
+        "estimator":"independent_sum", "statistics_kind":"independent_child_estimates",
+        "estimator_note":"Available child observable estimates are summed with the campaign coefficients; errors are combined in quadrature. Partial errors cover included contributions only. Missing children are not measured zeros.",
+        "primary_histogram_name":primary_histogram_name, "histograms":histograms,
+        "omitted_incompatible_histograms":omitted, "coverage":observable_coverage(inputs,&contributing),
     }))
 }
 
@@ -368,6 +436,9 @@ pub(crate) fn observable_payload(_accumulator: &AccumulatorState) -> Option<Json
 pub(crate) fn histogram_hwu(payload: &JsonValue) -> Result<String, String> {
     use std::fmt::Write;
     let mut output = String::new();
+    if let Some(coverage) = payload.get("coverage") {
+        writeln!(&mut output, "# Campaign coverage: {}", coverage).map_err(|e| e.to_string())?;
+    }
     for histogram in payload
         .get("histograms")
         .and_then(JsonValue::as_object)
@@ -622,5 +693,116 @@ mod tests {
         });
 
         assert!(combine_histogram(&[(1.0, &left), (1.0, &right)]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod partial_observable_tests {
+    use super::*;
+
+    fn histogram(count: u64, sum: f64, squared: f64) -> JsonValue {
+        json!({"title":"Shared title","kind":"continuous","phase":"real","sample_count":count,
+            "bins":[{"x_min":0.,"x_max":1.,"sum_weights":sum,"sum_weights_squared":squared}]})
+    }
+    fn bundle(histogram: JsonValue) -> JsonValue {
+        json!({"histograms":{"h":histogram}})
+    }
+
+    #[test]
+    fn campaign_observables_grow_from_partial_to_complete_without_counting_missing_as_zero() {
+        let mut inputs = vec![
+            ("A", 2., Some(bundle(histogram(2, 4., 10.)))),
+            ("B", -1., None),
+            ("C", 3., Some(bundle(histogram(0, 0., 0.)))),
+        ];
+        let partial = combine_observable_bundles(&inputs).unwrap();
+        assert_eq!(partial["histograms"]["h"]["bins"][0]["value"], 4.);
+        assert_eq!(partial["histograms"]["h"]["bins"][0]["error"], 2.);
+        assert_eq!(partial["coverage"]["contributing"], json!(["A"]));
+        assert_eq!(
+            partial["histograms"]["h"]["coverage"]["missing"],
+            json!(["B", "C"])
+        );
+        assert_eq!(partial["histograms"]["h"]["sample_count"], 2);
+        inputs[1].2 = Some(bundle(histogram(2, 6., 20.)));
+        let partial = combine_observable_bundles(&inputs).unwrap();
+        assert_eq!(partial["histograms"]["h"]["bins"][0]["value"], 1.);
+        assert!(
+            (partial["histograms"]["h"]["bins"][0]["error"]
+                .as_f64()
+                .unwrap()
+                - 5_f64.sqrt())
+            .abs()
+                < 1e-12
+        );
+        assert_eq!(partial["coverage"]["contributing_count"], 2);
+        inputs[2].2 = Some(bundle(histogram(2, 0., 0.)));
+        let complete = combine_observable_bundles(&inputs).unwrap();
+        assert_eq!(complete["histograms"]["h"]["bins"][0]["value"], 1.);
+        assert_eq!(complete["histograms"]["h"]["sample_count"], 6);
+        assert_eq!(
+            complete["coverage"]["partial"], false,
+            "a measured zero is a contribution"
+        );
+        assert_eq!(complete["histograms"]["h"]["coverage"]["partial"], false);
+    }
+
+    #[test]
+    fn campaign_observables_keep_names_and_per_observable_coverage() {
+        let a = json!({"histograms":{"higgs_energy_002":histogram(2,4.,10.),"higgs_energy_010":histogram(2,12.,80.)}});
+        let b = json!({"histograms":{"higgs_energy_002":histogram(2,6.,20.)}});
+        let result = combine_observable_bundles(&[("A", 1., Some(a)), ("B", 1., Some(b))]).unwrap();
+        assert_eq!(result["histograms"].as_object().unwrap().len(), 2);
+        assert_eq!(
+            result["histograms"]["higgs_energy_002"]["bins"][0]["value"],
+            5.
+        );
+        assert_eq!(
+            result["histograms"]["higgs_energy_010"]["bins"][0]["value"],
+            6.
+        );
+        assert_eq!(
+            result["histograms"]["higgs_energy_002"]["coverage"]["partial"],
+            false
+        );
+        assert_eq!(
+            result["histograms"]["higgs_energy_010"]["coverage"]["contributing"],
+            json!(["A"])
+        );
+        assert_eq!(
+            result["histograms"]["higgs_energy_010"]["coverage"]["partial"],
+            true
+        );
+    }
+
+    #[test]
+    fn campaign_observables_do_not_require_errors_and_skip_unavailable_child_means() {
+        let mut unavailable = histogram(10, 100., 1000.);
+        unavailable["bins"][0]["estimate"] = json!({"mean":null,"error":null});
+        let result = combine_observable_bundles(&[
+            ("first", 2., Some(bundle(histogram(1, 3., 9.)))),
+            ("waiting", 1., Some(bundle(unavailable))),
+        ])
+        .unwrap();
+        assert_eq!(result["histograms"]["h"]["bins"][0]["value"], 6.);
+        assert!(result["histograms"]["h"]["bins"][0]["error"].is_null());
+        assert_eq!(result["coverage"]["contributing"], json!(["first"]));
+        assert!(
+            combine_observable_bundles(&[("empty", 1., Some(bundle(histogram(0, 0., 0.))))])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn campaign_observables_still_reject_incompatible_populated_bins() {
+        let mut other = histogram(2, 6., 20.);
+        other["bins"][0]["x_max"] = json!(2.);
+        let result = combine_observable_bundles(&[
+            ("A", 1., Some(bundle(histogram(2, 4., 10.)))),
+            ("B", 1., Some(bundle(other))),
+        ])
+        .unwrap();
+        assert!(result["histograms"].as_object().unwrap().is_empty());
+        assert_eq!(result["omitted_incompatible_histograms"], json!(["h"]));
     }
 }

@@ -1,20 +1,23 @@
-import { finite, fraction } from './strataUtils';
+import { finite, fraction } from "./strataUtils";
 export const rasterAxes = ({ kind, geometry: g }) => {
   const axis = (s) =>
     Array.from(
       {
-        length: s.count
+        length: s.count,
       },
-      (_, i) => (s.count === 1 ? s.start : s.start + ((s.stop - s.start) * i) / (s.count - 1))
+      (_, i) =>
+        s.count === 1
+          ? s.start
+          : s.start + ((s.stop - s.start) * i) / (s.count - 1),
     );
-  return kind === 'line'
+  return kind === "line"
     ? {
         x: axis(g.linspace),
-        y: null
+        y: null,
       }
     : {
         x: axis(g.u_linspace),
-        y: axis(g.v_linspace)
+        y: axis(g.v_linspace),
       };
 };
 
@@ -43,123 +46,160 @@ export const sumDefined = (values) =>
   values.every(finite) ? values.reduce((a, b) => a + b, 0) : null;
 const divide = (values, divisor) =>
   values.map((v) =>
-    finite(v) && finite(divisor) && divisor > 0 && finite(v / divisor) ? v / divisor : null
+    finite(v) && finite(divisor) && divisor > 0 && finite(v / divisor)
+      ? v / divisor
+      : null,
   );
 export const coverageStatus = (pdf, target) =>
   !finite(pdf) || !finite(target)
-    ? 'missing'
+    ? "missing"
     : pdf === 0 && target > 0
-      ? 'uncovered'
+      ? "uncovered"
       : pdf > 0 && target === 0
-        ? 'leakage'
+        ? "leakage"
         : pdf === 0 && target === 0
-          ? 'both_zero'
-          : 'covered';
+          ? "both_zero"
+          : "covered";
 export const COVERAGE = [
   {
-    id: 'covered',
-    label: 'Both positive',
-    color: '#009e73'
+    id: "covered",
+    label: "Both positive",
+    color: "#009e73",
   },
   {
-    id: 'uncovered',
-    label: 'Positive target, zero PDF',
-    color: '#d55e00'
+    id: "uncovered",
+    label: "Positive target, zero PDF",
+    color: "#d55e00",
   },
   {
-    id: 'leakage',
-    label: 'Zero target, positive PDF',
-    color: '#0072b2'
+    id: "leakage",
+    label: "Zero target, positive PDF",
+    color: "#0072b2",
   },
   {
-    id: 'both_zero',
-    label: 'Both zero',
-    color: '#8a8f98'
+    id: "both_zero",
+    label: "Both zero",
+    color: "#8a8f98",
   },
   {
-    id: 'missing',
-    label: 'Unavailable',
-    color: '#cc79a7'
-  }
+    id: "missing",
+    label: "Unavailable",
+    color: "#cc79a7",
+  },
 ];
-export const pdfComparison = (state, scope = 'overall', mode = 'shape') => {
+export const pdfComparison = (state, scope = "overall", mode = "shape") => {
   const data = state.data,
     strata = data.strata,
     axes = rasterAxes(state.geometry);
-  const k = scope === 'overall' || !strata ? null : Number(scope);
+  const k = scope === "overall" || !strata ? null : Number(scope);
   const actual = strata?.actual_strata || [];
   const rawTarget = data.integrand_values.map((v, i) =>
     !finite(v) || (k != null && actual[i] == null)
       ? null
-      : k == null || actual[i] === k ? Math.abs(v) : 0
+      : k == null || actual[i] === k
+        ? Math.abs(v)
+        : 0,
   );
-  const zeroTarget = rawTarget.length > 0 && rawTarget.every((v) => finite(v) && v === 0);
+  const zeroTarget =
+    rawTarget.length > 0 && rawTarget.every((v) => finite(v) && v === 0);
   const joint = k == null ? data.pdf_values : strata.pdf_values[k];
   const probability = k == null ? 1 : strata.probabilities[k];
   const steps = data.pdf_steps;
   const stepValues = steps
     ? k == null
-      ? steps.edges.slice(1).map((_, i) => sumDefined(steps.densities.map((row) => row[i])))
+      ? steps.edges
+          .slice(1)
+          .map((_, i) => sumDefined(steps.densities.map((row) => row[i])))
       : steps.densities[k]
     : null;
   const stepIntegral =
     steps && stepValues
       ? sumDefined(
-          stepValues.map((v, i) => (finite(v) ? v * (steps.edges[i + 1] - steps.edges[i]) : null))
+          stepValues.map((v, i) =>
+            finite(v) ? v * (steps.edges[i + 1] - steps.edges[i]) : null,
+          ),
         )
       : null;
   const gridPdfIntegral = sliceIntegral(joint, axes.x, axes.y);
   const pdfIntegral = steps ? stepIntegral : gridPdfIntegral;
   const targetIntegral = sliceIntegral(rawTarget, axes.x, axes.y);
-  const pdfDivisor = mode === 'shape' ? pdfIntegral : mode === 'conditional' ? probability : 1;
+  const mean = (a) =>
+    a.length && a.every(finite)
+      ? a.reduce((sum, v) => sum + v / a.length, 0)
+      : null;
+  const pdfDivisor =
+    mode === "slice"
+      ? mean(joint)
+      : mode === "shape"
+        ? pdfIntegral
+        : mode === "conditional"
+          ? probability
+          : 1;
   const targetDivisor =
-    mode === 'shape' ? targetIntegral : mode === 'reference' ? data.global_abs_integrand_norm : 1;
+    mode === "slice"
+      ? mean(rawTarget)
+      : mode === "shape"
+        ? targetIntegral
+        : mode === "reference"
+          ? (data.reference?.value ?? data.global_abs_integrand_norm)
+          : 1;
   const pdf = divide(joint, pdfDivisor),
     target = divide(rawTarget, targetDivisor);
   const status = joint.map((p, i) => coverageStatus(p, rawTarget[i]));
   const ratio = pdf.map((p, i) =>
-    finite(p) && finite(target[i]) && target[i] > 0 && finite(p / target[i]) ? p / target[i] : null
+    finite(p) && finite(target[i]) && target[i] > 0 && finite(p / target[i])
+      ? p / target[i]
+      : null,
   );
   const relative = ratio.map((r) => (finite(r) ? r - 1 : null));
   const logRatio = pdf.map((p, i) =>
     finite(p) && p > 0 && finite(target[i]) && target[i] > 0
       ? Math.log10(p) - Math.log10(target[i])
-      : null
+      : null,
   );
   const targetTotal = sliceIntegral(
     data.integrand_values.map((v) => (finite(v) ? Math.abs(v) : null)),
     axes.x,
-    axes.y
+    axes.y,
   );
   const mixtureTotal = sliceIntegral(data.pdf_values, axes.x, axes.y);
   const maskedIntegral = (values, predicate) =>
     sliceIntegral(
-      values.map((v, i) => (!finite(v) || actual[i] == null ? null : predicate(actual[i]) ? v : 0)),
+      values.map((v, i) =>
+        !finite(v) || actual[i] == null ? null : predicate(actual[i]) ? v : 0,
+      ),
       axes.x,
-      axes.y
+      axes.y,
     );
   const leakage =
     k == null
       ? null
       : fraction(
           maskedIntegral(joint, (label) => label !== k),
-          gridPdfIntegral
+          gridPdfIntegral,
         );
   const actualMass =
     k == null
       ? null
       : fraction(
           maskedIntegral(data.pdf_values, (label) => label === k),
-          mixtureTotal
+          mixtureTotal,
         );
   const stepPoints = stepValues
     ? divide(stepValues, pdfDivisor).flatMap((v, i) => [
         [steps.edges[i], v],
-        [steps.edges[i + 1], v]
+        [steps.edges[i + 1], v],
       ])
     : null;
+  const sign = data.integrand_values.map((v, i) =>
+    !finite(v) || (k != null && actual[i] == null)
+      ? null
+      : k == null || actual[i] === k
+        ? Math.sign(v)
+        : 0,
+  );
   const counts = Object.fromEntries(
-    COVERAGE.map((c) => [c.id, status.filter((s) => s === c.id).length])
+    COVERAGE.map((c) => [c.id, status.filter((s) => s === c.id).length]),
   );
   return {
     scope,
@@ -175,7 +215,9 @@ export const pdfComparison = (state, scope = 'overall', mode = 'shape') => {
     targetIntegral,
     pdfIntegral,
     gridPdfIntegral,
-    pdfIntegralMethod: steps ? 'Exact native bins' : 'Trapezoidal grid estimate',
+    pdfIntegralMethod: steps
+      ? "Exact native bins"
+      : "Trapezoidal grid estimate",
     pdfDivisor,
     targetDivisor,
     targetShare: fraction(targetIntegral, targetTotal),
@@ -185,12 +227,13 @@ export const pdfComparison = (state, scope = 'overall', mode = 'shape') => {
     counts,
     relative,
     logRatio,
-    stepPoints
+    stepPoints,
+    sign,
   };
 };
 export const sharedColorLimits = (
   arrays,
-  { log = false, symmetric = false, manual = null } = {}
+  { log = false, symmetric = false, manual = null } = {},
 ) => {
   let min = Infinity,
     max = -Infinity;
@@ -216,43 +259,80 @@ export const sharedColorLimits = (
   }
   const auto = {
     zmin: min,
-    zmax: max
+    zmax: max,
   };
-  if (manual && finite(manual.min) && finite(manual.max) && manual.min < manual.max) {
+  if (
+    manual &&
+    finite(manual.min) &&
+    finite(manual.max) &&
+    manual.min < manual.max
+  ) {
     min = manual.min;
     max = manual.max;
   }
   return {
     min,
     max,
-    auto
+    auto,
   };
 };
-export const diagnosticHistograms = (arrays, bins = 31) => {
-  const finiteArrays = arrays.map((a) => a.filter(finite));
+export const diagnosticHistograms = (
+  arrays,
+  bins = 31,
+  log = false,
+  weights = null,
+) => {
+  let maxWeight = weights ? 0 : 1;
+  if (weights)
+    for (const weight of weights)
+      if (finite(weight) && weight > maxWeight) maxWeight = weight;
+  if (maxWeight === 0) return arrays.map(() => []);
   let lo = Infinity,
     hi = -Infinity;
-  for (const a of finiteArrays)
-    for (const v of a) {
-      lo = Math.min(lo, v);
-      hi = Math.max(hi, v);
-    }
+  const samples = arrays.map((a) =>
+    a.flatMap((value, i) => {
+      if (!finite(value) || (log && value <= 0)) return [];
+      const plottedValue = log ? Math.log10(value) : value;
+      // Keep the same shared bins when weighting excludes zero-density points.
+      lo = Math.min(lo, plottedValue);
+      hi = Math.max(hi, plottedValue);
+      const weight = weights ? weights[i] : 1;
+      return finite(weight) && weight > 0
+        ? [
+            {
+              value: plottedValue,
+              weight: weight / maxWeight,
+            },
+          ]
+        : [];
+    }),
+  );
   if (!finite(lo) || !finite(hi)) return arrays.map(() => []);
   if (lo === hi) {
-    const pad = Math.max(1, Math.abs(lo) * 0.1);
+    const pad = log ? 1 : lo === 0 ? 1 : Math.max(1e-300, Math.abs(lo) * 0.1);
     lo -= pad / 2;
     hi += pad / 2;
   }
   const width = (hi - lo) / bins;
-  return finiteArrays.map((a) => {
+  return samples.map((a) => {
     if (!a.length) return [];
     const counts = Array(bins).fill(0);
-    for (const v of a) counts[Math.min(bins - 1, Math.max(0, Math.floor((v - lo) / width)))] += 1;
-    return counts.map((count, i) => ({
-      start: lo + i * width,
-      stop: lo + (i + 1) * width,
-      value: count / (a.length * width),
-      error: null
-    }));
+    let total = 0;
+    for (const { value, weight } of a) {
+      counts[
+        Math.min(bins - 1, Math.max(0, Math.floor((value - lo) / width)))
+      ] += weight;
+      total += weight;
+    }
+    return counts.map((count, i) => {
+      const start = log ? 10 ** (lo + i * width) : lo + i * width,
+        stop = log ? 10 ** (lo + (i + 1) * width) : lo + (i + 1) * width;
+      return {
+        start,
+        stop,
+        value: count / (total * (stop - start)),
+        error: null,
+      };
+    });
   });
 };

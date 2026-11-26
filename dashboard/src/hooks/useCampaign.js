@@ -6,5 +6,5 @@ export function useCampaign({ runId, taskId, section = "settings", group = null,
   const parameters = JSON.stringify({ section, group, selection });
   const fetchResource = useCallback((signal) => fetchCampaign(runId, taskId, JSON.parse(parameters), signal), [runId, taskId, parameters]);
   return usePolledResource({ enabled: runId != null && taskId != null, pollMs: 10000, initialData: null, fetchResource, paused,
-    cacheKey: section === "settings" ? null : `campaign:${runId}:${taskId}:${parameters}` });
+    cacheKey: ["settings", "children"].includes(section) ? null : `campaign:${runId}:${taskId}:${parameters}` });
 }

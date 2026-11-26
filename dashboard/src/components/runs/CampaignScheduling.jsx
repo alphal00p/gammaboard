@@ -50,7 +50,7 @@ export default function CampaignScheduling({ runId, taskId }) {
     try {
       await updateCampaignScheduling(runId, taskId, { expected: expected.current, ...settings });
       dirty.current = false; expected.current = settings; resource.refresh();
-      setMessage({ severity:"success", text:"Scheduling updated. Existing grants are preserved." });
+      setMessage({ severity:"success", text:"Scheduling updated. Children will finish queued work before reassignment." });
     } catch (error) { setMessage({ severity:"error", text:error.message }); }
     finally { setBusy(false); }
   };
@@ -64,7 +64,7 @@ export default function CampaignScheduling({ runId, taskId }) {
         <Typography variant="body2">{data.samplers} samplers · {data.evaluators} evaluators · {Number(data.reserved_samples).toLocaleString()} reserved samples</Typography>
         <Typography variant="body2">Scheduled children: {(data.controller_output?.selected_child_run_ids ?? []).map((id) => data.children.find((child) => child.run_id === id)?.label ?? `#${id}`).join(", ") || "None"}</Typography>
         {data.capacity < data.settings.allocation.max_active_runs && <Alert severity="info">{data.samplers <= Math.floor(data.evaluators / data.settings.allocation.min_evaluators_per_run) ? "Sampler availability" : "Evaluator availability"} limits concurrency. Assign additional workers to the campaign to increase capacity.</Alert>}
-        <Typography variant="body2" color="text.secondary">Applying settings immediately rechecks assignments. Workers checkpoint before switching; existing sample reservations are retained. New allocation windows apply to future grants. Training samples count toward the total budget.</Typography>
+        <Typography variant="body2" color="text.secondary">Applying settings shortens existing reservations. Children finish already-generated work and checkpoint before switching; queued work may overshoot the revised allowance. Training samples count toward the total budget.</Typography>
       </Stack></CardContent></Card>
       {!editable && <Alert severity="info">{authenticated ? "Completed or failed campaigns are read-only." : "Log in to change scheduling."}</Alert>}
       <Box sx={{ display:"grid", gridTemplateColumns:{xs:"1fr",md:"1fr 1fr"}, gap:2 }}>

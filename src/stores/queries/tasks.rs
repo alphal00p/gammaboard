@@ -597,32 +597,51 @@ pub(crate) async fn apply_task_queue_change(
     expected: &[RunTask],
     change: crate::core::traits::TaskQueueChange,
 ) -> Result<Vec<RunTask>, crate::core::StoreError> {
+    let mut tx = pool.begin().await?;
+    crate::stores::pg_store::campaign::lock_controller(&mut tx).await?;
+    let result = apply_task_queue_change_in_transaction(&mut tx, run_id, expected, change).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub(crate) async fn apply_task_queue_change_in_transaction(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: i32,
+    expected: &[RunTask],
+    change: crate::core::traits::TaskQueueChange,
+) -> Result<Vec<RunTask>, crate::core::StoreError> {
     use crate::core::{StoreError, traits::TaskQueueChange};
     use crate::stores::pg_store::map_sqlx;
-    let mut tx = pool.begin().await.map_err(map_sqlx)?;
+    let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM run_drain_requests WHERE run_id=$1) OR EXISTS(SELECT 1 FROM runs r JOIN run_tasks t ON t.id=r.parent_task_id WHERE r.id=$1 AND t.state NOT IN ('pending','active'))")
+        .bind(run_id).fetch_one(&mut **tx).await?;
+    if blocked {
+        return Err(StoreError::invalid_input(
+            "run is draining or its campaign is no longer editable",
+        ));
+    }
     sqlx::query("SELECT id FROM runs WHERE id=$1 FOR UPDATE")
         .bind(run_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await
         .map_err(map_sqlx)?;
     let current = sqlx::query_as::<_, RunTaskRow>(&format!(
         "SELECT {RUN_TASK_COLUMNS} FROM run_tasks WHERE run_id=$1 ORDER BY sequence_nr, id FOR UPDATE"
-    )).bind(run_id).fetch_all(&mut *tx).await.map_err(map_sqlx)?;
+    )).bind(run_id).fetch_all(&mut **tx).await.map_err(map_sqlx)?;
     let matches = current.len() == expected.len()
         && current.iter().zip(expected).all(|(row, expected)| {
             row.id == expected.id
+                && row.state == expected.state.as_str()
                 && row.name == expected.name
                 && row.sequence_nr == expected.sequence_nr
                 && serde_json::to_value(&expected.task).ok().as_ref() == Some(&row.task)
         });
     if !matches {
-        tx.rollback().await.map_err(map_sqlx)?;
         return Err(StoreError::InvalidInput(
             "task queue changed; reload it before retrying".into(),
         ));
     }
     let changed = match change {
-        TaskQueueChange::Append(tasks) => append_tasks_in_transaction(&mut tx, run_id, &tasks)
+        TaskQueueChange::Append(tasks) => append_tasks_in_transaction(tx, run_id, &tasks)
             .await
             .map_err(map_sqlx)?,
         change => {
@@ -636,7 +655,6 @@ pub(crate) async fn apply_task_queue_change(
                 .iter()
                 .any(|task| task.id == task_id && task.state == "pending")
             {
-                tx.rollback().await.map_err(map_sqlx)?;
                 return Err(StoreError::InvalidInput(
                     "only pending tasks can be changed; reload the task queue".into(),
                 ));
@@ -648,14 +666,14 @@ pub(crate) async fn apply_task_queue_change(
                     )).bind(run_id).bind(task_id).bind(&task.name)
                         .bind(encode_task(&task.task).map_err(map_sqlx)?)
                         .bind(canonical_task_toml(&task).map_err(|err| StoreError::store(err.to_string()))?)
-                        .fetch_one(&mut *tx).await.map_err(map_sqlx)?;
+                        .fetch_one(&mut **tx).await.map_err(map_sqlx)?;
                     vec![decode_task_row(row).map_err(map_sqlx)?]
                 }
                 TaskQueueChange::Remove { task_id } => {
                     sqlx::query("DELETE FROM run_tasks WHERE run_id=$1 AND id=$2")
                         .bind(run_id)
                         .bind(task_id)
-                        .execute(&mut *tx)
+                        .execute(&mut **tx)
                         .await
                         .map_err(map_sqlx)?;
                     Vec::new()
@@ -664,6 +682,5 @@ pub(crate) async fn apply_task_queue_change(
             }
         }
     };
-    tx.commit().await.map_err(map_sqlx)?;
     Ok(changed)
 }

@@ -7,7 +7,7 @@ mod hyperparameter_tuning;
 mod integration_campaign;
 mod observable;
 mod parameter_scan;
-mod pdf_adaptation;
+pub(super) mod pdf_adaptation;
 pub(crate) mod sample;
 mod strata;
 
@@ -1301,6 +1301,7 @@ mod tests {
         assert_eq!(
             entries
                 .iter()
+                .filter(|entry| entry.key != "coverage")
                 .take(4)
                 .map(|entry| entry.label.as_str())
                 .collect::<Vec<_>>(),
@@ -1314,13 +1315,21 @@ mod tests {
                 .value,
             2
         );
-        assert_eq!(entries[2].value["target"], 1.4);
-        assert_eq!(entries[3].value["target"], -0.7);
-        assert!(
-            (entries[2].value["delta_sigma"].as_f64().unwrap() - 1.0 / 2.0_f64.sqrt()).abs()
-                < 1e-12
-        );
-        assert!((entries[3].value["delta_sigma"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+        assert_eq!(entries[0].label, "Partial result");
+        let real = &entries
+            .iter()
+            .find(|e| e.label == "Real vs Target")
+            .unwrap()
+            .value;
+        let imag = &entries
+            .iter()
+            .find(|e| e.label == "Imag vs Target")
+            .unwrap()
+            .value;
+        assert_eq!(real["target"], 1.4);
+        assert_eq!(imag["target"], -0.7);
+        assert!((real["delta_sigma"].as_f64().unwrap() - 1.0 / 2.0_f64.sqrt()).abs() < 1e-12);
+        assert!((imag["delta_sigma"].as_f64().unwrap() - 1.0).abs() < 1e-12);
     }
 
     #[test]

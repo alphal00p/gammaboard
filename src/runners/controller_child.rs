@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone)]
 pub struct ChildTaskResult {
     pub task_state: RunTaskState,
+    pub failure_reason: Option<String>,
     pub output: Option<TaskMeasurementOutput>,
     pub source: ResultSourceRef,
     pub accumulator: Option<AccumulatorState>,
@@ -38,12 +39,14 @@ impl ChildTaskResult {
     }
 
     pub fn task_failure_reason(&self) -> Option<String> {
-        task_failure_reason(
-            self.task_state,
-            &self.source_task.name,
-            self.source_task.failure_reason.as_deref(),
-            self.output.as_ref(),
-        )
+        self.failure_reason.clone().or_else(|| {
+            task_failure_reason(
+                self.task_state,
+                &self.source_task.name,
+                self.source_task.failure_reason.as_deref(),
+                self.output.as_ref(),
+            )
+        })
     }
 }
 
@@ -347,14 +350,31 @@ async fn load_child_task_result_inner(
             .map_err(|err| StoreError::store(err.to_string()))?;
         (accumulator, None)
     } else {
+        // A failed task may have published valid output without reaching a stage checkpoint.
+        let saved = store
+            .get_task_output_snapshots(child_run_id, output.task_id, None, 1)
+            .await?;
+        let published = saved.iter().find_map(|saved| {
+            AccumulatorState::from_json(&saved.persisted_output)
+                .ok()
+                .filter(|a| a.sample_count() > 0)
+                .map(|a| (saved.id.clone(), a))
+        });
         let snapshot = store
             .get_latest_task_stage_snapshot(child_run_id, output.task_id)
             .await?;
         let snapshot_id = snapshot.as_ref().map(|snapshot| snapshot.id.clone());
-        (
-            snapshot.map(|snapshot| snapshot.observable_state),
-            snapshot_id,
-        )
+        match (published, snapshot) {
+            (Some((id, published)), stage)
+                if stage.as_ref().is_none_or(|s| {
+                    s.observable_state.sample_count() <= published.sample_count()
+                }) =>
+            {
+                (Some(published), Some(format!("output:{id}")))
+            }
+            (_, Some(stage)) => (Some(stage.observable_state), snapshot_id),
+            _ => (None, None),
+        }
     };
     let sample_count = accumulator
         .as_ref()
@@ -372,6 +392,7 @@ async fn load_child_task_result_inner(
         })
         .unwrap_or(output.source_task.nr_completed_samples);
     Ok(ChildTaskResult {
+        failure_reason: None,
         task_state: output.task_state,
         output: output.output,
         source: ResultSourceRef {
@@ -411,13 +432,14 @@ pub async fn load_published_child_result(
     })?;
     let work_samples = tasks.iter().map(|task| task.nr_completed_samples).sum();
     let mut selected = None;
-    for task in publishing
-        .iter()
-        .rev()
-        .filter(|task| matches!(task.state, RunTaskState::Active | RunTaskState::Completed))
-    {
+    for task in publishing.iter().rev().filter(|task| {
+        matches!(
+            task.state,
+            RunTaskState::Active | RunTaskState::Completed | RunTaskState::Failed
+        )
+    }) {
         let result = load_child_task_result(store, run_id, &task.name).await?;
-        if (task.state == RunTaskState::Completed || task.nr_completed_samples > 0)
+        if (task.state != RunTaskState::Active || task.nr_completed_samples > 0)
             && result
                 .accumulator
                 .as_ref()
@@ -447,11 +469,9 @@ pub async fn load_published_child_result(
     // Earlier failures must not leave a pending result stage scheduled forever.
     if let Some(failed) = tasks.iter().find(|task| task.state == RunTaskState::Failed) {
         result.task_state = RunTaskState::Failed;
-        result.output = Some(TaskMeasurementOutput::Failed {
-            reason: match &failed.failure_reason {
-                Some(reason) => format!("child task '{}' failed: {reason}", failed.name),
-                None => format!("child task '{}' failed", failed.name),
-            },
+        result.failure_reason = Some(match &failed.failure_reason {
+            Some(reason) => format!("child task '{}' failed: {reason}", failed.name),
+            None => format!("child task '{}' failed", failed.name),
         });
     } else {
         result.task_state = if tasks
@@ -480,6 +500,7 @@ mod tests {
         }))
         .unwrap();
         let mut result = ChildTaskResult {
+            failure_reason: None,
             task_state: RunTaskState::Active,
             source: ResultSourceRef {
                 run_id: 2,

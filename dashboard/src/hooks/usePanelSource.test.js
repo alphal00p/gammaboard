@@ -173,3 +173,22 @@ describe("usePanelSource", () => {
     expect(result.current.panelStates).toEqual([childTable]);
   });
 });
+
+test('unchanged PDF grids survive full refreshes with changing progress, but changed densities replace them',async()=>{
+  const pdf={panel_id:'pdf',kind:'pdf_comparison',geometry:{kind:'line'},data:{processed:2,integrand_values:[-1,2],pdf_values:[1,3],reference:{value:2},strata:null}};
+  let progress=0;
+  const fetchPanels=vi.fn(async()=>({source_id:'pdf-refresh',panels:[],updates:[
+    {mode:'replace',panel:structuredClone(pdf)},
+    {mode:'replace',panel:{panel_id:'progress',kind:'progress',current:++progress}},
+  ],poll_after_ms:null}));
+  const {result,rerender}=renderHook(({refreshKey})=>usePanelSource({fetchPanels,refreshKey,useCursor:false}),{initialProps:{refreshKey:0}});
+  await waitFor(()=>expect(result.current.panelStates).toHaveLength(2));
+  const first=result.current.panelStates[0];
+  rerender({refreshKey:1});
+  await waitFor(()=>expect(result.current.panelStates[1].current).toBe(2));
+  expect(result.current.panelStates[0]).toBe(first);
+  pdf.data.pdf_values[1]=4;
+  rerender({refreshKey:2});
+  await waitFor(()=>expect(result.current.panelStates[0].data.pdf_values[1]).toBe(4));
+  expect(result.current.panelStates[0]).not.toBe(first);
+});

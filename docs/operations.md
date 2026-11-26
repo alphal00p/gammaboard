@@ -211,44 +211,60 @@ selector applies to both convergence and variance plots. Legend selections and
 count differences, so downsampling can widen its reporting intervals.
 
 Create a [PDF diagnostic task](config.md#pdf-diagnostic-tasks) from a saved sampler
-to inspect its proposal without changing its statistics. The **PDF comparison**
-panel's **Scope** selects an overview, one searchable stratum, or comparisons
-paged four at a time. **View** selects density, mismatch, distributions, coverage
-or membership. Both ordinary and stratified sources use these controls.
+to inspect its proposal without changing its statistics. **Stratum** selects the
+overall mixture or one searchable stratum. 2D slices show Target, Sampler and
+Sampling mismatch together; 1D slices overlay Target/Sampler beside the auxiliary
+curve. Both have fixed density-value and mismatch histograms below.
 
-| Normalization | Use |
-| --- | --- |
-| **Shape on this slice** | Compare shapes after each curve is normalized over the displayed parameter grid. A zero/unavailable integral has no normalized curve. |
-| **Source integral reference** | Compare the joint PDF with the target divided by the source's estimated absolute-projection integral. This is not necessarily unit area on a slice. |
-| **Conditional density** | Divide the joint PDF by the exact complete-prefix mass; unavailable/zero mass leaves the curve unavailable. |
-| **Joint density** | Inspect the returned PDF including its prefix probability. |
+**Source integral reference** divides the absolute training projection by its
+full-domain integral estimate and leaves the joint sampler PDF unchanged. The
+reference disclosure shows the source, value, standard error and sample count.
+Preference is a compatible configured target, the sampler source, then a compatible
+accumulator from an earlier task. Later tasks cannot change this fallback. New
+rasters retain source statistics in their checkpoints. Historical outputs remain
+readable; missing projection/error metadata is not guessed.
 
-The [probe specification](stratification.md#stratum-plot-data-and-pdf-probes)
-defines these quantities and their numerical integration. Native Havana line PDFs
-use exact grid edges/integrals; other sampler curves interpolate queried points.
-If a stratum's target is zero at every evaluated point, shape mode explains and
-omits that undefined normalized target; raw density modes can show its zero curve.
-Sampler density outside the intended stratum remains visible as leakage.
+For signed projections, a signed target is not an absolute-integral reference.
+Use an explicit named target such as `target = { components = { abs_real = 1.2 } }`
+and `target_error = { abs_real = 0.03 }`, or `abs_training_projection`. Nonnegative
+`norm` and `norm_squared` projections also accept targets with those names.
 
-Mismatch/distribution views use shape or source-reference normalization; raw
-PDF and target densities have separate labelled scales. **Normalization and
-leakage details** shows slice integrals, divisors, prefix masses, target shares,
-actual-cell mass estimates and leakage. These are slice estimates, not marginals
-over omitted coordinates or full-domain coverage guarantees.
+**Slice** divides each field by its mean over the evaluated grid. Both relative
+densities have mean one; this compares shape while removing allocation/overall
+scale differences. Complete data and a positive mean are required. Zooming never
+changes normalization. A selected stratum retains its joint PDF, including the
+prefix probability and leakage, in Source mode. These are slices, not marginals.
+Native Havana line PDFs retain their exact step edges.
 
-Mismatch offers `PDF / target - 1` or `log10(PDF / target)` (the default).
-**Coverage** locates positive-target/zero-PDF, zero-target/positive-PDF, both-zero
-and unavailable cases. Infinite or undefined ratios are counted but omitted from
-numeric curves. Distribution histograms describe deterministic raster values and
-have no Monte Carlo error bars; they retain the histogram scale/CDF/export controls.
+Density plots share Viridis, Cividis or Inferno and linear/logarithmic scale.
+Click a colorbar to set limits or return to Auto. Target/Sampler limits are linked
+by default; logarithmic limits are entered in original density units. Spatial
+zoom is shared and does not rescale colors. **Reset view** restores the extent.
 
-Zoom/pan is linked within the panel and persists across views; **Reset view**
-restores the full extent. Comparable heatmaps share colour bounds; raw target/PDF
-quantities keep separate bounds. **Colour encoding → Stratum hue + density** adds
-stratum hue and density saturation to 2D comparisons. Both plots use the actual
-integrand stratum at each point, so other hues in a sampler plot reveal leakage.
-White is the low end, unknown membership is grey, and hues repeat after eight
-prefixes; hover identifies the exact prefix. **Density only** is the default.
+Mismatch uses `log10(PDF / target)` by default, or `PDF / target - 1`. Red means
+undersampling, pale green is zero mismatch, and blue means oversampling. Limits
+may be asymmetric. Positive target/zero PDF and zero target/positive PDF retain
+extreme colors; both-zero and missing values have separate counts. Zeros on a
+logarithmic density plot are light grey. **Projection sign** is available for
+signed projections; it cannot recover component signs from a norm or absolute
+projection. Coverage and normalization disclosures contain additional details.
+
+Histograms default to **Weight by sampler density**: each grid point contributes
+its selected joint sampler density to both histograms. Turning this off gives
+every grid point equal weight. Bin edges stay fixed when weighting is toggled,
+including when extreme values have zero sampler density. Weighted histograms describe how values are
+distributed under the proposal restricted to this slice, but they remain
+deterministic diagnostics with no Monte Carlo errors. Zero-density regions have
+zero weight; use unweighted histograms and Coverage to inspect them. Logarithmic value bins use their actual widths for density.
+Nonfinite values (and zeros for logarithmic bins) are excluded and counted. Spatial
+zoom does not change the histogram population.
+
+**Export** selects plots, strata, format and current/full extent. PDF exports use
+one plot per page; multiple SVG, PNG, JSON or CSV files are bundled in a ZIP.
+Per-plot buttons use the same formats. JSON retains raw and displayed values,
+reference metadata and exceptional mismatch states; CSV exports numeric tables.
+Image exports retain plot scales and normalization labels. Large on-screen grids
+use cached rasters; SVG/PDF exports render the underlying cells.
 
 Stratum histories offer elapsed-time and reported sampler-time axes, follow-latest
 and persistent zoom. Sampler time uses the latest preceding report for the same
@@ -331,12 +347,51 @@ Clearing the fixed-size override restores that child's run default.
 
 **Tasks → Scheduling** edits concurrency, evaluator requirements, allocation
 windows, pilot minima, and stopping conditions. Changes serialize with the
-controller and reject stale forms. Applying edits immediately rechecks assignments
-under the new settings. Workers checkpoint before switching, and existing sample grants remain reserved for later
-resumption. New allocation-window sizes apply to future grants. A sample cap
-cannot be lowered below already produced or reserved work. Scheduling edits are
-included when exporting the campaign definition; queue-tuning rules are runtime
-database settings and are not copied by exporting a run card.
+controller and reject stale forms. Children finish already-generated samples and
+queued evaluations, deliver feedback, and checkpoint. Unused reservations are then
+released and assignments reconsidered. Draining can exceed a revised allowance or
+cap; this work remains counted and no additional credit is issued above the cap.
+A sampler call already in progress must finish before the drain can take effect.
+
+Campaigns retain valid published data from failed children and continue scheduling
+healthy children. Failed rows remain red. As soon as a child publishes a result,
+the campaign displays a weighted subtotal labelled **Partial result — n/N children**.
+Its error covers included contributions only; missing results are not measured
+zeros. Partial results and results with unavailable uncertainties cannot satisfy
+an error target. Histogram coverage is recorded individually and in exports.
+Observables publish independently of the selected scalar measurement. Missing,
+empty, or not-yet-estimable child histograms do not suppress other contributions;
+incompatible populated bin layouts are still omitted. JSON retains normalized
+values and null errors when uncertainties are not yet available; HwU requires
+available uncertainties. Observable identity is its name, not its display title.
+
+**Tasks → Edit children** provides two panels:
+
+- **Tasks across children:** add one task from TOML or remove a pending task by
+  exact name. The target dropdown defaults to all applicable children. Additions
+  exclude failed children; removals preserve downstream references and at least one
+  publishing task. Compatibility is previewed per child before confirmation.
+  Definitions and eligibility are checked again transactionally; stale previews
+  must be reviewed again. Confirmed requests are safe to retry.
+- **Manage children:** create a fresh child from TOML, optionally starting from
+  another child's current definition; delete a child after confirmation; or adopt
+  a compatible standalone integration run from this database. Adoption retains its
+  ID, tasks, results and checkpoints, counts its existing work, and transfers its
+  worker pool. An active run drains and releases its old runtime first. A paused
+  run with outstanding samples must be resumed before adoption. Pending worker
+  launches and known shared accumulator ancestry prevent adoption. Deletion removes
+  the contribution from future totals but retains spent samples and CPU time.
+  The last remaining child cannot be deleted.
+
+Integration-campaign children also expose the ordinary **Add tasks** button and
+pending-task trashcan. Other controller-managed queues remain read-only. Appending
+a task does not retry a failed task. Completed/failed campaigns remain read-only.
+Copied definitions retain external sampler paths: choose distinct writable output
+paths before creating an independent run. Configuration compatibility cannot prove
+that two independently supplied samplers generated independent observations.
+
+Current child queues and scheduling settings are included when exporting the
+campaign definition. Queue-tuning rules remain runtime database settings.
 
 ## Backup and recovery
 

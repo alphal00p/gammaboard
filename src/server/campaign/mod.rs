@@ -77,7 +77,7 @@ pub(super) async fn get(
     AxumPath((run, task)): AxumPath<(i32, i64)>,
     Query(query): Query<CampaignQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    if !["settings", "overview", "diagnostics"].contains(&query.section.as_str()) {
+    if !["settings", "children", "overview", "diagnostics"].contains(&query.section.as_str()) {
         return Err(ApiError::BadRequest("Unknown campaign section".into()));
     }
     let range = query.range();
@@ -88,12 +88,23 @@ pub(super) async fn get(
             "Task is not an integration campaign".into(),
         ));
     }
+    if query.section == "children" {
+        let mut result = state.store.campaign_children_editor(run, task.id).await?;
+        result["state"] = json!(task.state);
+        return json_response(result);
+    }
     if query.section == "settings" {
         return json_response(metadata(&state.store, run, &task).await?);
     }
+    use std::hash::{Hash, Hasher};
+    let mut revision = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(&task.task)
+        .unwrap()
+        .hash(&mut revision);
     let key = format!(
-        "{run}:{}:{}",
+        "{run}:{}:{}:{}",
         task.id,
+        revision.finish(),
         serde_json::to_string(&query).unwrap()
     );
     let slot = state.campaign_cache.slot(key).await;
@@ -225,6 +236,25 @@ pub(super) async fn tuning(
         task_id = task,
         "campaign queue tuning updated"
     );
+    Ok(result)
+}
+
+pub(super) async fn preview_edit(
+    state: &AppState,
+    run: i32,
+    task: i64,
+    edit: crate::stores::pg_store::campaign_edits::ChildEdit,
+) -> Result<Value, ApiError> {
+    state.store.preview_campaign_edit(run, task, &edit).await
+}
+pub(super) async fn apply_edit(
+    state: &AppState,
+    run: i32,
+    task: i64,
+    edit: crate::stores::pg_store::campaign_edits::ChildEdit,
+) -> Result<Value, ApiError> {
+    let result = state.store.apply_campaign_edit(run, task, edit).await?;
+    state.campaign_cache.invalidate().await;
     Ok(result)
 }
 

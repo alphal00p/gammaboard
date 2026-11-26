@@ -23,7 +23,7 @@ export default function DisclosureField({ label, value, children, inline = false
         aria-expanded={expandable ? open : undefined} aria-controls={expandable ? id : undefined}
         onClick={expandable ? toggle : undefined}
         sx={{ display: "grid", alignItems: "baseline", gap: 0.75, width: "100%", minWidth: 0,
-          gridTemplateColumns: inline ? "14px minmax(0, 1fr)" : section && value == null
+          gridTemplateColumns: inline ? `${expandable ? "14px " : ""}minmax(min-content, 1fr)` : section && value == null
             ? "minmax(0, 1fr) 14px" : "var(--field-label-width, minmax(100px, 0.85fr)) 14px minmax(0, 1.4fr)",
           font: "inherit", color: "inherit", textAlign: "start", background: "transparent", border: 0,
           borderRadius: 0.5, px: 0, py: inline ? 0.25 : 0.75,
@@ -33,14 +33,14 @@ export default function DisclosureField({ label, value, children, inline = false
         }}>
         {!inline && <Typography component="span" variant={section ? "subtitle1" : "body2"}
           sx={{ pl: indent * 1.5, minWidth: 0, overflowWrap: "anywhere", color: section ? "text.primary" : "text.secondary" }}>{label}</Typography>}
-        <Box component="span" aria-hidden="true" sx={{ display: "inline-block", alignSelf: "center", textAlign: "right",
-          transform: open && expandable ? "rotate(90deg)" : "none", lineHeight: 1, visibility: expandable ? "visible" : "hidden" }}>{expandable ? "▸" : null}</Box>
+        {(!inline || expandable) && <Box component="span" aria-hidden="true" sx={{ display: "inline-block", alignSelf: "center", textAlign: "right",
+          transform: open && expandable ? "rotate(90deg)" : "none", lineHeight: 1, visibility: expandable ? "visible" : "hidden" }}>{expandable ? "▸" : null}</Box>}
         {(!section || value != null) && <Box component="span" className="field-value"
           sx={{ minWidth: 0, fontVariantNumeric: "tabular-nums", overflowWrap: "anywhere" }}>{value}</Box>}
       </Box>
       {actions && <Box sx={{ flexShrink: 0 }}>{actions}</Box>}
     </Box>
-    {expandable && <Box id={id} hidden={!open} onClick={(event) => event.stopPropagation()} sx={{ minWidth: 0, pt: 0.5, pb: 1,
+    {expandable && <Box id={id} hidden={!open} onClick={(event) => event.stopPropagation()} sx={{ minWidth: 0, pt: 0.5, pb: 1, whiteSpace: "normal",
       "& pre": { m: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: "0.8rem" } }}>
       {(open || visited) && children}
     </Box>}

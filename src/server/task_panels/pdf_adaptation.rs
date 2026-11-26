@@ -89,3 +89,104 @@ fn comparison_projectors(
         ),
     ]
 }
+
+/// Enrich old outputs as well as new ones, without using statistics from a later
+/// task. New rasters retain the source estimate captured when they were created.
+pub(crate) async fn enrich_output<
+    S: crate::core::AggregationStore + crate::core::RunTaskStore + Send + Sync,
+>(
+    store: &S,
+    task: &crate::core::RunTask,
+    data: &mut Value,
+    target: Option<&Value>,
+    target_error: Option<&Value>,
+) -> Result<(), crate::core::StoreError> {
+    use crate::sampling::pdf_reference::{configured_reference, projection, reference};
+    let mut output: PdfAdaptationImagePersistedOutput = serde_json::from_value(data.clone())
+        .map_err(|e| crate::core::StoreError::store(e.to_string()))?;
+    let source = crate::services::stage::resolve_task_source_snapshot(
+        store,
+        task.run_id,
+        task,
+        task.task.sample_sampler_source(),
+    )
+    .await?;
+    let source = match source {
+        Some(source) => Some(source),
+        None => {
+            store
+                .load_latest_stage_snapshot_before_sequence(task.run_id, task.sequence_nr)
+                .await?
+        }
+    };
+    if let Some(source) = &source {
+        if output.projection.is_none() {
+            output.projection = source.observable_state.as_ref().and_then(projection);
+        }
+        if output.reference.is_none() {
+            output.reference = source.observable_state.as_ref().and_then(reference);
+        }
+        if let Some(reference) = &mut output.reference {
+            reference.task_id = source.task_id;
+            reference.task_name = Some(source.name.clone());
+        }
+    }
+    if let Some(p) = &output.projection {
+        if let Some(configured) = configured_reference(p, target, target_error) {
+            output.reference = Some(configured);
+        } else if output.reference.is_none() {
+            let mut before = task.sequence_nr;
+            while let Some(candidate) = store
+                .load_latest_stage_snapshot_before_sequence(task.run_id, before)
+                .await?
+            {
+                let Some(sequence) = candidate.sequence_nr.filter(|seq| *seq < before) else {
+                    break;
+                };
+                before = sequence;
+                let compatible = source.as_ref().is_some_and(|s| {
+                    s.evaluator.is_some()
+                        && s.evaluator == candidate.evaluator
+                        && s.batch_transforms == candidate.batch_transforms
+                        && serde_json::to_value(
+                            s.sampler_config().map(|c| (&c.materializer, &c.transforms)),
+                        )
+                        .ok()
+                            == serde_json::to_value(
+                                candidate
+                                    .sampler_config()
+                                    .map(|c| (&c.materializer, &c.transforms)),
+                            )
+                            .ok()
+                });
+                if !compatible {
+                    continue;
+                }
+                let Some(accumulator) = &candidate.observable_state else {
+                    continue;
+                };
+                if projection(accumulator).as_ref() != Some(p) {
+                    continue;
+                }
+                if let Some(mut found) = reference(accumulator) {
+                    found.source = "previous_accumulator".into();
+                    found.task_id = candidate.task_id;
+                    found.task_name = Some(candidate.name);
+                    output.reference = Some(found);
+                    break;
+                }
+            }
+        }
+        output.target_label = Some(if p.nonnegative {
+            p.label.clone()
+        } else {
+            format!("|{}|", p.label)
+        });
+    }
+    if let Some(reference) = &output.reference {
+        output.global_abs_integrand_norm = Some(reference.value);
+    }
+    *data =
+        serde_json::to_value(output).map_err(|e| crate::core::StoreError::store(e.to_string()))?;
+    Ok(())
+}

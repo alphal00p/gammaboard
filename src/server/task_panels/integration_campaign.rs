@@ -176,7 +176,12 @@ fn summary_projector() -> TaskPanelProjector {
                     )
                 })
                 .collect::<Vec<_>>();
-            if let Some(target) =
+            if output.is_some_and(|output| {
+                output
+                    .children
+                    .iter()
+                    .all(|child| measurement_results(&child.child).is_some())
+            }) && let Some(target) =
                 super::sample::run_target_from_json(ctx.run_target, ctx.run_target_error)
             {
                 for (index, result) in results.into_iter().flatten().enumerate() {
@@ -210,6 +215,24 @@ fn summary_projector() -> TaskPanelProjector {
                 }
             }
             if let Some(output) = output {
+                let contributing = output
+                    .children
+                    .iter()
+                    .filter(|child| measurement_results(&child.child).is_some())
+                    .count();
+                if contributing < output.total_children {
+                    entries.insert(
+                        0,
+                        key_value(
+                            "coverage",
+                            "Partial result",
+                            json!(format!(
+                                "{}/{} children",
+                                contributing, output.total_children
+                            )),
+                        ),
+                    );
+                }
                 entries.extend([
                     key_value(
                         "requested_concurrency",
@@ -320,11 +343,11 @@ fn children_projector(workers: Option<CampaignRuntime>) -> TaskPanelProjector {
             let mut precision = serde_json::Map::new();
             for columns in [&columns, &absolute_columns] {
                 for index in 0..result_keys.len() {
+                    formats.insert(columns[3 + 3 * index].clone(), json!("scientific"));
                     formats.insert(columns[4 + 3 * index].clone(), json!("scientific"));
-                    formats.insert(columns[5 + 3 * index].clone(), json!("scientific"));
-                    precision.insert(columns[4 + 3 * index].clone(), json!(4));
-                    precision.insert(columns[5 + 3 * index].clone(), json!(4));
-                    formats.insert(columns[6 + 3 * index].clone(), json!("comparison_decimal"));
+                    precision.insert(columns[3 + 3 * index].clone(), json!(3));
+                    precision.insert(columns[4 + 3 * index].clone(), json!(2));
+                    formats.insert(columns[5 + 3 * index].clone(), json!("comparison_decimal"));
                 }
             }
             formats.insert("var ctrb (%)".into(), json!("comparison_decimal"));
@@ -358,9 +381,7 @@ fn children_projector(workers: Option<CampaignRuntime>) -> TaskPanelProjector {
 type ResultKey = (crate::core::AccumulatorMetricName, Option<String>);
 
 fn child_columns(result_keys: &[ResultKey], absolute: bool) -> Vec<String> {
-    let mut columns = ["name", "status", "run", "coeff"]
-        .map(str::to_string)
-        .to_vec();
+    let mut columns = ["name", "status", "run"].map(str::to_string).to_vec();
     for key in result_keys {
         let label = result_key_label(key, result_keys.len());
         let label = if absolute && key.0 == crate::core::AccumulatorMetricName::Mean {
@@ -382,6 +403,7 @@ fn child_columns(result_keys: &[ResultKey], absolute: bool) -> Vec<String> {
         "samples".to_string(),
         "core-hours".to_string(),
         "estimator".to_string(),
+        "coeff".to_string(),
     ]);
     columns
 }
@@ -455,12 +477,7 @@ fn child_row(
             (status, _) => json!(status),
         }
     };
-    let mut row = vec![
-        json!(child.name),
-        status,
-        json!(child.child.child_run_id),
-        json!(child.coefficient),
-    ];
+    let mut row = vec![json!(child.name), status, json!(child.child.child_run_id)];
     let results = measurement_results(&child.child).unwrap_or_default();
     for key in result_keys {
         let (results, metric) = if absolute && key.0 == crate::core::AccumulatorMetricName::Mean {
@@ -521,6 +538,7 @@ fn child_row(
             .first()
             .map_or(JsonValue::Null, |result| json!(result.estimator)),
     );
+    row.push(json!(child.coefficient));
     row
 }
 
@@ -644,17 +662,18 @@ mod tests {
         let row = child_row(&children[0], false, &keys, Some(variance), false, None);
 
         assert_eq!(row.len(), 14);
-        assert_eq!(row[13], json!("pooled"));
-        assert!(row[12].is_null());
+        assert_eq!(row[13], json!(2.0));
+        assert_eq!(row[12], json!("pooled"));
+        assert!(row[11].is_null());
         assert_eq!(row[1], json!("running"));
-        assert_eq!(row[4], json!(3.0));
-        assert_eq!(row[5], json!(0.4));
-        assert!((row[6].as_f64().unwrap() - 100.0 * 0.4 / 3.0).abs() < 1e-12);
-        assert_eq!(row[7], json!(-2.0));
-        assert_eq!(row[8], json!(0.2));
-        assert_eq!(row[9], json!(10.0));
-        assert_eq!(row[10], json!(100.0));
-        assert_eq!(row[11], json!(10));
+        assert_eq!(row[3], json!(3.0));
+        assert_eq!(row[4], json!(0.4));
+        assert!((row[5].as_f64().unwrap() - 100.0 * 0.4 / 3.0).abs() < 1e-12);
+        assert_eq!(row[6], json!(-2.0));
+        assert_eq!(row[7], json!(0.2));
+        assert_eq!(row[8], json!(10.0));
+        assert_eq!(row[9], json!(100.0));
+        assert_eq!(row[10], json!(10));
     }
 
     #[test]
@@ -699,8 +718,8 @@ mod tests {
             false,
             None,
         );
-        assert!((first_row[10].as_f64().unwrap() - 88.888_888_888_888_89).abs() < 1e-12);
-        assert!((second_row[10].as_f64().unwrap() - 11.111_111_111_111_11).abs() < 1e-12);
+        assert!((first_row[9].as_f64().unwrap() - 88.888_888_888_888_89).abs() < 1e-12);
+        assert!((second_row[9].as_f64().unwrap() - 11.111_111_111_111_11).abs() < 1e-12);
     }
 
     #[test]
@@ -719,10 +738,10 @@ mod tests {
         let variance = child_variance(&child);
         let signed = child_row(&child, false, &keys, variance, false, None);
         let absolute = child_row(&child, false, &keys, variance, true, None);
-        assert_eq!(signed[6], json!(50.0));
-        assert_eq!(signed[9], json!("∞"));
+        assert_eq!(signed[5], json!(50.0));
+        assert_eq!(signed[8], json!("∞"));
         assert_eq!(
-            absolute[4..10],
+            absolute[3..9],
             [
                 json!(4.0),
                 json!(0.5),
@@ -732,14 +751,13 @@ mod tests {
                 json!(20.0)
             ]
         );
-        assert_eq!(absolute[10..], signed[10..]);
+        assert_eq!(absolute[9..], signed[9..]);
         assert_eq!(
             child_columns(&keys, false),
             [
                 "name",
                 "status",
                 "run",
-                "coeff",
                 "real",
                 "real err",
                 "real err (%)",
@@ -749,11 +767,12 @@ mod tests {
                 "var ctrb (%)",
                 "samples",
                 "core-hours",
-                "estimator"
+                "estimator",
+                "coeff"
             ]
         );
-        assert_eq!(child_columns(&keys, true)[4], "abs real");
-        assert_eq!(child_columns(&keys, true)[8], "abs imag err");
+        assert_eq!(child_columns(&keys, true)[3], "abs real");
+        assert_eq!(child_columns(&keys, true)[7], "abs imag err");
     }
 
     #[test]
@@ -761,9 +780,9 @@ mod tests {
         let child = child(Some(complex_measurement((0.0, 0.0), (0.0, 0.0), 10)));
         let keys = campaign_result_keys(std::slice::from_ref(&child));
         let signed = child_row(&child, false, &keys, None, false, None);
-        assert_eq!(signed[6], json!(0.0));
-        assert_eq!(signed[9], json!(0.0));
+        assert_eq!(signed[5], json!(0.0));
+        assert_eq!(signed[8], json!(0.0));
         let absolute = child_row(&child, false, &keys, None, true, None);
-        assert!(absolute[4..10].iter().all(JsonValue::is_null));
+        assert!(absolute[3..9].iter().all(JsonValue::is_null));
     }
 }

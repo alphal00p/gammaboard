@@ -88,7 +88,7 @@ The surface run's tasks form a plot tour:
   colour scale, limits, zoom and export controls.
 - **components-on-line:** all three components on an oblique line through the square.
 - **pdf-plane / pdf-line:** combined/per-stratum densities, conditional/joint/shape
-  normalization, mismatch, coverage, membership and optional hue/saturation encoding.
+  normalization, shared density/mismatch plots, projection sign, and value histograms.
 - **xy-phase:** the complex projection x+i y of the same surface, showing the phase
   colour wheel. Its real/imaginary controls refer to x/y; z is omitted. The main
   integrand remains a real three-component vector. This is not an RGB image mode.

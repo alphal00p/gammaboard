@@ -7,7 +7,6 @@ mod raster;
 
 use crate::Materializer;
 use crate::core::{EngineError, MaterializerConfig, SamplingConfig};
-use crate::evaluation::AccumulatorState;
 #[cfg(feature = "symbolica")]
 use crate::sampling::materializer::HavanaInferenceMaterializer;
 use crate::sampling::materializer::{IdentityMaterializer, ProcessMaterializer};
@@ -38,28 +37,7 @@ fn havana_disabled_error() -> EngineError {
 }
 
 fn global_abs_integrand_norm_from_handoff(handoff: Option<StageHandoff<'_>>) -> Option<f64> {
-    let observable = handoff.and_then(|value| value.observable_state)?;
-    match observable {
-        AccumulatorState::Vector(state) => {
-            let value = state.projection().state.mean_abs();
-            (value.is_finite() && value > 0.0).then_some(value)
-        }
-        AccumulatorState::Stratified(state)
-            if matches!(
-                &state.config,
-                crate::core::AccumulatorConfig::Vector {
-                    training_projection: crate::core::TrainingProjection::Norm,
-                    ..
-                }
-            ) =>
-        {
-            state
-                .mean()
-                .and_then(|v| v.last().copied())
-                .filter(|v| v.is_finite() && *v > 0.0)
-        }
-        _ => None,
-    }
+    crate::sampling::pdf_reference::reference(handoff?.observable_state?).map(|r| r.value)
 }
 
 impl SamplingConfig {
@@ -427,7 +405,7 @@ impl SamplingConfig {
                         global_abs_integrand_norm,
                         integrand_domain,
                     )?
-                    .with_target_config(source.observable_state.map(|state| state.config())),
+                    .with_target_statistics(source.observable_state),
                 ))
             }
             Self {
@@ -445,7 +423,7 @@ impl SamplingConfig {
                         global_abs_integrand_norm,
                         integrand_domain,
                     )?
-                    .with_target_config(source.observable_state.map(|state| state.config())),
+                    .with_target_statistics(source.observable_state),
                 ))
             }
             #[cfg(feature = "symbolica")]

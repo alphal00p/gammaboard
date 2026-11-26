@@ -4,6 +4,7 @@ mod feedback;
 pub(crate) mod havana_grid;
 pub(crate) mod latent_batch;
 pub(crate) mod materializer;
+pub(crate) mod pdf_reference;
 pub(crate) mod sampler;
 pub(crate) mod sampler_aggregator;
 

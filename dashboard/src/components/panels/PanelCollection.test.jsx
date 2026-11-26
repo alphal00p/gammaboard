@@ -13,6 +13,8 @@ vi.mock("./LazyChart", () => ({
   },
 }));
 
+vi.mock("./pdfDisplay", async importOriginal => ({...(await importOriginal()), rasterImage: () => document.createElement('canvas')}));
+
 beforeEach(() => {
   renderChart.mockClear();
   vi.stubGlobal("ResizeObserver", class {
@@ -661,125 +663,72 @@ test('stratum component and history controls update their own panel state',()=>{
   expect(screen.getByRole('checkbox',{name:'Between snapshots'})).toBeInTheDocument();
 });
 
-test('PDF normalization and stratum controls update without discarding the other view settings',()=>{
-  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[-1,1],pdf_values:[1,1],strata:{prefixes:[[0],[1,3]],probabilities:[0.25,0.75],actual_strata:[0,1],pdf_values:[[0.4,0.1],[0.6,0.9]]}}};
-  render(<StratumHarness state={state}/>);
-  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Normalization/}));
-  fireEvent.click(screen.getByRole('option',{name:'Conditional density',exact:true}));
-  expect(screen.getByText(/The PDF is raw/)).toBeInTheDocument();
-  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Scope/}));
-  fireEvent.click(screen.getByRole('option',{name:'Stratum (1,3)',exact:true}));
-  expect(screen.getByRole('combobox',{name:/^Normalization/})).toHaveTextContent('Conditional density');
-  expect(screen.queryByText(/^Stratum \(0\) · p/)).not.toBeInTheDocument();
-  const curves=renderChart.mock.calls.at(-1)[0].option.series;
-  expect(curves.find(s=>s.name==='Sampler PDF').data[0][1]).toBeCloseTo(0.8);
+const pdfState = (plane=false) => ({kind:'pdf_comparison',panel_id:'pdf_comparison',
+  geometry:plane?{kind:'plane',geometry:{u_linspace:{start:0,stop:1,count:2},v_linspace:{start:0,stop:1,count:2}}}:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},
+  data:{integrand_values:plane?[-1,1,0,2]:[-1,1],pdf_values:plane?[1,1,1,1]:[1,1],reference:{value:2,error:0.1,source:'sampler_source',task_name:'Train',sample_count:100},projection:{key:'real',label:'Re(f)',nonnegative:false}}
 });
 
-test('a zero slice target is explained and omitted only when unit-area normalization is undefined', () => {
-  const state = {
-    kind: 'pdf_comparison', panel_id: 'pdf_comparison',
-    geometry: {kind: 'line', geometry: {linspace: {start: 0, stop: 1, count: 2}}},
-    data: {integrand_values: [1, 2], pdf_values: [1, 1], strata: {
-      prefixes: [[0,0], [0,1]], probabilities: [0.5, 0.5],
-      actual_strata: [0, 0], pdf_values: [[0.5, 0.5], [0.5, 0.5]],
-    }},
-  };
-  render(<StratumHarness state={state} />);
-  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^Scope/}));
-  fireEvent.click(screen.getByRole('option', {name: 'Stratum (0,1)', exact: true}));
-  expect(screen.getByRole('alert')).toHaveTextContent('This stratum has no target support at the evaluated slice points');
-  expect(renderChart.mock.calls.at(-1)[0].option.series.map(s => s.name)).toEqual(['Sampler PDF']);
-  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^Normalization/}));
-  fireEvent.click(screen.getByRole('option', {name: 'Joint density', exact: true}));
-  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  const target = renderChart.mock.calls.at(-1)[0].option.series.find(s => s.name === 'Target');
-  expect(target.data).toEqual([[0, 0], [1, 0]]);
-});
-
-test('many strata start with one overview and comparisons are paged four at a time',()=>{
-  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[1,1],pdf_values:[1,1],strata:{prefixes:Array.from({length:11},(_,i)=>[i]),probabilities:Array(11).fill(1/11),actual_strata:[0,10],pdf_values:Array.from({length:11},()=>[1/11,1/11])}}};
-  render(<StratumHarness state={state}/>);
-  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(1);
-  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Scope/}));
-  fireEvent.click(screen.getByRole('option',{name:'Compare strata',exact:true}));
+test('PDF defaults to source reference, exposes provenance, and keeps both histograms visible',()=>{
+  render(<StratumHarness state={pdfState()}/>);
+  expect(screen.getByRole('combobox',{name:'Normalization'})).toHaveTextContent('Source integral reference');
   expect(screen.getAllByTestId('histogram-chart')).toHaveLength(4);
-  expect(screen.getByText('1–4 of 11')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button',{name:'Next',exact:true}));
-  expect(screen.getByText('5–8 of 11')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button',{name:'Next',exact:true}));
-  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(3);
-  expect(screen.getByRole('button',{name:'Next',exact:true})).toBeDisabled();
+  fireEvent.click(screen.getByRole('button',{name:'Normalization details'}));
+  expect(screen.getByText(/Reference source:/)).toHaveTextContent('Train');
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:'Normalization'}));
+  fireEvent.click(screen.getByRole('option',{name:'Slice',exact:true}));
+  expect(screen.getByRole('combobox',{name:'Normalization'})).toHaveTextContent('Slice');
 });
 
-test('ordinary PDF heatmaps share logarithmic limits, manual limits and persisted zoom',()=>{
-  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'plane',geometry:{u_linspace:{start:0,stop:1,count:2},v_linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[0.000001,1,2,10],pdf_values:[1,2,3,4],strata:null}};
+test('missing reference disables source normalization and nonnegative projections hide sign mode',()=>{
+  const state=pdfState();state.data.reference=null;state.data.projection.nonnegative=true;
   render(<StratumHarness state={state}/>);
-  expect(screen.queryByRole('combobox',{name:/^Scope/})).not.toBeInTheDocument();
-  fireEvent.mouseDown(screen.getByRole('combobox',{name:/^Density scale/}));
-  fireEvent.click(screen.getByRole('option',{name:'Logarithmic',exact:true}));
-  const options=renderChart.mock.calls.slice(-2).map(c=>c[0].option);
-  expect(options[0].visualMap.min).toBe(options[1].visualMap.min);
-  expect(options[0].visualMap.max).toBe(options[1].visualMap.max);
-  act(()=>renderChart.mock.calls.at(-1)[0].onEvents.datazoom({dataZoomId:'x-slider',start:25,end:75}));
-  expect(renderChart.mock.calls.slice(-2).every(c=>c[0].option.dataZoom[0].start===25)).toBe(true);
-  fireEvent.click(screen.getByText('Colour limits · linked across comparable plots'));
-  fireEvent.change(screen.getByRole('spinbutton',{name:'Min color limit'}),{target:{value:'-4'}});
-  fireEvent.blur(screen.getByRole('spinbutton',{name:'Min color limit'}));
-  expect(renderChart.mock.calls.slice(-2).every(c=>c[0].option.visualMap.min===-4)).toBe(true);
-  expect(renderChart.mock.calls.at(-1)[0].option.dataZoom[0].start).toBe(25);
-  fireEvent.click(screen.getByRole('button',{name:'Reset view',exact:true}));
-  expect(renderChart.mock.calls.at(-1)[0].option.dataZoom[0].start).toBe(0);
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:'Normalization'}));
+  expect(screen.getByRole('option',{name:'Source integral reference'})).toHaveAttribute('aria-disabled','true');
+  fireEvent.keyDown(screen.getByRole('listbox'),{key:'Escape'});
+  fireEvent.mouseDown(screen.getByRole('combobox',{name:'Auxiliary'}));
+  expect(screen.queryByRole('option',{name:'Projection sign'})).not.toBeInTheDocument();
 });
 
-test('large prefix lists can be searched without rendering all stratum plots',()=>{
-  const state={kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'line',geometry:{linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[1,1],pdf_values:[1,1],strata:{prefixes:Array.from({length:30},(_,i)=>[i]),probabilities:Array(30).fill(1/30),actual_strata:[0,29],pdf_values:Array.from({length:30},()=>[1/30,1/30])}}};
+test('PDF heatmaps keep all three plots visible and color limits are linked by default',()=>{
+  render(<StratumHarness state={pdfState(true)}/>);
+  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(5);
+  fireEvent.click(screen.getByRole('button',{name:'target color limits'}));
+  expect(screen.getByRole('checkbox',{name:'Link Target / Sampler'})).toBeChecked();
+  fireEvent.change(screen.getByRole('textbox',{name:'Min'}),{target:{value:'0.25'}});
+  fireEvent.change(screen.getByRole('textbox',{name:'Max'}),{target:{value:'4'}});
+  fireEvent.click(screen.getByRole('button',{name:'Apply',exact:true}));
+  fireEvent.click(screen.getByRole('button',{name:'sampler color limits'}));
+  expect(screen.getByRole('textbox',{name:'Min'})).toHaveValue('0.25');
+  expect(screen.getByRole('textbox',{name:'Max'})).toHaveValue('4');
+});
+
+test('many strata remain searchable and do not multiply the visible plots',()=>{
+  const state=pdfState();state.data.strata={prefixes:Array.from({length:30},(_,i)=>[i]),probabilities:Array(30).fill(1/30),actual_strata:[0,29],pdf_values:Array.from({length:30},()=>[1/30,1/30])};
   render(<StratumHarness state={state}/>);
-  const scope=screen.getByRole('combobox',{name:'Scope'});
+  const scope=screen.getByRole('combobox',{name:'Stratum'});
   fireEvent.change(scope,{target:{value:'(29)'}});
   fireEvent.keyDown(scope,{key:'ArrowDown'});
   fireEvent.click(screen.getByRole('option',{name:'Stratum (29)',exact:true}));
-  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(1);
-  expect(screen.getByText(/^Stratum \(29\) · p/)).toBeInTheDocument();
+  expect(screen.getAllByTestId('histogram-chart')).toHaveLength(4);
 });
 
-test('stratum hue is optional for 2D densities and survives view changes', () => {
-  const state = {
-    kind: 'pdf_comparison', panel_id: 'pdf_comparison',
-    geometry: {kind: 'plane', geometry: {
-      u_linspace: {start: 0, stop: 1, count: 2}, v_linspace: {start: 0, stop: 1, count: 2},
-    }},
-    data: {integrand_values: [1, -1, -1, 1], pdf_values: [1, 1, 1, 1], strata: {
-      prefixes: [[0], [1]], probabilities: [0.5, 0.5], actual_strata: [1, 0, 0, 1],
-      pdf_values: [[0.5, 0.5, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]],
-    }},
-  };
-  render(<StratumHarness state={state} />);
-  expect(screen.getByRole('combobox', {name: /^Colour encoding/})).toHaveTextContent('Density only');
-  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^Colour encoding/}));
-  fireEvent.click(screen.getByRole('option', {name: 'Stratum hue + density', exact: true}));
-  expect(screen.getByText(/Hue shows the actual integrand stratum/)).toBeInTheDocument();
-  const plots = renderChart.mock.calls.slice(-2).map(([props]) => props.option);
-  expect(plots.every(plot => plot.series[0].data[0].value[4] === 1)).toBe(true);
-  expect(plots.every(plot => plot.series[0].data[0].itemStyle.color.startsWith('rgb('))).toBe(true);
-  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^View/}));
-  fireEvent.click(screen.getByRole('option', {name: 'Coverage', exact: true}));
-  expect(screen.queryByRole('combobox', {name: /^Colour encoding/})).not.toBeInTheDocument();
-  fireEvent.mouseDown(screen.getByRole('combobox', {name: /^View/}));
-  fireEvent.click(screen.getByRole('option', {name: 'Density comparison', exact: true}));
-  expect(screen.getByRole('combobox', {name: /^Colour encoding/})).toHaveTextContent('Stratum hue + density');
+test('export selection starts with the current stratum and visible plots',()=>{
+  render(<StratumHarness state={pdfState(true)}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Export plots'}));
+  expect(screen.getByRole('combobox',{name:'Plots'})).toHaveTextContent('5 plots');
+  expect(screen.getByRole('combobox',{name:'Format'})).toHaveTextContent('PDF');
+  expect(screen.getByRole('button',{name:'Download',exact:true})).toBeEnabled();
 });
 
-test('unchanged PDF data is not redrawn when its parent refreshes', () => {
-  const state = {kind:'pdf_comparison',panel_id:'pdf_comparison',geometry:{kind:'plane',geometry:{u_linspace:{start:0,stop:1,count:2},v_linspace:{start:0,stop:1,count:2}}},data:{integrand_values:[1,2,3,4],pdf_values:[1,2,3,4],strata:null}};
-  const props = {
-    panelSpecs: [{panel_id:'pdf_comparison',kind:'pdf_comparison',label:'PDF',width:'full'}],
-    panelStates: [state], panelValues: {}, onPanelValueChange: vi.fn(),
-  };
-  const { rerender } = render(<PanelCollection {...props} title="First poll" />);
-  const draws = renderChart.mock.calls.length;
-  rerender(<PanelCollection {...props} title="Second poll" />);
-  expect(renderChart.mock.calls.length).toBe(draws);
-  expect(screen.queryByRole('checkbox', {name:'Show stratum boundaries'})).not.toBeInTheDocument();
+test('zoom retains the same PDF arrays and histogram options',async()=>{
+  render(<StratumHarness state={pdfState(true)}/>);
+  const before=renderChart.mock.calls.slice(-5).map(([p])=>p.option);
+  act(()=>renderChart.mock.calls.slice(-5)[0][0].onEvents.datazoom({dataZoomId:'x-slider',start:25,end:75}));
+  await waitFor(()=>expect(renderChart.mock.calls.length).toBeGreaterThan(5));
+  const after=renderChart.mock.calls.slice(-5).map(([p])=>p.option);
+  expect(after).toEqual(before);
+  expect(after[0]).toBe(before[0]);
+  expect(after[3]).toBe(before[3]);
 });
 
 test("RSD fits the visible x range and selected components, retaining legend choices on refresh", () => {
@@ -918,4 +867,18 @@ test("observable search survives polling, blur, result selection and table selec
   expect(search).toHaveValue("ang");
   act(() => poll());
   expect(search).toHaveValue("ang");
+});
+
+test('PDF histogram weighting defaults on and changing it preserves the upper plots',()=>{
+  const state=pdfState();state.data.pdf_values=[1,3];
+  render(<StratumHarness state={state}/>);
+  const toggle=screen.getByRole('switch',{name:'Weight by sampler density'});
+  expect(toggle).toBeChecked();
+  expect(screen.getAllByRole('combobox',{name:/^Scale/})).toHaveLength(2);
+  const before=renderChart.mock.calls.slice(-4).map(([p])=>p.option);
+  fireEvent.click(toggle);
+  const after=renderChart.mock.calls.slice(-4).map(([p])=>p.option);
+  expect(toggle).not.toBeChecked();
+  expect(after[0].series).toEqual(before[0].series);
+  expect(after[2].series).not.toEqual(before[2].series);
 });
