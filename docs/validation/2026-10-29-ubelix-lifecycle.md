@@ -75,7 +75,7 @@ the cache bind fix, but this host lacks usable user namespaces and Apptainer
 stopped before entering the build. The setup hooks were tested directly instead.
 No live UBELIX deployment was changed. Cluster resource policies
 and scientific runtimes still require the
-[deployment acceptance check](../../ops/ubelix/README.md#deployment-acceptance-check).
+[deployment validation](../../ops/slurm/README.md#validation).
 
 Evidence is retained on the execution host under
 `/common/dev/cedric/setup-logs/ubelix-checkout-20261029/`.

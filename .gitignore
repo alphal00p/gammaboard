@@ -158,7 +158,6 @@ vite.config.ts.timestamp-*
 
 # Local direnv/Nix environment
 .direnv/
-/ops/ubelix/local.toml
 
 # Local instance runtime state (configuration remains explicit).
 /state/

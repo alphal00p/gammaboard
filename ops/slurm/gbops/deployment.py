@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-import tomllib
 import uuid
 
 from . import settings
@@ -112,7 +111,11 @@ def toml_dump(value):
 
 
 def cluster_config():
-    data = tomllib.loads((settings.OPS_ROOT / "config/cluster.toml").read_text())
+    data = {
+        "control": {"time": "01:00:00", "cpus_per_task": 2, "mem": "4G"},
+        "worker": {"time": "01:00:00", "cpus_per_task": 2, "mem": "8G"},
+        "build": {"time": "02:00:00", "cpus_per_task": 32, "mem": "128G"},
+    }
     local=settings.local_config()
     overrides=local.get("cluster", {})
     overrides=merge(overrides,{name:local[name] for name in ("control","worker","build") if name in local})
@@ -233,8 +236,10 @@ class Deployments:
 
     def configuration(self, single, local_port, control_time=None):
         local = settings.local_config()
-        base = settings.OPS_ROOT / "config/server.toml"
-        server = merge(tomllib.loads(base.read_text()), local.get("server", {}))
+        server = merge({
+            "name": "slurm", "allow_local_node_spawn": False,
+            "frontend": {"build_dir": "/usr/local/share/gammaboard/dashboard", "host": "0.0.0.0"},
+        }, local.get("server", {}))
         build_dir = server.get("frontend", {}).get("build_dir")
         if build_dir and not Path(build_dir).is_absolute():
             server["frontend"]["build_dir"] = str(settings.local_path(build_dir))
@@ -322,7 +327,7 @@ class Deployments:
         launcher = directory / "launcher"
         settings.snapshot_helper(launcher)
         for name in ("control", "worker"):
-            shutil.copy2(settings.OPS_ROOT / f"slurm/{name}.sbatch", launcher / f"{name}.sbatch")
+            shutil.copy2(settings.OPS_ROOT / "jobs/job.sbatch", launcher / f"{name}.sbatch")
         for name in ("server", "runtime"):
             path = directory / f"{name}.toml"
             path.write_text(toml_dump(config[name]))

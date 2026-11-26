@@ -12,7 +12,7 @@ recipe, build, family, sha, cpus, scratch, image_cache = sys.argv[1:]
 recipe, build, scratch, image_cache = map(Path, (recipe, build, scratch, image_cache))
 if int(cpus) < 1:
     raise ValueError("build CPU count must be positive")
-pins = json.loads((recipe / "build/images.lock.json").read_text())
+pins = json.loads((recipe / "jobs/images.lock.json").read_text())
 for item in pins.values():
     repository, separator, checksum = item["image"].partition("@sha256:")
     if (
@@ -38,12 +38,12 @@ def expand(text, replacements):
 
 prepared = {}
 for role in ("builder", "runtime"):
-    text = expand((recipe / f"build/{role}-base.def").read_text(), values)
+    text = expand((recipe / f"jobs/{role}-base.def").read_text(), values)
     key = hashlib.sha256(text.encode()).hexdigest()
     prepared[role] = {"recipe_sha256": key, "path": str(image_cache / f"{role}-{key}.sif")}
     (build / f"{role}-base.def").write_text(text)
 
-template = (recipe / "build/service.def").read_text()
+template = (recipe / "jobs/service.def").read_text()
 # Only the builder environment and application build commands affect Cargo reuse.
 # Runtime packages, final-image layout, source revisions, paths and CPU counts do not.
 builder_stage = template.split("\nBootstrap:", 1)[0]
@@ -64,5 +64,5 @@ values.update({
 })
 (build / "service.def").write_text(expand(template, values))
 (build / "prepared-images.json").write_text(json.dumps(prepared, indent=2) + "\n")
-shutil.copy2(recipe / "build/images.lock.json", build / "images.lock.json")
-shutil.copy2(recipe / "build/smoke.sh", build / "smoke.sh")
+shutil.copy2(recipe / "jobs/images.lock.json", build / "images.lock.json")
+shutil.copy2(recipe / "jobs/smoke.sh", build / "smoke.sh")

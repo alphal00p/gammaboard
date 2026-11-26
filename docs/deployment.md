@@ -161,8 +161,10 @@ Set `externally_managed = true` and use explicit paths on shared storage. The
 owner starts services and workers inside allocations with `--allow-local-processes`.
 The override applies to that invocation; it does not change the API's launch policy.
 
-The [Slurm/Apptainer helper](../ops/slurm/README.md) owns allocations, worker
-submission/reconciliation and scheduler cleanup. It communicates through the
+The [Slurm/Apptainer helper](../ops/slurm/README.md) initializes a sibling workspace
+with `python3 ops/slurm/slurm.py init`. Its editable paths are relative to their
+configuration files; job snapshots contain resolved absolute paths. The helper
+owns allocations, worker submission/reconciliation and scheduler cleanup. It communicates through the
 [HTTP launch protocol](cluster-launches.md). GammaBoard itself has no Slurm backend.
 Ordinary users manage runs through `gb` and the published API endpoint; worker
 jobs receive their own frozen database configuration.

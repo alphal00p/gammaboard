@@ -181,6 +181,6 @@ jobs:
       - name: Validate UBELIX Python and shell entry points
         run: |
           python -m py_compile ops/slurm/slurm.py
-          for script in ops/slurm/build/*.sh ops/slurm/build/*.sbatch ops/slurm/slurm/*.sbatch; do
+          for script in ops/slurm/jobs/*.sh ops/slurm/jobs/*.sbatch; do
             bash -n "$script"
           done

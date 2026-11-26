@@ -94,7 +94,7 @@ def test_smoke_waits_for_registration_reports_failures_and_stops_supervisor(smok
     # A stale marker must never make a failed check look successful.
     (work / "smoke.result").write_text("passed\n")
     result = subprocess.run(
-        ["bash", str(ROOT / "build/smoke.sh"), str(work), "/test/frontend"],
+        ["bash", str(ROOT / "jobs/smoke.sh"), str(work), "/test/frontend"],
         env=dict(env, SMOKE_TEST_MODE=mode),
         capture_output=True,
         text=True,

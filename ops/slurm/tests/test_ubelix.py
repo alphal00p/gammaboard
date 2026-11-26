@@ -34,7 +34,7 @@ def test_old_python_reports_setup_instructions_before_importing_helpers(monkeypa
 
 
 def configure(**values):
-    path = settings.OPS_ROOT / "local.toml"
+    path = settings.config_path()
     path.write_text(toml_dump(merge(settings.local_config(), values)))
     return path
 
@@ -45,9 +45,12 @@ def workspace(tmp_path, monkeypatch):
     shutil.copytree(ROOT, ops, ignore=shutil.ignore_patterns("__pycache__", "local.toml"))
     shutil.copytree(ROOT.parents[1] / "resources/templates", ops.parents[1] / "resources/templates")
     monkeypatch.setattr(settings, "OPS_ROOT", ops)
+    monkeypatch.setattr(settings, "CONFIG_PATH", None)
+    monkeypatch.delenv("GAMMABOARD_SLURM_CONFIG", raising=False)
     workspace = tmp_path / "state"
     workspace.mkdir()
-    (ops / "local.toml").write_text(toml_dump({"workspace_root": str(workspace)}))
+    settings.config_path().parent.mkdir()
+    settings.config_path().write_text(toml_dump({"workspace_root": str(workspace)}))
     image = workspace / "images/gammaboard.sif"
     image.parent.mkdir(parents=True)
     image.write_bytes(b"first image")
@@ -843,9 +846,9 @@ def test_environment_path_is_explicit_and_missing_file_fails(workspace):
     configure(job_env_file="does-not-exist.sh")
     with pytest.raises(FileNotFoundError):
         Deployments(workspace, 0).configuration(False, 8080)
-    for script in (settings.OPS_ROOT / "slurm/control.sbatch", settings.OPS_ROOT / "slurm/worker.sbatch", settings.OPS_ROOT / "build/build.sbatch"):
-        assert "${HOME}" not in script.read_text()
-        assert "GAMMABOARD_JOB_ENV_FILE" in script.read_text()
+    script = settings.OPS_ROOT / "jobs/job.sbatch"
+    assert "${HOME}" not in script.read_text()
+    assert "GAMMABOARD_JOB_ENV_FILE" in script.read_text()
 
 
 def test_database_requested_cleanup_cancels_only_owned_jobs_then_acknowledges(workspace, monkeypatch):
@@ -910,9 +913,8 @@ def test_control_signal_keeps_cleanup_handshake_alive(workspace, monkeypatch):
 
 @pytest.fixture
 def explicit_workspace(workspace, monkeypatch):
-    path = settings.OPS_ROOT / "instance.toml"
-    raw = (settings.OPS_ROOT / "examples/gammaboard.toml").read_text()
-    path.write_text(raw.replace("/shared/YOUR_USER/gammaboard", str(workspace)))
+    path = workspace / "instance.toml"
+    path.write_text((settings.OPS_ROOT / "examples/gammaboard.toml").read_text())
     configure(instance_file=str(path), access={"ssh_target": "user@login.example"})
     return workspace, path
 
@@ -1014,6 +1016,7 @@ def test_seeding_an_existing_empty_template_directory(workspace):
 
 def test_environment_selects_config_and_explicit_flag_wins(workspace, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "CONFIG_PATH", None)
+    default_config = settings.config_path()
     selected = tmp_path / "config directory" / "slurm.toml"
     selected.parent.mkdir()
     selected.write_text(toml_dump({"workspace_root": "../environment-state"}))
@@ -1022,7 +1025,7 @@ def test_environment_selects_config_and_explicit_flag_wins(workspace, monkeypatc
     u.main(["install-examples"])
     assert settings.config_path() == selected
     assert (tmp_path / "environment-state/resources/templates/runs/tetrahedron-native.toml").exists()
-    u.main(["--config", str(settings.OPS_ROOT / "local.toml"), "install-examples"])
+    u.main(["--config", str(default_config), "install-examples"])
     assert settings.workspace_root() == workspace
     assert (workspace / "resources/templates/runs/tetrahedron-native.toml").exists()
     monkeypatch.setenv("GAMMABOARD_SLURM_CONFIG", str(tmp_path / "missing.toml"))
@@ -1046,3 +1049,127 @@ def test_batch_entry_points_ignore_config_environment(monkeypatch, tmp_path):
     assert u.main(["run-control", "--manifest", "frozen.json"]) == 0
     assert u.main(["run-worker", "--spec", "frozen.json"]) == 0
     assert u.main(["run-build", "--record", "frozen.json"]) == 0
+
+
+@pytest.mark.parametrize("role, flag", [("control", "--manifest"), ("worker", "--spec"), ("build", "--record")])
+def test_shared_batch_entrypoint_uses_frozen_helper_and_environment(tmp_path, role, flag):
+    import os
+    helper_dir = tmp_path / ("recipe" if role == "build" else "launcher")
+    helper_dir.mkdir()
+    output = tmp_path / "called.json"
+    helper = helper_dir / "slurm.py"
+    helper.write_text("import json,os,sys\nfrom pathlib import Path\nPath(os.environ['TEST_OUTPUT']).write_text(json.dumps([sys.argv[1:],os.environ['FROZEN_VALUE']]))\n")
+    env_file = tmp_path / "job.env"
+    env_file.write_text("export FROZEN_VALUE=original\n")
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    (binaries / "python3").symlink_to(sys.executable)
+    record = tmp_path / "record.json"
+    record.write_text("{}")
+    env = dict(os.environ, PATH=f"{binaries}:{os.environ['PATH']}",
+        TEST_OUTPUT=str(output), GAMMABOARD_JOB_ROLE=role,
+        GAMMABOARD_MANIFEST=str(record), GAMMABOARD_WORKER_SPEC=str(record),
+        GAMMABOARD_BUILD_RECORD=str(record), GAMMABOARD_JOB_ENV_FILE=str(env_file),
+        GAMMABOARD_JOB_ENV_SHA256=hashlib.sha256(env_file.read_bytes()).hexdigest())
+    subprocess.run(["bash", str(ROOT / "jobs/job.sbatch")], env=env, check=True)
+    assert json.loads(output.read_text()) == [[f"run-{role}", flag, str(record)], "original"]
+    output.unlink()
+    env_file.write_text("export FROZEN_VALUE=tampered\n")
+    assert subprocess.run(["bash", str(ROOT / "jobs/job.sbatch")], env=env).returncode != 0
+    assert not output.exists()
+
+
+@pytest.fixture
+def uninitialized_checkout(tmp_path, monkeypatch):
+    ops = tmp_path / "gammaboard-feature/ops/slurm"
+    shutil.copytree(ROOT, ops, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(settings, "OPS_ROOT", ops)
+    monkeypatch.setattr(settings, "CONFIG_PATH", None)
+    monkeypatch.delenv("GAMMABOARD_SLURM_CONFIG", raising=False)
+    from types import SimpleNamespace
+    monkeypatch.setattr(settings.pwd, "getpwuid", lambda _: SimpleNamespace(pw_name="cs22u040"))
+    monkeypatch.setenv("USER", "cedric") # Storage/environment names must not choose the SSH login.
+    monkeypatch.chdir(tmp_path)
+    return ops.parents[1]
+
+
+def test_init_defaults_are_sibling_relative_and_infer_the_login(uninitialized_checkout, tmp_path):
+    import tomllib
+    checkout = uninitialized_checkout
+    expected = checkout.with_name("gammaboard-feature-workspace")
+    # A stale in-checkout config must not override the new default discovery.
+    (settings.OPS_ROOT / "local.toml").write_text("workspace_root='wrong'\n")
+    assert settings.config_path() == expected / "slurm.toml"
+    with pytest.raises(SystemExit, match="slurm.py init"):
+        u.main(["status"])
+    assert not expected.exists()
+    u.main(["init"])
+    helper = tomllib.loads((expected / "slurm.toml").read_text())
+    instance = tomllib.loads((expected / "gammaboard.toml").read_text())
+    assert helper["workspace_root"] == "."
+    assert helper["image"] == "images/gammaboard.sif"
+    assert helper["binds"] == ["."]
+    assert helper["access"]["ssh_target"] == "cs22u040@submit03.unibe.ch"
+    assert instance["paths"]["state_dir"] == "control"
+    assert instance["database"]["data_dir"] == "resources/db/postgres"
+    assert instance["externally_managed"] is True
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in expected.iterdir())
+    assert settings.workspace_root() == expected
+    config = Deployments(expected, 0).configuration(False, 8080)
+    assert config["binds"] == [str(expected)]
+    assert config["instance"]["paths"]["state_dir"] == str(expected / "control")
+    assert config["runtime"]["local_postgres"]["data_dir"] == str(expected / "resources/db/postgres")
+    before = {p.name: p.read_bytes() for p in expected.iterdir()}
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        u.main(["init"])
+    assert before == {p.name: p.read_bytes() for p in expected.iterdir()}
+
+
+def test_init_overrides_workspace_config_and_username(uninitialized_checkout, tmp_path, monkeypatch):
+    import tomllib
+    work = tmp_path / "custom workspace"
+    config = tmp_path / "settings" / "helper.toml"
+    monkeypatch.setenv("GAMMABOARD_SLURM_CONFIG", str(tmp_path / "ignored.toml"))
+    u.main(["--config", str(config), "init", "--workspace", str(work), "--username", "other-login"])
+    helper = tomllib.loads(config.read_text())
+    assert helper["workspace_root"] == "../custom workspace"
+    assert helper["access"]["ssh_target"] == "other-login@submit03.unibe.ch"
+    assert settings.workspace_root() == work
+    assert settings.instance_definition()["paths"]["state_dir"] == str(work / "control")
+    assert not (tmp_path / "ignored.toml").exists()
+    selected = tmp_path / "env config" / "slurm.toml"
+    monkeypatch.setenv("GAMMABOARD_SLURM_CONFIG", str(selected))
+    u.main(["init", "--ssh-target", "different@other.example"])
+    assert settings.config_path() == selected
+    assert settings.ssh_target() == "different@other.example"
+    monkeypatch.delenv("GAMMABOARD_SLURM_CONFIG")
+    standalone = tmp_path / "standalone"
+    u.main(["init", "--workspace", str(standalone)])
+    assert settings.config_path() == standalone / "slurm.toml"
+
+
+def test_init_never_writes_into_checkout_or_overwrites_partial_setup(uninitialized_checkout, tmp_path):
+    checkout = uninitialized_checkout
+    for args in [
+        ["init", "--workspace", str(checkout)],
+        ["init", "--workspace", str(checkout / "nested")],
+        ["--config", str(checkout / "slurm.toml"), "init"],
+    ]:
+        with pytest.raises(SystemExit, match="outside the checkout"):
+            u.main(args)
+    assert not (checkout / "slurm.toml").exists()
+    work = tmp_path / "existing"
+    work.mkdir()
+    (work / "environment.sh").write_text("private settings")
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        u.main(["init", "--workspace", str(work)])
+    assert list(p.name for p in work.iterdir()) == ["environment.sh"]
+    with pytest.raises(SystemExit, match="filename must differ"):
+        u.main(["--config", str(tmp_path / "gammaboard.toml"), "init"])
+
+
+def test_template_ssh_host_infers_user_and_explicit_target_overrides(uninitialized_checkout, monkeypatch):
+    monkeypatch.setattr(settings, "local_config", lambda: {"access": {"ssh_host": "submit03.unibe.ch"}})
+    assert settings.ssh_target() == "cs22u040@submit03.unibe.ch"
+    monkeypatch.setattr(settings, "local_config", lambda: {"access": {"ssh_host": "unused", "ssh_target": "custom-alias"}})
+    assert settings.ssh_target() == "custom-alias"

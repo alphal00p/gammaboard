@@ -1568,8 +1568,8 @@ config = { cores = "$(cores:1)" }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for relative_path in [
             "resources/templates/nodes/local-two-workers.toml",
-            "ops/slurm/resources/templates/nodes/cpu-workers.toml",
-            "ops/slurm/resources/templates/nodes/free-gpu-plus-cpu.toml",
+            "ops/slurm/examples/cpu-workers.toml",
+            "ops/slurm/examples/free-gpu-plus-cpu.toml",
         ] {
             let toml = std::fs::read_to_string(root.join(relative_path)).expect("template file");
             let payload = AutoRunNodesRequest {

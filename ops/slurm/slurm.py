@@ -66,7 +66,7 @@ def shifted_port(base, offset):
 
 
 def tunnel_command(node, local_port, offset, frontend_port=None):
-    target = settings.local_config().get("access", {}).get("ssh_target") or settings.local_config().get("ssh_target")
+    target = settings.ssh_target()
     if not target:
         return "Set access.ssh_target in the helper configuration to print an SSH tunnel command."
     return f"ssh -N -L {local_port}:{node}:{frontend_port or shifted_port(4000, offset)} {target}"
@@ -193,10 +193,9 @@ class Lease:
 
 
 def worker_configuration(manifest, spec):
-    directory = Path(manifest.get("deployment_dir") or (Path(manifest["workspace"])/"deployments"/manifest["id"]))
     resources = {key: value for key, value in spec["config"].items() if key in SBATCH_OPTIONS}
     config = overlay_resources(manifest["profiles"]["worker"], resources)
-    status_file = directory / "control-status.json"
+    status_file = directory(manifest) / "control-status.json"
     status = json.loads(status_file.read_text()) if status_file.exists() else {}
     if status.get("end_time"):
         remaining = int(status["end_time"] - time.time()) - SIGNAL_MARGIN_SECONDS
@@ -210,13 +209,13 @@ def worker_configuration(manifest, spec):
 
 
 def submit_worker(manifest, node, spec, worker, slurm, config):
-    directory = Path(manifest.get("deployment_dir") or (Path(manifest["workspace"])/"deployments"/manifest["id"]))
-    recipe = directory / "workers" / f"{worker['submission_key']}.json"
+    root = directory(manifest)
+    recipe = root / "workers" / f"{worker['submission_key']}.json"
     caps = {**spec["capabilities"], "cpus": int(config["cpus_per_task"])}
     write_json(
         recipe,
         {
-            "manifest": str(directory / "manifest.json"),
+            "manifest": str(root / "manifest.json"),
             "database_node": node,
             "control_job_id": manifest.get("control_job_id"),
             **spec,
@@ -226,14 +225,15 @@ def submit_worker(manifest, node, spec, worker, slurm, config):
     )
     env = dict(
         os.environ,
+        GAMMABOARD_JOB_ROLE="worker",
         GAMMABOARD_WORKER_SPEC=str(recipe),
-        GAMMABOARD_MANIFEST=str(directory / "manifest.json"),
+        GAMMABOARD_MANIFEST=str(root / "manifest.json"),
         GAMMABOARD_JOB_ENV_FILE=manifest.get("job_env_file") or "",
         GAMMABOARD_JOB_ENV_SHA256=manifest.get("job_env_digest") or "",
     )
     env.pop("GAMMABOARD_ADMIN_PASSWORD", None)
     return slurm.submit(
-        directory / "launcher/worker.sbatch",
+        root / "launcher/worker.sbatch",
         name=job_name(manifest, worker["submission_key"]),
         comment=tag(manifest, worker["submission_key"]),
         workspace=manifest["workspace"],
@@ -408,6 +408,7 @@ def up(args, slurm):
                 (deployments.workspace / "logs/slurm" / name).mkdir(parents=True, exist_ok=True)
             env = dict(
                 os.environ,
+                GAMMABOARD_JOB_ROLE="control",
                 GAMMABOARD_MANIFEST=str(deployments.root / manifest["id"] / "manifest.json"),
                 GAMMABOARD_JOB_ENV_FILE=manifest.get("job_env_file") or "",
                 GAMMABOARD_JOB_ENV_SHA256=manifest.get("job_env_digest") or "",
@@ -805,10 +806,13 @@ def main(argv=None):
     if args.command in ("run-control", "run-build", "run-worker"):
         # Batch jobs use their frozen records, never the submitter's config selection.
         settings.configure(None)
-    elif args.config is not None:
+    else:
         settings.configure(args.config)
     slurm = Slurm()
     try:
+        if args.command == "init":
+            print(json.dumps(settings.initialize(args.workspace, args.site, args.username, args.ssh_target), indent=2))
+            return
         if args.command == "run-control":
             return run_control(args, slurm)
         if args.command == "run-build":
@@ -910,6 +914,12 @@ def parser():
         help="helper TOML (overrides GAMMABOARD_SLURM_CONFIG); paths resolve relative to this file",
     )
     commands = p.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init", help="initialize a sibling workspace with relative paths (default site: UBELIX)")
+    init.add_argument("--workspace", type=Path, help="override the workspace location")
+    init.add_argument("--site", choices=("ubelix", "generic"), default="ubelix")
+    identity = init.add_mutually_exclusive_group()
+    identity.add_argument("--username", help="override the inferred login username")
+    identity.add_argument("--ssh-target", help="override the complete SSH target, e.g. user@login.example")
     for name in (
         "up",
         "down",

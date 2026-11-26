@@ -1,9 +1,9 @@
 # Copy alongside your instance file and edit every site-dependent value.
 instance_file = "gammaboard.toml"
-workspace_root = "/shared/YOUR_USER/gammaboard"
-image = "/shared/YOUR_USER/gammaboard/images/gammaboard.sif"
+workspace_root = "."
+image = "images/gammaboard.sif"
 job_env_file = "environment.sh"
-binds = ["/shared/YOUR_USER/gammaboard"]
+binds = ["."]
 
 [control]
 account = "YOUR_ACCOUNT"
@@ -27,5 +27,5 @@ mem = "128G"
 time = "02:00:00"
 
 [access]
-ssh_target = "YOUR_USER@login.YOUR_CLUSTER"
+ssh_host = "login.YOUR_CLUSTER" # Login username is inferred; ssh_target overrides both.
 local_port = 8080

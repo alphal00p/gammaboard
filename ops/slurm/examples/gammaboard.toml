@@ -2,11 +2,11 @@ name = "cluster-demo"
 externally_managed = true
 
 [paths]
-state_dir = "/shared/YOUR_USER/gammaboard/control"
-log_dir = "/shared/YOUR_USER/gammaboard/logs"
-temp_dir = "/shared/YOUR_USER/gammaboard/tmp"
-template_dir = "/shared/YOUR_USER/gammaboard/resources/templates"
-resource_roots = ["/shared/YOUR_USER/gammaboard/resources"]
+state_dir = "control"
+log_dir = "logs"
+temp_dir = "tmp"
+template_dir = "resources/templates"
+resource_roots = ["resources"]
 
 [database]
 mode = "managed"
@@ -14,8 +14,8 @@ host = "127.0.0.1"
 port = 5400
 name = "gammaboard"
 user = "postgres"
-data_dir = "/shared/YOUR_USER/gammaboard/resources/db/postgres"
-socket_dir = "/shared/YOUR_USER/gammaboard/resources/db/socket"
+data_dir = "resources/db/postgres"
+socket_dir = "resources/db/socket"
 
 [database.tuning]
 listen_addresses = "0.0.0.0"

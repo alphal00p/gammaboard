@@ -1,60 +1,76 @@
-# Slurm deployment helper
+# Slurm deployment
 
-`slurm.py` is a reusable Slurm + Apptainer helper. GammaBoard itself has no Slurm
-backend. The helper owns allocations, job submission/recovery, image builds and
-site setup; GammaBoard owns runs, worker assignments, exports and graceful shutdown.
-UBELIX-specific settings live in `examples/ubelix.toml`. The helper handles scheduler
-operations; use `gb` for runs, worker requests, results and application shutdown.
+Use `python3 ops/slurm/slurm.py` for allocations, image builds and scheduler cleanup.
+Use `gb` for runs, worker requests and results. The helper talks to GammaBoard's
+HTTP API; workers use PostgreSQL directly. All commands below run from the repo root.
 
 ## UBELIX quick start
 
-On a UBELIX login node, clone the repository and select a writable **shared**
-directory for deployment data. Keep configuration outside the checkout: image
-builds require a clean committed source tree.
+You need Python **3.11.8+**, Slurm and Apptainer. On UBELIX, load a suitable Python
+module; Apptainer is already on PATH ([site documentation](https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/container-jobs/)).
+Keep the checkout on shared storage and initialize its sibling workspace:
 
 ```bash
-git clone https://github.com/alphal00p/gammaboard.git
-cd gammaboard
 module load Python
-python3 --version             # must be 3.11.8 or newer
+python3 --version
 apptainer --version
-export GB_WORK=/storage/research/itp_localunitaritydata/$USER/gammaboard-workspace
-export GAMMABOARD_SLURM_CONFIG="$GB_WORK/slurm.toml"
-mkdir -p "$GB_WORK"
-cp ops/slurm/examples/ubelix.toml "$GB_WORK/slurm.toml"
-cp ops/slurm/examples/gammaboard.toml "$GB_WORK/gammaboard.toml"
-cp ops/slurm/examples/environment.sh "$GB_WORK/environment.sh"
+python3 ops/slurm/slurm.py init
 ```
 
-Choose a shared path you can access; the storage path above is an institute-specific
-example. Edit the copied files: replace all `YOUR_USER` and `/shared/...` paths,
-make `workspace_root`, `image`, `binds` and the instance paths agree, set
-`access.ssh_target` to your actual login username (which may differ from the storage
-directory name), and choose account/partition/QoS limits available to you.
-Put the same working Python module command in `environment.sh`. UBELIX provides
-Apptainer on PATH without a module; see its official [container guide](https://hpc-unibe-ch.github.io/runjobs/scheduled-jobs/container-jobs/)
-and [module guide](https://hpc-unibe-ch.github.io/software/Lmod_modules/).
-Keep `externally_managed = true`. The supplied cluster bind addresses permit
-compute-node access; authentication and exact-only browser origins can be configured
-in the instance file for a shared deployment.
+For a checkout named `gammaboard`, this creates `../gammaboard-workspace/` containing
+`slurm.toml`, `gammaboard.toml` and `environment.sh`. Paths in these files are relative
+to the file containing them, so the default layout needs no path substitutions.
+The SSH username comes from the login account, not the storage directory name.
+Initialization refuses to overwrite existing files or put generated configuration
+inside the checkout. If your workspace already exists, skip `init`.
 
-Submit the build, wait for its record to say `completed`, then start the control job:
+| Override | How |
+| --- | --- |
+| Workspace | `init --workspace /shared/another-workspace` |
+| Login username | `init --username other-login` |
+| Complete SSH target | `init --ssh-target user@login.example` |
+| Other cluster | `init --site generic`, then edit site resource settings |
+
+Configuration selection is `--config FILE`, then `GAMMABOARD_SLURM_CONFIG`, then
+`<checkout-name>-workspace/slurm.toml` beside the checkout, independently of the
+current directory. For a custom workspace, select its config on later commands:
+
+```bash
+export GAMMABOARD_SLURM_CONFIG=/shared/another-workspace/slurm.toml
+python3 ops/slurm/slurm.py up
+```
+
+Review account/partition/QoS and the Python module for your allocation. These live
+in `slurm.toml` and `environment.sh`; application paths and ports live in
+`gammaboard.toml`. `access.ssh_target` can also be edited directly. Copied templates
+that specify only `access.ssh_host` infer the current login username when used.
+
+The examples permit compute-node database/API access on a trusted cluster network.
+For authentication, configure `[server.auth]` in the instance and `admin_password`
+in the helper file; protect both files. See [deployment settings](../../docs/deployment.md).
+
+Build the image, then start the control allocation:
 
 ```bash
 python3 ops/slurm/slurm.py build gammaboard
-# Inspect the printed job with squeue/sacct and artifacts/builds/BUILD_ID/build.json.
+# Wait for the workspace's artifacts/builds/BUILD_ID/build.json to say "completed".
 python3 ops/slurm/slurm.py up --startup-timeout 1800
 ```
 
-The build and service run in Slurm allocations. `up` prints a `client_instance`, an
-SSH tunnel command and a dashboard URL. Run that SSH command **on your laptop**,
-then open the printed localhost URL. Changing its local port works with the default
-loopback-origin policy and does not require a new allocation.
+Builds use committed sources and run in Slurm. Check the printed job ID with
+`squeue`/`sacct`; logs are under the workspace's `logs/slurm/`. Failed builds retain the
+previous image. `up` prints a client connection file, SSH tunnel command and dashboard
+URL. Run the tunnel command **on your laptop**, then open that URL. Forwarded
+loopback ports can change without reconfiguring the default browser-origin policy.
 
-Use the lightweight client already inside the image; this function starts no
-service or worker processes on the login node and does not compile anything:
+## Run and inspect
+
+Use the prepared client inside the image—no compilation or service startup on the
+login node. Adjust these paths if your instance uses different locations:
 
 ```bash
+# Convenience for the client examples; the helper itself needs no environment variable.
+GB_WORK=$(realpath "../$(basename "$PWD")-workspace")
 gb() {
   apptainer exec --cleanenv --bind "$GB_WORK" "$GB_WORK/images/gammaboard.sif" \
     gb --instance "$GB_WORK/control/active.toml" "$@"
@@ -66,196 +82,83 @@ gb run create "$GB_WORK/resources/templates/runs/tetrahedron-unstratified.toml" 
 gb run wait tetrahedron-unstratified --timeout 5m
 ```
 
-Adjust the function's image, binds and active-file path if you chose different
-locations. For authenticated instances, log in with `gb auth login --password-stdin
---output "$GB_WORK/session.token"`, then pass `--token-file "$GB_WORK/session.token"`
-to subsequent commands. Worker registration can wait on the Slurm queue; `run start`
-only retries unavailable workers for 10 seconds by default. `run wait` defaults to
-successful completion. Omit `--max-evaluators` to use compatible free capacity.
-Leave the allocation running for dashboard inspection, then finish with:
+With authentication enabled, use `gb auth login --password-stdin --output TOKEN_FILE`
+and pass `--token-file TOKEN_FILE` afterward. Worker registration may wait on Slurm;
+repeating `worker launch` requests additional workers. Run starts retry unavailable
+workers for 10 seconds by default. `run wait` defaults to successful completion.
+See the [CLI reference](../../docs/local-cli.md) for other operations.
+
+Leave the allocation running for dashboard inspection, then stop it:
 
 ```bash
 python3 ops/slurm/slurm.py down --wait
 ```
 
-Use `up --restore-workers` to restore saved worker requests in a later allocation.
-No automatic resubmission occurs when an allocation expires.
+This finishes accepted work and confirms scheduler cleanup. `gb stop --wait` also
+requests application shutdown, but `down` additionally confirms allocation exit.
+Allocation expiry triggers graceful shutdown; it does not automatically resubmit.
+Use `up --restore-workers` to restore saved workers in a later allocation.
 
+## Update and maintain
 
-## Configuration
-
-Select the helper configuration once per shell:
+Stop the deployment before updating its helper or replacing its image:
 
 ```bash
-export GAMMABOARD_SLURM_CONFIG=/absolute/path/to/slurm.toml
+python3 ops/slurm/slurm.py down --wait
+git pull
+python3 ops/slurm/slurm.py build gammaboard
+# Wait for the build record to say "completed".
 python3 ops/slurm/slurm.py up
+```
+
+Rebuilding keeps the helper, client and service together. `install-examples`
+refreshes the bundled run cards without changing database runs or private templates.
+Use `gb db backup --output FILE` for backups; perform [offline database maintenance](../../docs/local-cli.md#database-maintenance)
+inside an allocation with the deployment file and explicit process override.
+
+For a queued deployment or unavailable API:
+
+```bash
 python3 ops/slurm/slurm.py status
-python3 ops/slurm/slurm.py down --wait
+python3 ops/slurm/slurm.py down --force
 ```
 
-An explicit `--config FILE` overrides the environment variable. Relative config
-paths resolve from the invoking directory; paths inside the file resolve against
-that file. Prefer an absolute config path when changing directories. A selected
-missing file is an error; it never falls back silently. An unset or empty variable
-keeps the existing `ops/slurm/local.toml` fallback. Queued jobs use their frozen
-records and ignore this environment selection.
-
-Keep two files:
-
-- A GammaBoard instance file with `externally_managed = true` and explicit paths,
-  database, server, logging and shutdown settings. Start from `examples/gammaboard.toml`.
-- A helper file selected by `--config FILE`, containing `instance_file`,
-  `workspace_root`, `image`, `job_env_file`, explicit container `binds`, control/
-  worker/build resource profiles and optional SSH access settings. Start from
-  `examples/generic.toml` or `examples/ubelix.toml`.
-
-Paths resolve against the file containing them, independent of the shell directory.
-Use shared storage accessible to the control and worker jobs. Configure container
-binds for all required host paths. The application image contains the service,
-lightweight CLI and optional dashboard at `/usr/local/share/gammaboard/dashboard`. Configure API and database ports in the
-instance file.
-
-`job_env_file` is optional. When configured it must exist. Its contents are copied
-into the deployment/build snapshot, hashed, verified and sourced by the batch job
-before starting Python or Apptainer. There is no implicit home-directory environment
-file. A module loaded here prepares the host job environment; it does not install
-software inside a container or automatically forward variables through `--cleanenv`.
-
-The helper needs Python 3.11.8+, Slurm commands and Apptainer. The control/worker
-profiles must use resources permitted by your site. It does not compile GammaBoard
-on the login node merely to submit jobs. Protect helper files containing credentials
-and generated private deployment files appropriately.
-
-## Build and start
-
-From the repository checkout, with the site Python environment available:
-
-```bash
-python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml build gammaboard
-# Wait for the recorded build job to complete successfully.
-python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml up
-```
-
-`build` submits a job and returns its ID. Its record is under
-`<workspace>/artifacts/builds/BUILD_ID/build.json`; Slurm logs are under
-`<workspace>/logs/slurm/`. Build jobs freeze the source revision, helper scripts,
-resource profile, environment and output destination before submission. Successful
-validated builds replace the configured application image. Failed builds retain
-the previous image. Stop deployments sharing the build workspace before replacing
-images; per-instance manifests are registered with that workspace for this check.
-
-`up` submits one control allocation, starts GammaBoard inside it with the explicit
-`--allow-local-processes` override, and waits for readiness. Worker jobs use the
-same override inside their allocations. The shared instance file
-continues to prohibit accidental execution elsewhere.
-
-Configure cluster-reachable database/server bind addresses. Use the supplied
-examples on a trusted cluster network, or configure database authentication.
-
-The helper prints `client_instance=.../active.toml` after readiness. This generated
-file contains the allocated node's API endpoint, without database credentials.
-Use the prepared `gb` client on the login node for ordinary operations:
-
-```bash
-gb --instance /shared/demo/control/active.toml worker launch --count 6 --wait --timeout 10m
-gb --instance /shared/demo/control/active.toml run list
-gb --instance /shared/demo/control/active.toml run create /shared/demo/run.toml \
-  --start --export-path /shared/demo/results/result.json
-```
-
-Worker submissions are asynchronous; `--wait` waits for registration. Repeating
-a worker submission creates additional workers. Repeating `up` while its control job is queued/running reuses the recorded deployment; uncertain
-scheduler outcomes require reconciliation rather than blind resubmission.
-
-The host-facing active file is a convenience copy. Each worker receives its own
-immutable deployment generation's `worker.toml` database configuration. Configuration
-and image hash checks prevent queued jobs from picking up later execution changes.
-Only browser-origin fields in the control instance snapshot can be reloaded;
-worker configuration, database paths, resource profiles, environment and image
-remain pinned.
-
-## One API for management
-
-The helper claims launch requests, renews leases, reports receipts, reads shutdown
-status, and acknowledges cleanup through HTTP. It connects directly to
-the service API port; no frontend proxy or dashboard is required. It verifies
-`deployment_id` and `build_id` before authenticating. Scheduler submission remains
-in the helper, and worker computation continues to access PostgreSQL directly.
-
-Ordinary `gb` clients use that same service. With authentication enabled, obtain a
-personal token using `gb auth login --password-stdin --output TOKEN_FILE` and pass
-`--token-file TOKEN_FILE`. The helper retains its frozen launcher credential and
-reconnects/re-authenticates on errors.
+Forced cleanup verifies ownership and stops worker allocations before the control
+allocation. Unknown scheduler/submission outcomes require reconciliation with
+`resolve-control` or `resolve-submission`; see their `--help`. Repeating `up` reuses
+a recorded queued/running deployment when its configuration matches.
 
 ## Browser-origin reload
 
-Loopback HTTP(S) browser origins on any port are accepted by default. Set
-`server.allow_loopback_origins = false` with an exact `allowed_origins` list to opt
-out. The helper never adds forwarding origins behind that policy.
-
-The Slurm service reads a generated deployment snapshot, so editing the source
-instance file followed by plain `gb config reload --origins` would reread the old
-snapshot. After editing the source instance file, use:
+Loopback HTTP(S) origins on any port are trusted by default. For exact-only access,
+set `server.allow_loopback_origins = false` and configure `allowed_origins`.
+After editing the **source instance file**, apply just those settings with:
 
 ```bash
-python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml reload-origins
+python3 ops/slurm/slurm.py reload-origins
 ```
 
-This copies **only** the two origin settings into the running control instance file
-and invokes the same `reload_origins` management API as `gb config reload --origins`.
-All execution settings remain protected by their digest, and queued workers retain
-their original configuration. Rejected policy changes restore the previous file;
-an ambiguous transport failure retains the candidate file so the operator can
-inspect `gb status` and safely retry. Origin changes do not alter allocation identity.
-Use this explicit reload command to apply edits before reusing `up`. Other deployment
-changes require shutdown and a new allocation.
+The helper copies browser policy into the control snapshot and calls the same API
+as `gb config reload --origins`. Plain `gb` would only reread that generated snapshot.
+Rejected changes restore the previous file. After an uncertain response, inspect
+`gb status` and retry. Other configuration changes require a new allocation.
 
-## Shutdown and recovery
+## Implementation and validation
 
-```bash
-python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml down --wait
-```
+- `slurm.py`: command entry point and orchestration.
+- `gbops/`: configuration, scheduler, deployment, process and build logic.
+- `jobs/`: shared batch entry point, image recipes and build/smoke scripts.
+- `examples/`: editable configuration and CPU/GPU worker request templates.
+- `tests/`: scheduler, build, recovery and process tests.
 
-Alternatively, `gb --instance /shared/demo/control/active.toml stop --wait` requests
-application shutdown through the API; `down` additionally confirms scheduler cleanup.
-
-Shutdown requests and draining state are durable in PostgreSQL. The service waits
-for accepted work and exports, checkpoints workers, and requests external cleanup.
-The helper cancels owned queued jobs, allows running workers to exit, cancels any
-remaining owned allocations, and acknowledges the exact shutdown ID through HTTP.
-The service retains PostgreSQL until cleanup is acknowledged.
-
-`gb stop` waits for application shutdown completion. The helper's `down` also
-confirms that the scheduler allocations have ended. A lost API connection before
-acknowledgment is not considered successful shutdown. The service leaves an
-owner-side receipt in its explicit state directory; clients need not mount it.
-
-Use forced scheduler cleanup when the control job is queued or the API is unavailable:
-
-```bash
-python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml status
-python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml down --force
-```
-
-Forced cleanup verifies deployment/job ownership and confirms worker allocations
-are gone before canceling the control job. `resolve-control` and
-`resolve-submission` handle uncertain submissions; scheduler lookup errors are not
-proof that a job ended. Allocation expiry triggers graceful application shutdown
-within the signal margin. Allocations are not automatically resubmitted.
-
-Backups use `gb db backup --output LOCAL_FILE`. Perform [offline database
-maintenance](../../docs/local-cli.md#database-maintenance) inside an appropriate
-allocation using the deployment instance file and explicit process override.
-
-## Example runs
-
-`install-examples` refreshes the six portable CPU examples and their shared child
-card without touching existing database runs or private templates. CPU/GPU worker
-cards remain external launch recipes; see the [canonical examples](../../docs/quickstart.md).
+Jobs resolve configuration paths to absolute paths and freeze their helper,
+environment, execution configuration and image identity.
+`job_env_file` is optional; when set, it is copied, verified and sourced before the
+job starts. It prepares the host environment, not container packages or automatic
+variable forwarding through `--cleanenv`. Queued jobs ignore the submitting shell's
+config selection. Only the control snapshot's browser policy is reloadable.
 
 ## Validation
 
-The test suite uses a fake scheduler to exercise receipts, uncertain submission,
-ownership checks, configuration/environment snapshots, image publication and
-shutdown. Run `python3 -m pytest ops/slurm/tests`. Actual cluster operation still
-requires a site-specific deployment smoke test; the tests do not submit real jobs.
+Run `python3 -m pytest ops/slurm/tests`. Tests exercise scheduler failures, frozen
+jobs, image publication and cleanup; they do not submit actual UBELIX jobs.

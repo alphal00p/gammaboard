@@ -17,7 +17,7 @@ sha="${GAMMABOARD_SOURCE_REVISION:?checked-out source revision required}"
 cpus="${SLURM_CPUS_PER_TASK:-4}"
 image_cache="${workspace}/artifacts/image-cache"
 mkdir -p "${workspace}/artifacts/download-cache" "${workspace}/artifacts/build-cache" "$image_cache"
-python3 "${recipe}/build/render.py" "$recipe" "$build_dir" "$family" "$sha" "$cpus" "$scratch" "$image_cache"
+python3 "${recipe}/jobs/render.py" "$recipe" "$build_dir" "$family" "$sha" "$cpus" "$scratch" "$image_cache"
 # Unpacking and packing touch thousands of files; only caches and completed images
 # belong on shared storage. Python owns and cleans this private scratch directory.
 export APPTAINER_TMPDIR="${scratch}/tmp"

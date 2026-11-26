@@ -1,9 +1,9 @@
 # UBELIX example. Verify resource/account access for your allocation.
 instance_file = "gammaboard.toml"
-workspace_root = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard"
-image = "/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard/images/gammaboard.sif"
+workspace_root = "."
+image = "images/gammaboard.sif"
 job_env_file = "environment.sh"
-binds = ["/storage/research/itp_localunitaritydata/YOUR_USER/gammaboard"]
+binds = ["."]
 
 [control]
 account = "gratis"
@@ -30,5 +30,5 @@ mem = "128G"
 time = "02:00:00"
 
 [access]
-ssh_target = "YOUR_USER@submit03.unibe.ch"
+ssh_host = "submit03.unibe.ch" # Login username is inferred; ssh_target overrides both.
 local_port = 8080

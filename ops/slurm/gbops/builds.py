@@ -49,7 +49,7 @@ def prepare(workspace, family, output=None, definition=None):
     recipe = build / "recipe"
     settings.snapshot_helper(recipe)
     shutil.copytree(
-        settings.OPS_ROOT / "build", recipe / "build", ignore=shutil.ignore_patterns("__pycache__")
+        settings.OPS_ROOT / "jobs", recipe / "jobs", ignore=shutil.ignore_patterns("__pycache__")
     )
     environment=settings.snapshot_environment(recipe/"job.env")
     record = {
@@ -107,10 +107,10 @@ def submit(workspace, args, slurm):
         record = json.loads(path.read_text())
         record["state"] = "submitting"
         write_json(path, record)
-        env = dict(os.environ, GAMMABOARD_BUILD_RECORD=str(path), GAMMABOARD_JOB_ENV_FILE=record.get("job_env_file") or "", GAMMABOARD_JOB_ENV_SHA256=record.get("job_env_digest") or "")
+        env = dict(os.environ, GAMMABOARD_JOB_ROLE="build", GAMMABOARD_BUILD_RECORD=str(path), GAMMABOARD_JOB_ENV_FILE=record.get("job_env_file") or "", GAMMABOARD_JOB_ENV_SHA256=record.get("job_env_digest") or "")
         (Path(workspace) / "logs/slurm/build").mkdir(parents=True, exist_ok=True)
         record["job_id"] = slurm.submit(
-            path.parent / "recipe/build/build.sbatch",
+            path.parent / "recipe/jobs/job.sbatch",
             name=f"gb-build-{record['id']}",
             comment=f"gb:build:{record['id']}",
             workspace=workspace,
@@ -167,7 +167,7 @@ def execute(path, slurm):
     record = json.loads(path.read_text())
     if record.get("job_env_file") and digest(record["job_env_file"])!=record["job_env_digest"]:
         raise ValueError("build environment snapshot was modified")
-    deployments = Deployments(record["workspace"], 0)
+    deployments = Deployments(record["workspace"], 0, root=Path(record["workspace"]) / "deployments")
     # The submitter saves its receipt before this job reads or updates the record.
     with deployments.locked():
         record = json.loads(path.read_text())
@@ -207,7 +207,7 @@ def execute(path, slurm):
                 with tarfile.open(build / "source.tar") as archive:
                     archive.extractall(Path(scratch) / "src", filter="data")
                 subprocess.run(
-                    ["bash", str(recipe / "build/service-build.sh"), record["family"]],
+                    ["bash", str(recipe / "jobs/service-build.sh"), record["family"]],
                     env=dict(env, GAMMABOARD_BUILD_SCRATCH=scratch),
                     check=True,
                 )

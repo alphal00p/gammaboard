@@ -59,8 +59,11 @@ def checkout(tmp_path, monkeypatch):
     command(["git", "init", str(repo)])
     commit(repo, "a")
     workspace = tmp_path / "state"
-    (ops / "local.toml").write_text(toml_dump({"workspace_root": str(workspace)}))
     monkeypatch.setattr(settings, "OPS_ROOT", ops)
+    monkeypatch.setattr(settings, "CONFIG_PATH", None)
+    monkeypatch.delenv("GAMMABOARD_SLURM_CONFIG", raising=False)
+    settings.config_path().parent.mkdir()
+    settings.config_path().write_text(toml_dump({"workspace_root": str(workspace)}))
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (bindir / "python3").symlink_to(sys.executable)
@@ -138,7 +141,7 @@ def execute(workspace, record, env, scheduler, **extra):
 
 
 def test_all_post_stages_create_cache_bind_destination_before_container_start(tmp_path):
-    definition = "\n".join(path.read_text() for path in sorted((ROOT / "build").glob("*.def")))
+    definition = "\n".join(path.read_text() for path in sorted((ROOT / "jobs").glob("*.def")))
     post_stages = 0
     for index, stage in enumerate(re.split(r"(?m)^Bootstrap:", definition)[1:]):
         if not re.search(r"(?m)^%post\b", stage):
@@ -159,7 +162,7 @@ def test_all_post_stages_create_cache_bind_destination_before_container_start(tm
 
 def test_renderer_rejects_tag_and_digest_before_apptainer(checkout, tmp_path):
     _, _, env = checkout
-    lock = settings.OPS_ROOT / "build/images.lock.json"
+    lock = settings.OPS_ROOT / "jobs/images.lock.json"
     pins = json.loads(lock.read_text())
     pins["node"]["image"] = pins["node"]["image"].replace("@", ":20-bookworm-slim@")
     lock.write_text(json.dumps(pins))
@@ -168,7 +171,7 @@ def test_renderer_rejects_tag_and_digest_before_apptainer(checkout, tmp_path):
     result = subprocess.run(
         [
             sys.executable,
-            str(settings.OPS_ROOT / "build/render.py"),
+            str(settings.OPS_ROOT / "jobs/render.py"),
             str(settings.OPS_ROOT),
             str(rendered),
             "gammaboard",
@@ -221,7 +224,7 @@ def test_queued_build_is_independent_of_checkout_and_local_settings(checkout):
     scheduler = FakeSlurm()
     record = submit(workspace, scheduler)
     commit(repo, "newer")
-    (settings.OPS_ROOT / "build/service-build.sh").write_text("exit 99\n")
+    (settings.OPS_ROOT / "jobs/service-build.sh").write_text("exit 99\n")
     shutil.rmtree(repo)
     result, saved = execute(workspace, record, env, scheduler)
     assert result.returncode == 0, result.stderr
@@ -248,7 +251,7 @@ def test_prepared_bases_are_reused_and_invalidated_independently(checkout):
     calls = [json.loads(line)["definition"] for line in Path(env["BUILD_CALLS"]).read_text().splitlines()]
     assert calls == ["builder-base.def", "runtime-base.def", "service.def", "service.def"]
 
-    runtime = settings.OPS_ROOT / "build/runtime-base.def"
+    runtime = settings.OPS_ROOT / "jobs/runtime-base.def"
     runtime.write_text(runtime.read_text() + "\n# runtime dependency update\n")
     commit(repo, "new runtime")
     second = build()
@@ -257,7 +260,7 @@ def test_prepared_bases_are_reused_and_invalidated_independently(checkout):
     calls = [json.loads(line)["definition"] for line in Path(env["BUILD_CALLS"]).read_text().splitlines()]
     assert calls[-2:] == ["runtime-base.def", "service.def"]
 
-    builder = settings.OPS_ROOT / "build/builder-base.def"
+    builder = settings.OPS_ROOT / "jobs/builder-base.def"
     builder.write_text(builder.read_text() + "\n# build dependency update\n")
     commit(repo, "new builder")
     third = build()
@@ -333,7 +336,7 @@ def test_gammaloop_uses_configured_local_checkout(checkout):
     source = repo.parent / "gammaloop"
     command(["git", "clone", str(repo), str(source)])
     revision = commit(source, "loop")
-    configure(gammaloop_source="../../../gammaloop")
+    configure(gammaloop_source="../gammaloop")
     scheduler = FakeSlurm()
     result, saved = execute(workspace, submit(workspace, scheduler, "gammaloop"), env, scheduler)
     assert result.returncode == 0, result.stderr
@@ -360,13 +363,13 @@ def test_generic_runtime_uses_frozen_definition_and_never_overwrites(checkout):
 
 def test_local_config_is_relative_to_helper_not_cwd_or_environment(checkout, monkeypatch, tmp_path):
     _, workspace, _ = checkout
-    configure(workspace_root="../../../state", cluster={"control": {"mem_per_cpu": "8G"}})
+    configure(workspace_root="../state", cluster={"control": {"mem_per_cpu": "8G"}})
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GAMMABOARD_WORKSPACE_ROOT", str(tmp_path / "ignored"))
     assert settings.workspace_root() == workspace
     profile = Deployments(workspace, 0).configuration(False, 8080)["profiles"]["control"]
     assert profile["mem_per_cpu"] == "8G" and "mem" not in profile
-    (settings.OPS_ROOT / "local.toml").unlink()
+    settings.config_path().unlink()
     with pytest.raises(ValueError, match="--config"):
         settings.workspace_root()
     assert u.parser().parse_args(["build", "gammaboard"]).build_kind == "gammaboard"
@@ -377,7 +380,7 @@ def render_definition(ops, directory, revision="a" * 40, cpus=4, family="gammabo
     command(
         [
             sys.executable,
-            str(ops / "build/render.py"),
+            str(ops / "jobs/render.py"),
             str(ops),
             str(directory),
             family,
@@ -400,13 +403,13 @@ def test_compilation_cache_survives_revision_paths_and_cpu_changes(checkout, tmp
         namespace(render_definition(ops, tmp_path / "second", revision="b" * 40, cpus=8)) == first
     )
     assert namespace(render_definition(ops, tmp_path / "loop", family="gammaloop")) != first
-    runtime = ops / "build/runtime-base.def"
+    runtime = ops / "jobs/runtime-base.def"
     runtime.write_text(runtime.read_text() + "\n# runtime-only update\n")
     assert namespace(render_definition(ops, tmp_path / "runtime")) == first
     keys = lambda path: json.loads((path / "prepared-images.json").read_text())
     assert keys(tmp_path / "runtime")["builder"]["recipe_sha256"] == keys(tmp_path / "first")["builder"]["recipe_sha256"]
     assert keys(tmp_path / "runtime")["runtime"]["recipe_sha256"] != keys(tmp_path / "first")["runtime"]["recipe_sha256"]
-    lock = ops / "build/images.lock.json"
+    lock = ops / "jobs/images.lock.json"
     pins = json.loads(lock.read_text())
     pins["debian"]["image"] = "docker.io/library/debian@sha256:" + "2" * 64
     lock.write_text(json.dumps(pins))
@@ -416,7 +419,7 @@ def test_compilation_cache_survives_revision_paths_and_cpu_changes(checkout, tmp
     lock.write_text(json.dumps(pins))
     changed_image = namespace(render_definition(ops, tmp_path / "image"))
     assert changed_image != first
-    definition = ops / "build/service.def"
+    definition = ops / "jobs/service.def"
     definition.write_text(
         definition.read_text().replace("target-cpu=x86-64", "target-cpu=x86-64-v2")
     )
@@ -488,4 +491,4 @@ def test_real_cargo_reuses_dependencies_but_updates_revision(tmp_path):
     assert (
         len(list((tmp_path / "compiled").glob("**/target/release/deps/libcache_dep-*.rlib"))) == 2
     )
-    assert "sqlx-cli" not in (ROOT / "build/service.def").read_text()
+    assert "sqlx-cli" not in (ROOT / "jobs/service.def").read_text()
