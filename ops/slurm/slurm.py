@@ -22,12 +22,13 @@ from pathlib import Path
 import subprocess
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 import uuid
 from socket import gethostname
 
-from gbops.deployment import Deployments, tag, write_json, job_name, owns
+from gbops.deployment import Deployments, tag, write_json, write_toml, execution_digest, ORIGIN_FIELDS, job_name, owns
 from gbops.slurm import (
     Slurm,
     SchedulerError,
@@ -352,8 +353,6 @@ def up(args, slurm):
         builds.require_no_build(deployments.workspace, slurm)
         image = deployments.image()
         manifest = deployments.load()
-        if args.fresh_db:
-            reset_database(deployments, slurm)
         if manifest and manifest["state"] == "stopped":
             manifest = None
         if manifest:
@@ -396,7 +395,7 @@ def up(args, slurm):
             )
         if manifest and args.resume_workers and not manifest["resume_workers"]:
             raise RuntimeError(
-                "--resume-workers is a startup setting; stop the active deployment before enabling it"
+                "--restore-workers is a startup setting; stop the active deployment before enabling it"
             )
         if manifest is None:
             manifest = deployments.create(
@@ -445,6 +444,7 @@ def up(args, slurm):
         deployments.save(current)
     tunnel = tunnel_command(node, args.local_port, args.port_offset, manifest.get("api_port"))
     print(f"tunnel={tunnel}")
+    print(f"dashboard=http://localhost:{args.local_port}/")
     if args.copy and sys.stdout.isatty():
         sys.stdout.write("\033]52;c;" + base64.b64encode(tunnel.encode()).decode() + "\a")
 
@@ -535,34 +535,41 @@ def down(args, slurm):
     print(f"stopped deployment={manifest['id']}")
 
 
-def watch(manifest, node, api, slurm, interval, once=False):
-    delay = interval
-    while True:
+def reload_origins(args, slurm):
+    """Copy only browser policy into the service-owned file, then use its API."""
+    source = settings.instance_definition()
+    if source is None:
+        raise ValueError("reload-origins requires an explicit instance_file in the helper configuration")
+    deployments, manifest = require_deployment(args)
+    with deployments.locked():
+        manifest = deployments.load()
+        job = control_job(manifest, slurm)
+        if manifest["state"] in ("stopping", "stopped") or not job or job.terminal or not job.node:
+            raise RuntimeError("selected deployment is not running")
+        if not manifest.get("instance_execution_digest"):
+            raise RuntimeError("this deployment predates origin reload; restart it with the current helper")
+        path = Path(manifest["instance_file"])
+        current = tomllib.loads(path.read_text())
+        if execution_digest(current) != manifest["instance_execution_digest"]:
+            raise RuntimeError("deployment instance snapshot was modified outside browser settings")
+        import copy
+        candidate = copy.deepcopy(current)
+        for key in ORIGIN_FIELDS:
+            candidate["server"].pop(key, None)
+            if key in source.get("server", {}):
+                candidate["server"][key] = source["server"][key]
+        api = Api(manifest, job.node, args.admin_password)
+        write_toml(path, candidate)
         try:
-            job = control_job(manifest, slurm)
-            if job and job.terminal:
-                return
-            if job is None:
-                raise SchedulerError("control status unknown")
-            if not manifest["single_node"]:
-                resolve_launch_requests(manifest, node, api, slurm)
-            if once:
-                return
-            delay = interval
+            result = api.request("/v1/manage", {"operation": "reload_origins"})
         except urllib.error.HTTPError as error:
-            if error.code == 401:
-                api.login()
-            else:
-                print(f"launcher retry: {error}", file=sys.stderr)
-            if once:
+            if error.code in (400, 401, 403, 404):
+                write_toml(path, current)
                 raise
-            delay = min(60, max(interval, delay * 2))
-        except (OSError, SchedulerError, RuntimeError) as error:
-            if once:
-                raise
-            print(f"launcher retry: {error}", file=sys.stderr)
-            delay = min(60, max(interval, delay * 2))
-        time.sleep(delay)
+            raise RuntimeError("origin reload outcome unknown; inspect gb status and retry reload-origins; the edited snapshot is retained") from error
+        except (OSError, RuntimeError, ValueError) as error:
+            raise RuntimeError("origin reload outcome unknown; inspect gb status and retry reload-origins; the edited snapshot is retained") from error
+    print(json.dumps(result, indent=2))
 
 
 def publish_client_instance(manifest,node):
@@ -812,6 +819,8 @@ def main(argv=None):
             up(args, slurm)
         elif args.command == "down":
             down(args, slurm)
+        elif args.command == "reload-origins":
+            reload_origins(args, slurm)
         elif args.command == "resolve-control":
             resolve_control(args, slurm)
         elif args.command == "resolve-submission":
@@ -843,6 +852,8 @@ def main(argv=None):
                             "deployment": manifest["id"],
                             "control": None if job is None else job.__dict__,
                             "state": manifest["state"],
+                            "instance_file": manifest["instance_file"],
+                            "client_instance": str(directory(manifest).parent.parent / "active.toml"),
                             "image": manifest["image"]["path"],
                             "image_sha256": manifest["image"]["sha256"],
                             "build_id": manifest["image"]["build_info"]["build_id"],
@@ -861,37 +872,10 @@ def main(argv=None):
                     )
                 )
                 return
-            if not job or job.terminal or not job.node:
-                raise RuntimeError("selected deployment is not running")
-            api = Api(manifest, job.node, args.admin_password)
-            if args.command == "submit-workers":
-                from gbops.deployment import toml_dump
-
-                config = dict(args.capabilities)
-                toml = (
-                    f"[[groups]]\ncount={args.count}\nname_prefix={json.dumps(args.prefix)}\nmax_start_failures={args.max_start_failures}\n[groups.config]\n"
-                    + toml_dump(config)
-                )
-                print(json.dumps(api.request("/v1/manage", {"operation":"worker_launch", "source":{"kind":"new","toml":toml}})))
-            watch(
-                manifest,
-                job.node,
-                api,
-                slurm,
-                args.poll_seconds,
-                once=args.command == "submit-workers" or args.once,
-            )
     except KeyboardInterrupt:
         print("launcher stopped; recorded submissions remain recoverable")
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as error:
         raise SystemExit(str(error)) from error
-
-
-def nonnegative(value):
-    n = int(value)
-    if n < 0:
-        raise argparse.ArgumentTypeError("must be nonnegative")
-    return n
 
 
 def positive(value):
@@ -915,13 +899,6 @@ def offset(value):
     return n
 
 
-def parse_capability(value):
-    key, separator, raw = value.partition("=")
-    if not separator or not key:
-        raise argparse.ArgumentTypeError("capability must use KEY=VALUE")
-    return key, positive(raw)
-
-
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", type=Path, help="helper TOML; paths resolve relative to this file")
@@ -930,50 +907,29 @@ def parser():
         "up",
         "down",
         "status",
-        "submit-workers",
-        "watch-requests",
+        "reload-origins",
         "resolve-control",
         "resolve-submission",
         "reset-db",
     ):
         cmd = commands.add_parser(name)
-        cmd.add_argument("--port-offset", type=offset, default=0)
+        cmd.add_argument("--port-offset", type=offset, default=0, help=argparse.SUPPRESS)
         cmd.add_argument("--admin-password", default="")
         if name == "up":
             cmd.add_argument("--time", help="override the control profile walltime")
-            cmd.add_argument(
-                "--fresh-db",
-                action="store_true",
-                help="archive the stopped database before creating a fresh one",
-            )
-            cmd.add_argument("--single-node", action="store_true")
-            cmd.add_argument("--resume-workers", action="store_true")
+            cmd.set_defaults(single_node=False)
+            cmd.add_argument("--restore-workers", dest="resume_workers", action="store_true")
             cmd.add_argument("--local-port", type=port)
             cmd.add_argument("--startup-timeout", type=positive, default=180)
             cmd.add_argument("--copy", action="store_true")
         elif name == "down":
             cmd.add_argument("--wait",action="store_true",help="finish accepted GammaBoard work before shutdown")
-            cmd.add_argument("--worker-timeout", type=nonnegative, default=60)
             cmd.add_argument(
                 "--force",
                 action="store_true",
                 help="skip unavailable API and cancel only verified owned jobs",
             )
             cmd.add_argument("--cancel-timeout", type=positive, default=180)
-        elif name in ("submit-workers", "watch-requests"):
-            cmd.add_argument("--poll-seconds", type=positive, default=5)
-            cmd.add_argument("--once", action="store_true")
-            if name == "submit-workers":
-                cmd.add_argument("--count", type=positive, required=True)
-                cmd.add_argument("--prefix", default="w")
-                cmd.add_argument("--max-start-failures", type=positive, default=3)
-                cmd.add_argument(
-                    "--capability",
-                    dest="capabilities",
-                    action="append",
-                    default=[],
-                    type=parse_capability,
-                )
         elif name == "reset-db":
             cmd.add_argument(
                 "--discard",

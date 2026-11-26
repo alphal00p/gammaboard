@@ -21,6 +21,8 @@ socket_dir = "/shared/YOUR_USER/gammaboard/resources/db/socket"
 listen_addresses = "0.0.0.0"
 
 [server]
+# Trust loopback browser pages on any forwarded port; set false for exact-only access.
+allow_loopback_origins = true
 host = "0.0.0.0"
 api_port = 4000
 dashboard_dir = "/usr/local/share/gammaboard/dashboard"

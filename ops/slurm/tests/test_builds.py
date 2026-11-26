@@ -423,7 +423,7 @@ def test_compilation_cache_survives_revision_paths_and_cpu_changes(checkout, tmp
     assert namespace(render_definition(ops, tmp_path / "recipe")) != changed_image
 
 
-def test_real_cargo_reuses_dependencies_and_installed_tool_but_updates_revision(tmp_path):
+def test_real_cargo_reuses_dependencies_but_updates_revision(tmp_path):
     # Run the definition's compilation commands on tiny offline/local sources.
     source = tmp_path / "source"
     (source / "src").mkdir(parents=True)
@@ -454,30 +454,17 @@ def test_real_cargo_reuses_dependencies_and_installed_tool_but_updates_revision(
         CARGO_HOME=str(tmp_path / "downloads/cargo"),
         TEST_PACKAGE_VERSION="1",
     )
+    env.pop("CARGO_BUILD_BUILD_DIR", None)
     command(["cargo", "generate-lockfile", "--offline"], cwd=source, env=env)
-    tool_source = tmp_path / "tool-source"
-    (tool_source / "src").mkdir(parents=True)
-    (tool_source / "Cargo.toml").write_text(
-        '[package]\nname="sqlx-cli"\nversion="0.8.6"\nedition="2021"\n[[bin]]\nname="sqlx"\npath="src/main.rs"\n[features]\nrustls=[]\npostgres=[]\n'
-    )
-    (tool_source / "src/main.rs").write_text('fn main() { println!("test sqlx"); }\n')
-    command(["cargo", "generate-lockfile", "--offline"], cwd=tool_source, env=env)
-    command(["git", "init", str(tool_source)])
-    tool_revision = commit(tool_source, "tool")
-
     def build(revision, name, packages="1"):
         output = tmp_path / name
         definition = render_definition(ROOT, tmp_path / (name + "-recipe"), revision=revision)
         body = definition.split("    cd /src\n", 1)[1]
         compile_commands = body.split("    rustc --version > /out/toolchain.txt", 1)[0]
         install_commands = body.split("    if [ 'gammaboard' = gammaboard ]; then\n", 1)[1].split(
-            "        cp -a migrations", 1
+            "        cd dashboard", 1
         )[0]
         script = compile_commands + install_commands
-        script = script.replace(
-            "cargo install sqlx-cli --version 0.8.6",
-            f"cargo install sqlx-cli --git {tool_source.as_uri()} --rev {tool_revision}",
-        )
         for container, local in (
             ("/build-cache", tmp_path / "compiled"),
             ("/cache", tmp_path / "downloads"),
@@ -489,17 +476,16 @@ def test_real_cargo_reuses_dependencies_and_installed_tool_but_updates_revision(
             ["sh", "-eu", "-c", script], cwd=source, env=dict(env, TEST_PACKAGE_VERSION=packages)
         )
         assert command([str(output / "gammaboard")]).stdout.strip() == revision + ":42"
-        assert command([str(output / "sqlx/bin/sqlx")]).stdout.strip() == "test sqlx"
+        assert (output / "gb").is_file()
 
     build("a" * 40, "first")
     dependency = next((tmp_path / "compiled").glob("**/target/release/deps/libcache_dep-*.rlib"))
-    tool = next((tmp_path / "compiled").glob("**/sqlx/bin/sqlx"))
-    unchanged = dependency.stat().st_mtime_ns, tool.stat().st_mtime_ns
+    unchanged = dependency.stat().st_mtime_ns
     build("b" * 40, "second")
-    assert (dependency.stat().st_mtime_ns, tool.stat().st_mtime_ns) == unchanged
+    assert dependency.stat().st_mtime_ns == unchanged
     # A changed system-library environment must start a separate cache.
     build("c" * 40, "third", packages="2")
     assert (
         len(list((tmp_path / "compiled").glob("**/target/release/deps/libcache_dep-*.rlib"))) == 2
     )
-    assert len(list((tmp_path / "compiled").glob("**/sqlx/bin/sqlx"))) == 2
+    assert "sqlx-cli" not in (ROOT / "build/service.def").read_text()

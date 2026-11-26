@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import copy
 import fcntl
 import hashlib
 import json
@@ -43,6 +44,35 @@ def write_json(path, data):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+ORIGIN_FIELDS = ("allowed_origins", "allow_loopback_origins")
+
+
+def execution_digest(instance):
+    """Only browser policy can change in a running deployment snapshot."""
+    value = copy.deepcopy(instance)
+    for key in ORIGIN_FIELDS:
+        value.get("server", {}).pop(key, None)
+    return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
+def write_toml(path, value):
+    path = Path(path)
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as temporary:
+        temporary.write(toml_dump(value))
+        temporary.flush()
+        os.fsync(temporary.fileno())
+    try:
+        os.replace(temporary.name, path)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary.name):
+            os.unlink(temporary.name)
 
 
 def merge(base, override):
@@ -239,10 +269,9 @@ class Deployments:
                 "cluster deployments manage their database URL; configure PostgreSQL tuning only"
             )
         server["allow_local_node_spawn"] = single
-        origins = [f"http://localhost:{local_port}", f"http://127.0.0.1:{local_port}"]
-        if instance:
-            instance["server"]["allowed_origins"]=list(dict.fromkeys([*instance["server"].get("allowed_origins",[]),*origins]))
-            server["allowed_origins"]=instance["server"]["allowed_origins"]
+        # Browser forwarding ports are client-side choices, not deployment identity.
+        # Exact-only deployments must explicitly list their trusted browser origins.
+        origins = server.get("allowed_origins", [])
         profiles = cluster_config()
         if control_time is not None:
             profiles["control"]["time"] = control_time
@@ -265,22 +294,26 @@ class Deployments:
             instance={"name":server.get("name","cluster"),"externally_managed":True,
                 "paths":{"state_dir":str(self.workspace),"log_dir":str(self.workspace/"logs"),"temp_dir":str(self.workspace/"tmp"),"template_dir":str(self.workspace/"resources/templates"),"resource_roots":[str(self.workspace/"resources")]},
                 "database":{"mode":"managed","host":"127.0.0.1","port":5400+self.offset,"name":"gammaboard_db","user":"postgres","data_dir":str(paths["data_dir"]),"socket_dir":str(paths["socket_dir"]),"tuning":{**runtime.get("local_postgres",{}),"listen_addresses":"0.0.0.0"}},
-                "server":{"host":"0.0.0.0","api_port":4000+self.offset,"dashboard_dir":server["frontend"]["build_dir"],"allowed_origins":origins,"allow_local_node_spawn":False},
+                "server":{"host":"0.0.0.0","api_port":4000+self.offset,"dashboard_dir":server["frontend"]["build_dir"],"allowed_origins":origins,"allow_loopback_origins":server.get("allow_loopback_origins",True),"allow_local_node_spawn":False},
                 "shutdown":server.get("cleanup",{})}
             if server.get("auth"):instance["server"]["auth"]=server["auth"]
-        instance["server"]["allowed_origins"]=list(dict.fromkeys([*instance["server"].get("allowed_origins",[]),*origins]))
         data = {"server": server, "runtime": runtime, "origins": origins, "profiles": profiles}
         if instance: data["instance"]=instance
         env_file=local.get("job_env_file")
         data["environment_digest"]=digest(settings.local_path(env_file)) if env_file else None
         data["binds"]=[str(settings.local_path(p)) for p in local.get("binds",[str(self.workspace)])]
-        data["hash"] = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        identity = copy.deepcopy(data)
+        identity.pop("origins", None)
+        for section in (identity["server"], identity["instance"]["server"]):
+            for key in ORIGIN_FIELDS:
+                section.pop(key, None)
+        data["hash"] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         return data
 
     def create(self, image, config, single, resume, password=""):
         paths = preflight_database(self.workspace, config["runtime"], self.offset, image)
         if config["server"].get("auth") and not password:
-            raise ValueError("set admin_password in local.toml for the managed request launcher")
+            raise ValueError("set admin_password in the helper configuration for the managed request launcher")
         settings.seed_templates(self.workspace)
         identifier = uuid.uuid4().hex
         directory = self.root / identifier
@@ -306,6 +339,7 @@ class Deployments:
             "deployment_dir":str(directory),
             "instance_file":str(instance_path) if instance_path else None,
             "instance_digest":digest(instance_path) if instance_path else None,
+            "instance_execution_digest":execution_digest(config["instance"]) if instance_path else None,
             "job_env_file":environment,
             "job_env_digest":digest(environment) if environment else None,
             "binds":config.get("binds",[str(self.workspace)]),

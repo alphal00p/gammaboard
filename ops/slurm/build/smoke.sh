@@ -52,12 +52,12 @@ import socket
 import sys
 from pathlib import Path
 listeners = []
-for _ in range(3):
+for _ in range(2):
     s = socket.socket()
     s.bind(('127.0.0.1', 0))
     listeners.append(s)
-pg, api, web = [s.getsockname()[1] for s in listeners]
-Path('ports').write_text(f'{pg} {api} {web}\n')
+pg, api = [s.getsockname()[1] for s in listeners]
+Path('ports').write_text(f'{pg} {api}\n')
 Path('instance.toml').write_text(f'''name="image-smoke"
 [paths]
 state_dir="{Path.cwd()}/control"
@@ -79,7 +79,7 @@ api_port={api}
 dashboard_dir={json.dumps(sys.argv[1])}
 ''')
 PY
-read -r pg api web < ports
+read -r pg api < ports
 step 'starting services'
 # Launch the executable directly so $! identifies the supervisor, not a function's shell.
 gammaboard --instance "${smoke_root}/instance.toml" start --foreground > deploy.log 2>&1 &
@@ -112,18 +112,12 @@ step 'validating Symbolica runtime'
 board --json local run validate run.toml --probe > evaluator-probe.json
 step 'creating run and launching workers'
 board run create run.toml
-http -H 'Content-Type: application/json' -d '{"operation":"worker_launch","source":{"kind":"new","count":2,"name_prefix":"smoke"}}' "http://127.0.0.1:${api}/api/v1/manage" > workers.json
 step 'waiting for worker registration'
-deadline=$((SECONDS + 60))
-while true; do
-    kill -0 "$deploy_pid"
-    http "http://127.0.0.1:${api}/api/workers?state=live" > nodes.json
-    if python3 -c 'import json,sys; nodes=json.load(open("nodes.json")); sys.exit(0 if sum(n["status"] == "idle" for n in nodes) == 2 else 1)'; then break; fi
-    (( SECONDS < deadline ))
-    sleep 0.5
-done
+board --json worker launch --count 2 --wait --timeout 60s > workers.json
+step 'reloading browser origins'
+board --json config reload --origins > origins.json
 step 'assigning sampler and evaluator'
-board --json run start image-smoke --max-evaluators 1 > assignment.json
+board --json run start image-smoke > assignment.json
 python3 - <<'PY'
 import json
 assignment = json.load(open('assignment.json'))
@@ -131,7 +125,7 @@ if assignment['start']['state'] != 'started' or len(assignment['start']['assignm
     raise SystemExit(f'expected one sampler and one evaluator; got {assignment}')
 PY
 step 'waiting for 32 completed samples'
-board run wait image-smoke --until completed --timeout 60s
+board run wait image-smoke --timeout 60s
 board --json run inspect image-smoke > run-result.json
 python3 - <<'PY'
 import json

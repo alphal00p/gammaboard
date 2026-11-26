@@ -30,12 +30,6 @@ if Path(sys.argv[0]).name=='curl':
         if not (root/'supervisor.pid').exists():sys.exit(7)
         print('{"status":"ok"}')
     elif path=='/':print('<html>dashboard</html>')
-    elif path=='/api/v1/manage':print('{"request_ids":["1"],"node_names":["smoke-1","smoke-2"]}')
-    elif path=='/api/workers':
-        counter=root/'polls'
-        n=int(counter.read_text())+1 if counter.exists() else 1
-        counter.write_text(str(n))
-        print(json.dumps([{'node_name':f'smoke-{i}','status':'idle'} for i in range(min(n-1,2))]))
     else:raise AssertionError(sys.argv)
     sys.exit(0)
 args=sys.argv[3:]
@@ -57,11 +51,17 @@ elif args[:3]==['local','run','validate']:
     if mode=='missing_compiler':
         print('Symbolica expression compilation with g++ failed',file=sys.stderr);sys.exit(1)
     print('{"runtime_probes":1}')
+elif args[:2]==['worker','launch']:
+    assert '--wait' in args and '--count' in args and '--timeout' in args
+    if mode=='registration_failure':sys.exit(1)
+    (root/'workers-ready').write_text('yes')
+    print('{"request_ids":["1"]}')
+elif args[:3]==['config','reload','--origins']:print('{"allow_loopback_origins":true}')
 elif args[:2]==['run','create']:print('created run_id=1 name=image-smoke')
 elif args[:2]==['run','start']:
-    n=int((root/'polls').read_text())
-    assignment={'assigned_samplers':['smoke-1'] if n>=3 and mode!='empty_assignment' else [],'assigned_evaluators':['smoke-2'] if n>=3 and mode!='empty_assignment' else []}
-    (root/'assigned-after-polls').write_text(str(n))
+    ready=(root/'workers-ready').exists()
+    assignment={'assigned_samplers':['smoke-1'] if ready and mode!='empty_assignment' else [],'assigned_evaluators':['smoke-2'] if ready and mode!='empty_assignment' else []}
+    assert ready, 'start must follow worker registration'
     print(json.dumps({'start':{'state':'started','assignments':assignment['assigned_samplers']+assignment['assigned_evaluators']}}))
 elif args[:2]==['run','wait']:
     assert len(json.loads((root/'assignment.json').read_text())['start']['assignments'])==2
@@ -88,7 +88,7 @@ else:raise AssertionError(args)
             pass
 
 
-@pytest.mark.parametrize("mode", ["success", "empty_assignment", "startup_failure", "missing_compiler"])
+@pytest.mark.parametrize("mode", ["success", "empty_assignment", "startup_failure", "missing_compiler", "registration_failure"])
 def test_smoke_waits_for_registration_reports_failures_and_stops_supervisor(smoke, mode):
     work, env = smoke
     # A stale marker must never make a failed check look successful.
@@ -106,8 +106,8 @@ def test_smoke_waits_for_registration_reports_failures_and_stops_supervisor(smok
         assert (work / "supervisor-stopped").exists(), result.stderr
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
-        if mode != "missing_compiler":
-            assert int((work / "assigned-after-polls").read_text()) >= 3
+        if mode not in ("missing_compiler", "registration_failure"):
+            assert (work / "workers-ready").exists()
     if mode == "success":
         assert result.returncode == 0, result.stderr
         assert (work / "smoke.result").read_text().strip() == "passed"
@@ -119,6 +119,7 @@ def test_smoke_waits_for_registration_reports_failures_and_stops_supervisor(smok
         assert result.returncode != 0
         assert not (work / "smoke.result").exists()
         expected = {
+            "registration_failure": "waiting for worker registration",
             "empty_assignment": "assigning sampler and evaluator",
             "startup_failure": "starting services",
             "missing_compiler": "validating Symbolica runtime",

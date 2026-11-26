@@ -1,4 +1,4 @@
-# CPU workers and both groups' walltime inherit [cluster.worker].
+# CPU workers and both groups' walltime inherit [worker].
 # The GPU group retains an explicit host CPU/memory allowance.
 replacements = { gpu_workers = 1, gpu_prefix = "gpu", gpu_kind = "rtx4090:1", gpu_cores = 4, gpu_mem = "16G", cpu_workers = 4, cpu_prefix = "cpu" }
 

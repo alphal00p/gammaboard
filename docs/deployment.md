@@ -148,7 +148,10 @@ gb --instance /srv/board/instance.toml restart --allowed-origin https://board.ex
 ```
 
 The flag does not edit the file. Reload replaces both origin settings from the
-file, discarding these invocation-only additions. For Vite development, the
+file, discarding these invocation-only additions.
+Slurm deployments use frozen generated files: edit the source instance and use the
+helper's [`reload-origins`](../ops/slurm/README.md#browser-origin-reload) command to
+copy only browser policy into the control snapshot before invoking the API. For Vite development, the
 default loopback policy covers its changing port; see
 [dashboard development](../dashboard/README.md).
 

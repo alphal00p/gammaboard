@@ -42,7 +42,8 @@ def instance_definition():
     data = copy.deepcopy(tomllib.loads(path.read_text()))
     if data.get("externally_managed") is not True:
         raise ValueError("the HPC instance must set externally_managed = true")
-    data.pop("execution", None)
+    if "execution" in data:
+        raise ValueError("remove obsolete execution settings; use externally_managed = true")
     for key in ("state_dir", "log_dir", "temp_dir", "template_dir"):
         data["paths"][key] = str((path.parent / data["paths"][key]).resolve())
     data["paths"]["resource_roots"] = [str((path.parent / root).resolve()) for root in data["paths"].get("resource_roots", [])]
@@ -81,9 +82,13 @@ def template_root(workspace):
 
 def seed_templates(workspace):
     target = template_root(workspace)
-    if not target.exists():
-        shutil.copytree(OPS_ROOT.parents[1] / "resources/templates/tasks", target / "tasks")
-        shutil.copytree(OPS_ROOT / "resources/templates/nodes", target / "nodes")
+    for name, source in (
+        ("tasks", OPS_ROOT.parents[1] / "resources/templates/tasks"),
+        ("nodes", OPS_ROOT / "resources/templates/nodes"),
+    ):
+        if not (target / name).exists():
+            shutil.copytree(source, target / name)
+    if not (target / "runs").exists():
         install_examples(workspace)
 
 def install_examples(workspace):

@@ -8,8 +8,9 @@ import signal
 import subprocess
 import threading
 import time
+import tomllib
 
-from .deployment import Deployments, digest, owns, write_json
+from .deployment import Deployments, digest, execution_digest, owns, write_json
 
 from .slurm import SHUTDOWN_SECONDS, SchedulerError
 
@@ -38,7 +39,14 @@ def container_command(manifest, command, gpu=False):
         if digest(manifest[name + "_config"]) != manifest[name + "_digest"]:
             raise RuntimeError("deployment configuration snapshot was modified")
     for path_key,digest_key in [("instance_file","instance_digest"),("job_env_file","job_env_digest"),("client_instance_file","client_digest"),("worker_instance_file","worker_digest")]:
-        if manifest.get(path_key) and digest(manifest[path_key]) != manifest[digest_key]:
+        if not manifest.get(path_key):
+            continue
+        if path_key == "instance_file" and manifest.get("instance_execution_digest"):
+            actual = execution_digest(tomllib.loads(Path(manifest[path_key]).read_text()))
+            expected = manifest["instance_execution_digest"]
+        else:
+            actual, expected = digest(manifest[path_key]), manifest[digest_key]
+        if actual != expected:
             raise RuntimeError(f"deployment {path_key} snapshot was modified")
     if digest(image["path"]) != image["sha256"]:
         raise RuntimeError("pinned image was modified")

@@ -40,11 +40,6 @@ Stage: builder
     if [ '@FAMILY@' = gammaboard ]; then
         install -m755 "${CARGO_TARGET_DIR}/release/gb" /out/gb
         strip --strip-unneeded /out/gb
-        cargo install sqlx-cli --version 0.8.6 --locked --no-default-features --features rustls,postgres --root "${build_cache}/sqlx"
-        mkdir -p /out/sqlx/bin
-        install -m755 "${build_cache}/sqlx/bin/sqlx" /out/sqlx/bin/sqlx
-        strip --strip-unneeded /out/sqlx/bin/sqlx
-        cp -a migrations /out/migrations
         cd dashboard
         frontend_started="$(date +%s)"
         npm ci --cache /cache/npm
@@ -69,9 +64,7 @@ Stage: runtime
     mv /opt/service-build/@FAMILY@ /usr/local/bin/@FAMILY@
     if [ '@FAMILY@' = gammaboard ]; then
         mv /opt/service-build/gb /usr/local/bin/gb
-        mv /opt/service-build/sqlx/bin/sqlx /usr/local/bin/sqlx
         mkdir -p /usr/local/share/gammaboard
-        mv /opt/service-build/migrations /usr/local/share/gammaboard/migrations
         mv /opt/service-build/dashboard /usr/local/share/gammaboard/dashboard
     fi
     mv /opt/service-build/toolchain.txt /opt/service-build/builder-packages.txt /usr/local/share/build/
@@ -80,7 +73,6 @@ Stage: runtime
 %environment
     export PATH=/usr/local/bin:$PATH
     export TZ=Etc/UTC
-    export GAMMABOARD_MIGRATIONS_DIR=/usr/local/share/gammaboard/migrations
 
 %runscript
     exec "$@"

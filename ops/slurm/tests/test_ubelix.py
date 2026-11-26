@@ -214,7 +214,7 @@ def test_running_down_only_cancels_its_own_jobs(workspace, monkeypatch):
     api.request.side_effect=request
     monkeypatch.setattr(u, "Api", lambda *_: api)
     u.down(
-        u.parser().parse_args(["down", "--worker-timeout", "0", "--cancel-timeout", "1"]), scheduler
+        u.parser().parse_args(["down", "--cancel-timeout", "1"]), scheduler
     )
     api.request.assert_any_call("/v1/manage", {"operation":"stop","wait":False,"timeout_ms":None})
     assert scheduler.canceled == ["20", "10"]
@@ -248,7 +248,8 @@ def test_custom_tunnel_origin_and_private_configuration_are_snapshotted(workspac
     store = Deployments(workspace, 10)
     config = store.configuration(False, 9000)
     manifest = store.create(store.image(), config, False, False, password="private-password")
-    assert manifest["origins"] == ["http://localhost:9000", "http://127.0.0.1:9000"]
+    assert manifest["origins"] == []
+    assert store.configuration(False, 8080)["hash"] == config["hash"]
     assert "private" in Path(manifest["server_config"]).read_text()
     assert "9000:compute-a:4010" in u.tunnel_command("compute-a", 9000, 10)
     credentials = runtime.directory(manifest) / "launcher-auth.json"
@@ -514,7 +515,7 @@ def test_force_down_works_without_api_and_waits_for_workers_before_control(works
     scheduler.jobs["30"] = Job("30", "unrelated-job", "RUNNING", "other", "")
     monkeypatch.setattr(u, "Api", Mock(side_effect=OSError("API unreachable")))
     with pytest.raises(RuntimeError, match="down --force"):
-        u.down(u.parser().parse_args(["down", "--worker-timeout", "0"]), scheduler)
+        u.down(u.parser().parse_args(["down"]), scheduler)
     assert scheduler.canceled == []
     assert Deployments(workspace, 0).load()["state"] == "stopping"
     cancel = scheduler.cancel
@@ -905,3 +906,107 @@ def test_control_signal_keeps_cleanup_handshake_alive(workspace, monkeypatch):
     assert u.run_control(argparse_args(manifest=str(runtime.directory(manifest)/"manifest.json")),scheduler)==0
     assert acknowledged==["signal-stop"]
     process.terminate.assert_called_once()
+
+
+@pytest.fixture
+def explicit_workspace(workspace, monkeypatch):
+    path = settings.OPS_ROOT / "instance.toml"
+    raw = (settings.OPS_ROOT / "examples/gammaboard.toml").read_text()
+    path.write_text(raw.replace("/shared/YOUR_USER/gammaboard", str(workspace)))
+    configure(instance_file=str(path), access={"ssh_target": "user@login.example"})
+    return workspace, path
+
+
+def test_forwarded_port_changes_reuse_the_same_deployment(explicit_workspace, monkeypatch):
+    workspace, path = explicit_workspace
+    scheduler = FakeSlurm()
+    monkeypatch.setattr(u, "wait_ready", fake_ready)
+    u.up(u.parser().parse_args(["up", "--local-port", "8080"]), scheduler)
+    first = Deployments(workspace, 0).load()
+    u.up(u.parser().parse_args(["up", "--local-port", "45678"]), scheduler)
+    assert Deployments(workspace, 0).load()["id"] == first["id"]
+    assert len(scheduler.submissions) == 1
+    import tomllib
+    instance = tomllib.loads(path.read_text())
+    instance["server"].update(allow_loopback_origins=False, allowed_origins=["http://localhost:8080"])
+    path.write_text(toml_dump(instance))
+    config = Deployments(workspace, 0).configuration(False, 45678)
+    assert config["instance"]["server"]["allowed_origins"] == ["http://localhost:8080"]
+    assert config["hash"] == first["config_hash"]
+
+
+def test_origin_reload_updates_only_browser_policy_and_preserves_worker_snapshots(explicit_workspace, monkeypatch):
+    import tomllib
+    workspace, source = explicit_workspace
+    manifest = create_manifest(workspace)
+    scheduler = FakeSlurm()
+    control(manifest, scheduler)
+    u.publish_client_instance(manifest, "compute-a")
+    worker = Path(manifest["worker_instance_file"]).read_bytes()
+    original = tomllib.loads(source.read_text())
+    original["server"].update(allow_loopback_origins=False, allowed_origins=["https://board.example.org"])
+    original["name"] = "unapplied-name-change"
+    source.write_text(toml_dump(original))
+    api = Mock()
+    api.request.return_value = {"allow_loopback_origins": False, "allowed_origins": ["https://board.example.org"]}
+    monkeypatch.setattr(u, "Api", lambda *_: api)
+    u.reload_origins(u.parser().parse_args(["reload-origins"]), scheduler)
+    api.request.assert_called_once_with("/v1/manage", {"operation": "reload_origins"})
+    selected = Path(manifest["instance_file"])
+    changed = tomllib.loads(selected.read_text())
+    assert changed["name"] == "cluster-demo"
+    assert changed["server"]["allow_loopback_origins"] is False
+    assert changed["server"]["allowed_origins"] == ["https://board.example.org"]
+    assert Path(manifest["worker_instance_file"]).read_bytes() == worker
+    runtime.container_command(manifest, ["gammaboard", "build-info"])
+    changed["server"]["api_port"] += 1
+    selected.write_text(toml_dump(changed))
+    with pytest.raises(RuntimeError, match="snapshot"):
+        runtime.container_command(manifest, [])
+    with pytest.raises(RuntimeError, match="snapshot"):
+        u.reload_origins(u.parser().parse_args(["reload-origins"]), scheduler)
+
+
+def test_origin_reload_rolls_back_rejection_but_retains_unknown_outcome(explicit_workspace, monkeypatch):
+    import tomllib
+    import urllib.error
+    workspace, source = explicit_workspace
+    manifest = create_manifest(workspace)
+    scheduler = FakeSlurm()
+    control(manifest, scheduler)
+    selected = Path(manifest["instance_file"])
+    before = tomllib.loads(selected.read_text())
+    instance = tomllib.loads(source.read_text())
+    instance["server"]["allowed_origins"] = ["*"]
+    source.write_text(toml_dump(instance))
+    api = Mock()
+    monkeypatch.setattr(u, "Api", lambda *_: api)
+    api.request.side_effect = urllib.error.HTTPError("http://compute/api", 400, "invalid origin", {}, None)
+    with pytest.raises(urllib.error.HTTPError):
+        u.reload_origins(u.parser().parse_args(["reload-origins"]), scheduler)
+    assert tomllib.loads(selected.read_text()) == before
+    instance["server"]["allowed_origins"] = ["https://board.example.org"]
+    source.write_text(toml_dump(instance))
+    api.request.side_effect = urllib.error.URLError("lost response")
+    with pytest.raises(RuntimeError, match="outcome unknown"):
+        u.reload_origins(u.parser().parse_args(["reload-origins"]), scheduler)
+    assert tomllib.loads(selected.read_text())["server"]["allowed_origins"] == ["https://board.example.org"]
+
+
+def test_helper_commands_leave_worker_management_to_gb():
+    for command in ["submit-workers", "watch-requests"]:
+        with pytest.raises(SystemExit):
+            u.parser().parse_args([command])
+    for args in [["up", "--single-node"], ["up", "--fresh-db"], ["down", "--worker-timeout", "0"]]:
+        with pytest.raises(SystemExit):
+            u.parser().parse_args(args)
+    assert u.parser().parse_args(["up", "--restore-workers"]).resume_workers
+
+
+def test_seeding_an_existing_empty_template_directory(workspace):
+    target = settings.template_root(workspace)
+    target.mkdir(parents=True)
+    settings.seed_templates(workspace)
+    assert (target / "nodes/cpu-workers.toml").is_file()
+    assert (target / "runs/tetrahedron-unstratified.toml").is_file()
+    assert any((target / "tasks").iterdir())

@@ -41,7 +41,7 @@ def prepare(workspace, family, output=None, definition=None):
         if family == "gammaloop":
             value = settings.local_config().get("gammaloop_source")
             if not value:
-                raise ValueError("set gammaloop_source in local.toml to a local GammaLoop checkout")
+                raise ValueError("set gammaloop_source in the helper configuration to a local GammaLoop checkout")
             source = settings.local_path(value)
             revision = clean_revision(source)
     identifier = uuid.uuid4().hex
