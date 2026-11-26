@@ -34,7 +34,7 @@ pub enum Command {
         #[command(subcommand)]
         command: Worker,
     },
-    /// Inspect/validate client connection settings offline; service configuration is in status.
+    /// Inspect client settings or reload selected service settings.
     Config {
         #[command(subcommand)]
         command: Config,
@@ -178,7 +178,7 @@ pub enum Run {
     },
     Wait {
         run: String,
-        #[arg(long,default_value="ready",value_parser=["ready","idle","completed"])]
+        #[arg(long,default_value="completed",value_parser=["ready","idle","completed"])]
         until: String,
         #[arg(long, default_value_t = 1)]
         evaluators: usize,
@@ -211,9 +211,8 @@ pub enum Run {
         /// Reuse this key to safely recover creation after a lost response.
         #[arg(long)]
         request_id: Option<String>,
-        #[arg(long, requires = "start")]
-        wait_for_workers: bool,
-        #[arg(long, requires="wait_for_workers", default_value="60s", value_parser=parse_duration)]
+        /// Wait for compatible workers; 0 makes a single start attempt.
+        #[arg(long, requires="start", default_value="10s", value_parser=parse_worker_timeout)]
         timeout: Duration,
         #[arg(long)]
         name: Option<String>,
@@ -232,9 +231,8 @@ pub enum Run {
     #[command(alias = "resume")]
     Start {
         run: String,
-        #[arg(long)]
-        wait_for_workers: bool,
-        #[arg(long, requires="wait_for_workers", default_value="60s", value_parser=parse_duration)]
+        /// Wait for compatible workers; 0 makes a single start attempt.
+        #[arg(long, default_value="10s", value_parser=parse_worker_timeout)]
         timeout: Duration,
         #[arg(long)]
         max_evaluators: Option<usize>,
@@ -380,6 +378,11 @@ pub enum LaunchRequest {
 pub enum Config {
     Show,
     Validate,
+    /// Reload browser origins from the service's deployment file without restarting.
+    Reload {
+        #[arg(long, required = true)]
+        origins: bool,
+    },
 }
 #[derive(Debug, Subcommand)]
 pub enum Db {
@@ -512,6 +515,14 @@ pub enum Control {
 }
 
 pub fn parse_duration(raw: &str) -> Result<Duration, String> {
+    parse_duration_with_min(raw, 0.001)
+}
+
+fn parse_worker_timeout(raw: &str) -> Result<Duration, String> {
+    parse_duration_with_min(raw, 0.0)
+}
+
+fn parse_duration_with_min(raw: &str, minimum: f64) -> Result<Duration, String> {
     let (number, scale) = if let Some(n) = raw.strip_suffix("ms") {
         (n, 0.001)
     } else if let Some(n) = raw.strip_suffix('s') {
@@ -525,8 +536,11 @@ pub fn parse_duration(raw: &str) -> Result<Duration, String> {
         .parse::<f64>()
         .map_err(|_| "expected a duration such as 250ms, 30s, or 2m")?
         * scale;
-    if !seconds.is_finite() || !(0.001..=86400.0).contains(&seconds) {
-        return Err("duration must be between 1ms and 24h".into());
+    if !seconds.is_finite() || !(minimum..=86400.0).contains(&seconds) {
+        return Err(format!(
+            "duration must be between {}ms and 24h",
+            minimum * 1000.0
+        ));
     }
     Ok(Duration::from_secs_f64(seconds))
 }
@@ -575,9 +589,12 @@ pub async fn execute(cli: Cli) -> Result<()> {
         );
     }
     let connection = cli.connection()?;
-    if let Command::Config { command } = &cli.command {
+    if let Command::Config { command } = &cli.command
+        && !matches!(command, Config::Reload { .. })
+    {
         Client::new(&connection.endpoint, None)?;
         return match command {
+            Config::Reload { .. } => unreachable!(),
             Config::Show => print_value(&serde_json::to_value(&connection)?, cli.json),
             Config::Validate => {
                 connection.validate()?;
@@ -595,6 +612,9 @@ pub async fn execute(cli: Cli) -> Result<()> {
     let mut worker_wait = None;
     let request = match cli.command {
         Command::Status => Request::Status {},
+        Command::Config {
+            command: Config::Reload { .. },
+        } => Request::ReloadOrigins {},
         Command::BuildInfo { server: true } => Request::BuildInfo {},
         Command::Control {
             command: Control::AcknowledgeCleanup { request_id },
@@ -660,7 +680,6 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Run::Create {
                 file,
                 request_id,
-                wait_for_workers,
                 timeout,
                 name,
                 start,
@@ -674,7 +693,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
                         "--export-path must be absolute on the deployment"
                     );
                 }
-                worker_wait = wait_for_workers.then_some(timeout);
+                worker_wait = (start && !timeout.is_zero()).then_some(timeout);
                 Request::RunCreate {
                     request_id,
                     duplicate: false,
@@ -690,10 +709,9 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Run::Start {
                 run,
                 max_evaluators,
-                wait_for_workers,
                 timeout,
             } => {
-                worker_wait = wait_for_workers.then_some(timeout);
+                worker_wait = (!timeout.is_zero()).then_some(timeout);
                 Request::RunStart {
                     run,
                     max_evaluators,
@@ -941,7 +959,9 @@ pub async fn execute(cli: Cli) -> Result<()> {
         Command::Start(_)
         | Command::Restart(_)
         | Command::Local { .. }
-        | Command::Config { .. }
+        | Command::Config {
+            command: Config::Show | Config::Validate,
+        }
         | Command::BuildInfo { server: false }
         | Command::Completion { .. } => unreachable!(),
     };
@@ -1137,6 +1157,21 @@ pub fn print_value(value: &Value, json: bool) -> Result<()> {
         }
     } else if let Some(object) = value.as_object() {
         for (key, value) in object {
+            if key == "dashboard_url" {
+                use std::io::IsTerminal;
+                let link = value
+                    .as_str()
+                    .map(|url| {
+                        terminal_link(
+                            url,
+                            std::io::stdout().is_terminal()
+                                && std::env::var("TERM").as_deref() != Ok("dumb"),
+                        )
+                    })
+                    .unwrap_or_else(|| "not served".into());
+                println!("Dashboard: {link}");
+                continue;
+            }
             println!(
                 "{key}: {}",
                 value
@@ -1157,6 +1192,18 @@ pub fn print_value(value: &Value, json: bool) -> Result<()> {
 
     Ok(())
 }
+/// OSC 8 in interactive terminals; readable URLs in redirected output.
+fn terminal_link(value: &str, interactive: bool) -> String {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return value.into();
+    };
+    if interactive && matches!(url.scheme(), "http" | "https") {
+        format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\")
+    } else {
+        value.into()
+    }
+}
+
 pub fn write_output(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let parent = path

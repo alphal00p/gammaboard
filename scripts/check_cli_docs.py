@@ -16,6 +16,7 @@ CLIENT = rf'(?<![\w-])(?:\./)?gb{GLOBAL_FLAGS}'
 OBSOLETE = re.compile(
     SERVICE + r'(?:deploy\b|server\b|run\s|node\s+(?:list|start|stop|assign)\b)'
     + '|'
+    + r'--wait-for-workers\b|'
     + CLIENT + r'(?:db\s+status\b|local\s+(?:db\s+start|check-config|check-run)\b'
     r'|worker\s+(?:launch-request\b|list\b[^`\n]*--offline\b)'
     r'|run\s+(?:resume\b|task\s+inspect\b|results\b[^`\n]*--output\b'

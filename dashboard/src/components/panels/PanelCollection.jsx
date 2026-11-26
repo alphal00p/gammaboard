@@ -219,18 +219,6 @@ const estimateSeriesLabel = (label, points) => {
   const estimator = estimatorCaption(points);
   return estimator ? `${label} (${estimator})` : label;
 };
-const buildMultiSeriesData = (seriesList) => {
-  const rows = new Map();
-  for (const series of asArray(seriesList)) {
-    for (const point of asArray(series.points)) {
-      const row = rows.get(point.x) || { x: point.x };
-      row[series.id] = point.y;
-      rows.set(point.x, row);
-    }
-  }
-  return Array.from(rows.values()).sort((a, b) => a.x - b.x);
-};
-
 const historyXAxisValueForPoint = (point, mode, nativeAxis) => {
   const raw = mode === nativeAxis
     ? point?.x
@@ -610,8 +598,8 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
     points: remapAndSortTimeseriesPoints(item?.points, historyXAxisMode, nativeAxis),
   }));
   const { selected, onLegendChanged } = useTimeseriesLegend(panelId, value, onValueChange);
-  const data = buildMultiSeriesData(series);
-  const xDomain = state?.x_range ?? fitXDomain(data.map((row) => row.x));
+  const points = series.flatMap((item) => item.points);
+  const xDomain = state?.x_range ?? fitXDomain(points.map((point) => point.x));
   const zoomRange = useMemo(() => readZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const yZoomRange = useMemo(() => readYZoomFromPanelValue(value, FULL_ZOOM), [value]);
   const visibleXRange = visibleXRangeFromZoom(xDomain, zoomRange);
@@ -628,7 +616,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
     const next = { start: Math.max(0, 100 - width), end: 100 };
     if (!zoomRangeChanged(normalized, next)) return;
     onValueChange(panelId, writeZoomPanelValue(value, next, true), false);
-  }, [isHistoryPanel, onValueChange, panelId, data.length, tailPinned, value, zoomRange]);
+  }, [isHistoryPanel, onValueChange, panelId, points.length, tailPinned, value, zoomRange]);
   const onDataZoom = useMemo(
     () => ({
       legendselectchanged: onLegendChanged,
@@ -714,7 +702,7 @@ const MultiTimeseriesPanel = ({ title, state, value = undefined, onValueChange =
     }),
     [domain, historyXAxisMode, panelId, percentAxis, series, usesTimestampXAxis, xAxisOriginMs, xDomain, yZoomRange, zoomRange, selected],
   );
-  if (data.length === 0) return null;
+  if (points.length === 0) return null;
   return (
     <Card variant="outlined">
       <CardContent>

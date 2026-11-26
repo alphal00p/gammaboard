@@ -14,7 +14,8 @@ are documented in the [CLI reference](local-cli.md).
 Authenticate with `Authorization: Bearer TOKEN` or the dashboard session cookie.
 `POST /api/auth/login` accepts `{ "password": "..." }` and returns a token.
 `POST /api/auth/session` checks browser access and makes browsers send their Origin,
-including through same-origin proxies. Browser origins are configured explicitly;
+including through same-origin proxies. Loopback HTTP(S) origins on any port are trusted by default; other origins require
+an exact allowlist entry. Set `server.allow_loopback_origins = false` for an exact-only policy;
 see [deployment access](deployment.md#authentication-and-browser-access).
 
 | Endpoint family | Purpose |
@@ -28,6 +29,20 @@ see [deployment access](deployment.md#authentication-and-browser-access).
 Offline probes and database administration use `gb local`; the management protocol
 accepts no local-execution override. `status.database` includes reachability and
 schema version; status also includes effective deployment configuration.
+
+## Reload browser origins
+
+```json
+{"operation":"reload_origins"}
+```
+
+Rereads the service's deployment file and atomically replaces only
+`server.allowed_origins` and `server.allow_loopback_origins`, returning those two
+effective fields. The same authentication and current origin policy as other
+management operations apply. Invalid configuration leaves the current policy
+unchanged. No processes restart; status reflects the new policy. `gb config reload
+--origins` invokes this operation. Invocation-only origins from startup are replaced
+by the file's settings. The request accepts no client-supplied path or policy.
 
 ## Runs and retry receipts
 
@@ -55,7 +70,12 @@ guarantee.
 `run_start` returns `run_id` and `start`. `started` confirms admission of the complete
 worker group; readiness is separate. `blocked` includes code `workers_unavailable`,
 `retryable: true` and an availability summary. It holds no partial group and queues
-no durable start. `gb run start --wait-for-workers` polls admission until its deadline.
+no durable start. The CLI polls blocked admission automatically for `run start` and
+`run create --start`, with a default `--timeout 10s`. Use `--timeout 0` for a single
+attempt or a larger value for a longer wait. Creation is never repeated by this
+polling: subsequent attempts use `run_start` with the created run ID. Exhaustion
+returns `start.state = "timed_out"` and a nonzero CLI exit; no background start is
+queued. The API itself continues to return each admission attempt immediately.
 
 Creation may return `not_requested`; unsuccessful execution may return `failed`.
 The CLI additionally reports `timed_out` or `unknown` when waiting expires or an

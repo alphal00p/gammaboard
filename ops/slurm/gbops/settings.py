@@ -7,7 +7,7 @@ import tomllib
 OPS_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = None
 PORTABLE_RUNS = (
-    "installation-smoke.toml", "tetrahedron-native.toml", "tetrahedron-tuning.toml",
+    "installation-smoke.toml", "tetrahedron-native.toml", "tetrahedron-unstratified.toml", "tetrahedron-tuning.toml",
     "tetrahedron-scan.toml", "tetrahedron-campaign.toml", "support/tetrahedron-trial.toml",
 )
 

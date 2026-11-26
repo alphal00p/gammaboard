@@ -115,7 +115,7 @@ def test_templates_are_seeded_once_and_dashboard_edits_survive_new_deployments(w
     assert (templates / "runs/installation-smoke.toml").is_file()
     assert (templates / "nodes/cpu-workers.toml").is_file()
     assert {path.name for path in (templates / "runs").glob("*.toml")} == {
-        "installation-smoke.toml", "tetrahedron-native.toml", "tetrahedron-tuning.toml",
+        "installation-smoke.toml", "tetrahedron-native.toml", "tetrahedron-unstratified.toml", "tetrahedron-tuning.toml",
         "tetrahedron-scan.toml", "tetrahedron-campaign.toml",
     }
     assert (templates / "runs/support/tetrahedron-trial.toml").is_file()

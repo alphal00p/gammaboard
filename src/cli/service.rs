@@ -59,7 +59,7 @@ pub fn atomic_json(path: &Path, value: &impl serde::Serialize, overwrite: bool) 
     }
     Ok(())
 }
-fn client(instance: &Instance) -> Result<Client> {
+fn service_url(instance: &Instance) -> String {
     let host = match instance.server.api_host {
         std::net::IpAddr::V4(ip) if ip.is_unspecified() => "127.0.0.1".into(),
         std::net::IpAddr::V6(ip) => format!(
@@ -72,8 +72,11 @@ fn client(instance: &Instance) -> Result<Client> {
         ),
         ip => ip.to_string(),
     };
+    format!("http://{host}:{}", instance.server.api_port)
+}
+fn client(instance: &Instance) -> Result<Client> {
     Client::new(
-        &format!("http://{host}:{}", instance.server.api_port),
+        &service_url(instance),
         gammaboard::server::bootstrap_token(&instance.server)?,
     )
 }
@@ -206,6 +209,14 @@ pub async fn start(instance: &Instance, args: StartArgs, allowed: bool) -> Resul
         status["request_ids"] = json!(ids);
         shared::print_json(&status);
         return Ok(());
+    }
+    // Diagnose missing tools in the caller before spawning a detached service.
+    if instance.managed_database {
+        gammaboard::local_db::require_commands(if args.component.as_deref() == Some("server") {
+            &["pg_ctl"]
+        } else {
+            &["initdb", "pg_ctl"]
+        })?;
     }
     // An unreachable live owner must not be replaced based on a failed HTTP probe.
     drop(
@@ -347,10 +358,12 @@ pub fn stop_database(instance: &Instance) -> Result<()> {
 
 struct Service {
     instance: Instance,
+    origins: gammaboard::server::origins::BrowserOrigins,
     store: PgStore,
     owner: String,
     request_ids: Vec<String>,
     ready: bool,
+    dashboard: bool,
     exit: bool,
     stop_id: Option<String>,
     stop_result: Option<Value>,
@@ -364,9 +377,14 @@ struct Drain {
 }
 impl Service {
     fn status(&self) -> Value {
-        json!({"name":self.instance.name,"state":if self.exit{"closing"}else if self.drain.is_some(){"draining"}else{"running"},
+        let url = service_url(&self.instance);
+        let mut effective = self.instance.clone();
+        self.origins.snapshot().apply(&mut effective.server);
+        json!({"api_url":self.ready.then(||format!("{url}/api")),
+            "dashboard_url":(self.ready && self.dashboard).then(||format!("{url}/")),
+            "name":self.instance.name,"state":if self.exit{"closing"}else if self.drain.is_some(){"draining"}else{"running"},
             "pid":std::process::id(),"ready":self.ready,"server":!self.exit,"database_owned":self.instance.managed_database,
-            "error":self.error,"stop_id":self.stop_id,"stop_result":self.stop_result,"configuration":self.instance.redacted().ok(),
+            "error":self.error,"stop_id":self.stop_id,"stop_result":self.stop_result,"configuration":effective.redacted().ok(),
             "request_ids":self.request_ids,"waiting_for_runs":self.drain.as_ref().map(|d|&d.runs)})
     }
     async fn publish(&self) -> Result<()> {
@@ -511,12 +529,19 @@ async fn serve(instance: Instance, args: StartArgs, allowed: bool) -> Result<()>
         }
     }
 
+    let dashboard = !args.api_only
+        && Path::new(&instance.server.frontend.build_dir)
+            .join("index.html")
+            .is_file();
+    let origins = gammaboard::server::origins::BrowserOrigins::new(&instance.server)?;
     let mut service = Service {
         instance: instance.clone(),
+        origins: origins.clone(),
         store: store.clone(),
         owner,
         request_ids: Vec::new(),
         ready: false,
+        dashboard,
         exit: false,
         stop_id: None,
         stop_result: None,
@@ -527,8 +552,9 @@ async fn serve(instance: Instance, args: StartArgs, allowed: bool) -> Result<()>
         store.clone(),
         instance.server.clone(),
         runtime.clone().with_local_processes(false),
-        !args.api_only,
+        dashboard,
         Some(instance.clone()),
+        origins,
     )
     .await?;
     service.publish().await?;
@@ -585,6 +611,9 @@ async fn serve(instance: Instance, args: StartArgs, allowed: bool) -> Result<()>
     }
     service.ready = true;
     service.publish().await?;
+    if dashboard {
+        println!("Dashboard: {}/", service_url(&instance));
+    }
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut tick = tokio::time::interval(Duration::from_millis(250));

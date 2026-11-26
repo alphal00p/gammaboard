@@ -7,6 +7,7 @@ pub(super) async fn get_settings_overview(
     State(state): State<AppState>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let runtime_config = state.runtime.runtime_config();
+    let origins = state.origins.snapshot();
     json_response(serde_json::json!({
         "repository": { "url": REPOSITORY_URL },
         "paths": {
@@ -46,8 +47,8 @@ pub(super) async fn get_settings_overview(
             "secure_cookie": state.secure_cookie,
             "auth_enabled": state.auth.is_some(),
             "allow_local_node_spawn": state.allow_local_node_spawn,
-            "allowed_origins": state.allowed_origins.iter()
-                .filter_map(|origin| origin.to_str().ok()).collect::<std::collections::BTreeSet<_>>(),
+            "allowed_origins": origins.allowed_origins,
+            "allow_loopback_origins": origins.allow_loopback_origins,
         },
     }))
 }

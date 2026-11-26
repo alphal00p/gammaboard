@@ -731,6 +731,8 @@ sampler = { config = { kind = "naive_monte_carlo", seed = 1234 } }
             "run",
             "wait",
             "metrics-inspection",
+            "--until",
+            "ready",
             "--evaluators",
             "1",
             "--timeout",

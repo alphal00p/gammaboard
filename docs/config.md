@@ -128,8 +128,8 @@ Raw `image` and `plot_line` tasks accept `accumulator = { components = ["x", "y"
 for named vector outputs. The compact `"scalar"` form means `["value"]`; `"vector"`
 means the complex pair `["real", "imag"]`. Images provide one selector for components
 and the full vector magnitude; complex phase is offered only for real/imag output.
-Use a task-local evaluator projection, as in the tetrahedron's `xy-phase` task,
-when a complex view is wanted for part of a higher-dimensional output.
+Use a task-local evaluator returning `real` and `imag` when a complex view is
+wanted for part of a higher-dimensional output.
 
 ### Checkpoint policy
 
@@ -333,8 +333,9 @@ stratum prefix. Every complete prefix is inspected, including ragged/sparse labe
 The saved source determines the partition and training projection. Diagnostic
 statistics start fresh and do not modify the source or publish a new integral.
 
-For two-dimensional inputs, the [native tetrahedron card](../resources/templates/runs/tetrahedron-native.toml)
-includes complete line and plane PDF tasks that can be copied into another run.
+The [native tetrahedron card](../resources/templates/runs/tetrahedron-native.toml)
+contains a complete 1D PDF line task. For two-dimensional inputs, use the plane
+geometry form above with matching two-entry coordinate vectors.
 [PDF inspection](operations.md#stratum-plots-and-pdf-inspection) describes display
 controls; the [probe contract](stratification.md#stratum-plot-data-and-pdf-probes)
 defines densities, normalization and supported coordinate mappings.

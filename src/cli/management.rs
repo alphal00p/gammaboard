@@ -30,6 +30,10 @@ pub fn confirm(yes: bool, message: &str) -> Result<()> {
     Ok(())
 }
 fn command(command: &mut Command, label: &str) -> Result<()> {
+    gammaboard::local_db::require_commands(&[command
+        .get_program()
+        .to_str()
+        .context("invalid executable name")?])?;
     ensure!(
         command
             .status()
@@ -166,6 +170,7 @@ pub async fn database(instance: &Instance, args: DbArgs) -> Result<()> {
                 )?;
             }
             if let DbCommand::Restore { backup, .. } = &operation {
+                gammaboard::local_db::require_commands(&["pg_restore"])?;
                 ensure!(backup.is_file(), "backup not found: {}", backup.display());
             }
             let was_running = if instance.managed_database {

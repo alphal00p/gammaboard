@@ -9,7 +9,9 @@ builds and runs the client; installed binaries are invoked as `gb`.
 | `gammaboard` | Service, worker runtime and offline utilities |
 | `gb local` | Commands within `gb` that invoke the local `gammaboard` executable |
 
-`gb start` and `gb restart` also invoke the local executable. Ordinary management
+In a checkout, the `./gb` wrapper also prepares frontend dependencies and assets
+for `start`/`restart` when needed; `--api-only` and `start db` skip frontend work.
+`gb start` and `gb restart` invoke the local runtime executable. Ordinary management
 commands, including `gb stop`, act through the API. Workers communicate directly
 with PostgreSQL. See [setup](quickstart.md) for a first run and
 [deployment](deployment.md) for installation, instance settings and browser access.
@@ -36,6 +38,13 @@ gb --instance ./client.toml config validate
 gb --endpoint https://board.example.org auth login --password-stdin --output session.token
 ```
 
+`gb config reload --origins` asks the running service to reread its deployment
+file's `server.allowed_origins` and `server.allow_loopback_origins`. It applies only
+browser-origin settings without restarting; `gb status` shows the effective
+configuration. Loopback HTTP(S) origins on any port are trusted by default; shared
+deployments can set `allow_loopback_origins = false` and use exact origins.
+See [browser access](deployment.md#authentication-and-browser-access).
+
 Login reads the password from stdin and writes a private token file without
 replacing an existing file. It does not require an existing token.
 
@@ -54,6 +63,8 @@ gb stop --wait
 
 - `start` provisions a managed database and starts the control/API service. It
   serves dashboard assets when available. `--api-only` disables static serving.
+  Startup prints a clickable `Dashboard: http://…/` link when the frontend is
+  served. JSON output includes `dashboard_url` (`null` when unavailable) and `api_url`.
 - `start db` starts only PostgreSQL. `start server` uses the configured running
   database. `--foreground` keeps the service attached for a process manager.
 - `--workers N` submits a request for **N additional workers** using the instance's
@@ -94,10 +105,10 @@ Run references accept an ID or an unambiguous name. Use IDs when names repeat.
 ```bash
 gb run list
 gb run inspect RUN
-gb run create ./run.toml --start --max-evaluators 4
-gb run start RUN --wait-for-workers --timeout 60s
+gb run create ./run.toml --start --max-evaluators 5
+gb run start RUN --timeout 2m
 gb run wait RUN --until ready --timeout 2m
-gb run wait RUN --until completed --timeout 10m
+gb run wait RUN --timeout 10m
 gb run pause RUN
 gb run results RUN
 gb run results RUN --task TASK_ID
@@ -106,19 +117,36 @@ gb run remove RUN --dry-run
 gb run remove RUN --yes
 ```
 
-`--max-evaluators` is a ceiling. Starting admits a complete compatible worker group;
-`run wait --until ready` waits for execution readiness. Completion can precede worker
-release, so use `--wait-for-workers` when starting sequential runs. Its timeout
-leaves no background queued start. `run wait --until idle` checks assignment release.
+For a standalone integration, six workers allow one sampler/aggregator and five
+evaluators. `--max-evaluators` is a ceiling; omit it to use compatible free capacity. Starting admits a complete compatible worker group;
+`run start` and `run create --start` automatically retry blocked admission for up to
+**10 seconds**, allowing workers from a completed run to finish releasing their
+assignments. Use `--timeout 0` for one immediate attempt or `--timeout 2m` for a
+longer wait. This timeout controls worker admission, not run completion; it never
+leaves a background queued start. Only unavailable compatible capacity is retried.
+With `run create`, an explicit `--timeout` requires `--start`.
+
+`run wait RUN` defaults to successful completion and has its own **60-second**
+timeout; use `--timeout 5m` for longer computations. Timing out does not stop the run.
+
+| `--until` | Condition |
+| --- | --- |
+| `completed` (default) | All tasks completed successfully; worker release can still be in progress. |
+| `ready` | An active task, one sampler/aggregator, exactly `--evaluators` active evaluators (default 1), and fresh performance reports. |
+| `idle` | No live workers actively assigned or instructed to execute this run; this also includes paused, failed, and never-started runs. |
+
+`--max-age` (default `10s`) controls report freshness for `ready`. Failed tasks make
+`ready` and `completed` fail; `idle` does not assert successful completion.
 
 Creation can succeed while starting fails. The receipt retains `created.run_id`,
-and the CLI exits nonzero after printing the unsuccessful start status. Retry that
+and the CLI exits nonzero after printing the unsuccessful start status (`blocked`
+for an immediate attempt, `timed_out` after exhausting the worker wait). Retry that
 run with `run start ID`. To recover safely after losing the entire creation response,
 reuse an explicit `--request-id` with identical input:
 
 ```bash
 gb --json run create ./run.toml --request-id experiment-007 \
-  --start --wait-for-workers --timeout 60s
+  --start --timeout 2m
 ```
 
 Names do not deduplicate creation. See [API receipts](management-api.md#runs-and-retry-receipts)

@@ -425,7 +425,7 @@ defines ordering, replay, notification retries and artifact responsibilities.
 | Symptom | Check |
 | --- | --- |
 | Port in use | Stop the conflicting service or choose distinct ports in the instance file |
-| Browser access rejected | Configure its [exact browser origin](deployment.md#authentication-and-browser-access) |
+| Browser access rejected | Update and reload the [browser-origin policy](deployment.md#authentication-and-browser-access) |
 | No workers start | Launch-request errors, capacity, and external launcher availability |
 | Run stops progressing | Task errors, worker leases, oldest unfinished batch, and database latency |
 | Worker/task failure | Dashboard Logs, then local worker or Slurm stderr |

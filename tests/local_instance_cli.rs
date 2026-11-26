@@ -654,19 +654,40 @@ fn authenticated_client_and_static_dashboard() {
         }),
         "local instance test"
     );
+    runtime.block_on(async {
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/api/v1/manage"))
+            .header("Origin", "http://localhost:39491")
+            .json(&serde_json::json!({"operation":"reload_origins"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "http://localhost:39491"
+        );
+    });
+    instance.ok(&[
+        "--token-file",
+        token.to_str().unwrap(),
+        "config",
+        "reload",
+        "--origins",
+    ]);
     instance.ok(&["--token-file", token.to_str().unwrap(), "stop"]);
     instance.wait_stopped();
 }
 #[cfg(feature = "symbolica")]
 #[test]
 #[ignore = "executes the native tetrahedron example with disposable services"]
-fn native_tetrahedron_three_command_workflow() {
+fn native_tetrahedron_workflow_preserves_1d_plot() {
     let instance = Instance::new();
     instance.ok(&["start", "--workers", "2", "--wait"]);
     let output = instance.root.path().join("tetrahedron.json");
     let card = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("resources/templates/runs/tetrahedron-native.toml");
-    instance.ok(&[
+    let created = instance.ok(&[
         "run",
         "create",
         card.to_str().unwrap(),
@@ -676,11 +697,72 @@ fn native_tetrahedron_three_command_workflow() {
         "--export-path",
         output.to_str().unwrap(),
     ]);
+    let run = created["created"]["run_id"].as_i64().unwrap().to_string();
+    instance.ok(&[
+        "run",
+        "wait",
+        &run,
+        "--until",
+        "completed",
+        "--timeout",
+        "90s",
+    ]);
+    let tasks = instance.ok(&["run", "task", "list", &run]);
+    let task = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["name"] == "components-on-line")
+        .unwrap();
+    let endpoint = instance.ok(&["status"])["api_url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let panel: Value = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        reqwest::Client::new()
+            .post(format!(
+                "{endpoint}/runs/{run}/tasks/{}/output",
+                task["id"].as_str().unwrap()
+            ))
+            .json(&serde_json::json!({"section":"result","phase":"current"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    });
+    let plot = panel["updates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|update| update["panel"]["panel_id"] == "line_components")
+        .expect("completed line task must retain its plotted values");
+    let series = plot["panel"]["series"].as_array().unwrap();
+    assert_eq!(series.len(), 3);
+    for component in series {
+        let points = component["points"].as_array().unwrap();
+        assert_eq!(points.len(), 1025);
+        for point in points {
+            let t = point["x"].as_f64().unwrap();
+            let x = (8.0 * (2.0 * std::f64::consts::PI * t).cos()).tanh();
+            let y = (8.0 * (2.0 * std::f64::consts::PI * t).sin()).tanh();
+            let expected = match component["id"].as_str().unwrap() {
+                "x" => x,
+                "y" => y,
+                "z" => x * y,
+                _ => panic!("unexpected component"),
+            };
+            assert!((point["y"].as_f64().unwrap() - expected).abs() < 1e-12);
+        }
+    }
     instance.ok(&["stop", "--wait", "--timeout", "90s"]);
     instance.wait_stopped();
     let result: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
     assert_eq!(result["run"]["lifecycle_state"], "completed");
-    assert_eq!(result["tasks"].as_array().unwrap().len(), 7);
+    assert_eq!(result["tasks"].as_array().unwrap().len(), 4);
 }
 
 #[test]
@@ -740,6 +822,8 @@ fn retry_safe_create_wait_and_archive_workflow() {
         "--start",
         "--request-id",
         "retry-safe-001",
+        "--timeout",
+        "0",
     ];
     let blocked = instance.output(&create);
     assert!(!blocked.status.success());
@@ -768,16 +852,14 @@ fn retry_safe_create_wait_and_archive_workflow() {
         "different",
     ]);
     assert!(!conflict.status.success());
+    let timed_out = instance.output(&["run", "start", &id, "--timeout", "150ms"]);
+    assert!(!timed_out.status.success());
+    let timed_out: Value = serde_json::from_slice(&timed_out.stdout).unwrap();
+    assert_eq!(timed_out["start"]["state"], "timed_out");
+    assert_eq!(timed_out["run_id"].to_string(), id);
     let waiting = instance
         .cmd()
-        .args([
-            "run",
-            "start",
-            &id,
-            "--wait-for-workers",
-            "--timeout",
-            "15s",
-        ])
+        .args(["run", "start", &id])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -790,22 +872,13 @@ fn retry_safe_create_wait_and_archive_workflow() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    instance.ok(&[
-        "run",
-        "wait",
-        &id,
-        "--until",
-        "completed",
-        "--timeout",
-        "30s",
-    ]);
+    instance.ok(&["run", "wait", &id, "--timeout", "30s"]);
     let next = instance.card("next", 1024);
     let second = instance.ok(&[
         "run",
         "create",
         next.to_str().unwrap(),
         "--start",
-        "--wait-for-workers",
         "--timeout",
         "15s",
     ]);
@@ -893,5 +966,202 @@ evaluator={{config={{kind="process_evaluator",command=["sh","-c","touch {}"]}}}}
     );
     instance.ok(&["run", "remove", &archive, "--yes"]);
     instance.ok(&["stop", "--wait"]);
+    instance.wait_stopped();
+}
+
+#[test]
+#[ignore = "owns disposable PostgreSQL and service processes"]
+fn startup_link_tracks_the_served_dashboard() {
+    let instance = Instance::new();
+    let raw = fs::read_to_string(&instance.config).unwrap();
+    fs::write(
+        &instance.config,
+        raw.replace("[server]", "[server]\nhost = '0.0.0.0'"),
+    )
+    .unwrap();
+    let started = instance.ok(&["start"]);
+    let url = started["dashboard_url"].as_str().unwrap().to_owned();
+    assert!(
+        url.starts_with("http://127.0.0.1:"),
+        "wildcard bind needs a usable browser address"
+    );
+    assert_eq!(started["api_url"], format!("{}api", url));
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let page = runtime.block_on(async { reqwest::get(&url).await.unwrap().text().await.unwrap() });
+    assert_eq!(page, "local instance test");
+    let human = Command::new(Path::new(env!("CARGO_BIN_EXE_gammaboard")).with_file_name("gb"))
+        .arg("--instance")
+        .arg(&instance.config)
+        .arg("start")
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let text = String::from_utf8(human.stdout).unwrap();
+    assert!(text.contains(&format!("Dashboard: {url}")));
+    assert!(
+        !text.contains('\x1b'),
+        "redirected output must remain plain text"
+    );
+    assert!(instance.ok(&["restart", "--api-only"])["dashboard_url"].is_null());
+    assert!(
+        instance.ok(&["start"])["dashboard_url"].is_null(),
+        "reuse must report the running mode"
+    );
+    instance.ok(&["stop"]);
+    instance.wait_stopped();
+    fs::remove_file(instance.root.path().join("dashboard/index.html")).unwrap();
+    let missing = instance.ok(&["start"]);
+    assert_eq!(missing["ready"], true);
+    assert!(missing["dashboard_url"].is_null());
+    assert!(missing["api_url"].is_string());
+    instance.ok(&["stop"]);
+    instance.wait_stopped();
+}
+
+#[test]
+fn missing_postgres_tools_are_reported_before_detached_startup() {
+    let instance = Instance::configured(false);
+    let output = instance
+        .cmd()
+        .env("PATH", instance.root.path().join("no-tools"))
+        .arg("start")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    let message = error["error"]["message"].as_str().unwrap();
+    for expected in ["initdb", "pg_ctl", "Install PostgreSQL", "PATH"] {
+        assert!(message.contains(expected), "{message}");
+    }
+    assert!(!message.contains("nix develop"));
+    assert!(!instance.root.path().join("postgres").exists());
+    assert!(!instance.root.path().join("control/status.json").exists());
+}
+
+#[test]
+#[ignore = "owns disposable services to test live browser-origin policy reload"]
+fn browser_origin_defaults_and_atomic_reload() {
+    let instance = Instance::new();
+    let raw = fs::read_to_string(&instance.config).unwrap();
+    let started = instance.ok(&[
+        "start",
+        "--workers",
+        "2",
+        "--wait",
+        "--allowed-origin",
+        "https://startup.example.org",
+    ]);
+    assert_eq!(
+        started["configuration"]["server"]["allow_loopback_origins"],
+        true
+    );
+    let endpoint = started["api_url"].as_str().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let http = reqwest::Client::new();
+    let check = |origin: &str, allowed: bool| {
+        runtime.block_on(async {
+            let response = http
+                .post(format!("{endpoint}/auth/session"))
+                .header("Origin", origin)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().is_success(), allowed, "{origin}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .and_then(|v| v.to_str().ok()),
+                allowed.then_some(origin)
+            );
+            let preflight = http
+                .request(reqwest::Method::OPTIONS, format!("{endpoint}/v1/manage"))
+                .header("Origin", origin)
+                .header("Access-Control-Request-Method", "POST")
+                .header("Access-Control-Request-Headers", "content-type")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                preflight
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .and_then(|v| v.to_str().ok()),
+                allowed.then_some(origin)
+            );
+        });
+    };
+    for origin in [
+        "http://localhost:39491",
+        "http://127.0.0.1:45678",
+        "https://[::1]:12345",
+    ] {
+        check(origin, true);
+    }
+    for origin in [
+        "https://untrusted.example",
+        "http://localhost.evil.test",
+        "null",
+    ] {
+        check(origin, false);
+    }
+    check("https://startup.example.org", true);
+    let write_policy = |settings: &str| {
+        fs::write(
+            &instance.config,
+            raw.replace("[server]", &format!("[server]\n{settings}")),
+        )
+        .unwrap();
+    };
+    write_policy("allow_loopback_origins = false\nallowed_origins = ['https://board.example.org']");
+    // Exercise a remote connection: the client does not send the deployment path.
+    let reload = || instance.ok(&["--endpoint", endpoint, "config", "reload", "--origins"]);
+    let policy = reload();
+    assert_eq!(policy["allow_loopback_origins"], false);
+    check("http://localhost:39491", false);
+    check("https://board.example.org", true);
+    check("https://startup.example.org", false);
+    let status = instance.ok(&["status"]);
+    assert_eq!(
+        status["configuration"]["server"]["allowed_origins"],
+        policy["allowed_origins"]
+    );
+    assert_eq!(instance.ok(&["start"])["pid"], started["pid"]);
+    assert_eq!(
+        instance.ok(&["worker", "list"]).as_array().unwrap().len(),
+        2
+    );
+
+    write_policy("allow_loopback_origins = true\nallowed_origins = ['*']");
+    assert!(
+        !instance
+            .output(&["config", "reload", "--origins"])
+            .status
+            .success()
+    );
+    check("http://localhost:39491", false);
+    check("https://board.example.org", true);
+    assert_eq!(
+        instance.ok(&["status"])["configuration"]["server"]["allow_loopback_origins"],
+        false
+    );
+
+    write_policy("allow_loopback_origins = true\nallowed_origins = []");
+    reload();
+    check("http://localhost:39491", true);
+    check("https://board.example.org", false);
+    assert_eq!(instance.ok(&["start"])["pid"], started["pid"]);
+    // An unrelated valid edit is never reported as applied by origin-only reload.
+    fs::write(
+        &instance.config,
+        fs::read_to_string(&instance.config)
+            .unwrap()
+            .replace("name = \"test\"", "name = \"changed\""),
+    )
+    .unwrap();
+    reload();
+    assert_eq!(instance.ok(&["status"])["configuration"]["name"], "test");
+    assert!(!instance.output(&["start"]).status.success());
+    instance.ok(&["stop"]);
     instance.wait_stopped();
 }

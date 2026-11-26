@@ -22,6 +22,7 @@ mod config_panels;
 mod histogram_export;
 mod histogram_import;
 pub mod manage;
+pub mod origins;
 mod panels;
 mod performance_panels;
 mod routes;
@@ -91,6 +92,8 @@ pub struct ServerConfig {
     pub api_port: u16,
     #[serde(default = "default_allowed_origins")]
     pub allowed_origins: Vec<String>,
+    #[serde(default = "default_allow_loopback_origins")]
+    pub allow_loopback_origins: bool,
     #[serde(default)]
     pub secure_cookie: bool,
     #[serde(default = "default_allow_local_node_spawn")]
@@ -130,6 +133,10 @@ fn default_server_name() -> String {
 
 fn default_api_port() -> u16 {
     4000
+}
+
+fn default_allow_loopback_origins() -> bool {
+    true
 }
 
 fn default_allowed_origins() -> Vec<String> {
@@ -277,7 +284,10 @@ pub async fn serve(
     config: ServerConfig,
     runtime: RuntimeContext,
 ) -> anyhow::Result<()> {
-    spawn(store, config, runtime, false, None).await?.await??;
+    let origins = origins::BrowserOrigins::new(&config)?;
+    spawn(store, config, runtime, false, None, origins)
+        .await?
+        .await??;
     Ok(())
 }
 
@@ -289,22 +299,12 @@ pub async fn spawn(
     runtime: RuntimeContext,
     dashboard: bool,
     instance: Option<crate::instance::Instance>,
+    origins: origins::BrowserOrigins,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     store
         .bind_deployment(std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok().as_deref())
         .await?;
     let bind = config.bind_addr();
-    let allowed_origins = config
-        .allowed_origins
-        .iter()
-        .map(|origin| {
-            axum::http::HeaderValue::from_str(&normalize_browser_origin(origin)?)
-                .with_context(|| format!("invalid server.allowed_origins entry={origin:?}"))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    if allowed_origins.is_empty() {
-        anyhow::bail!("server.allowed_origins must not be empty");
-    }
     let state = AppState {
         instance,
         store: store.clone(),
@@ -313,7 +313,7 @@ pub async fn spawn(
             .as_ref()
             .map(|auth| AuthConfig::from_server_config(auth, &config.name)),
         server_name: config.name.clone(),
-        allowed_origins,
+        origins,
         secure_cookie: config.secure_cookie,
         allow_local_node_spawn: config.allow_local_node_spawn
             && !runtime.runtime_config().externally_managed,
@@ -362,7 +362,7 @@ pub(crate) struct AppState {
     store: PgStore,
     pub(crate) auth: Option<AuthConfig>,
     server_name: String,
-    allowed_origins: Vec<axum::http::HeaderValue>,
+    origins: origins::BrowserOrigins,
     secure_cookie: bool,
     allow_local_node_spawn: bool,
     api_bind: String,
@@ -656,7 +656,7 @@ async fn get_session_status(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<SessionStatus>, ApiError> {
-    auth::validate_origin(&headers, &state.allowed_origins)?;
+    auth::validate_origin(&headers, &state.origins)?;
     Ok(Json(auth::auth_status_from_headers(&state, &headers)))
 }
 
@@ -993,7 +993,14 @@ async fn get_run_task_output(
         )
         .await?;
     }
-    let latest_stage_snapshot = if latest_persisted_snapshot.is_none() {
+    // Raw raster output snapshots store progress only; the stage owns the values.
+    let raw_raster = matches!(
+        task.task,
+        RunTaskSpec::Image { .. } | RunTaskSpec::PlotLine { .. }
+    );
+    let latest_stage_snapshot = if latest_persisted_snapshot.is_none()
+        || (raw_raster && request.phase != TaskOutputPhase::History)
+    {
         state
             .store
             .get_latest_task_stage_snapshot(run_id, task.id)

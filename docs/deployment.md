@@ -5,6 +5,9 @@ coordinates work and hosts the HTTP API and optional dashboard on one port. Work
 use PostgreSQL directly. The lightweight `gb` client manages the service remotely
 and provides local startup and maintenance commands; see the [CLI reference](local-cli.md).
 
+Use installed [system dependencies](quickstart.md) on `PATH`. `nix develop` is an
+optional reproducible environment; startup does not require Nix.
+
 ## Build features
 
 The default build includes `gammaloop`, which enables `symbolica`. Feature flags
@@ -30,9 +33,30 @@ a sibling `gammaboard`, then `PATH`. An invalid explicit override fails. Remote
 management needs only `gb`; local start/restart and `gb local` also need the service
 executable. Use absolute binary paths on cluster hosts.
 
-Build optional dashboard assets with `npm ci` and `npm run build` in `dashboard/`.
-Set `server.dashboard_dir` to the resulting `build` directory. Missing assets do
-not block API startup; `gb start --api-only` explicitly disables static serving.
+The repository wrappers prepare the frontend for `start` and `restart`:
+
+- Build missing or changed assets into `server.dashboard_dir` (default
+  `dashboard/build`, relative to the instance file).
+- Install locked JavaScript packages with `npm ci` when the dependency cache is
+  missing or changes, including after a Node version change during a rebuild.
+- Reuse a current build without requiring Node/npm or `node_modules`.
+- Skip preparation for `--api-only`, `start db`, help and remote management.
+- Respect `externally_managed`; local build/install work requires the explicit
+  `--allow-local-processes` override.
+
+Builds use content fingerprints of frontend sources, package files, Vite configuration,
+`.env` files and frontend environment variables. Preparation is serialized per checkout.
+A failed build leaves the previous assets intact and stops startup with an error.
+Progress goes to stderr, preserving `--json` stdout.
+
+Custom prebuilt directories with `index.html` are used unchanged unless previously
+built by the wrapper. A new custom output directory must be empty. The wrapper
+never installs system packages; missing Node/npm produce a readable error.
+
+Installed binaries serve prebuilt assets without building them. To prepare assets
+manually, run `npm ci` and `npm run build` in `dashboard/` and configure
+`server.dashboard_dir`. Missing assets do not block the installed service's API;
+`--api-only` explicitly disables static serving.
 
 ## Instance configuration
 
@@ -80,24 +104,52 @@ network, usually through a site reverse proxy. Authenticated operators can launc
 configured evaluator commands on the deployment; passwordless instances belong on
 trusted networks.
 
-Configure the exact origin shown in the browser address bar. For an SSH forward
-from local port 39491 to service port 4000:
+By default, `server.allow_loopback_origins = true` accepts HTTP(S) browser origins
+on exactly `localhost`, `127.0.0.1`, or `[::1]` at any valid port. SSH/browser port
+forwarding therefore works when the local port changes. This trusts pages served
+by other local applications on the **browser's machine**; it does not verify an
+SSH tunnel or replace authentication. Other hostnames, loopback aliases and
+subdomains, `null` origins, and malformed origins are rejected unless an exact
+valid origin is configured.
+
+For a shared deployment, disable this convenience and list the exact browser origins:
 
 ```toml
 [server]
-allowed_origins = ["http://localhost:4000", "http://localhost:39491"]
+allow_loopback_origins = false
+allowed_origins = ["https://board.example.org", "http://localhost:39491"]
 ```
 
-The list replaces defaults. To add an origin for one startup, use the repeatable
-`--allowed-origin` flag on `start` or `restart`:
+`allowed_origins` replaces the default exact list; when loopback trust is enabled,
+its entries are additional trusted origins. An empty list is permitted only with
+loopback trust enabled. Entries accept HTTP(S) scheme, host and optional port;
+wildcards, paths, credentials and implicit trust of forwarded headers are unsupported.
+
+After editing either origin setting in the deployment file, reload it without
+restarting the service, runs or workers:
 
 ```bash
-gb --instance /srv/board/instance.toml restart --allowed-origin http://localhost:39491
+gb config reload --origins
 ```
 
-The flag does not edit the file. Origins accept HTTP(S) scheme, host and optional
-port; wildcards, paths, credentials and implicit trust of forwarded headers are
-unsupported. For Vite development, allow its actual origin too; see
+This authenticated management operation reads the **service's deployment file**,
+not a client-side file. It also works through a remote connection file or endpoint
+and on externally managed deployments. It validates the file and atomically
+replaces the policy used by CORS and browser request validation. Invalid settings
+leave the previous policy active. Other configuration changes remain unapplied
+until restart. In-flight requests are not canceled. `gb status` and dashboard
+settings show the effective policy; a later `gb start` reuses the service when
+configuration matches.
+
+For a one-start addition, use the repeatable `--allowed-origin` flag:
+
+```bash
+gb --instance /srv/board/instance.toml restart --allowed-origin https://board.example.org
+```
+
+The flag does not edit the file. Reload replaces both origin settings from the
+file, discarding these invocation-only additions. For Vite development, the
+default loopback policy covers its changing port; see
 [dashboard development](../dashboard/README.md).
 
 ## HPC

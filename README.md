@@ -5,20 +5,20 @@ samplers, replaceable workers, and a live dashboard.
 
 ## Start locally
 
-On Linux, from a checkout:
+On Linux, from a checkout with the [system dependencies](docs/quickstart.md) installed:
 
 ```bash
-nix develop
 ./gb start --workers 2 --wait
 ./gb run create resources/templates/runs/installation-smoke.toml \
   --start --export-path "$PWD/installation-smoke.json"
 ./gb stop --wait
 ```
 
-With dashboard assets installed, open <http://localhost:4000> while running.
-Build the optional assets with `npm ci` and `npm run build` inside `dashboard/`. The run should finish with an integral
-of **1.0**. Use `start --api-only --workers 2 --wait` for headless execution. Each worker
-count launches that many additional workers; service startup alone launches none.
+`./gb start` installs frontend packages and builds the dashboard when needed, then
+prints its clickable URL (normally <http://localhost:4000>). Cached assets are
+reused on subsequent starts. The run should finish with an integral of **1.0**.
+Use `start --api-only --workers 2 --wait` to skip frontend setup and serving.
+Each worker count launches that many additional workers; startup alone launches none.
 
 The checked-in `gammaboard.toml` consolidates local settings and explicit paths.
 Use `--instance FILE` for another configuration. See the [CLI reference](docs/local-cli.md)
@@ -28,7 +28,8 @@ Anyone with dashboard access can launch configured process commands; keep the
 default passwordless deployment on a trusted network.
 
 The [default examples](docs/quickstart.md#default-examples) cover native GammaLoop
-phase stratification, a 2D-to-3D tetrahedron surface, the process API, centre tuning,
+phase stratification, a 1D-to-3D tetrahedron curve with a matched unstratified
+baseline, the process API, centre tuning,
 scans and campaigns.
 
 ## Evaluator and sampler models

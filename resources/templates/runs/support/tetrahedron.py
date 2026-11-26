@@ -1,4 +1,4 @@
-"""The tetrahedron surface evaluated through GammaBoard's per-sample process API."""
+"""The one-dimensional tetrahedron curve evaluated through GammaBoard's per-sample process API."""
 
 import numpy as np
 from gammaboard_process import (
@@ -11,20 +11,19 @@ from gammaboard_process import (
 
 
 class Tetrahedron(Evaluator):
-    def __init__(self, *, domain=None, sharpness=6.0, skew=0.0):
-        self.domain = domain = domain or RectangularDomain((), 2)
-        if domain.require_rectangular_shape() != ([], 2):
-            raise ValueError("tetrahedron expects two integrand coordinates")
+    def __init__(self, *, domain=None, sharpness=8.0):
+        self.domain = domain = domain or RectangularDomain((), 1)
+        if domain.require_rectangular_shape() != ([], 1):
+            raise ValueError("tetrahedron expects one integrand coordinate")
         self.sharpness = sharpness
-        self.skew = skew
 
     def descriptor(self):
         return EvaluatorDescriptor(self.domain, ["x", "y", "z"])
 
     def evaluate(self, xs_discrete, xs_continuous, request):
-        u, v = xs_continuous.T
-        a = np.tanh(self.sharpness * np.cos(2 * np.pi * u))
-        b = np.tanh(self.sharpness * np.cos(2 * np.pi * (v + self.skew * u)))
+        t = xs_continuous[:, 0]
+        a = np.tanh(self.sharpness * np.cos(2 * np.pi * t))
+        b = np.tanh(self.sharpness * np.sin(2 * np.pi * t))
         return EvaluationBatch({"x": a, "y": b, "z": a * b})
 
 

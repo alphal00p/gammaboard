@@ -21,3 +21,6 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Temporary output while the repository wrapper builds the dashboard.
+/.gb-frontend-*

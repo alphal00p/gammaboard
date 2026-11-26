@@ -882,3 +882,18 @@ test('PDF histogram weighting defaults on and changing it preserves the upper pl
   expect(after[0].series).toEqual(before[0].series);
   expect(after[2].series).not.toEqual(before[2].series);
 });
+
+test("component names x and y cannot overwrite a line plot's independent coordinate", () => {
+  const points = [{ x: 0, y: 1 }, { x: 0.5, y: -1 }, { x: 1, y: 1 }];
+  render(<PanelCollection
+    panelSpecs={[{ panel_id: "line_components", label: "Components", kind: "multi_timeseries", history: "none" }]}
+    panelStates={[{ panel_id: "line_components", kind: "multi_timeseries", series: [
+      { id: "x", label: "x", points },
+      { id: "y", label: "y", points: points.map(({ x, y }) => ({ x, y: -y })) },
+    ] }]}
+  />);
+  const option = renderChart.mock.lastCall[0].option;
+  expect([option.xAxis.min, option.xAxis.max]).toEqual([0, 1]);
+  expect(option.series.find((series) => series.id === "x").data).toEqual([[0, 1], [0.5, -1], [1, 1]]);
+  expect(option.series.find((series) => series.id === "y").data).toEqual([[0, -1], [0.5, 1], [1, -1]]);
+});

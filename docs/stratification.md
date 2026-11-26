@@ -18,6 +18,11 @@ explains the dashboard controls.
 - [RSD and training ESS](#rsd-and-training-ess)
 - [PDF diagnostic data](#stratum-plot-data-and-pdf-probes)
 
+The tetrahedron catalog pairs [trained stratified](../resources/templates/runs/tetrahedron-native.toml)
+and [trained unstratified](../resources/templates/runs/tetrahedron-unstratified.toml)
+runs of the same 1D curve at equal sample budgets. The latter is a separate
+ordinary-sampling baseline, not the pooled comparison from stratified draws.
+
 ## Partition and domain
 
 `sampler.config.stratification` contains `kind = "voronoi"`, a stratum-only

@@ -67,7 +67,7 @@ Use the prepared `gb` client on the login node for ordinary operations:
 gb --instance /shared/demo/control/active.toml worker launch --count 6 --wait
 gb --instance /shared/demo/control/active.toml run list
 gb --instance /shared/demo/control/active.toml run create /shared/demo/run.toml \
-  --start --max-evaluators 4 --export-path /shared/demo/results/result.json
+  --start --max-evaluators 5 --export-path /shared/demo/results/result.json
 ```
 
 Worker submissions are asynchronous; `--wait` waits for registration. Repeating
@@ -128,7 +128,7 @@ allocation using the deployment instance file and explicit process override.
 
 ## Example runs
 
-`install-examples` refreshes the five portable CPU examples and their shared child
+`install-examples` refreshes the six portable CPU examples and their shared child
 card without touching existing database runs or private templates. CPU/GPU worker
 cards remain external launch recipes; see the [canonical examples](../../docs/quickstart.md).
 

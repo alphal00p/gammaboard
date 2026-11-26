@@ -40,7 +40,19 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
         ManagementRequest::Status {} => {
             let mut status=crate::local_control::status(store).await?;
             status["database"]["managed"]=json!(state.instance.as_ref().is_some_and(|instance| instance.managed_database));
+            if let Some(mut instance) = state.instance.clone() {
+                state.origins.snapshot().apply(&mut instance.server);
+                status["configuration"] = instance.redacted()?;
+            }
             Ok(status)
+        },
+        ManagementRequest::ReloadOrigins {} => {
+            let config = if let Some(instance) = &state.instance {
+                crate::instance::Instance::load(&instance.source)?.server
+            } else {
+                ServerConfig::load(&state.server_config_path)?
+            };
+            Ok(serde_json::to_value(state.origins.replace(&config)?)?)
         },
         ManagementRequest::Stop { wait, timeout_ms } => {
             let id = crate::local_control::request_stop(store, None, wait, timeout_ms).await?;
@@ -614,6 +626,7 @@ fn tail(path: &Path, limit: usize) -> Result<Value> {
 pub(super) async fn backup(State(state): State<AppState>) -> Result<Response, ApiError> {
     async {
         use tokio::io::AsyncReadExt;
+        crate::local_db::require_commands(&["pg_dump"])?;
         let temporary = tempfile::NamedTempFile::new()?;
         let output = tokio::process::Command::new("pg_dump")
             .arg("--format=custom")

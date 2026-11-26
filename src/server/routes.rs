@@ -83,12 +83,12 @@ pub(super) fn build_app(state: AppState) -> Router {
             }),
         )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-        .layer(cors_layer(state.allowed_origins.clone()))
+        .layer(cors_layer(state.origins.clone()))
         .layer(middleware::from_fn(request_context_middleware))
         .with_state(state)
 }
 
-fn cors_layer(allowed_origins: Vec<axum::http::HeaderValue>) -> CorsLayer {
+fn cors_layer(origins: origins::BrowserOrigins) -> CorsLayer {
     CorsLayer::new()
         .allow_credentials(true)
         .allow_methods([
@@ -97,5 +97,13 @@ fn cors_layer(allowed_origins: Vec<axum::http::HeaderValue>) -> CorsLayer {
             axum::http::Method::OPTIONS,
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
-        .allow_origin(AllowOrigin::list(allowed_origins))
+        .allow_origin(AllowOrigin::predicate(move |origin, parts| {
+            parts
+                .headers
+                .get_all(axum::http::header::ORIGIN)
+                .iter()
+                .count()
+                == 1
+                && origins.allows(origin)
+        }))
 }

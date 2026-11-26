@@ -4,10 +4,10 @@ React/Vite frontend for the GammaBoard dashboard.
 
 ## Development
 
-Start the backend from the repository root, allowing the browser's development origin:
+Start the backend from the repository root:
 
 ```bash
-./gb start --api-only --allowed-origin http://localhost:5173
+./gb start --api-only
 ```
 
 Then run from `dashboard/`:
@@ -18,7 +18,9 @@ npm start
 ```
 
 Vite proxies `/api` to `http://127.0.0.1:4000`. If its printed browser URL uses a
-different port, allow that exact origin on the backend. Production assets are
+different port, the default loopback-origin policy already allows it. With
+`server.allow_loopback_origins = false`, add that exact origin to the deployment
+file and run `./gb config reload --origins` from the repository root. Production assets are
 served by GammaBoard; see [deployment](../docs/deployment.md).
 
 ## Scripts

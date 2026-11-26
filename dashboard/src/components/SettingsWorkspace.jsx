@@ -129,7 +129,8 @@ const SettingsWorkspace = ({ section = "settings" }) => {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <SettingsCard title="Server">
             <ConfigurationTree value={{ server: { name: server.name, api_bind: server.api_bind,
-              allowed_origins: server.allowed_origins || [], secure_cookie: server.secure_cookie,
+              allowed_origins: server.allowed_origins || [], allow_loopback_origins: server.allow_loopback_origins,
+              secure_cookie: server.secure_cookie,
               auth_enabled: server.auth_enabled, allow_local_node_spawn: server.allow_local_node_spawn } }} />
           </SettingsCard>
         </Box>

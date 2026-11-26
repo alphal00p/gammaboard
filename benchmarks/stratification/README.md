@@ -1,6 +1,6 @@
 # Scaled Voronoi stratification: tetrahedron path A/B
 
-This benchmark is separate from the 2D dashboard showcase. `main.rs` is registered
+This benchmark drives the same 1D curve as the dashboard examples. `main.rs` is registered
 as the `stratification_ab` Cargo target and needs the `symbolica` feature. It
 directly drives the production components without a server or database.
 Historical data and PNG previews live in `results/`; their recorded settings and
@@ -130,4 +130,6 @@ run was assigned workers through the webapp; the completed stratified task expos
 per-stratum attempted/matched counts, probabilities and component estimates without
 browser errors. The sampler summary now displays the lifted sampling domain.
 
-The current [default catalog](../../docs/quickstart.md#default-examples) uses a two-dimensional tetrahedron surface. The measurements above remain the historical one-dimensional path experiment.
+The current [default catalog](../../docs/quickstart.md#default-examples) includes
+matched distributed stratified/unstratified runs of this same 1D curve with larger
+training budgets. The historical measurements above retain their recorded settings.

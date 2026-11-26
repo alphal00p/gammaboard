@@ -28,9 +28,31 @@ for arg in "$@"; do
     esac
 done
 if [[ "$instance" != /* ]]; then instance="${caller_dir}/${instance}"; fi
+require_tool() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Missing dependency: $1. $2" >&2
+        exit 2
+    fi
+}
 managed=false
 if [[ -f "$instance" ]]; then
-    managed="$(python3 -c 'import sys,tomllib; v=tomllib.load(open(sys.argv[1],"rb")).get("externally_managed",False); assert isinstance(v,bool); print(str(v).lower())' "$instance")"
+    require_tool python3 "Install Python 3.11 or newer and make python3 available on PATH, or use a prepared gb binary."
+    managed="$(python3 - "$instance" <<'PYTHON'
+import sys
+try:
+    import tomllib
+except ImportError:
+    sys.exit("Missing dependency: Python 3.11 or newer is required by the repository launcher (tomllib unavailable).")
+try:
+    with open(sys.argv[1], "rb") as source:
+        value = tomllib.load(source).get("externally_managed", False)
+    if not isinstance(value, bool):
+        raise ValueError("externally_managed must be true or false")
+except (OSError, ValueError) as error:
+    sys.exit(f"Cannot read instance configuration {sys.argv[1]}: {error}")
+print(str(value).lower())
+PYTHON
+)"
 fi
 if [[ "$managed" == true && "$allow" == false ]]; then
     if [[ ! -x "$bin" ]]; then
@@ -38,6 +60,11 @@ if [[ "$managed" == true && "$allow" == false ]]; then
         exit 2
     fi
 else
+    require_tool cargo "Install the Rust toolchain and make cargo available on PATH, or use a prepared gb binary."
+    require_tool rustc "Install the Rust toolchain and make rustc available on PATH."
+    if [[ -f "$instance" ]]; then
+        python3 "$repo_root/tools/frontend.py" "$instance" "$@"
+    fi
     package=gammaboard
     if [[ "$family" == gb ]]; then package=gammaboard-client; fi
     (

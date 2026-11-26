@@ -69,7 +69,7 @@ pub async fn require_admin_session(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if let Err(err) = validate_origin(request.headers(), &state.allowed_origins) {
+    if let Err(err) = validate_origin(request.headers(), &state.origins) {
         return err.into_response();
     }
     let Some(auth) = &state.auth else {
@@ -91,7 +91,7 @@ pub async fn login(
     headers: HeaderMap,
     axum::extract::Json(payload): axum::extract::Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
-    validate_origin(&headers, &state.allowed_origins)?;
+    validate_origin(&headers, &state.origins)?;
     let Some(auth) = &state.auth else {
         return Ok(Json(SessionStatus {
             auth_enabled: false,
@@ -116,7 +116,7 @@ pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    validate_origin(&headers, &state.allowed_origins)?;
+    validate_origin(&headers, &state.origins)?;
     let authenticated = state.auth.is_none();
     Ok(response_with_cookie(
         session_cookie("", 0, state.secure_cookie),
@@ -223,19 +223,19 @@ fn cookie_value(headers: &HeaderMap, key: &str) -> Option<String> {
 
 pub(super) fn validate_origin(
     headers: &HeaderMap,
-    allowed_origins: &[HeaderValue],
+    origins: &super::origins::BrowserOrigins,
 ) -> Result<(), ApiError> {
     let Some(origin) = headers.get(ORIGIN) else {
         // Non-browser CLI and worker requests need not carry an Origin header.
         return Ok(());
     };
-    if allowed_origins.iter().any(|allowed| allowed == origin) {
+    if headers.get_all(ORIGIN).iter().count() == 1 && origins.allows(origin) {
         return Ok(());
     }
     let origin = origin.to_str().unwrap_or("<invalid Origin header>");
     let quoted_origin = format!("'{}'", origin.replace('\'', "'\\''"));
     let message = format!(
-        "Browser origin {origin:?} is not allowed. Add this exact origin to server.allowed_origins in the deployment instance file and restart the service. On the deployment host, use gb --instance /path/to/gammaboard.toml restart --allowed-origin {quoted_origin}; externally managed instances must use their deployment helper or an explicit local-process override."
+        "Browser origin {origin:?} is not allowed. Add this exact origin to server.allowed_origins in the deployment instance file, then run gb config reload --origins using this instance connection. For loopback forwarding, server.allow_loopback_origins = true trusts HTTP(S) pages on localhost, 127.0.0.1 and [::1] at any port. A one-start alternative on the deployment host is gb --instance /path/to/gammaboard.toml restart --allowed-origin {quoted_origin}; externally managed instances require their helper or an explicit local-process override."
     );
     tracing::warn!(
         origin,
@@ -254,14 +254,21 @@ fn now_unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::ServerConfig;
 
     #[test]
     fn browser_origins_require_an_exact_allowlist_match() {
-        let allowed = vec![HeaderValue::from_static("http://localhost:39491")];
+        let mut config: ServerConfig = toml::from_str("").unwrap();
+        config.allow_loopback_origins = false;
+        config.allowed_origins = vec!["http://localhost:39491".into()];
+        let allowed = super::super::origins::BrowserOrigins::new(&config).unwrap();
         let mut headers = HeaderMap::new();
         assert!(validate_origin(&headers, &allowed).is_ok());
-        headers.insert(ORIGIN, allowed[0].clone());
+        headers.insert(ORIGIN, HeaderValue::from_static("http://localhost:39491"));
         assert!(validate_origin(&headers, &allowed).is_ok());
+        headers.append(ORIGIN, HeaderValue::from_static("http://localhost:39491"));
+        assert!(validate_origin(&headers, &allowed).is_err());
+        headers.remove(ORIGIN);
         for origin in [
             "http://localhost:8081",
             "http://127.0.0.1:39491",

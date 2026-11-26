@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Status {},
+    ReloadOrigins {},
     Stop {
         wait: bool,
         timeout_ms: Option<u64>,

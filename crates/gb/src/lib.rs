@@ -403,11 +403,69 @@ mod consistency_tests {
         );
     }
     #[test]
+    fn run_waiting_defaults_and_timeout_overrides() {
+        use cli::{Command, Run};
+        let parsed = cli::Cli::try_parse_from(["gb", "run", "wait", "example"]).unwrap();
+        assert!(matches!(parsed.command, Command::Run {
+            command: Run::Wait { until, timeout, .. }
+        } if until == "completed" && timeout == Duration::from_secs(60)));
+        for (args, expected) in [
+            (vec!["gb", "run", "start", "example"], 10),
+            (vec!["gb", "run", "create", "card.toml", "--start"], 10),
+            (vec!["gb", "run", "start", "example", "--timeout", "0"], 0),
+            (
+                vec![
+                    "gb",
+                    "run",
+                    "create",
+                    "card.toml",
+                    "--start",
+                    "--timeout",
+                    "0s",
+                ],
+                0,
+            ),
+            (
+                vec!["gb", "run", "start", "example", "--timeout", "2m"],
+                120,
+            ),
+        ] {
+            let parsed = cli::Cli::try_parse_from(args).unwrap();
+            let timeout = match parsed.command {
+                Command::Run {
+                    command: Run::Start { timeout, .. } | Run::Create { timeout, .. },
+                } => timeout,
+                _ => panic!("expected a start command"),
+            };
+            assert_eq!(timeout, Duration::from_secs(expected));
+        }
+        cli::Cli::try_parse_from(["gb", "run", "create", "card.toml"]).unwrap();
+        for args in [
+            vec!["gb", "run", "start", "example", "--wait-for-workers"],
+            vec![
+                "gb",
+                "run",
+                "create",
+                "card.toml",
+                "--start",
+                "--wait-for-workers",
+            ],
+            vec!["gb", "run", "create", "card.toml", "--timeout", "0"],
+            vec!["gb", "run", "start", "example", "--timeout=-1"],
+            vec!["gb", "run", "start", "example", "--timeout", "NaN"],
+            vec!["gb", "run", "wait", "example", "--timeout", "0"],
+        ] {
+            assert!(cli::Cli::try_parse_from(&args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
     fn worker_waiting_and_local_scopes_are_explicit() {
         for args in [
             vec!["gb", "worker", "launch", "--local", "2"],
             vec!["gb", "worker", "launch", "--count", "2", "--timeout", "1s"],
             vec!["gb", "restart", "server"],
+            vec!["gb", "config", "reload"],
             vec!["gb", "db", "restore", "file"],
             vec!["gb", "run", "validate", "file", "--probe"],
             vec!["gb", "--quiet", "status"],
@@ -428,6 +486,7 @@ mod consistency_tests {
             vec!["gb", "local", "db", "restore", "file", "--yes"],
             vec!["gb", "worker", "requests", "cancel", "42"],
             vec!["gb", "start", "--workers", "2", "--wait"],
+            vec!["gb", "config", "reload", "--origins"],
         ] {
             cli::Cli::try_parse_from(&args).unwrap();
         }

@@ -1,0 +1,56 @@
+# f(t) = (x,y,x*y), x=tanh(8*cos(2*pi*t)), y=tanh(8*sin(2*pi*t)).
+# Integrate over parameter time t in [0,1]; exact vector integral [0,0,0].
+# Matched stratified/unstratified cards share budgets, seeds and Havana settings.
+replacements = { sharpness = 8, train_samples = 1048576, sample_samples = 131072, havana_bins = 64, training_rate = 0.5, seed = 10, inference_seed = 20, line_points = 1025 }
+name = "tetrahedron-unstratified"
+target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
+[evaluator]
+kind = "symbolica"
+args = ["t"]
+[evaluator.source]
+kind = "expressions"
+components = ["x", "y", "z"]
+exprs = ["((exp(2*$(sharpness:8)*cos(2*pi*t))-1)/(exp(2*$(sharpness:8)*cos(2*pi*t))+1))", "((exp(2*$(sharpness:8)*sin(2*pi*t))-1)/(exp(2*$(sharpness:8)*sin(2*pi*t))+1))", "((exp(2*$(sharpness:8)*cos(2*pi*t))-1)/(exp(2*$(sharpness:8)*cos(2*pi*t))+1))*((exp(2*$(sharpness:8)*sin(2*pi*t))-1)/(exp(2*$(sharpness:8)*sin(2*pi*t))+1))"]
+[sampler_aggregator_runner_params]
+frontend_sync_interval_ms = 500
+
+[[task_queue]]
+name = "train"
+kind = "sample"
+publish_result = false
+stop_condition = { max_samples = "$(train_samples:1048576)" }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+[task_queue.sampler.config]
+kind = "havana_training"
+seed = "$(seed:10)"
+bins = "$(havana_bins:64)"
+samples_for_update = 4096
+initial_training_rate = "$(training_rate:0.5)"
+final_training_rate = 0.1
+
+[[task_queue]]
+name = "inference"
+kind = "sample"
+estimator = "pooled"
+stop_condition = { max_samples = "$(sample_samples:131072)" }
+accumulator = { config = { kind = "vector", components = ["x", "y", "z"], training_projection = { kind = "norm" } } }
+sampler = { from_stage = "train", config = { kind = "havana_inference", seed = "$(inference_seed:20)" } }
+
+[[task_queue]]
+name = "components-on-line"
+kind = "plot_line"
+accumulator = { components = ["x", "y", "z"] }
+display = "components"
+[task_queue.geometry]
+offset = [0.0]
+direction = [1.0]
+linspace = { start = 0.0, stop = 1.0, count = "$(line_points:1025)" }
+
+[[task_queue]]
+name = "pdf-line"
+kind = "pdf_adaptation_plot_line"
+sampler = { from_name = "inference" }
+[task_queue.geometry]
+offset = [0.0]
+direction = [1.0]
+linspace = { start = 0.0, stop = 1.0, count = "$(line_points:1025)" }

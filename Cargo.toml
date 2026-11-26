@@ -24,6 +24,7 @@ include = [
     "/process_api/examples/rust_gammaloop/**",
     "/process_api/examples/common/**",
     "/tools/launch.sh",
+    "/tools/frontend.py",
     "/crates/gb/**",
     "/benchmarks/stratification/main.rs",
     "/benchmarks/gammaloop_transport/**",

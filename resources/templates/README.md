@@ -17,3 +17,8 @@ portable subset of this same run catalog and its own worker presets into the
 workspace. Workspace copies are editable and are not refreshed by a Git pull;
 use `install-examples` or reseed the template directory as described in the
 [UBELIX guide](../../ops/slurm/README.md#example-runs).
+
+`tetrahedron-native.toml` and `tetrahedron-unstratified.toml` form a matched pair:
+1D input, the same three-component curve, equal training/inference budgets and
+independently trained Havana proposals. `tetrahedron-process.toml` evaluates the
+same function through Python with a uniform proposal.

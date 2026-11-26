@@ -1,15 +1,15 @@
-# Average two independent replicas of the tetrahedron surface integral.
+# Average two independent replicas of the tetrahedron curve integral.
 # Portable: needs Symbolica/Havana, but no generated physics state or Python.
 kind = "integration_campaign"
 name = "tetrahedron-campaign"
 target = { kind = "vector", components = { x = 0.0, y = 0.0, z = 0.0 } }
 [stop_condition]
-max_total_samples = 98304
+max_total_samples = 655360
 [allocation]
 max_active_runs = 2
 min_evaluators_per_run = 2
 min_samples_per_child = 4096
-allocation_window_samples = 8192
+allocation_window_samples = 32768
 [[children]]
 name = "replica-a"
 coefficient = 0.5

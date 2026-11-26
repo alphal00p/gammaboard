@@ -148,13 +148,18 @@ sampler={{config={{kind="process_sampler",command={command},args={{inference=tru
 #[test]
 fn scaled_voronoi_run_cards_validate_and_reject_invalid_estimators() {
     let card = include_str!("../../resources/templates/runs/tetrahedron-native.toml");
-    let definition = gammaboard::api::runs::parse_run_add_config_toml(card).unwrap();
-    assert_eq!(
-        gammaboard::api::runs::validate_run(definition, true)
-            .unwrap()
-            .tasks_validated,
-        7
-    );
+    for raw in [
+        card,
+        include_str!("../../resources/templates/runs/tetrahedron-unstratified.toml"),
+    ] {
+        let definition = gammaboard::api::runs::parse_run_add_config_toml(raw).unwrap();
+        assert_eq!(
+            gammaboard::api::runs::validate_run(definition, true)
+                .unwrap()
+                .tasks_validated,
+            4
+        );
+    }
     let invalid = card.replace("scales = [1.0,1.0,1.0]", "scales = [0.0,1.0,1.0]");
     let definition = gammaboard::api::runs::parse_run_add_config_toml(&invalid).unwrap();
     assert!(gammaboard::api::runs::validate_run(definition, false).is_err());

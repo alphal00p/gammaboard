@@ -204,19 +204,47 @@ pub fn start_postgres_cluster(local: &LocalPostgresConfig, database_url: &str) -
 }
 
 pub fn require_commands(commands: &[&str]) -> Result<()> {
-    for command in commands {
-        if !command_in_path(command) {
-            bail!(
-                "missing required command '{command}' in PATH; run `nix develop` or install it and retry"
-            );
-        }
+    let missing: Vec<_> = commands
+        .iter()
+        .copied()
+        .filter(|command| !command_in_path(command))
+        .collect();
+    if !missing.is_empty() {
+        let hint = if missing.iter().any(|name| {
+            matches!(
+                *name,
+                "initdb" | "pg_ctl" | "pg_dump" | "pg_restore" | "psql" | "createdb"
+            )
+        }) {
+            "Install PostgreSQL server/client tools and add their bin directory to PATH."
+        } else {
+            "Install the required tools and add their executable directory to PATH."
+        };
+        bail!(
+            "Missing dependencies (executables not found on PATH): {}. {hint}",
+            missing.join(", ")
+        );
     }
     Ok(())
 }
 
 fn command_in_path(command: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|directory| directory.join(command).is_file())
+        std::env::split_paths(&paths).any(|directory| {
+            fs::metadata(directory.join(command)).is_ok_and(|metadata| {
+                if !metadata.is_file() {
+                    return false;
+                }
+                #[cfg(unix)]
+                {
+                    metadata.permissions().mode() & 0o111 != 0
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            })
+        })
     })
 }
 
@@ -365,6 +393,7 @@ fn is_cluster_initialized(local: &LocalPostgresConfig) -> bool {
 }
 
 pub fn is_db_running(local: &LocalPostgresConfig) -> Result<bool> {
+    require_commands(&["pg_ctl"])?;
     let output = Command::new("pg_ctl")
         .arg("-D")
         .arg(&local.data_dir)
