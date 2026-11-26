@@ -173,8 +173,8 @@ async fn local_launch_survives_removing_the_running_executable_path() -> anyhow:
     std::fs::remove_file(&executable)?;
     let response = http_post_json(
         &server,
-        "/api/nodes/auto-run",
-        json!({"count":1,"name_prefix":"replaced"}),
+        "/api/v1/manage",
+        json!({"operation":"worker_launch","source":{"kind":"new","count":1,"name_prefix":"replaced"}}),
         Some(&cookie),
     )
     .await?;
@@ -199,8 +199,8 @@ async fn local_launch_survives_removing_the_running_executable_path() -> anyhow:
         .await?;
     http_post_json(
         &server,
-        &format!("/api/nodes/{node}/stop"),
-        json!({}),
+        "/api/v1/manage",
+        json!({"operation":"worker_stop","names":[node],"all":false,"idle":false}),
         Some(&cookie),
     )
     .await?
@@ -296,8 +296,8 @@ completed_batch_fetch_limit = 64
 
     let assign_sampler = http_post_json(
         &server_url,
-        "/api/nodes/w-1/assign",
-        json!({ "run_id": run_id, "role": "sampler_aggregator" }),
+        "/api/v1/manage",
+        json!({"operation":"worker_assign","name":"w-1","run":run_id.to_string(),"role":"sampler_aggregator"}),
         Some(&cookie),
     )
     .await?;
@@ -305,8 +305,8 @@ completed_batch_fetch_limit = 64
 
     let assign_eval = http_post_json(
         &server_url,
-        "/api/nodes/w-2/assign",
-        json!({ "run_id": run_id, "role": "evaluator" }),
+        "/api/v1/manage",
+        json!({"operation":"worker_assign","name":"w-2","run":run_id.to_string(),"role":"evaluator"}),
         Some(&cookie),
     )
     .await?;
@@ -359,8 +359,8 @@ completed_batch_fetch_limit = 64
 
     let update = http_post_json(
         &server_url,
-        &format!("/api/runs/{run_id}/tasks/{task_id}/queue-tuning"),
-        json!({
+        "/api/v1/manage",
+        json!({"operation":"task","run":run_id.to_string(),"action":{"action":"tune","id":task_id,
             "queue_tuning": {
 
                 "target_batch_eval_ms": 500.0,
@@ -368,7 +368,7 @@ completed_batch_fetch_limit = 64
                 "max_batch_size": 256,
                 "max_generation_size": 256
             }
-        }),
+        }}),
         Some(&cookie),
     )
     .await?;
@@ -616,13 +616,15 @@ async fn full_stack_server_run_removal_handles_long_deletes_and_rolls_back_failu
         let server_url = harness.start_server().await?;
         let cookie = login_cookie(&server_url).await?;
         let client = reqwest::Client::builder().timeout(Duration::from_secs(3)).build()?;
-        let delete_url = format!("{server_url}/api/runs/{parent}");
-        let response = client.delete(&delete_url).header("Cookie", &cookie).send().await?;
-        anyhow::ensure!(response.status() == reqwest::StatusCode::ACCEPTED);
+        let delete_url = format!("{server_url}/api/v1/manage");
+        let remove = json!({"operation":"run_remove","runs":[parent.to_string()],"all":false,"dry_run":false});
+        let response = client.post(&delete_url).header("content-type","application/json").body(remove.to_string()).header("Cookie", &cookie).send().await?;
+        anyhow::ensure!(response.status() == reqwest::StatusCode::OK);
         let failed: JsonValue = serde_json::from_str(&response.text().await?)?;
-        let failed_url = format!("{server_url}/api/run-removals/{}", failed["operation_id"].as_str().unwrap());
+        let failed = failed["operations"][0].clone();
+        let failed_url = json!({"operation":"run_removal_status","operation_id":failed["operation_id"]});
         harness.wait_for("failed removal reported to dashboard", Duration::from_secs(10), || async {
-            let status: JsonValue = serde_json::from_str(&client.get(&failed_url).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
+            let status: JsonValue = serde_json::from_str(&client.post(&delete_url).header("content-type","application/json").body(failed_url.to_string()).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
             if status["status"] == "running" { return Ok(false); }
             anyhow::ensure!(status["status"] == "failed" && status["error"].as_str().unwrap().contains("injected run removal failure"), "unexpected result: {status}");
             Ok(true)
@@ -631,11 +633,12 @@ async fn full_stack_server_run_removal_handles_long_deletes_and_rolls_back_failu
             .fetch_one(&harness.pool).await?;
         anyhow::ensure!(counts == (4,4097,4097,4097,3), "failed deletion lost data: {counts:?}");
         sqlx::query("UPDATE removal_fault SET fail=false").execute(&harness.pool).await?;
-        let response = client.delete(&delete_url).header("Cookie", &cookie).send().await?;
-        anyhow::ensure!(response.status() == reqwest::StatusCode::ACCEPTED);
+        let response = client.post(&delete_url).header("content-type","application/json").body(remove.to_string()).header("Cookie", &cookie).send().await?;
+        anyhow::ensure!(response.status() == reqwest::StatusCode::OK);
         let operation: JsonValue = serde_json::from_str(&response.text().await?)?;
+        let operation = operation["operations"][0].clone();
         anyhow::ensure!(operation["operation_id"] != failed["operation_id"]);
-        let status_url = format!("{server_url}/api/run-removals/{}", operation["operation_id"].as_str().unwrap());
+        let status_url = json!({"operation":"run_removal_status","operation_id":operation["operation_id"]});
         harness.wait_for("slow database deletion started", Duration::from_secs(10), || async {
             Ok(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event='PgSleep')")
                 .fetch_one(&harness.pool).await?)
@@ -643,10 +646,11 @@ async fn full_stack_server_run_removal_handles_long_deletes_and_rolls_back_failu
         let lock_owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.datname=current_database() AND a.wait_event='PgSleep' AND l.locktype='advisory' AND l.classid=1196245588 AND l.objid=1 AND l.granted)")
             .fetch_one(&harness.pool).await?;
         anyhow::ensure!(lock_owned, "deletion must use the transaction that owns the controller lock");
-        let duplicate: JsonValue = serde_json::from_str(&client.delete(&delete_url).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
+        let duplicate: JsonValue = serde_json::from_str(&client.post(&delete_url).header("content-type","application/json").body(remove.to_string()).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
+        let duplicate = duplicate["operations"][0].clone();
         anyhow::ensure!(duplicate["operation_id"] == operation["operation_id"]);
         harness.wait_for("long dashboard deletion completed", Duration::from_secs(45), || async {
-            let status: JsonValue = serde_json::from_str(&client.get(&status_url).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
+            let status: JsonValue = serde_json::from_str(&client.post(&delete_url).header("content-type","application/json").body(status_url.to_string()).header("Cookie", &cookie).send().await?.error_for_status()?.text().await?)?;
             anyhow::ensure!(status["status"] != "failed", "deletion failed: {status}");
             Ok(status["status"] == "completed")
         }).await?;
@@ -699,9 +703,16 @@ async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Resul
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()?;
-    let delete_url = format!("{server_url}/api/runs/{parent_id}");
+    let delete_url = format!("{server_url}/api/v1/manage");
+    let remove = json!({"operation":"run_remove","runs":[parent_id.to_string()],"all":false,"dry_run":false});
     assert_eq!(
-        client.delete(&delete_url).send().await?.status(),
+        client
+            .post(&delete_url)
+            .header("content-type", "application/json")
+            .body(remove.to_string())
+            .send()
+            .await?
+            .status(),
         reqwest::StatusCode::UNAUTHORIZED
     );
 
@@ -712,18 +723,23 @@ async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Resul
         .execute(&mut *blocker)
         .await?;
     let response = client
-        .delete(&delete_url)
+        .post(&delete_url)
+        .header("content-type", "application/json")
+        .body(remove.to_string())
         .header("Cookie", &cookie)
         .send()
         .await?;
-    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
     let operation: JsonValue = serde_json::from_str(&response.text().await?)?;
+    let operation = operation["operations"][0].clone();
     assert_eq!(operation["status"], "running");
     let operation_id = operation["operation_id"].as_str().unwrap();
-    let status_url = format!("{server_url}/api/run-removals/{operation_id}");
+    let status_url = json!({"operation":"run_removal_status","operation_id":operation_id});
 
     let duplicate = client
-        .delete(&delete_url)
+        .post(&delete_url)
+        .header("content-type", "application/json")
+        .body(remove.to_string())
         .header("Cookie", &cookie)
         .send()
         .await?
@@ -731,13 +747,22 @@ async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Resul
         .text()
         .await?;
     let duplicate: JsonValue = serde_json::from_str(&duplicate)?;
+    let duplicate = duplicate["operations"][0].clone();
     assert_eq!(duplicate["operation_id"], operation["operation_id"]);
     assert_eq!(
-        client.get(&status_url).send().await?.status(),
+        client
+            .post(&delete_url)
+            .header("content-type", "application/json")
+            .body(status_url.to_string())
+            .send()
+            .await?
+            .status(),
         reqwest::StatusCode::UNAUTHORIZED
     );
     let pending = client
-        .get(&status_url)
+        .post(&delete_url)
+        .header("content-type", "application/json")
+        .body(status_url.to_string())
         .header("Cookie", &cookie)
         .send()
         .await?
@@ -752,7 +777,9 @@ async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Resul
     harness
         .wait_for("background deletion", Duration::from_secs(10), || async {
             let status = client
-                .get(&status_url)
+                .post(&delete_url)
+                .header("content-type", "application/json")
+                .body(status_url.to_string())
                 .header("Cookie", &cookie)
                 .send()
                 .await?
@@ -776,21 +803,18 @@ async fn full_stack_server_run_removal_outlives_http_requests() -> anyhow::Resul
 
     // Operations are local to the server; after a restart, instruct the client
     // to refresh rather than falsely reporting success or waiting forever.
-    harness
-        .kill_child(&format!(
-            "server:{}",
-            server_url.trim_start_matches("http://")
-        ))
-        .await?;
+    harness.kill_child("control").await?;
     let restarted_url = harness.start_server().await?;
     let restarted_cookie = login_cookie(&restarted_url).await?;
     let response = client
-        .get(format!("{restarted_url}/api/run-removals/{operation_id}"))
+        .post(format!("{restarted_url}/api/v1/manage"))
+        .header("content-type", "application/json")
+        .body(json!({"operation":"run_removal_status","operation_id":operation_id}).to_string())
         .header("Cookie", restarted_cookie)
         .send()
         .await?;
-    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
-    assert!(response.text().await?.contains("Refresh the run list"));
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(response.text().await?.contains("inspect the run list"));
     harness.cleanup().await?;
     Ok(())
 }
@@ -832,8 +856,8 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 
     let unauthorized = http_post_json(
         &server_url,
-        &format!("/api/runs/{run_id}/pause"),
-        json!({}),
+        "/api/v1/manage",
+        json!({"operation":"run_pause","runs":[run_id.to_string()],"all":false}),
         None,
     )
     .await?;
@@ -869,16 +893,11 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 
     // Server state is reconstructed from PostgreSQL; existing signed sessions
     // and independently running nodes remain usable after the server is killed.
-    harness
-        .kill_child(&format!(
-            "server:{}",
-            server_url.trim_start_matches("http://")
-        ))
-        .await?;
+    harness.kill_child("control").await?;
     let server_url = harness
         .start_server_with_auth((&password_hash, "test-session-secret"))
         .await?;
-    let nodes = http_get_with_cookie(&server_url, "/api/nodes", &cookie).await?;
+    let nodes = http_get_with_cookie(&server_url, "/api/workers?state=live", &cookie).await?;
     assert!(nodes.contains("\"node_name\":\"w-1\""));
     assert!(
         http_get_with_cookie(&server_url, "/api/runs", &cookie)
@@ -888,8 +907,8 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 
     let pause = http_post_json(
         &server_url,
-        &format!("/api/runs/{run_id}/pause"),
-        json!({}),
+        "/api/v1/manage",
+        json!({"operation":"run_pause","runs":[run_id.to_string()],"all":false}),
         Some(&cookie),
     )
     .await?;
@@ -908,8 +927,8 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 
     let assign = http_post_json(
         &server_url,
-        "/api/nodes/w-1/assign",
-        json!({ "run_id": run_id, "role": "evaluator" }),
+        "/api/v1/manage",
+        json!({"operation":"worker_assign","name":"w-1","run":run_id.to_string(),"role":"evaluator"}),
         Some(&cookie),
     )
     .await?;
@@ -929,8 +948,8 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
     harness.start_node("w-2").await?;
     let auto_assign = http_post_json(
         &server_url,
-        &format!("/api/runs/{run_id}/auto-assign"),
-        json!({ "max_evaluators": 1 }),
+        "/api/v1/manage",
+        json!({"operation":"run_start","run":run_id.to_string(), "max_evaluators": 1 }),
         Some(&cookie),
     )
     .await?;
@@ -953,8 +972,8 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
 
     let unassign = http_post_json(
         &server_url,
-        "/api/nodes/w-1/unassign",
-        json!({}),
+        "/api/v1/manage",
+        json!({"operation":"worker_unassign","name":"w-1"}),
         Some(&cookie),
     )
     .await?;
@@ -971,11 +990,17 @@ async fn full_stack_server_auth_protects_pause_endpoint() -> anyhow::Result<()> 
         )
         .await?;
 
-    let stop = http_post_json(&server_url, "/api/nodes/w-1/stop", json!({}), Some(&cookie)).await?;
+    let stop = http_post_json(
+        &server_url,
+        "/api/v1/manage",
+        json!({"operation":"worker_stop","names":["w-1"],"all":false,"idle":false}),
+        Some(&cookie),
+    )
+    .await?;
     assert_eq!(stop.status(), reqwest::StatusCode::OK);
     let stop_body: JsonValue = serde_json::from_str(&stop.text().await?)?;
-    assert_eq!(stop_body["node_name"].as_str(), Some("w-1"));
-    assert_eq!(stop_body["rows_updated"].as_u64(), Some(1));
+    assert_eq!(stop_body[0]["node_name"].as_str(), Some("w-1"));
+    assert_eq!(stop_body[0]["rows_updated"].as_u64(), Some(1));
 
     harness
         .wait_for(
@@ -1025,30 +1050,42 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
 
     let response = http_post_json(
         &server_url,
-        "/api/nodes/auto-run",
-        json!({
+        "/api/v1/manage",
+        json!({"operation":"worker_launch","source":{"kind":"new",
             "count": 2,
             "name_prefix": "queued-w",
             "args": {
                 "partition": "epyc2"
             }
-        }),
+        }}),
         Some(&cookie),
     )
     .await
     .map_err(|err| anyhow::anyhow!("node launch request failed: {err}"))?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let body: JsonValue = serde_json::from_str(&response.text().await?)?;
-    assert_eq!(body["started"].as_u64(), Some(0));
-    assert_eq!(body["request"]["state"].as_str(), Some("pending"));
-    assert_eq!(body["request"]["backend"].as_str(), Some("external"));
-    assert_eq!(body["request"]["requested_count"].as_u64(), Some(2));
-    assert_eq!(body["request"]["name_prefix"].as_str(), None);
+    let request_id = body["request_ids"][0].as_str().unwrap().to_owned();
+    let request: JsonValue = serde_json::from_str(
+        &http_post_json(
+            &server_url,
+            "/api/v1/manage",
+            json!({"operation":"worker_requests","id":request_id.parse::<i64>()?}),
+            Some(&cookie),
+        )
+        .await?
+        .error_for_status()?
+        .text()
+        .await?,
+    )?;
+    assert_eq!(request["state"].as_str(), Some("pending"));
+    assert_eq!(request["backend"].as_str(), Some("external"));
+    assert_eq!(request["requested_count"].as_u64(), Some(2));
+    assert_eq!(request["name_prefix"].as_str(), None);
     assert_eq!(
-        body["request"]["args"]["groups"][0]["name_prefix"].as_str(),
+        request["args"]["groups"][0]["name_prefix"].as_str(),
         Some("queued-w")
     );
-    assert_eq!(body["request"]["args"]["partition"].as_str(), Some("epyc2"));
+    assert_eq!(request["args"]["partition"].as_str(), Some("epyc2"));
 
     let node_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM nodes WHERE lease_expires_at > now()")
@@ -1057,10 +1094,6 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
             .map_err(|err| anyhow::anyhow!("node count query failed: {err}"))?;
     assert_eq!(node_count, 0);
 
-    let request_id = body["request"]["id"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing launch request id"))?
-        .to_string();
     let request_id_i64 = request_id
         .parse::<i64>()
         .map_err(|err| anyhow::anyhow!("invalid launch request id: {err}"))?;
@@ -1109,10 +1142,18 @@ async fn full_stack_server_queues_node_launch_requests_when_local_spawn_disabled
             "launch request is fulfilled after workers connect",
             Duration::from_secs(10),
             || async {
-                let body =
-                    http_get_with_cookie(&server_url, "/api/node-launch-requests", &cookie).await?;
+                let body = http_post_json(
+                    &server_url,
+                    "/api/v1/manage",
+                    json!({"operation":"worker_requests"}),
+                    Some(&cookie),
+                )
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
                 let body: JsonValue = serde_json::from_str(&body)?;
-                let state = body["items"]
+                let state = body
                     .as_array()
                     .and_then(|items| {
                         items

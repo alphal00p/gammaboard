@@ -22,7 +22,7 @@ The [run card](run.toml) integrates the unit function in two stages. Set its
 repository root:
 
 ```bash
-./gammaboard run create process_api/examples/python_sampler/run.toml
+./gb run create process_api/examples/python_sampler/run.toml
 ```
 
 Run the checker in the SDK environment:

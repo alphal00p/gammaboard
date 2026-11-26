@@ -13,66 +13,31 @@ pub(super) fn build_app(state: AppState) -> Router {
         .route("/auth/logout", post(logout));
 
     let protected = Router::new()
-        .route("/v1/manage", post(manage::handle))
+        .route(
+            "/v1/manage",
+            post(manage::handle).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .route("/v1/database/backup", post(manage::backup))
         .route("/settings", get(settings::get_settings_overview))
-        .route("/runs", get(get_runs).post(create_run))
-        .route("/runs/:id", get(get_run_summary).delete(delete_run))
-        .route("/run-removals/:id", get(get_run_removal))
-        .route("/runs/:id/pause", post(pause_run))
+        .route("/runs", get(get_runs))
+        .route("/runs/:id", get(get_run_summary))
         .route("/runs/:id/definition", get(get_run_definition))
         .route("/runs/:id/panels", get(get_run_panels))
-        .route("/runs/:id/tasks", get(get_run_tasks).post(add_run_tasks))
-        .route(
-            "/runs/:id/tasks/:task_id",
-            delete(delete_run_task).put(edit_run_task),
-        )
+        .route("/runs/:id/tasks", get(get_run_tasks))
         .route(
             "/runs/:id/tasks/:task_id/definition",
             get(get_task_definition),
         )
         .route("/runs/:id/tasks/:task_id/output", post(get_run_task_output))
         .route("/runs/:id/tasks/:task_id/campaign", get(campaign::get))
-        .route(
-            "/runs/:id/tasks/:task_id/campaign/scheduling",
-            post(campaign::scheduling),
-        )
-        .route(
-            "/runs/:id/tasks/:task_id/campaign/queue-tuning",
-            post(campaign::tuning),
-        )
-        .route(
-            "/runs/:id/tasks/:task_id/queue-tuning",
-            post(update_run_task_queue_tuning),
-        )
         .route("/runs/:id/performance", get(get_run_performance))
         .route(
             "/runs/:id/performance/graphs",
             get(get_run_performance_graphs),
         )
         .route("/runs/:id/metrics", get(get_run_metrics))
-        .route("/runs/:id/auto-assign", post(auto_assign_run))
-        .route("/nodes", get(get_nodes))
-        .route("/nodes/offline", get(get_offline_nodes))
-        .route("/nodes/:id/start", post(start_offline_node))
-        .route("/nodes/:id/restore", post(restore_offline_node))
-        .route("/nodes/:id/unassign-offline", post(unassign_offline_node))
-        .route(
-            "/nodes/:id/cancel-restoration",
-            post(cancel_worker_restoration),
-        )
-        .route("/nodes/:id/panels", get(get_node_panels))
-        .route("/nodes/:id/assign", post(assign_node))
-        .route("/nodes/:id/unassign", post(unassign_node))
-        .route("/nodes/:id/stop", post(stop_node))
-        .route("/nodes/unassign-all", post(unassign_all_nodes))
-        .route("/nodes/stop-all", post(stop_all_nodes))
-        .route("/nodes/stop-idle", post(stop_idle_nodes))
-        .route("/nodes/auto-run", post(auto_run_nodes))
-        .route(
-            "/node-launch-requests",
-            get(get_node_launch_requests).post(create_node_launch_request),
-        )
+        .route("/workers", get(get_workers))
+        .route("/workers/:id/panels", get(get_node_panels))
         .route(
             "/node-launch-requests/claim-external",
             post(claim_external_node_launch_request),
@@ -85,11 +50,8 @@ pub(super) fn build_app(state: AppState) -> Router {
             "/node-launch-requests/:id/lease",
             post(renew_external_launch_lease),
         )
-        .route("/templates/:kind", get(list_templates).post(save_template))
-        .route(
-            "/templates/:kind/:name",
-            get(get_template).delete(delete_template),
-        )
+        .route("/templates/:kind", get(list_templates))
+        .route("/templates/:kind/:name", get(get_template))
         .route("/logs", get(get_logs))
         .route(
             "/histogram-bundle/export",
@@ -105,21 +67,6 @@ pub(super) fn build_app(state: AppState) -> Router {
             post(histogram_import::import_hwu)
                 .layer(DefaultBodyLimit::max(histogram_import::MAX_IMPORT_BYTES)),
         )
-        .route("/admin/control/status", get(instance_control_status))
-        .route(
-            "/admin/control/acknowledge-cleanup",
-            post(acknowledge_instance_cleanup),
-        )
-        .route("/admin/db/restart", post(restart_db))
-        .route(
-            "/admin/workers/save-for-restart",
-            post(save_workers_for_restart),
-        )
-        .route("/admin/control/shutdown", post(shutdown_control_process))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            instance_admission,
-        ))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_admin_session,
@@ -147,46 +94,8 @@ fn cors_layer(allowed_origins: Vec<axum::http::HeaderValue>) -> CorsLayer {
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
-            axum::http::Method::DELETE,
             axum::http::Method::OPTIONS,
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
         .allow_origin(AllowOrigin::list(allowed_origins))
-}
-
-async fn instance_admission(
-    State(state): State<AppState>,
-    request: Request<axum::body::Body>,
-    next: Next,
-) -> Response {
-    let path = request.uri().path();
-    let mutating = matches!(
-        *request.method(),
-        axum::http::Method::POST | axum::http::Method::PUT
-    );
-    let starts_work = path.ends_with("/runs")
-        || path.ends_with("/tasks")
-        || path.ends_with("/auto-assign")
-        || path.ends_with("/assign")
-        || path.ends_with("/auto-run")
-        || path.ends_with("/start")
-        || path.ends_with("/restore")
-        || path.ends_with("/node-launch-requests");
-    let guard = if mutating && starts_work {
-        match crate::local_control::admit(&state.store).await {
-            Ok(guard) => Some(guard),
-            Err(error) => {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error":error.to_string()})),
-                )
-                    .into_response();
-            }
-        }
-    } else {
-        None
-    };
-    let response = next.run(request).await;
-    drop(guard);
-    response
 }

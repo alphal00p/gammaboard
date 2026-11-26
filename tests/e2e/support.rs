@@ -362,9 +362,14 @@ persist_runtime_logs=true
         let mut config: toml::Value =
             toml::from_str(&std::fs::read_to_string(&self.instance_path)?)?;
         config["server"]["api_port"] = toml::Value::Integer(unused_local_port()? as i64);
-        config["server"]["allowed_origins"] =
-            toml::Value::Array(vec![toml::Value::String("http://localhost:3000".into())]);
-        config["server"]["allow_local_node_spawn"] = toml::Value::Boolean(allow_local_node_spawn);
+        config["server"].as_table_mut().unwrap().insert(
+            "allowed_origins".into(),
+            toml::Value::Array(vec![toml::Value::String("http://localhost:3000".into())]),
+        );
+        config["server"].as_table_mut().unwrap().insert(
+            "allow_local_node_spawn".into(),
+            toml::Value::Boolean(allow_local_node_spawn),
+        );
         config["server"].as_table_mut().unwrap().insert(
             "auth".into(),
             toml::Value::Table(toml::Table::from_iter([

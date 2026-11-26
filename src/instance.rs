@@ -237,6 +237,15 @@ impl Instance {
             "use top-level database and shutdown sections"
         );
         let mut server: ServerConfig = toml::Value::Table(table).try_into()?;
+        server.allowed_origins = server
+            .allowed_origins
+            .iter()
+            .map(|origin| crate::server::normalize_browser_origin(origin))
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            !server.allowed_origins.is_empty(),
+            "server.allowed_origins must not be empty"
+        );
         server.name = definition.name.clone();
         server.cleanup = definition.shutdown;
         if managed_database {

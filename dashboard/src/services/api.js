@@ -86,10 +86,9 @@ const apiPost = async (path, payload, message, signal) =>
     body: JSON.stringify(payload ?? {}),
   });
 
-const apiDelete = async (path, message, signal) =>
-  apiRequest(path, message, signal, {
-    method: "DELETE",
-  });
+const manage = (payload, message, signal) => apiPost("/v1/manage", payload, message, signal);
+const taskAction = (runId, action, message, signal) =>
+  manage({ operation: "task", run: String(runId), action }, message, signal);
 
 export const importHwuBundle = (contents, signal) =>
   apiRequest("/histogram-bundle/import", "Failed to import HwU bundle", signal, {
@@ -127,21 +126,20 @@ export const login = async (password, signal) => { clearResourceCache(); return 
 
 export const logout = async (signal) => { clearResourceCache(); return apiPost("/auth/logout", {}, "Failed to log out", signal); };
 
-export const pauseRun = async (runId, signal) => apiPost(`/runs/${runId}/pause`, {}, "Failed to pause run", signal);
+export const pauseRun = (runId, signal) =>
+  manage({ operation: "run_pause", runs: [String(runId)], all: false }, "Failed to pause run", signal);
 
-export const createRun = async (toml, { duplicate = false, signal } = {}) =>
-  apiPost("/runs", { toml, duplicate }, "Failed to create run", signal);
+export const createRun = async (toml, { duplicate = false, signal } = {}) => {
+  const settings = await fetchSettingsOverview(signal);
+  const receipt = await manage({ operation: "run_create", toml, duplicate, start: false, base_dir: settings.paths.run_templates_dir }, "Failed to create run", signal);
+  return receipt.created;
+};
 
-export const addRunTasks = async (runId, toml, { duplicate = false, signal } = {}) =>
-  apiPost(`/runs/${runId}/tasks`, { toml, duplicate }, "Failed to add tasks", signal);
+export const addRunTasks = (runId, toml, { duplicate = false, signal } = {}) =>
+  taskAction(runId, { action: "append", toml, duplicate }, "Failed to add tasks", signal);
 
-export const updateRunTaskQueueTuning = async (runId, taskId, queueTuning, signal) =>
-  apiPost(
-    `/runs/${runId}/tasks/${taskId}/queue-tuning`,
-    { queue_tuning: queueTuning },
-    "Failed to update task queue tuning",
-    signal,
-  );
+export const updateRunTaskQueueTuning = (runId, taskId, queueTuning, signal) =>
+  taskAction(runId, { action: "tune", id: String(taskId), queue_tuning: queueTuning }, "Failed to update task queue tuning", signal);
 
 const waitForRemovalPoll = (delay, signal) => new Promise((resolve, reject) => {
   signal?.throwIfAborted();
@@ -157,13 +155,12 @@ const waitForRemovalPoll = (delay, signal) => new Promise((resolve, reject) => {
 });
 
 export const deleteRun = async (runId, signal) => {
-  let operation = await apiDelete(`/runs/${runId}`, "Failed to delete run", signal);
-  // Older servers return the completed deletion directly.
-  if (!operation?.operation_id) { clearResourceCache(); return operation; }
+  const receipt = await manage({ operation: "run_remove", runs: [String(runId)], all: false, dry_run: false }, "Failed to delete run", signal);
+  let operation = receipt.operations[0];
   while (operation.status === "running") {
     await waitForRemovalPoll(operation.poll_after_ms ?? 1000, signal);
-    operation = await apiGet(
-      `/run-removals/${encodeURIComponent(operation.operation_id)}`,
+    operation = await manage(
+      { operation: "run_removal_status", operation_id: operation.operation_id },
       "Unable to check deletion status; refresh the run list before retrying",
       signal,
     );
@@ -176,60 +173,48 @@ export const deleteRun = async (runId, signal) => {
 };
 
 export const deleteRunTask = async (runId, taskId, signal) => {
-  const result = await apiDelete(`/runs/${runId}/tasks/${taskId}`, "Failed to delete pending task", signal);
+  const result = await taskAction(runId, { action: "remove", id: String(taskId) }, "Failed to delete pending task", signal);
   clearResourceCache(); return result;
 };
 
-export const autoAssignRun = async (runId, { maxEvaluators = null } = {}, signal) =>
-  apiPost(`/runs/${runId}/auto-assign`, { max_evaluators: maxEvaluators }, "Failed to auto-assign run", signal);
-
-export const assignNode = async (nodeName, { runId, role }, signal) =>
-  apiPost(`/nodes/${nodeName}/assign`, { run_id: runId, role }, "Failed to assign node", signal);
-
-export const unassignNode = async (nodeName, signal) =>
-  apiPost(`/nodes/${nodeName}/unassign`, {}, "Failed to unassign node", signal);
-
-export const unassignAllNodes = async (signal) =>
-  apiPost("/nodes/unassign-all", {}, "Failed to unassign all nodes", signal);
-
-export const stopNode = async (nodeName, signal) =>
-  apiPost(`/nodes/${nodeName}/stop`, {}, "Failed to stop node", signal);
-
-export const stopAllNodes = async (signal) => apiPost("/nodes/stop-all", {}, "Failed to stop all nodes", signal);
-export const stopIdleNodes = async (signal) => apiPost("/nodes/stop-idle", {}, "Failed to stop idle nodes", signal);
-export const fetchOfflineNodes = (signal) => apiGet("/nodes/offline", "Failed to load offline nodes", signal);
-export const updateOfflineNode = (node, action) => apiPost(`/nodes/${encodeURIComponent(node.node_name)}/${action}`,
-  { node_uuid: node.node_uuid }, `Failed to ${action === "unassign-offline" ? "unassign" : action === "cancel-restoration" ? "cancel restoration" : action} for ${node.node_name}`);
-
-export const restartDatabase = async (signal) => { clearResourceCache(); return apiPost("/admin/db/restart", {}, "Failed to restart database", signal); };
-
-export const shutdownControlProcess = async (signal) =>
-  apiPost("/admin/control/shutdown", {}, "Failed to shut down control process", signal);
-
-export const autoRunNodes = async ({ toml, count = null, maxStartFailures = null, dbPoolSize = null }, signal) =>
-  apiPost(
-    "/nodes/auto-run",
-    {
-      toml,
-      count,
-      max_start_failures: maxStartFailures,
-      db_pool_size: dbPoolSize,
-    },
-    "Failed to start nodes",
-    signal,
-  );
-
-export const fetchNodeLaunchRequests = async (signal) => {
-  const data = await apiGet("/node-launch-requests", "Failed to fetch node launch requests", signal);
-  return data.items;
+export const autoAssignRun = async (runId, { maxEvaluators = null } = {}, signal) => {
+  const receipt = await manage({ operation: "run_start", run: String(runId), max_evaluators: maxEvaluators }, "Failed to start run", signal);
+  if (receipt.start.state !== "started") throw new Error(receipt.start.error?.message || `Run start ${receipt.start.state}`);
+  return receipt;
 };
 
-export const fetchNodes = async (runId = null, signal) => {
-  return apiGet(`/nodes${buildQueryString([["run_id", runId]])}`, "Failed to fetch nodes", signal);
+export const assignNode = (nodeName, { runId, role }, signal) =>
+  manage({ operation: "worker_assign", name: nodeName, run: String(runId), role }, "Failed to assign worker", signal);
+export const unassignNode = (nodeName, signal) =>
+  manage({ operation: "worker_unassign", name: nodeName }, "Failed to unassign worker", signal);
+export const unassignAllNodes = (signal) =>
+  manage({ operation: "worker_unassign", all: true }, "Failed to unassign all workers", signal);
+export const stopNode = (nodeName, signal) =>
+  manage({ operation: "worker_stop", names: [nodeName], all: false, idle: false }, "Failed to stop worker", signal);
+export const stopAllNodes = (signal) =>
+  manage({ operation: "worker_stop", names: [], all: true, idle: false }, "Failed to stop all workers", signal);
+export const stopIdleNodes = (signal) =>
+  manage({ operation: "worker_stop", names: [], all: false, idle: true }, "Failed to stop idle workers", signal);
+export const fetchOfflineNodes = (signal) => apiGet("/workers?state=offline", "Failed to load offline workers", signal);
+export const updateOfflineNode = (node, action) => {
+  const identity = { name: node.node_name, expected_uuid: node.node_uuid };
+  const payload = action === "start" || action === "restore"
+    ? { operation: "worker_launch", source: { kind: "saved", ...identity, restore_only: action === "restore" } }
+    : { operation: action === "unassign-offline" ? "worker_unassign" : "worker_cancel_restoration", ...identity };
+  return manage(payload, `Failed to ${action} for ${node.node_name}`);
 };
 
-export const fetchNodePanels = async (nodeName, signal) =>
-  apiGet(`/nodes/${nodeName}/panels`, "Failed to fetch node panels", signal);
+export const shutdownControlProcess = (signal) =>
+  manage({ operation: "stop", wait: false, timeout_ms: null }, "Failed to stop instance", signal);
+
+export const autoRunNodes = ({ toml, count = null, maxStartFailures = null }, signal) =>
+  manage({ operation: "worker_launch", source: { kind: "new", toml, count, max_start_failures: maxStartFailures } }, "Failed to request workers", signal);
+export const fetchNodeLaunchRequests = (signal) =>
+  manage({ operation: "worker_requests", id: null }, "Failed to fetch worker launch requests", signal);
+export const fetchNodes = (runId = null, signal) =>
+  apiGet(`/workers${buildQueryString([["state", "live"], ["run_id", runId]])}`, "Failed to fetch workers", signal);
+export const fetchNodePanels = (nodeName, signal) =>
+  apiGet(`/workers/${encodeURIComponent(nodeName)}/panels`, "Failed to fetch worker panels", signal);
 
 export const fetchRunDefinition = async (runId, duplicate = false, signal) =>
   apiGet(`/runs/${runId}/definition?duplicate=${duplicate}`, "Failed to load run definition", signal);
@@ -237,11 +222,8 @@ export const fetchRunDefinition = async (runId, duplicate = false, signal) =>
 export const fetchTaskDefinition = async (runId, taskId, duplicate = false, signal) =>
   apiGet(`/runs/${runId}/tasks/${taskId}/definition?duplicate=${duplicate}`, "Failed to load task definition", signal);
 
-export const editRunTask = async (runId, taskId, toml, expectedToml, signal) =>
-  apiRequest(`/runs/${runId}/tasks/${taskId}`, "Failed to edit task", signal, {
-    method: "PUT", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ toml, expected_toml: expectedToml }),
-  });
+export const editRunTask = (runId, taskId, toml, expectedToml, signal) =>
+  taskAction(runId, { action: "edit", id: String(taskId), toml, expected_toml: expectedToml }, "Failed to edit task", signal);
 
 export const fetchRunPanels = async (runId, signal) =>
   apiGet(`/runs/${runId}/panels`, "Failed to fetch run panels", signal);
@@ -279,10 +261,10 @@ export const fetchTemplateFile = async (kind, name, signal) =>
   apiGet(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to fetch template ${name}`, signal);
 
 export const saveTemplateFile = async (kind, { name, toml }, signal) =>
-  apiPost(`/templates/${kind}`, { name, toml }, `Failed to save template ${name}`, signal);
+  manage({ operation: "template", kind: ({ runs: "run", tasks: "task", nodes: "worker" })[kind] || kind, action: { action: "save", name, toml, overwrite: true } }, `Failed to save template ${name}`, signal);
 
 export const deleteTemplateFile = async (kind, name, signal) =>
-  apiDelete(`/templates/${kind}/${encodeURIComponent(name)}`, `Failed to delete template ${name}`, signal);
+  manage({ operation: "template", kind: ({ runs: "run", tasks: "task", nodes: "worker" })[kind] || kind, action: { action: "remove", name } }, `Failed to delete template ${name}`, signal);
 
 export const fetchRuntimeLogPage = async (
   {
@@ -342,5 +324,5 @@ export const fetchCampaign = (runId, taskId, { section = "settings", group, sele
   apiGet(`/runs/${runId}/tasks/${taskId}/campaign${buildQueryString([
     ["section", section], ["group", group], ...performanceRangeQuery(selection),
   ])}`, "Failed to fetch campaign", signal);
-export const updateCampaignScheduling = (runId, taskId, payload) => apiPost(`/runs/${runId}/tasks/${taskId}/campaign/scheduling`, payload, "Failed to update campaign scheduling");
-export const updateCampaignTuning = (runId, taskId, payload) => apiPost(`/runs/${runId}/tasks/${taskId}/campaign/queue-tuning`, payload, "Failed to update campaign queue tuning");
+export const updateCampaignScheduling = (runId, taskId, payload) => taskAction(runId, { action: "campaign_scheduling", id: String(taskId), settings: payload }, "Failed to update campaign scheduling");
+export const updateCampaignTuning = (runId, taskId, payload) => taskAction(runId, { action: "campaign_tuning", id: String(taskId), settings: payload }, "Failed to update campaign queue tuning");

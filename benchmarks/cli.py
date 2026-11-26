@@ -116,6 +116,7 @@ def parser():
         default=Path("/tmp"),
         help="parent directory for private databases; choose a filesystem to compare storage",
     )
+    cli.add_argument("--keep-instance",type=Path,help="Retain stopped deployments under this directory for dashboard inspection")
     cli.add_argument("--port-offset", type=int, default=150)
     return cli
 

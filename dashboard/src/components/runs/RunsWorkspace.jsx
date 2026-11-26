@@ -60,7 +60,8 @@ function WorkerPoolControls({ run, workers, disabled, notify }) {
       else window.localStorage.removeItem("runs.evaluator_count");
       if (action === "assign") {
         const result = await autoAssignRun(run.run_id, { maxEvaluators: target });
-        notify(`Assigned ${(result.assigned_evaluators?.length || 0) + (result.assigned_samplers?.length || 0)} node(s); resumed ${result.resumed_nodes || 0} pool member(s).`);
+        if (result.start?.state !== "started") throw new Error(result.start?.error?.message || "Compatible workers are not yet available; retry after release.");
+        notify(`Run started; assigned ${result.start.assignments?.length || 0} new node(s).`);
       } else if (action === "remove") {
         const nodes = await fetchNodes(run.run_id);
         const evaluators = asArray(nodes).filter((node) => node.pool_run_id === run.run_id && node.pool_role === "evaluator");
@@ -74,6 +75,7 @@ function WorkerPoolControls({ run, workers, disabled, notify }) {
     } catch (error) { notify(error.message, "error"); }
     finally { setBusy(false); }
   };
+  if (run.archived) return <Alert severity="info">Archived results: read-only, with no resumable computation.</Alert>;
   return <ControlBar>
     <LoadingStatus loading={busy} label={operation} />
     <TextField size="small" label="Evaluators" value={count} placeholder="all" InputLabelProps={{ shrink: true }} disabled={disabled || busy || Boolean(assignReason && removeReason)} inputProps={{ "aria-label": "Evaluator node count" }} sx={{ width: 104 }}
@@ -102,11 +104,11 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const isIntegration = !run.kind || run.kind === "integration";
-  const editable = authenticated && isIntegration && run.parent_run_id == null;
+  const editable = authenticated && isIntegration && run.parent_run_id == null && !run.archived;
   const taskList = asArray(tasks);
   const requestedTask = navigation?.taskId ?? selectedId;
   const selectedTask = taskList.find((task) => String(task.id) === String(requestedTask)) ?? getCurrentTask(taskList);
-  const campaignView = run.kind === "integration_campaign" && ["diagnostics", "scheduling"].includes(taskTab);
+  const campaignView = !run.archived && run.kind === "integration_campaign" && ["diagnostics", "scheduling"].includes(taskTab);
   const taskOutput = useTaskOutput({ runId: run.run_id, taskId: selectedTask?.id ?? null,
     section: view === "summary" ? "summary" : campaignView || (taskTab === "scheduling" && run.kind !== "integration_campaign") ? "result" : taskTab,
     pollMs: run.kind === "integration_campaign" ? 10000 : 3000,
@@ -177,10 +179,10 @@ function RunContent({ run, runs, workers, isConnected, disabled, notify, onSelec
         openLabel={`${editable && task.state === "pending" ? "Edit" : "Open"} task ${task.name}`}
         editable={editable && task.state === "pending"} disabled={disabled || busy} onOpen={() => openTask(task)}
         deleteLabel={`Delete task ${task.name}`} onDelete={authenticated ? () => removeTask(task) : null}
-        deleteReason={!editable ? "This queue is managed by its parent run." : task.state !== "pending" ? "Only pending tasks can be deleted." : null} />} />}
+        deleteReason={run.archived ? "Archived results are read-only." : !editable ? "This queue is managed by its parent run." : task.state !== "pending" ? "Only pending tasks can be deleted." : null} />} />}
     {!tasksLoading && (selectedTask || isIntegration) && <StableTaskOutput loading={taskOutput.isLoading && !campaignView} source={selectedTask?.id}>
     <TaskOutputPanel title={isIntegration ? "Selected task output" : "Run output"}
-      key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} output={taskOutput} onSelectRun={onSelectRun}
+      key={selectedTask?.id ?? "empty"} runId={run.run_id} task={selectedTask} output={taskOutput} readOnly={Boolean(run.archived)} onSelectRun={run.archived ? null : onSelectRun}
       view={taskTab} onViewChange={setTaskTab} />
     </StableTaskOutput>}
     </WorkspacePanel>

@@ -234,6 +234,54 @@ fn lightweight_client_remote_workflow() {
             .success()
     );
     assert_eq!(call(&["worker", "list"]).as_array().unwrap().len(), 3);
+    let worker = call(&["worker", "list", "--state", "all"])[0].clone();
+    let name = worker["node_name"].as_str().unwrap();
+    let inspected = call(&["worker", "inspect", name]);
+    assert_eq!(inspected["node_name"], name);
+    assert_eq!(inspected["state"], "live");
+    assert!(inspected.get("live").is_none() && inspected.get("offline").is_none());
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let http = reqwest::Client::new();
+        for path in [
+            "/admin/db/restart",
+            "/admin/workers/save-for-restart",
+            "/admin/control/shutdown",
+            "/nodes/auto-run",
+            "/node-launch-requests",
+        ] {
+            let response = http
+                .post(format!("{endpoint}/api{path}"))
+                .body("{}")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND, "{path}");
+        }
+        let response = http
+            .post(format!("{endpoint}/api/runs"))
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+        let response = http
+            .get(format!("{endpoint}/api/workers?state=all"))
+            .send()
+            .await
+            .unwrap();
+        let workers: Value = response.json().await.unwrap();
+        assert_eq!(workers.as_array().unwrap().len(), 3);
+        assert_eq!(
+            workers[0].as_object().unwrap().keys().collect::<Vec<_>>(),
+            inspected.as_object().unwrap().keys().collect::<Vec<_>>()
+        );
+    });
+    assert_eq!(
+        call(&["run", "list"]).as_array().unwrap().len(),
+        1,
+        "retired reset route must not delete data"
+    );
+
     assert_eq!(
         call(&["run", "inspect", &id])["run"]["lifecycle_state"],
         "completed"
@@ -255,12 +303,14 @@ fn lightweight_client_remote_workflow() {
     call(&["run", "task", "remove", &clone, &new_task, "--yes"]);
     call(&["run", "remove", &clone, "--yes"]);
     assert_eq!(call(&["config", "validate"])["valid"], true);
-    assert_eq!(call(&["db", "status"])["reachable"], true);
+    assert_eq!(call(&["status"])["database"]["reachable"], true);
     let definition_file = instance.root.path().join("export.toml");
     call(&[
         "run",
         "export",
         &id,
+        "--kind",
+        "definition",
         "--output",
         definition_file.to_str().unwrap(),
     ]);
@@ -273,7 +323,15 @@ fn lightweight_client_remote_workflow() {
     call(&["db", "backup", "--output", backup.to_str().unwrap()]);
     assert!(fs::read(backup).unwrap().starts_with(b"PGDMP"));
     let output = instance.root.path().join("download.json");
-    call(&["run", "results", &id, "--output", output.to_str().unwrap()]);
+    call(&[
+        "run",
+        "export",
+        &id,
+        "--kind",
+        "results",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
     let downloaded: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
     assert_eq!(downloaded["run"]["lifecycle_state"], "completed");
     assert_eq!(
@@ -300,13 +358,13 @@ fn lightweight_client_remote_workflow() {
 #[test]
 fn instance_configuration_is_explicit_and_offline() {
     let instance = Instance::configured(false);
-    let config = instance.ok(&["local", "check-config"]);
+    let config = instance.ok(&["local", "config", "validate"]);
     assert_eq!(
         config["paths"]["state_dir"],
         instance.root.path().join("control").display().to_string()
     );
     assert!(!instance.root.path().join("postgres").exists());
-    let failed = instance.output(&["local", "check-run", "does-not-exist.toml"]);
+    let failed = instance.output(&["local", "run", "validate", "does-not-exist.toml"]);
     assert!(!failed.status.success());
     let lines = String::from_utf8(failed.stderr).unwrap();
     assert_eq!(
@@ -327,7 +385,8 @@ fn external_gate_prevents_bootstrap_without_a_database() {
         &["start"][..],
         &["restart"][..],
         &["start", "db"][..],
-        &["local", "check-run", "missing.toml", "--probe"][..],
+        &["local", "run", "validate", "missing.toml", "--probe"][..],
+        &["local", "run", "validate", "missing.toml"][..],
         &["local", "db", "create"][..],
     ] {
         let output = instance.output(args);
@@ -657,5 +716,182 @@ fn queued_requests_wait_cancel_and_policy() {
             .success()
     );
     instance.ok(&["stop"]);
+    instance.wait_stopped();
+}
+
+#[test]
+#[ignore = "starts a disposable service to test atomic starts, retry receipts and archived results"]
+fn retry_safe_create_wait_and_archive_workflow() {
+    let instance = Instance::new();
+    instance.ok(&[
+        "start",
+        "--workers",
+        "1",
+        "--wait",
+        "--allowed-origin",
+        "http://localhost:39491",
+    ]);
+    assert!(instance.root.path().join("control/resources").is_dir());
+    let card = instance.card("retry-safe", 1024);
+    let create = [
+        "run",
+        "create",
+        card.to_str().unwrap(),
+        "--start",
+        "--request-id",
+        "retry-safe-001",
+    ];
+    let blocked = instance.output(&create);
+    assert!(!blocked.status.success());
+    let receipt: Value = serde_json::from_slice(&blocked.stdout).unwrap();
+    assert_eq!(receipt["start"]["state"], "blocked");
+    let id = receipt["created"]["run_id"].to_string();
+    let repeated = instance.output(&create);
+    let replay: Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(receipt["created"], replay["created"]);
+    assert_eq!(instance.ok(&["run", "list"]).as_array().unwrap().len(), 1);
+    let workers = instance.ok(&["worker", "list"]);
+    for worker in workers.as_array().unwrap() {
+        assert!(
+            worker["pool_run_id"].is_null(),
+            "blocked admission took half a group: {worker}"
+        );
+    }
+    let conflict = instance.output(&[
+        "run",
+        "create",
+        card.to_str().unwrap(),
+        "--start",
+        "--request-id",
+        "retry-safe-001",
+        "--name",
+        "different",
+    ]);
+    assert!(!conflict.status.success());
+    let waiting = instance
+        .cmd()
+        .args([
+            "run",
+            "start",
+            &id,
+            "--wait-for-workers",
+            "--timeout",
+            "15s",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    instance.ok(&["worker", "launch", "--count", "1", "--wait"]);
+    let output = waiting.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    instance.ok(&[
+        "run",
+        "wait",
+        &id,
+        "--until",
+        "completed",
+        "--timeout",
+        "30s",
+    ]);
+    let next = instance.card("next", 1024);
+    let second = instance.ok(&[
+        "run",
+        "create",
+        next.to_str().unwrap(),
+        "--start",
+        "--wait-for-workers",
+        "--timeout",
+        "15s",
+    ]);
+    let next_id = second["created"]["run_id"].to_string();
+    instance.ok(&[
+        "run",
+        "wait",
+        &next_id,
+        "--until",
+        "completed",
+        "--timeout",
+        "30s",
+    ]);
+    let results = instance.root.path().join("results.json");
+    instance.ok(&["run", "results", &id, "--output", results.to_str().unwrap()]);
+    let imported = instance.ok(&[
+        "run",
+        "import-results",
+        results.to_str().unwrap(),
+        "--name",
+        "Archive",
+    ]);
+    let archive = imported["run_id"].to_string();
+    assert_eq!(imported["archived"], true);
+    assert!(
+        !instance
+            .output(&["run", "start", &archive])
+            .status
+            .success()
+    );
+    let config: toml::Value =
+        toml::from_str(&fs::read_to_string(&instance.config).unwrap()).unwrap();
+    let endpoint = format!(
+        "http://127.0.0.1:{}",
+        config["server"]["api_port"].as_integer().unwrap()
+    );
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let summary = reqwest::get(format!("{endpoint}/api/runs/{archive}"))
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(summary["archived"], true);
+        let catalog = reqwest::get(format!("{endpoint}/api/runs"))
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert!(
+            catalog["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["run_id"] == imported["run_id"] && r["archived"] == true)
+        );
+    });
+    let marker = instance.root.path().join("must-not-execute");
+    let task = instance.root.path().join("archive-task.toml");
+    fs::write(
+        &task,
+        format!(
+            r#"[[task_queue]]
+kind="sample"
+stop_condition={{max_samples=1}}
+sampler={{config={{kind="naive_monte_carlo",seed=1}}}}
+accumulator={{config="scalar"}}
+evaluator={{config={{kind="process_evaluator",command=["sh","-c","touch {}"]}}}}
+"#,
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let rejected = instance.output(&["run", "task", "append", &archive, task.to_str().unwrap()]);
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("read-only"));
+    assert!(!marker.exists());
+    let original: Value = serde_json::from_slice(&fs::read(results).unwrap()).unwrap();
+    let copy = instance.ok(&["run", "results", &archive]);
+    assert_eq!(copy["run"]["archived"], true);
+    assert_eq!(
+        original["tasks"][0]["snapshot"]["persisted_output"],
+        copy["tasks"][0]["snapshot"]["persisted_output"]
+    );
+    instance.ok(&["run", "remove", &archive, "--yes"]);
+    instance.ok(&["stop", "--wait"]);
     instance.wait_stopped();
 }

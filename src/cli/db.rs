@@ -1,80 +1,8 @@
-use anyhow::Result;
-use clap::{Args, Subcommand};
-use gammaboard::config::RuntimeConfig;
-use gammaboard::local_db;
-use std::path::PathBuf;
-
+//! Offline database commands share the client grammar and require an instance file.
+use clap::Args;
+pub use gammaboard_client::cli::LocalDb as DbCommand;
 #[derive(Debug, Args)]
 pub struct DbArgs {
     #[command(subcommand)]
     pub command: DbCommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum DbCommand {
-    /// Create the configured logical database (instance mode)
-    Create,
-    /// Apply supported migrations (instance mode)
-    Migrate,
-    /// Delete the complete managed local PostgreSQL cluster
-    Purge {
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Show local Postgres cluster status
-    Status,
-    /// Start local Postgres and run migrations
-    Start {
-        /// Start PostgreSQL without creating or migrating the configured database
-        #[arg(long)]
-        skip_migrations: bool,
-    },
-    /// Stop local Postgres
-    Stop,
-    /// Delete the local Postgres data directory
-    Delete {
-        #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
-        yes: bool,
-    },
-    /// Create a compressed backup of the configured database
-    Backup {
-        /// Output path (defaults to backups/gammaboard-<timestamp>.dump)
-        #[arg(short, long, value_name = "PATH")]
-        output: Option<PathBuf>,
-    },
-    /// Replace the configured database with a backup and apply pending migrations
-    Restore {
-        /// Backup produced by `gammaboard db backup`
-        #[arg(value_name = "PATH")]
-        backup: PathBuf,
-        #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
-        yes: bool,
-    },
-    /// Recreate the local Postgres cluster and run migrations
-    Reset {
-        #[arg(short = 'y', long, action = clap::ArgAction::SetTrue)]
-        yes: bool,
-    },
-}
-
-pub fn run_db_command(args: DbArgs, config: &RuntimeConfig) -> Result<()> {
-    let local = &config.local_postgres;
-    match args.command {
-        DbCommand::Create | DbCommand::Migrate => {
-            anyhow::bail!("use --instance FILE for database create/migrate")
-        }
-        DbCommand::Purge { yes } => local_db::delete_db(local, yes),
-        DbCommand::Status => local_db::status_db(local, &config.database.url),
-        DbCommand::Start { skip_migrations } if skip_migrations => {
-            local_db::start_postgres_cluster(local, &config.database.url)
-        }
-        DbCommand::Start { .. } => local_db::start_db(local, &config.database.url),
-        DbCommand::Stop => local_db::stop_db(local),
-        DbCommand::Delete { yes } => local_db::delete_db(local, yes),
-        DbCommand::Backup { output } => local_db::backup_db(&config.database.url, output),
-        DbCommand::Restore { backup, yes } => {
-            local_db::restore_db(local, &config.database.url, &backup, yes)
-        }
-        DbCommand::Reset { yes } => local_db::reset_db(local, yes, &config.database.url),
-    }
 }

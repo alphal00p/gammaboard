@@ -253,3 +253,33 @@ impl PgStore {
             .fetch_optional(self.pool()).await
     }
 }
+
+impl PgStore {
+    /// One snapshot and one public schema for live, offline and restoring workers.
+    pub async fn worker_views(
+        &self,
+        live: Option<bool>,
+        name: Option<&str>,
+        run: Option<i32>,
+    ) -> Result<Vec<Value>, sqlx::Error> {
+        sqlx::query_scalar(r#"SELECT jsonb_build_object(
+            'node_name',n.name,'node_uuid',n.uuid,'capabilities',n.capabilities,'last_seen',n.last_seen,
+            'state',CASE WHEN n.lease_expires_at>now() THEN 'live' ELSE 'offline' END,
+            'status',CASE WHEN n.lease_expires_at>now() THEN CASE WHEN n.active_role IS NULL THEN 'idle' ELSE 'active' END
+                WHEN worker_launch_pending(n.name,n.launch_request_id,n.last_seen) THEN 'starting' ELSE 'offline' END,
+            'pool_run_id',n.pool_run_id,'pool_run_name',pool.name,'pool_role',n.pool_role,
+            'desired_run_id',n.desired_run_id,'desired_run_name',desired.name,'desired_role',n.desired_role,
+            'current_run_id',CASE WHEN n.lease_expires_at>now() THEN n.active_run_id END,
+            'current_run_name',CASE WHEN n.lease_expires_at>now() THEN active.name END,
+            'current_role',CASE WHEN n.lease_expires_at>now() THEN n.active_role END,
+            'restore_requested',n.resume_requested,'backend',l.backend,'launch_state',l.state,
+            'launch_request_id',n.launch_request_id::text,
+            'launch_pending',worker_launch_pending(n.name,n.launch_request_id,n.last_seen),
+            'can_start',n.lease_expires_at<=now() AND n.launch_group IS NOT NULL AND l.id IS NOT NULL AND NOT worker_launch_pending(n.name,n.launch_request_id,n.last_seen))
+            FROM nodes n LEFT JOIN runs pool ON pool.id=n.pool_run_id LEFT JOIN runs desired ON desired.id=n.desired_run_id
+            LEFT JOIN runs active ON active.id=n.active_run_id LEFT JOIN node_launch_requests l ON l.id=n.launch_request_id
+            WHERE ($1::bool IS NULL OR (n.lease_expires_at>now())=$1) AND ($2::text IS NULL OR n.name=$2)
+                AND ($3::int IS NULL OR $3 IN (n.pool_run_id,n.desired_run_id,n.active_run_id)) ORDER BY n.name"#)
+            .bind(live).bind(name).bind(run).fetch_all(self.pool()).await
+    }
+}

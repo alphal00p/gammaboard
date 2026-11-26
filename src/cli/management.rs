@@ -4,12 +4,11 @@ use super::{
     instance::Instance,
     service as local, shared,
 };
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use sqlx::Connection;
 use std::{
     fs,
     io::{IsTerminal, Write},
-    path::PathBuf,
     process::Command,
 };
 pub fn confirm(yes: bool, message: &str) -> Result<()> {
@@ -40,35 +39,11 @@ fn command(command: &mut Command, label: &str) -> Result<()> {
     );
     Ok(())
 }
-pub async fn database(instance: &Instance, args: DbArgs, allowed: bool) -> Result<()> {
+pub async fn database(instance: &Instance, args: DbArgs) -> Result<()> {
     let url = &instance.runtime.database.url;
     match args.command {
-        DbCommand::Start {
-            skip_migrations: false,
-        } => {
-            return local::start(
-                instance,
-                local::StartArgs {
-                    component: Some("db".into()),
-                    options: Default::default(),
-                },
-                allowed,
-            )
-            .await;
-        }
-        DbCommand::Start {
-            skip_migrations: true,
-        } => bail!(
-            "instance startup always ensures its schema; use db create/migrate for explicit provisioning"
-        ),
         DbCommand::Stop => local::stop_database(instance),
         DbCommand::Backup { output } => {
-            let output = output.unwrap_or_else(|| {
-                PathBuf::from(format!(
-                    "gammaboard-{}.dump",
-                    chrono::Utc::now().format("%Y%m%dT%H%M%S")
-                ))
-            });
             let output = super::instance::resolve(&std::env::current_dir()?, &output)?;
             ensure!(
                 !output.exists(),
@@ -229,7 +204,6 @@ pub async fn database(instance: &Instance, args: DbArgs, allowed: bool) -> Resul
                         command(Command::new("pg_restore").args(["--no-owner","--exit-on-error","--dbname",url]).arg(backup),"restore")?; gammaboard::local_db::migrate_instance(url).await?;
                     }
                     DbCommand::Delete {..} => {},
-                    DbCommand::Start {skip_migrations:true} => {},
                     _=>unreachable!(),
                 }
                 Ok(())

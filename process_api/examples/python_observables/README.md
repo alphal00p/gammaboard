@@ -16,7 +16,7 @@ Set the card's `python` replacement to the worker interpreter, then create the
 chosen card from the repository root:
 
 ```bash
-./gammaboard run create process_api/examples/python_observables/run-stratified.toml
+./gb run create process_api/examples/python_observables/run-stratified.toml
 ```
 
 The two Voronoi centres partition the **integrand values**, not x directly.

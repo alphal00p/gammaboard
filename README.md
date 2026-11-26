@@ -21,7 +21,7 @@ of **1.0**. Use `start --api-only --workers 2 --wait` for headless execution. Ea
 count launches that many additional workers; service startup alone launches none.
 
 The checked-in `gammaboard.toml` consolidates local settings and explicit paths.
-Use `--instance FILE` for another configuration. See the [local CLI guide](docs/local-cli.md)
+Use `--instance FILE` for another configuration. See the [CLI reference](docs/local-cli.md)
 for separate service starts, result exports, worker restoration and database maintenance.
 
 Anyone with dashboard access can launch configured process commands; keep the

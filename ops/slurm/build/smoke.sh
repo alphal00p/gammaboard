@@ -109,15 +109,15 @@ accumulator={config="scalar"}
 sampler={config={kind="naive_monte_carlo"}}
 TOML
 step 'validating Symbolica runtime'
-board --json local check-run run.toml --probe > evaluator-probe.json
+board --json local run validate run.toml --probe > evaluator-probe.json
 step 'creating run and launching workers'
 board run create run.toml
-http -H 'Content-Type: application/json' -d '{"count":2,"name_prefix":"smoke"}' "http://127.0.0.1:${api}/api/node-launch-requests" > workers.json
+http -H 'Content-Type: application/json' -d '{"operation":"worker_launch","source":{"kind":"new","count":2,"name_prefix":"smoke"}}' "http://127.0.0.1:${api}/api/v1/manage" > workers.json
 step 'waiting for worker registration'
 deadline=$((SECONDS + 60))
 while true; do
     kill -0 "$deploy_pid"
-    http "http://127.0.0.1:${api}/api/nodes" > nodes.json
+    http "http://127.0.0.1:${api}/api/workers?state=live" > nodes.json
     if python3 -c 'import json,sys; nodes=json.load(open("nodes.json")); sys.exit(0 if sum(n["status"] == "idle" for n in nodes) == 2 else 1)'; then break; fi
     (( SECONDS < deadline ))
     sleep 0.5
@@ -127,7 +127,7 @@ board --json run start image-smoke --max-evaluators 1 > assignment.json
 python3 - <<'PY'
 import json
 assignment = json.load(open('assignment.json'))
-if len(assignment['assigned_samplers']) != 1 or len(assignment['assigned_evaluators']) != 1:
+if assignment['start']['state'] != 'started' or len(assignment['start']['assignments']) != 2:
     raise SystemExit(f'expected one sampler and one evaluator; got {assignment}')
 PY
 step 'waiting for 32 completed samples'

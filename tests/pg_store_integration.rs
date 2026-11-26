@@ -4738,3 +4738,135 @@ async fn cancel_launch_is_idempotent_and_fenced_against_controller_claims() {
         .unwrap();
     assert_eq!(state, "starting");
 }
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn atomic_start_waits_for_current_assignment_release() {
+    use gammaboard::api::runs::{create_run, parse_run_add_config_toml};
+    let (_guard, store) = locked_test_store().await;
+    let raw = include_str!("../resources/templates/runs/installation-smoke.toml");
+    let a = create_run(&store, parse_run_add_config_toml(raw).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    let b = create_run(&store, parse_run_add_config_toml(raw).unwrap())
+        .await
+        .unwrap()
+        .run_id;
+    store
+        .announce_node("atomic-1", "atomic-1", &Default::default())
+        .await
+        .unwrap();
+    let blocked = store.try_start_run(a, None).await.unwrap();
+    assert_eq!(blocked["start"]["state"], "blocked");
+    assert!(
+        store
+            .list_nodes(None)
+            .await
+            .unwrap()
+            .iter()
+            .all(|n| n.pool_assignment.is_none())
+    );
+    store
+        .announce_node("atomic-2", "atomic-2", &Default::default())
+        .await
+        .unwrap();
+    let (first, second) = tokio::join!(store.try_start_run(a, None), store.try_start_run(b, None));
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(
+        [&first, &second]
+            .iter()
+            .filter(|r| r["start"]["state"] == "started")
+            .count(),
+        1
+    );
+    let winner = if first["start"]["state"] == "started" {
+        a
+    } else {
+        b
+    };
+    let other = if winner == a { b } else { a };
+    sqlx::query(
+        "UPDATE gammaboard_run_starts SET started_at=now()-interval '1 day' WHERE run_id=$1",
+    )
+    .bind(winner)
+    .execute(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        store.try_start_run(winner, None).await.unwrap()["start"]["state"],
+        "started"
+    );
+    let current: bool = sqlx::query_scalar(
+        "SELECT started_at>now()-interval '1 minute' FROM gammaboard_run_starts WHERE run_id=$1",
+    )
+    .bind(winner)
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert!(
+        current,
+        "repeated/resumed starts must remain visible to stop --wait in the current service lifetime"
+    );
+
+    for n in store.list_nodes(None).await.unwrap() {
+        let assignment = n.pool_assignment.unwrap();
+        store
+            .set_current_assignment(&n.uuid, assignment.role, winner)
+            .await
+            .unwrap();
+    }
+    store.finish_run_assignments(winner).await.unwrap();
+    assert_eq!(
+        store.try_start_run(other, None).await.unwrap()["start"]["state"],
+        "blocked"
+    );
+    for n in store.list_nodes(None).await.unwrap() {
+        store.clear_current_assignment(&n.uuid).await.unwrap();
+    }
+    assert_eq!(
+        store.try_start_run(other, None).await.unwrap()["start"]["state"],
+        "started"
+    );
+    store.remove_run(a).await.unwrap();
+    store.remove_run(b).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires postgres with project migrations applied"]
+async fn concurrent_creation_keys_are_atomic_and_deleted_keys_are_tombstones() {
+    use gammaboard::api::runs::{create_run, parse_run_add_config_toml};
+    let (_guard, store) = locked_test_store().await;
+    let raw = include_str!("../resources/templates/runs/installation-smoke.toml");
+    let key = unique_id("create-key");
+    let payload = serde_json::json!({"toml":raw});
+    let scoped = store.with_creation_request(key.clone(), payload.clone());
+    let (a, b) = tokio::join!(
+        create_run(&scoped, parse_run_add_config_toml(raw).unwrap()),
+        create_run(&scoped, parse_run_add_config_toml(raw).unwrap())
+    );
+    let id = a.unwrap().run_id;
+    assert_eq!(id, b.unwrap().run_id);
+    let other = store.with_creation_request(key.clone(), serde_json::json!({"toml":"different"}));
+    assert!(
+        create_run(&other, parse_run_add_config_toml(raw).unwrap())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .creation_receipt(&key, &payload)
+            .await
+            .unwrap()
+            .unwrap()["run_id"],
+        id
+    );
+    store.remove_run(id).await.unwrap();
+    assert!(
+        create_run(&scoped, parse_run_add_config_toml(raw).unwrap())
+            .await
+            .is_err()
+    );
+    assert!(store.creation_receipt(&key, &payload).await.is_err());
+}

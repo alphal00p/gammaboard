@@ -104,10 +104,16 @@ class Session:
         infrastructure_cpus=None,
         shared_buffers=None,
         database_directory="/tmp",
+        keep_instance=None,
     ):
         self.binary, self.output, self.offset = binary, output, offset
         self.deadline = time.monotonic() + budget - 90  # Reserve graceful worker/database shutdown.
-        self.directory = Path(tempfile.mkdtemp(prefix="gmb-scale-", dir=database_directory))
+        self.keep_instance = keep_instance is not None
+        if self.keep_instance:
+            self.directory=Path(keep_instance).absolute()
+            self.directory.mkdir(parents=True,exist_ok=False)
+        else:
+            self.directory = Path(tempfile.mkdtemp(prefix="gmb-scale-", dir=database_directory))
         self.runtime = self.directory / "runtime.toml"
         self.runtime.write_text(
             f'[resources]\nroots = [{json.dumps(str(self.directory/"resources"))}]\n'
@@ -136,6 +142,7 @@ max_connections={max_connections}
 {f'shared_buffers={json.dumps(shared_buffers)}' if shared_buffers else ''}
 [server]
 api_port={4000+offset}
+dashboard_dir={json.dumps(str(ROOT/"dashboard/build"))}
 ''')
         self.infrastructure_cpus = infrastructure_cpus
         self.workers = []
@@ -239,7 +246,12 @@ api_port={4000+offset}
                 runtime_directory=str(self.directory),
             ),
         )
-        if exc_type is None and not errors:
+        if self.keep_instance:
+            import shlex
+            command=shlex.join([str(self.binary.with_name("gb")),"--instance",str(self.instance),"start"])
+            write_json(self.output/"retained-instance.json",dict(instance=str(self.instance),restart_command=command,processes_stopped=not errors,endpoint=self.endpoint))
+            print(f"Instance retained at {self.directory}. Reopen without workers: {command}",file=sys.stderr)
+        elif exc_type is None and not errors:
             shutil.rmtree(self.directory)
         else:
             print(f"Deployment diagnostics retained in {self.directory}", file=sys.stderr)

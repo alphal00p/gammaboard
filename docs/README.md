@@ -1,43 +1,36 @@
 # Documentation
 
-## Get started
-
 | Task | Guide |
 | --- | --- |
-| Install and run the standard examples | [Setup and examples](quickstart.md) |
-| Define runs, tasks, sources, tuning and campaigns | [Configuration reference](config.md) |
-| Understand strata, weights and reported errors | [Stratification](stratification.md) |
-
-## Operate GammaBoard
-
-| Task | Guide |
-| --- | --- |
-| Assign workers, inspect plots, compare observables and recover work | [Operations](operations.md) |
-| Configure hosting, access, ports and capacity | [Deployment](deployment.md) |
-| Upgrade matching binaries, SDKs and saved formats | [Compatibility](compatibility.md) |
+| Install and run examples | [Setup and examples](quickstart.md) |
+| Find commands and understand local/remote scope | [CLI reference](local-cli.md) |
+| Configure instances, access and hosting | [Deployment](deployment.md) |
+| Define runs, tasks, tuning and campaigns | [Configuration reference](config.md) |
+| Use the dashboard, inspect results and recover work | [Operations](operations.md) |
+| Understand strata, weights and uncertainties | [Stratification](stratification.md) |
+| Check supported formats and upgrade components | [Compatibility](compatibility.md) |
 | Measure throughput and overhead | [Benchmarking](benchmarking.md) |
 
 Deployment profiles: [local](../ops/local/README.md),
-[ITPhlies](../ops/itphlies/README.md), and [UBELIX](../ops/slurm/README.md).
+[ITPhlies](../ops/itphlies/README.md), and [Slurm/Apptainer](../ops/slurm/README.md)
+with a UBELIX example.
 
 ## Extend GammaBoard
 
 | Task | Guide |
 | --- | --- |
-| Implement sampling, materialization, evaluation, feedback and recovery | [Execution model](execution-model.md) |
-| Write or test an external worker | [Process-worker guide](../process_api/README.md) |
+| Automate management through HTTP | [Management API](management-api.md) |
+| Implement sampling, evaluation, feedback and recovery | [Execution model](execution-model.md) |
+| Configure external process workers | [Process-worker guide](../process_api/README.md) |
+| Integrate and check an external evaluator | [Evaluator integration](../process_api/integration.md) |
 | Browse small worker implementations | [Process tutorials](../process_api/examples/README.md) |
-| Implement the transport without the Python SDK | [Wire protocol](../process_api/protocol.md) |
-| Submit workers through an external scheduler | [Cluster launch contract](cluster-launches.md) |
+| Implement the process transport | [Wire protocol](../process_api/protocol.md) |
+| Implement an external worker launcher | [Launch contract](cluster-launches.md) |
+
+The [dashboard template catalog](../resources/templates/README.md),
+[GammaLoop preparation tool](../tools/prepare-gammaloop/README.md), and
+[stratification benchmark](../benchmarks/stratification/README.md) have their own
+references. Templates become database runs only when explicitly created.
 
 [Historical validation and benchmark records](validation/README.md) retain their
 original revisions, settings and results. Use the guides above for current behavior.
-
-The [dashboard catalog](../resources/templates/README.md),
-[GammaLoop preparation tool](../tools/prepare-gammaloop/README.md), and
-[stratification benchmark](../benchmarks/stratification/README.md) have separate
-purposes; none automatically creates database runs when the server starts.
-
-See [Local instances and CLI](local-cli.md) for the consolidated local workflow and explicit instance files.
-
-- [Management API](management-api.md): lightweight clients, file ownership, authentication, and shutdown semantics.

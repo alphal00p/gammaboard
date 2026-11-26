@@ -127,6 +127,7 @@ def execute(args):
             max_connections=2 * args.consumers + args.insert_concurrency + 32,
             infrastructure_cpus=database_cpus,
             database_directory=args.database_directory,
+            keep_instance=(args.keep_instance / args.command) if args.keep_instance else None,
             shared_buffers=f"{args.database_cache_mib}MB",
         ) as session:
             for repeat in range(args.repetitions):

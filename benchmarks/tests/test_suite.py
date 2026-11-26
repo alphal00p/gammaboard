@@ -39,6 +39,10 @@ class SuiteTests(unittest.TestCase):
         session.directory = root / "private"
         session.directory.mkdir()
         session.output = root
+        session.keep_instance = False
+        session.binary = root / "gammaboard"
+        session.instance = session.directory / "instance.toml"
+        session.endpoint = "http://127.0.0.1:4000"
         session.workers = []
         session.cli = Mock()
         session.db_command = Mock()
@@ -53,6 +57,19 @@ class SuiteTests(unittest.TestCase):
             self.assertTrue(root.exists())
             session.db_command.assert_called_once_with("stop")
             self.assertTrue(json.loads((root / "cleanup.json").read_text())["clean"])
+
+    def test_retention_stops_processes_and_records_reopen_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            session=self.session(root)
+            session.keep_instance=True
+            session.__exit__(None)
+            self.assertTrue(session.directory.exists())
+            session.db_command.assert_called_once_with("stop")
+            receipt=json.loads((root/"retained-instance.json").read_text())
+            self.assertTrue(receipt["processes_stopped"])
+            self.assertIn("--instance",receipt["restart_command"])
+            self.assertNotIn("--workers",receipt["restart_command"])
 
     def test_database_cleanup_failure_is_visible_and_retains_diagnostics(self):
         with tempfile.TemporaryDirectory() as tmp:

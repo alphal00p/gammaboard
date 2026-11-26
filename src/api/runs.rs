@@ -653,6 +653,11 @@ pub async fn export_task_definition(
 }
 
 fn ensure_editable_queue(run: &RunProgress) -> Result<(), ApiError> {
+    if run.archived {
+        return Err(ApiError::BadRequest(
+            "archived result runs are read-only".into(),
+        ));
+    }
     if run.kind() != "integration" {
         return Err(ApiError::BadRequest(
             "only integration runs have an editable task queue".into(),

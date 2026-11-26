@@ -47,6 +47,8 @@ impl WorkerStatus {
 pub struct RunProgress {
     pub run_id: i32,
     pub run_name: String,
+    #[serde(default)]
+    pub archived: bool,
     pub run_toml: Option<String>,
     pub provenance: serde_json::Value,
     pub parent_run_id: Option<i32>,

@@ -371,6 +371,7 @@ class FrontierTests(unittest.TestCase):
                 effective_suite=None,
                 cpu_limit=None,
                 database_directory=Path("/tmp"),
+                keep_instance=None,
             )
             failed = dict(point=point, valid=False, adequate=False, rate=None)
             with patch.object(f.bench, "physical_cpus", return_value=list(range(32))), patch.object(

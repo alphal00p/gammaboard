@@ -23,12 +23,12 @@ const TaskOutputPanel = (props) => props.output
   ? <TaskOutputContent {...props} /> : <TaskOutputSource {...props} />;
 
 const TaskOutputContent = ({ runId, task, title = "Selected task output", onSelectRun = null,
-  view: controlledView, onViewChange, output }) => {
+  view: controlledView, onViewChange, output, readOnly = false }) => {
   const [localView, setLocalView] = useState("result");
   const requestedView = controlledView ?? localView;
   const changeView = onViewChange ?? setLocalView;
   const { panelSpecs, panelStates, panelValues, setPanelValue, error, isLoading, availableSections, isRevalidating, isHistoryLoading } = output;
-  const campaign = task?.task_kind === "integration_campaign";
+  const campaign = !readOnly && task?.task_kind === "integration_campaign";
   // Sample tasks declare stratum panel specs even when their accumulators have
   // no partition. Enable the tab once there is actual stratum output.
   const hasStrata = availableSections ? availableSections.includes("strata") : panelSpecs.some((spec) => taskPanelSection(spec) === "strata" && panelStates.some((state) => {

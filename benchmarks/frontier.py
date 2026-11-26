@@ -850,6 +850,7 @@ def execute(args):
             max_connections=max(128, 4 * (max(workers) + 1) + 32),
             infrastructure_cpus=database_cpus,
             database_directory=args.database_directory,
+            keep_instance=(args.keep_instance / args.command) if args.keep_instance else None,
             shared_buffers=suite.get("database_shared_buffers", "256MB"),
         ) as session:
             session.single_run = len(points) == 1

@@ -425,7 +425,7 @@ pub async fn auto_assign_run(
 
 /// Reserve complete sampler/evaluator bundles before consuming flexible workers.
 /// Existing operator-assigned roles are preserved; only free nodes get new roles.
-fn plan_auto_roles(
+pub(crate) fn plan_auto_roles(
     free: &[RegisteredNode],
     sampler_requirements: &CapabilityRequirements,
     evaluator_requirements: &CapabilityRequirements,

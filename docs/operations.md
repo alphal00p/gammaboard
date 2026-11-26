@@ -1,7 +1,8 @@
 # Operations
 
 Use the deployment endpoint or its explicit instance/connection file. Run IDs avoid
-ambiguity when several runs share a name. For run-card fields see
+ambiguity when several runs share a name. Commands and file ownership are in the
+[CLI reference](local-cli.md). For run-card fields see
 [configuration](config.md); for statistical definitions see [stratification](stratification.md).
 
 ## Dashboard navigation
@@ -18,7 +19,7 @@ ambiguity when several runs share a name. For run-card fields see
   tuning**. Queue tuning follows the active sampling task, not the task being
   inspected. It is disabled without active sampling; changing tasks discards its
   unsaved edits. Controller-owned child tasks are read-only here.
-- **System** manages workers, the database and server settings. **Logs** retains
+- **System** manages workers and displays database/server settings. **Logs** retains
   its filters and loaded older pages; use **Refresh** to request the latest page.
 
 The URL records the selected run, task and tabs for bookmarks and Back/Forward.
@@ -31,54 +32,36 @@ help and configuration details.
 
 ## Manage work
 
-```bash
-./gb run list
-./gb run inspect RUN
-./gb run task list RUN
-./gb run pause RUN
-./gb run resume RUN --max-evaluators 16
-./gb worker list
-./gb worker launch --count 2
-./gb worker stop --all
-```
-
 Workers belong to a root run's pool; controllers place them among children.
-Assigning or pausing a child resolves to its root family. Pause checkpoints work
-and retains pool membership; unassign/stop removes membership. Expired workers
-are not live capacity. Launch history records connection attempts, not current health.
+Assigning or pausing a child resolves to its root family. `gb run pause RUN`
+checkpoints work and retains pool membership; `gb run start RUN` re-enables live
+members. Unassigning or stopping a worker releases its membership. Expired workers
+are not live capacity; launch history records attempts, not current health.
 
-Graceful instance shutdown marks running workers **Saved for restart**, preserving
-their launch settings and intended assignments. Workers stopped separately before
-shutdown are not marked. `start --restore-workers` restores only marked workers;
-plain `start` leaves them offline with their markers intact. Use `worker launch --count N`,
-dashboard launch requests, or the cluster launcher so launch settings are recorded. Manually started `node run` workers cannot be
-automatically recreated. A forced kill cannot save a new shutdown roster.
+Graceful instance shutdown marks live workers **Saved for restart**, preserving
+launch recipes and intended assignments. Workers stopped separately are not marked.
+Use `gb worker restore` or `gb start --restore-workers` to request the saved fleet.
+A launch through the CLI, dashboard or helper records a recipe; directly executed
+workers without a recipe must be started by their owner.
 
-**System → Workers → Offline** shows offline and starting workers. Restoration
-intent is a separate **Saved for restart** badge, not a suspended/retired status.
-**Start** explicitly launches one offline worker using its saved settings, even if
-it was stopped separately. **Restore saved workers** starts only marked workers;
-the server rechecks that marker, so a canceled restoration cannot be revived by a
-stale dashboard. **Cancel restoration** clears the marker without changing the
-saved assignment. **Unassign** releases the run reservation without canceling
-restoration. Both keep the launch recipe and historical data; there is no worker
-deletion action. **Stop** shuts down a live worker, releases its assignment and
-clears restoration intent.
+**System → Workers → Offline** shows offline and starting workers:
 
-Bulk restore, unassign and cancellation validate each captured identity, skip
-ineligible workers and report individual failures. Live replacements and pending
-launches cannot be changed through stale offline rows. Local starts respect the
-server's local-launch setting. A newly registered process consumes any saved
-restart marker; heartbeats from the old process while draining do not.
-Launch reservations are per worker: an old group request still marked `starting`
-does not block a worker that already connected and subsequently stopped. Workers
-still awaiting their first registration for that launch remain protected.
+| Action | Effect |
+| --- | --- |
+| **Start** | Request one worker using its saved recipe |
+| **Restore saved workers** | Request only workers marked for restoration |
+| **Cancel restoration** | Clear restoration intent while retaining the assignment |
+| **Unassign** | Release the run reservation while retaining restoration intent |
+| **Stop** (live worker) | Stop the worker and clear assignment/restoration intent |
 
-Assigning a fresh sampler to a standalone run atomically releases expired sampler
-reservations that have no pending launch, including their restoration intent.
-Live workers and queued/starting launches retain their slots; auto-assignment
-counts pending launches when planning capacity. Ordinary pool resume re-enables
-only live members; it does not recreate offline processes.
+These actions retain launch recipes and history. Bulk actions validate each captured
+worker identity, skip ineligible rows and report individual failures. Stale rows
+cannot modify replacement processes or pending launches. Registration consumes the
+restoration marker. Launch reservations are tracked per worker.
+
+Auto-assignment accounts for pending launches. Assigning a fresh sampler can release
+an expired sampler reservation with no pending launch, including its restoration
+intent. Live workers and queued launches retain their slots.
 
 ## Edit and duplicate
 
@@ -92,16 +75,8 @@ Controller duplicates create new children; a child can become a standalone run.
 External paths are retained, so choose distinct writable artifact paths for
 independent runs. Historical snapshot branching is not supported.
 
-```bash
-./gb run export RUN > run.toml
-./gb run duplicate RUN NEW_NAME
-./gb run task append RUN tasks.toml
-./gb run task export RUN TASK_ID > task.toml
-./gb run task duplicate RUN TASK_ID
-./gb run task edit RUN TASK_ID task.toml
-./gb run task remove RUN TASK_ID --yes
-./gb run remove RUN --yes
-```
+Use the [run/task commands](local-cli.md#runs-and-tasks) to export, edit, duplicate
+or remove definitions from the CLI.
 
 Removal drains the whole run tree before deleting it. Browser deletion continues
 in the background; the CLI waits. If removal fails, inspect the error and retry
@@ -367,7 +342,8 @@ database settings and are not copied by exporting a run card.
 
 ```bash
 ./gb db backup --output /safe/path/gammaboard.dump
-# Stop servers and workers before replacing the database:
+./gb stop
+# After the deployment owner confirms service termination:
 ./gb local db restore /safe/path/gammaboard.dump --yes
 ```
 
@@ -393,13 +369,17 @@ defines ordering, replay, notification retries and artifact responsibilities.
 
 | Symptom | Check |
 | --- | --- |
-| Port in use | Stop the conflicting service or select a port offset |
-| Browser access rejected | Allow its exact origin in server config |
+| Port in use | Stop the conflicting service or choose distinct ports in the instance file |
+| Browser access rejected | Configure its [exact browser origin](deployment.md#authentication-and-browser-access) |
 | No workers start | Launch-request errors, capacity, and external launcher availability |
 | Run stops progressing | Task errors, worker leases, oldest unfinished batch, and database latency |
 | Worker/task failure | Dashboard Logs, then local worker or Slurm stderr |
 | Growing database | Performance-history volume, payload size, and retention needs |
 
-Default logs: `resources/logs/nodes/`, `resources/db/logfile` (offset suffix when
-used), and `logs/slurm/` on UBELIX. For live measurements:
-`gammaboard --json run performance RUN --duration 60s --interval 1s`.
+Use `gb logs --service server`, `gb logs --service db`, or `gb logs --worker NAME`.
+Local service/database files are under the configured `paths.log_dir`; Slurm job
+logs are under the helper workspace's `logs/slurm/`. For live measurements:
+
+```bash
+gb --json run performance RUN --duration 60s --interval 1s
+```

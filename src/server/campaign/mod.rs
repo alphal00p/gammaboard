@@ -175,10 +175,11 @@ pub(super) struct SchedulingEdit {
     stop_condition: IntegrationCampaignStopCondition,
 }
 pub(super) async fn scheduling(
-    State(state): State<AppState>,
-    AxumPath((run, task)): AxumPath<(i32, i64)>,
-    AxumJson(edit): AxumJson<SchedulingEdit>,
-) -> Result<Json<Value>, ApiError> {
+    state: &AppState,
+    run: i32,
+    task: i64,
+    edit: SchedulingEdit,
+) -> Result<Value, ApiError> {
     state
         .store
         .update_campaign_scheduling(
@@ -197,7 +198,7 @@ pub(super) async fn scheduling(
         task_id = task,
         "campaign scheduling updated"
     );
-    json_response(json!({"updated":true}))
+    Ok(json!({"updated":true}))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -207,10 +208,11 @@ pub(super) struct TuningEdit {
     patch: Value,
 }
 pub(super) async fn tuning(
-    State(state): State<AppState>,
-    AxumPath((run, task)): AxumPath<(i32, i64)>,
-    AxumJson(edit): AxumJson<TuningEdit>,
-) -> Result<Json<Value>, ApiError> {
+    state: &AppState,
+    run: i32,
+    task: i64,
+    edit: TuningEdit,
+) -> Result<Value, ApiError> {
     let result = state
         .store
         .update_campaign_queue_tuning(run, task, &edit.children, &edit.scope, edit.patch)
@@ -223,7 +225,7 @@ pub(super) async fn tuning(
         task_id = task,
         "campaign queue tuning updated"
     );
-    json_response(result)
+    Ok(result)
 }
 
 fn response(source: String, panels: Vec<(&str, panels::PanelState)>) -> Value {

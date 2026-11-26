@@ -96,6 +96,7 @@ jobs:
             dependencies=$(cargo tree "${flags[@]}" --prefix none)
             ! rg '^symbolica v' <<< "$dependencies"
           fi
+          python3 scripts/check_cli_docs.py
           cargo clippy "${flags[@]}" --all-targets -- -D warnings
           client_dependencies=$(cargo tree -p gammaboard-client --edges normal --prefix none)
           ! rg '^(gammaboard v|sqlx|symbolica|gammaloop)' <<< "$client_dependencies"

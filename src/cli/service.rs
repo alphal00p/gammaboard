@@ -81,6 +81,8 @@ fn directories(instance: &Instance) -> Result<()> {
     fs::create_dir_all(&instance.paths.state_dir)?;
     private_permissions(&instance.paths.state_dir, 0o700)?;
     fs::create_dir_all(&instance.paths.log_dir)?;
+    fs::create_dir_all(instance.paths.state_dir.join("resources"))?;
+    fs::create_dir_all(&instance.paths.temp_dir)?;
     Ok(())
 }
 fn db_lock(instance: &Instance) -> Result<Option<File>> {
@@ -174,8 +176,13 @@ pub async fn start(instance: &Instance, args: StartArgs, allowed: bool) -> Resul
         if let Some(count) = args.workers {
             let receipt = api
                 .request(&Request::WorkerLaunch {
-                    count: Some(count as usize),
-                    toml: None,
+                    source: gammaboard_client::protocol::LaunchSource::New {
+                        count: Some(count as usize),
+                        toml: None,
+                        max_start_failures: None,
+                        name_prefix: None,
+                        args: Value::Null,
+                    },
                 })
                 .await?;
             ids.extend(serde_json::from_value::<Vec<String>>(
@@ -183,7 +190,11 @@ pub async fn start(instance: &Instance, args: StartArgs, allowed: bool) -> Resul
             )?);
         }
         if args.restore_workers {
-            let receipt = api.request(&Request::WorkerRestore {}).await?;
+            let receipt = api
+                .request(&Request::WorkerLaunch {
+                    source: gammaboard_client::protocol::LaunchSource::RestoreSaved {},
+                })
+                .await?;
             ids.extend(serde_json::from_value::<Vec<String>>(
                 receipt["request_ids"].clone(),
             )?);
@@ -211,6 +222,9 @@ pub async fn start(instance: &Instance, args: StartArgs, allowed: bool) -> Resul
         command.arg("--allow-local-processes");
     }
     command.args(["start", "--foreground"]);
+    for origin in &args.allowed_origins {
+        command.args(["--allowed-origin", origin]);
+    }
     if args.component.as_deref() == Some("server") {
         command.arg("server");
     }

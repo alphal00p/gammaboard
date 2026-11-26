@@ -235,7 +235,7 @@ pub(super) fn validate_origin(
     let origin = origin.to_str().unwrap_or("<invalid Origin header>");
     let quoted_origin = format!("'{}'", origin.replace('\'', "'\\''"));
     let message = format!(
-        "Browser origin {origin:?} is not allowed. Restart gammaboard deploy with --allowed-origin {quoted_origin}, or add this origin to server.allowed_origins in your server configuration."
+        "Browser origin {origin:?} is not allowed. Add this exact origin to server.allowed_origins in the deployment instance file and restart the service. On the deployment host, use gb --instance /path/to/gammaboard.toml restart --allowed-origin {quoted_origin}; externally managed instances must use their deployment helper or an explicit local-process override."
     );
     tracing::warn!(
         origin,
@@ -309,6 +309,35 @@ mod tests {
                 &token
             )
             .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod forwarded_origin_tests {
+    #[test]
+    fn origin_configuration_rejects_patterns_and_non_origin_urls() {
+        for bad in [
+            "*",
+            "null",
+            "http://*.example.org",
+            "https://example.org/path",
+            "https://user@example.org",
+            "https://example.org/?q=1",
+            "https://example.org/#fragment",
+        ] {
+            assert!(
+                super::super::normalize_browser_origin(bad).is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            super::super::normalize_browser_origin("http://localhost:39491").unwrap(),
+            "http://localhost:39491"
+        );
+        assert_eq!(
+            super::super::normalize_browser_origin("https://example.org:443").unwrap(),
+            "https://example.org"
         );
     }
 }

@@ -207,8 +207,8 @@ def test_running_down_only_cancels_its_own_jobs(workspace, monkeypatch):
     scheduler.jobs["30"] = Job("30", "gb-other-control", "RUNNING", "compute-c", "gb:other:control")
     api = Mock()
     def request(path,payload=None,method="POST"):
-        if path=="/v1/manage": return {"stop_id":"shutdown-1"}
-        assert path=="/admin/control/status" and method=="GET"
+        if payload["operation"]=="stop": return {"stop_id":"shutdown-1"}
+        assert path=="/v1/manage" and payload=={"operation":"status"}
         scheduler.cancel(["20","10"])
         return {"stop_id":"shutdown-1","stop_result":{"success":True,"phase":"ready_to_exit"}}
     api.request.side_effect=request
@@ -857,7 +857,7 @@ def test_database_requested_cleanup_cancels_only_owned_jobs_then_acknowledges(wo
     u.cleanup_external_jobs(manifest,api,scheduler,"stop-request")
     assert scheduler.canceled==["20"]
     assert scheduler.jobs["30"].state=="RUNNING"
-    api.request.assert_called_once_with("/admin/control/acknowledge-cleanup",{"request_id":"stop-request"})
+    api.request.assert_called_once_with("/v1/manage",{"operation":"acknowledge_cleanup","request_id":"stop-request"})
 
 
 def test_api_control_uses_http_and_never_spawns_a_cli(monkeypatch):
@@ -871,9 +871,9 @@ def test_api_control_uses_http_and_never_spawns_a_cli(monkeypatch):
     transport=Mock();transport.open.return_value=response
     monkeypatch.setattr(u,"opener",lambda:transport)
     monkeypatch.setattr(u.subprocess,"run",Mock(side_effect=AssertionError("no CLI subprocess")))
-    assert api.request("/admin/control/status",method="GET")["stop_id"]=="stop-id"
+    assert api.request("/v1/manage",{"operation":"status"})["stop_id"]=="stop-id"
     request=transport.open.call_args.args[0]
-    assert request.full_url=="http://compute:4000/api/admin/control/status"
+    assert request.full_url=="http://compute:4000/api/v1/manage"
     assert request.get_header("Cookie")=="session=value"
 
 
@@ -890,8 +890,8 @@ def test_control_signal_keeps_cleanup_handshake_alive(workspace, monkeypatch):
     process.poll.side_effect=lambda: 0 if acknowledged else None
     api=Mock()
     def request(path,payload=None,method="POST"):
-        if path=="/admin/control/status": return {"cleanup_required":True,"stop_id":"signal-stop"}
-        assert path=="/admin/control/acknowledge-cleanup"
+        if payload["operation"]=="status": return {"cleanup_required":True,"stop_id":"signal-stop"}
+        assert path=="/v1/manage" and payload["operation"]=="acknowledge_cleanup"
         assert scheduler.jobs["20"].terminal
         acknowledged.append(payload["request_id"])
         return {"acknowledged":True}

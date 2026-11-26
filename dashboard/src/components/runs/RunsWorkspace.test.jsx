@@ -247,3 +247,11 @@ test("a run-definition draft survives temporarily hiding its workspace", async (
   rerender(tree(true));
   expect(await screen.findByLabelText("Run TOML")).toHaveValue(draft);
 });
+
+test("archived runs expose inspection without task or worker mutation controls", async () => {
+  render(<RunsWorkspace runs={[{ ...runs[0], archived: true }]} selectedRun={runs[0].run_id}
+    workers={[]} isConnected onSelectRun={() => {}} />);
+  expect(await screen.findByText(/Archived results: read-only/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Add tasks" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Assign / resume" })).not.toBeInTheDocument();
+});

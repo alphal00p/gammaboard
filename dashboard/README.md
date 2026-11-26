@@ -2,14 +2,24 @@
 
 React/Vite frontend for the GammaBoard dashboard.
 
-## Quick Start
+## Development
+
+Start the backend from the repository root, allowing the browser's development origin:
+
+```bash
+./gb start --api-only --allowed-origin http://localhost:5173
+```
+
+Then run from `dashboard/`:
 
 ```bash
 npm ci
 npm start
 ```
 
-Opens at the URL printed by Vite, usually http://localhost:5173.
+Vite proxies `/api` to `http://127.0.0.1:4000`. If its printed browser URL uses a
+different port, allow that exact origin on the backend. Production assets are
+served by GammaBoard; see [deployment](../docs/deployment.md).
 
 ## Scripts
 

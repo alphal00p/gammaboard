@@ -123,3 +123,8 @@ protocol or isolated I/O improvements alone do not establish end-to-end gains.
 [Saved measurements and plots](benchmarks/) retain their original settings and
 source provenance. Use current runs to assess current code. Benchmark definitions
 live in [benchmarks/](../benchmarks/) and [src/benchmark/](../src/benchmark/).
+
+Use `--keep-instance /absolute/path` to retain stopped benchmark deployments for
+later dashboard inspection. Each case writes `retained-instance.json` with its
+instance path and restart command. Retention does not leave workers or services
+running. See the [CLI guide](local-cli.md#inspecting-retained-or-imported-results).

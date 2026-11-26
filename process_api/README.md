@@ -10,6 +10,7 @@ python -m pip install ./process_api/python
 
 | Reference | Contents |
 | --- | --- |
+| [Integration guide and evaluator checker](integration.md) | Weight ownership, discrete measure, component order, padding, constants and conformance checks |
 | [Execution model](../docs/execution-model.md) | Full sampler → materializer → transforms → evaluator → feedback contract, ownership, weights, budgets, and recovery |
 | [Wire protocol](protocol.md) | Current JSON-RPC framing, every role/method, binary arrays, and errors |
 | [Python interfaces](python/src/gammaboard_process/abc.py) | Typed callbacks and their defaults |
@@ -30,7 +31,6 @@ All process roles share `command`, optional `cwd`, `args`, and
 Evaluators declare their domain and available channels. Tasks select components
 through their accumulators, including `gammaloop` for observable integration.
 Optional explicit `domain`/`descriptor` assertions support deployment validation.
-The older fixed `output` setting is retained for legacy workers.
 Commands may launch a local executable or an explicit container invocation.
 
 ## Entrypoints

@@ -26,3 +26,8 @@ refer to the source checkout relative to the default resource root.
 
 Create a selected run with `./gb run create PATH`, then assign workers.
 Tutorials are not automatically added to the dashboard menu or database.
+
+Before integrating a real evaluator, read the [integration guide](../integration.md)
+and run `check_evaluator.py` with valid physical points. Example paths are relative
+to the configured resource root; use absolute command/artifact paths when copying
+cards into an independently located deployment. An explicit `cwd` remains optional.

@@ -13,6 +13,10 @@ pub enum Request {
         request_id: String,
     },
     RunCreate {
+        #[serde(default)]
+        request_id: Option<String>,
+        #[serde(default)]
+        duplicate: bool,
         toml: String,
         /// Explicit directory on the deployment for relative resource references.
         base_dir: Option<String>,
@@ -27,6 +31,10 @@ pub enum Request {
     RunStart {
         run: String,
         max_evaluators: Option<usize>,
+    },
+    RunImportResults {
+        bundle: serde_json::Value,
+        name: Option<String>,
     },
     RunResults {
         run: String,
@@ -47,6 +55,7 @@ pub enum Request {
     },
     RunExport {
         run: String,
+        kind: ExportKind,
     },
     RunPause {
         runs: Vec<String>,
@@ -56,6 +65,9 @@ pub enum Request {
         runs: Vec<String>,
         all: bool,
         dry_run: bool,
+    },
+    RunRemovalStatus {
+        operation_id: String,
     },
     RunPerformance {
         run: String,
@@ -78,21 +90,21 @@ pub enum Request {
     },
     WorkerList {
         name: Option<String>,
-        offline: bool,
+        #[serde(default)]
+        state: WorkerFilter,
+        #[serde(default)]
+        run: Option<String>,
     },
     WorkerInspect {
         name: String,
     },
     WorkerLaunch {
-        count: Option<usize>,
-        toml: Option<String>,
+        source: LaunchSource,
     },
-    WorkerStart {
-        name: String,
-    },
-    WorkerRestore {},
     WorkerCancelRestoration {
         name: String,
+        #[serde(default)]
+        expected_uuid: Option<String>,
     },
     WorkerStop {
         names: Vec<String>,
@@ -105,7 +117,11 @@ pub enum Request {
         role: String,
     },
     WorkerUnassign {
-        name: String,
+        name: Option<String>,
+        #[serde(default)]
+        all: bool,
+        #[serde(default)]
+        expected_uuid: Option<String>,
     },
     WorkerRequests {
         id: Option<i64>,
@@ -113,7 +129,6 @@ pub enum Request {
     WorkerRequestCancel {
         id: i64,
     },
-    DatabaseStatus {},
     Template {
         kind: String,
         action: TemplateAction,
@@ -132,13 +147,45 @@ pub enum Request {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskAction {
     List {},
-    Inspect { id: i64 },
-    Export { id: i64 },
-    Append { toml: String },
-    Duplicate { id: i64 },
-    Edit { id: i64, toml: String },
-    Tune { id: i64, toml: String },
-    Remove { id: i64 },
+    Export {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+    },
+    Append {
+        toml: String,
+        #[serde(default)]
+        duplicate: bool,
+    },
+    Duplicate {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+    },
+    Edit {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+        toml: String,
+        #[serde(default)]
+        expected_toml: Option<String>,
+    },
+    Tune {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+        queue_tuning: Option<serde_json::Value>,
+    },
+    CampaignScheduling {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+        settings: serde_json::Value,
+    },
+    CampaignTuning {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+        settings: serde_json::Value,
+    },
+    Remove {
+        #[serde(deserialize_with = "deserialize_id")]
+        id: i64,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -155,4 +202,57 @@ pub enum TemplateAction {
     Remove {
         name: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, clap::ValueEnum, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportKind {
+    Definition,
+    Results,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, clap::ValueEnum, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerFilter {
+    #[default]
+    Live,
+    Offline,
+    All,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LaunchSource {
+    New {
+        count: Option<usize>,
+        toml: Option<String>,
+        #[serde(default)]
+        max_start_failures: Option<u32>,
+        #[serde(default)]
+        name_prefix: Option<String>,
+        #[serde(default)]
+        args: serde_json::Value,
+    },
+    Saved {
+        name: String,
+        #[serde(default)]
+        expected_uuid: Option<String>,
+        #[serde(default)]
+        restore_only: bool,
+    },
+    RestoreSaved {},
+}
+
+// Browsers retain PostgreSQL bigint IDs as strings to avoid IEEE-754 rounding.
+fn deserialize_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Id {
+        Integer(i64),
+        Text(String),
+    }
+    match Id::deserialize(deserializer)? {
+        Id::Integer(id) => Ok(id),
+        Id::Text(id) => id.parse().map_err(serde::de::Error::custom),
+    }
 }

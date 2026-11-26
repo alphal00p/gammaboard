@@ -18,9 +18,9 @@ Keep two files:
 
 Paths resolve against the file containing them, independent of the shell directory.
 Use shared storage accessible to the control and worker jobs. Configure container
-binds for all required host paths. The application image contains the service, lightweight CLI, and optional dashboard
-at `/usr/local/share/gammaboard/dashboard`. Explicit instance ports replace offsets
-for the new configuration format.
+binds for all required host paths. The application image contains the service,
+lightweight CLI and optional dashboard at `/usr/local/share/gammaboard/dashboard`. Configure API and database ports in the
+instance file.
 
 `job_env_file` is optional. When configured it must exist. Its contents are copied
 into the deployment/build snapshot, hashed, verified and sourced by the batch job
@@ -41,7 +41,6 @@ From the repository checkout, with the site Python environment available:
 python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml build gammaboard
 # Wait for the recorded build job to complete successfully.
 python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml up
-python3 ops/slurm/slurm.py --config /shared/demo/slurm.toml submit-workers --count 6
 ```
 
 `build` submits a job and returns its ID. Its record is under
@@ -54,38 +53,35 @@ images; per-instance manifests are registered with that workspace for this check
 
 `up` submits one control allocation, starts GammaBoard inside it with the explicit
 `--allow-local-processes` override, and waits for readiness. Worker jobs use the
-same override for `worker run` inside their allocations. The shared instance file
+same override inside their allocations. The shared instance file
 continues to prohibit accidental execution elsewhere.
 
-Rebuild the service image after updating: older images do not implement the new
-instance commands and shutdown coordination. The helper requires explicitly
-cluster-reachable database/server bind addresses; it does not silently change a
-loopback-only application configuration. Use the supplied examples on a trusted
-cluster network, or configure the appropriate database authentication.
+Configure cluster-reachable database/server bind addresses. Use the supplied
+examples on a trusted cluster network, or configure database authentication.
 
 The helper prints `client_instance=.../active.toml` after readiness. This generated
 file contains the allocated node's API endpoint, without database credentials.
-Use a prepared GammaBoard executable on the login node for ordinary operations:
+Use the prepared `gb` client on the login node for ordinary operations:
 
 ```bash
+gb --instance /shared/demo/control/active.toml worker launch --count 6 --wait
 gb --instance /shared/demo/control/active.toml run list
 gb --instance /shared/demo/control/active.toml run create /shared/demo/run.toml \
   --start --max-evaluators 4 --export-path /shared/demo/results/result.json
 ```
 
-Worker submissions are asynchronous. Wait for workers to register before starting
-a run. Repeating a worker submission creates additional workers. Repeating `up`
-while its control job is queued/running reuses the recorded deployment; uncertain
+Worker submissions are asynchronous; `--wait` waits for registration. Repeating
+a worker submission creates additional workers. Repeating `up` while its control job is queued/running reuses the recorded deployment; uncertain
 scheduler outcomes require reconciliation rather than blind resubmission.
 
 The host-facing active file is a convenience copy. Each worker receives its own
-immutable deployment generation's `worker.toml` database configuration. Configuration and image
-hash checks prevent queued jobs from silently picking up later changes.
+immutable deployment generation's `worker.toml` database configuration. Configuration
+and image hash checks prevent queued jobs from picking up later changes.
 
 ## One API for management
 
-The helper creates/claims launch requests, renews leases, reports receipts, reads
-shutdown status, and acknowledges cleanup through HTTP. It connects directly to
+The helper claims launch requests, renews leases, reports receipts, reads shutdown
+status, and acknowledges cleanup through HTTP. It connects directly to
 the service API port; no frontend proxy or dashboard is required. It verifies
 `deployment_id` and `build_id` before authenticating. Scheduler submission remains
 in the helper, and worker computation continues to access PostgreSQL directly.
@@ -124,11 +120,11 @@ Forced cleanup verifies deployment/job ownership and confirms worker allocations
 are gone before canceling the control job. `resolve-control` and
 `resolve-submission` handle uncertain submissions; scheduler lookup errors are not
 proof that a job ended. Allocation expiry triggers graceful application shutdown
-within the signal margin. Automatic job resubmission is not added.
+within the signal margin. Allocations are not automatically resubmitted.
 
-Backups use `gb db backup --output LOCAL_FILE`. Offline `gb local db create/migrate/restore/delete/reset/purge` run through the service executable with the deployment instance
-file, inside an appropriate allocation and with the explicit process override.
-The helper's legacy `reset-db` remains restricted to the workspace database tree.
+Backups use `gb db backup --output LOCAL_FILE`. Perform [offline database
+maintenance](../../docs/local-cli.md#database-maintenance) inside an appropriate
+allocation using the deployment instance file and explicit process override.
 
 ## Example runs
 
@@ -136,12 +132,7 @@ The helper's legacy `reset-db` remains restricted to the workspace database tree
 card without touching existing database runs or private templates. CPU/GPU worker
 cards remain external launch recipes; see the [canonical examples](../../docs/quickstart.md).
 
-## Compatibility and validation
-
-`ops/ubelix/ubelix.py` is a forwarding compatibility entry point. Existing
-`ops/slurm/local.toml` configurations and legacy offset deployments remain readable;
-new configurations should use explicit `--config` and `instance_file`. The helper
-contains no built-in account, partition, QoS or SSH hostname for a particular site.
+## Validation
 
 The test suite uses a fake scheduler to exercise receipts, uncertain submission,
 ownership checks, configuration/environment snapshots, image publication and

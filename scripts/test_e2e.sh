@@ -21,7 +21,9 @@ fi
 # An explicitly supplied database is external to the managed local deployment.
 # E2Es create and migrate private databases on this server (CREATE DATABASE needed).
 if [[ -z "${GAMMABOARD_TEST_DATABASE_URL:-}" ]]; then
-    cargo run --locked -q --profile "$profile" --bin gammaboard -- --runtime-config ops/local/config/runtime.toml db start --skip-migrations
+    cargo run --locked -q --profile "$profile" --bin gammaboard -- --instance gammaboard.toml start db
+    export GAMMABOARD_TEST_DATABASE_URL
+    GAMMABOARD_TEST_DATABASE_URL=$(python3 -c 'import tomllib; from urllib.parse import quote; d=tomllib.load(open("gammaboard.toml","rb"))["database"]; print(d.get("url") or "postgresql://%s@%s:%s/%s" % (quote(d.get("user","postgres")), d.get("host","127.0.0.1"), d.get("port",5400), quote(d.get("name","gammaboard"))))')
 fi
 run_tests() {
     cargo test --locked --profile "$profile" --test full_stack_cli "$@" \

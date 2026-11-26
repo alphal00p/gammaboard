@@ -1,7 +1,7 @@
 # Python process evaluator over a small discrete/continuous sine integrand.
 # Requires Python with the SDK installed; set the python replacement as needed.
 # Uniform sampling with discrete projections; works in a minimal build.
-# Run: ./gammaboard run create process_api/examples/python_evaluator/run.toml
+# Run: ./gb run create process_api/examples/python_evaluator/run.toml
 
 replacements = { python = "python3" }
 name = "python-evaluator"

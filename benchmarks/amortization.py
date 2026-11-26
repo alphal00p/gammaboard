@@ -155,6 +155,7 @@ def execute(args):
                     args.port_offset,
                     infrastructure_cpus=database_cpus,
                     shared_buffers="1GB",
+                    keep_instance=(args.keep_instance / args.command / directory.name) if args.keep_instance else None,
                 ) as session:
                     session.start_pinned_workers(evaluator_cpus[:count], sampler_cpus)
                     selected = sizes if repeat % 2 == 0 else sizes[::-1]

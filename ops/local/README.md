@@ -1,20 +1,16 @@
 # Local deployment
 
-Copy `instance.example.toml` to an explicit location and edit its paths and ports.
-Relative paths resolve against that file. From the repository:
+The checkout's `gammaboard.toml` configures a local instance. Follow the
+[quickstart](../../docs/quickstart.md) to build and run it.
+
+For another instance, copy [instance.example.toml](instance.example.toml), then
+set explicit paths and distinct API/database ports. Relative paths resolve against
+the copied file. Select it on each command:
 
 ```bash
-./gb start --workers 6 --wait
-./gb run create resources/templates/runs/tetrahedron-native.toml \
-  --start --max-evaluators 4 --export-path "$PWD/tetrahedron.json"
-./gb stop --wait
+gb --instance /srv/board/instance.toml start --workers 2 --wait
+gb --instance /srv/board/instance.toml stop --wait
 ```
 
-The optional dashboard and API share the configured API port (4000 by default).
-No nginx process is needed. The lightweight client can be installed separately:
-`cargo install --path crates/gb`. Local bootstrap also needs the `gammaboard`
-service executable; remote management only needs an endpoint and credentials.
-
-See [CLI guide](../../docs/local-cli.md), [API contract](../../docs/management-api.md),
-and [Slurm deployment](../slurm/README.md). Old runtime files remain usable for
-worker execution and offline maintenance, not as a second management interface.
+See [deployment](../../docs/deployment.md) for binaries, dashboard assets and access;
+use the [CLI reference](../../docs/local-cli.md) for commands and maintenance.

@@ -1,68 +1,24 @@
-# CLI and local instances
+# CLI reference
 
-`gb` is a lightweight HTTP client. `gammaboard` is the service/worker executable.
-The control service owns lifecycle coordination, exports, local worker processes,
-and the management API. It optionally serves dashboard assets on that same port.
-Workers retain direct PostgreSQL access.
+Use `gb COMMAND --help` for all arguments and defaults. In a checkout, `./gb`
+builds and runs the client; installed binaries are invoked as `gb`.
 
-## Build and start
+| Interface | Role |
+| --- | --- |
+| `gb` | Lightweight client for the instance's HTTP API |
+| `gammaboard` | Service, worker runtime and offline utilities |
+| `gb local` | Commands within `gb` that invoke the local `gammaboard` executable |
 
-```bash
-cargo build --release --workspace --bins
-./gb start --workers 6 --wait
-./gb run create resources/templates/runs/tetrahedron-native.toml \
-  --start --max-evaluators 4 --export-path "$PWD/tetrahedron.json"
-./gb stop --wait
-```
+`gb start` and `gb restart` also invoke the local executable. Ordinary management
+commands, including `gb stop`, act through the API. Workers communicate directly
+with PostgreSQL. See [setup](quickstart.md) for a first run and
+[deployment](deployment.md) for installation, instance settings and browser access.
 
-The repository launchers build their respective packages. `./gb` builds only the
-client for ordinary management commands. Starting locally invokes the separately
-installed service executable (a sibling `gammaboard`, or
-`GAMMABOARD_SERVICE_BINARY`). No frontend build is required for service startup.
-To build the optional dashboard, run `npm ci` and `npm run build` in `dashboard/`.
+## Choose an instance
 
-`start --workers 6` submits a request for six **additional** workers, using the instance’s launch policy. `--wait` also waits for registration. There is no implicit
-configured worker count. `start --restore-workers` submits requests for saved workers using the current instance policy. Repeating `start` reuses a healthy matching instance.
-
-```bash
-./gb start db                      # PostgreSQL only
-./gb start server                  # Control/API against the configured DB
-./gb start --api-only              # Control/API without static dashboard files
-./gb start --foreground            # Service remains attached; suitable for Slurm
-./gb restart                      # Ordered stop and local startup
-```
-
-`start db` cannot launch workers or own a foreground service. Normal management
-commands require the API. There is no separate `stop server` operation: stopping
-the control service stops management access. Missing dashboard assets do not
-prevent the API from starting.
-
-## Explicit configuration
-
-Start from `ops/local/instance.example.toml`. Select a deployment file with
-`--instance FILE`; the default is `./gammaboard.toml`. There is no home-directory
-instance registry. Relative configuration paths resolve against that file.
-
-- `name` labels the instance; its file and explicit paths identify the deployment.
-- `externally_managed = true` blocks local bootstrap and computation unless the
-  invocation explicitly supplies `--allow-local-processes`.
-- `[paths]` declares state, logs, temporary files, templates, and resource roots.
-- `[database]` selects managed PostgreSQL or an external database URL.
-- `[server]` declares `host`, `api_port` (also accepted as `port`), optional
-  `dashboard_dir`, allowed browser origins, authentication, and local-launch policy.
-- `[logging]` and `[shutdown]` configure tracing and bounded checkpoint/worker stop.
-
-Each concurrently running instance needs its own API port, managed database port,
-data directory, state directory, logs, and temporary directory. File locks and a
-database advisory lock prevent competing service owners.
-
-Validate a deployment offline with:
-
-```bash
-./gb --instance /path/instance.toml local check-config
-```
-
-For a remote client, use `--endpoint URL` or a minimal connection file:
+`--instance FILE` selects a deployment file or a minimal client connection file.
+The default is `./gammaboard.toml`. Local operations require a full deployment file;
+remote management needs only an API endpoint and credentials.
 
 ```toml
 [client]
@@ -70,103 +26,201 @@ endpoint = "https://board.example.org"
 token_file = "session.token"
 ```
 
-`gb auth login --password-stdin --output session.token` obtains a machine session.
-The client needs no PostgreSQL credentials, shared control directory, or native
-computation dependencies. See [management API](management-api.md) for the contract.
+Paths in these files resolve relative to the file. `--endpoint URL` and
+`--token-file FILE` override connection settings; their environment equivalents
+are `GAMMABOARD_ENDPOINT` and `GAMMABOARD_TOKEN_FILE`.
 
-## Runs, tasks, and files
+```bash
+gb --instance ./client.toml config show
+gb --instance ./client.toml config validate
+gb --endpoint https://board.example.org auth login --password-stdin --output session.token
+```
+
+Login reads the password from stdin and writes a private token file without
+replacing an existing file. It does not require an existing token.
+
+## Start and stop
+
+```bash
+gb start --workers 6 --wait
+gb start db
+gb start server
+gb start --api-only
+gb start --foreground
+gb restart
+gb stop
+gb stop --wait
+```
+
+- `start` provisions a managed database and starts the control/API service. It
+  serves dashboard assets when available. `--api-only` disables static serving.
+- `start db` starts only PostgreSQL. `start server` uses the configured running
+  database. `--foreground` keeps the service attached for a process manager.
+- `--workers N` submits a request for **N additional workers** using the instance's
+  launch policy. `--wait` waits for their registration. Startup alone launches none.
+- `--restore-workers` requests restoration of workers saved by graceful shutdown.
+  Repeating `start` reuses a healthy instance with matching configuration.
+- `restart` stops and starts the whole local instance.
+- `stop` checkpoints and stops workers, completes exports and coordinates deployment
+  cleanup. `stop --wait` first waits for accepted runs to finish. New work is
+  rejected during draining. `--timeout DURATION` bounds waiting.
+
+Shutdown errors retain the service for inspection. Application completion and
+process/allocation termination are separate: the local owner or Slurm helper
+confirms termination. An API disconnect does not confirm successful shutdown.
+
+For an externally managed deployment, local startup and computation require
+`--allow-local-processes` on the intended host/allocation. That override is local
+and does not change the service's worker-launch policy. See [HPC deployment](deployment.md#hpc).
+
+## Validate configuration and runs
+
+| Command | Where and what it validates |
+| --- | --- |
+| `gb config validate` | Client connection settings on this host |
+| `gb local config validate` | Full deployment configuration on this host |
+| `gb run validate FILE` | Run preflight on the service |
+| `gb local run validate FILE` | Run preflight on this host |
+| `gb local run validate FILE --probe` | Local preflight plus task-runtime construction |
+
+Run preflight can execute evaluator programs for descriptor/domain discovery.
+Local run validation uses the deployment's process gate. `gb status` shows the
+running service's effective configuration.
+
+## Runs and tasks
+
+Run references accept an ID or an unambiguous name. Use IDs when names repeat.
 
 ```bash
 gb run list
 gb run inspect RUN
-gb run validate ./run.toml
 gb run create ./run.toml --start --max-evaluators 4
-gb run wait RUN --until completed --timeout 2m
-gb run results RUN --output ./result.json
-gb run export RUN --output ./definition.toml
+gb run start RUN --wait-for-workers --timeout 60s
+gb run wait RUN --until ready --timeout 2m
+gb run wait RUN --until completed --timeout 10m
 gb run pause RUN
-gb run start RUN
+gb run results RUN
+gb run results RUN --task TASK_ID
 gb run duplicate RUN NEW_NAME
 gb run remove RUN --dry-run
 gb run remove RUN --yes
 ```
 
-Input documents are read on the caller and uploaded. Referenced executables,
-datasets, and child-run resources must exist on the deployment; `--base-dir`
-supplies an explicit deployment directory for relative run references.
+`--max-evaluators` is a ceiling. Starting admits a complete compatible worker group;
+`run wait --until ready` waits for execution readiness. Completion can precede worker
+release, so use `--wait-for-workers` when starting sequential runs. Its timeout
+leaves no background queued start. `run wait --until idle` checks assignment release.
 
-`--output` on `results` or `export` writes locally, atomically without overwriting.
-`run create --export-path /shared/result.json` schedules a server-side export that
-survives client disconnection and service restart. It requires an absolute path.
-Existing conflicting files remain untouched and the error is visible in `status`.
+Creation can succeed while starting fails. The receipt retains `created.run_id`,
+and the CLI exits nonzero after printing the unsuccessful start status. Retry that
+run with `run start ID`. To recover safely after losing the entire creation response,
+reuse an explicit `--request-id` with identical input:
 
-Task commands are `list`, `inspect`, `append`, `duplicate`, `edit`, `tune`, `export`,
-and `remove`. Edits/removal retain the existing task-state restrictions. Duplication
-copies definitions, not checkpoints; external resource paths remain unchanged.
+```bash
+gb --json run create ./run.toml --request-id experiment-007 \
+  --start --wait-for-workers --timeout 60s
+```
+
+Names do not deduplicate creation. See [API receipts](management-api.md#runs-and-retry-receipts)
+for structured statuses and retry rules.
+
+```bash
+gb run task list RUN
+gb run task append RUN tasks.toml
+gb run task edit RUN TASK_ID task.toml
+gb run task tune RUN TASK_ID queue-tuning.toml
+gb run task duplicate RUN TASK_ID
+gb run task export RUN TASK_ID --output task.toml
+gb run task remove RUN TASK_ID --yes
+```
+
+Definition edits/removal apply to eligible pending tasks. Tuning changes queue
+settings. Duplication creates fresh work without checkpoints or results. Run removal
+drains and deletes the run tree; the CLI polls the background operation to completion.
+`run pause` and `run remove` also accept multiple references or `--all`.
+
+## Files and exports
+
+Input files are read on the caller and uploaded. Referenced executables, datasets
+and child-run files must exist on the deployment. `--base-dir /shared/project` on
+`run create` or `run validate` sets the directory for relative references; the
+default is the service's working directory.
+
+```bash
+gb run export RUN --kind definition --output definition.toml
+gb run export RUN --kind results --output results.json
+gb run create ./run.toml --start --export-path /shared/results/result.json
+```
+
+`--output` writes atomically on the caller without overwriting. Definition exports
+are TOML; result exports are JSON inspection archives. `--export-path` is an absolute
+path on the deployment: the service writes it after completion, even if the client
+exits or the service restarts. Export failures appear in `gb status`.
 
 ## Workers and templates
 
 ```bash
-gb worker launch --count 2
 gb worker launch --count 6 --wait --timeout 2m
-gb worker requests wait REQUEST_ID
-gb worker requests cancel REQUEST_ID
-gb worker list
-gb worker list --offline
+gb worker launch --config workers.toml
+gb worker list --state all
 gb worker inspect NAME
 gb worker assign NAME RUN --role evaluator
 gb worker unassign NAME
+gb worker stop NAME
 gb worker stop --idle
 gb worker stop --all
-gb worker start NAME
-gb worker restore
+gb worker start NAME --wait
+gb worker restore --wait
 gb worker cancel-restoration NAME
-gb worker launch-request list
+gb worker requests list
+gb worker requests inspect REQUEST_ID
+gb worker requests wait REQUEST_ID
+gb worker requests cancel REQUEST_ID
+```
+
+All launches submit durable requests; the instance chooses local or external
+execution. `launch` creates workers, `start NAME` uses a saved recipe, and `restore`
+starts only workers marked for restoration. Each returns `request_ids` and
+`node_names`. Waiting times out without canceling accepted requests.
+
+Worker lists use one schema for `live` (the default), `offline`, or `all`.
+Inspection returns one worker. Canceling restoration clears saved intent; canceling
+a launch request is allowed only before a controller claims it. Submitted jobs
+require worker/deployment controls. See [worker behavior](operations.md#manage-work).
+
+```bash
 gb template list run
 gb template show run tetrahedron-native
-gb template save run NAME ./definition.toml
+gb template save run NAME definition.toml
 gb template remove run NAME --yes
 ```
 
-All launches are durable requests. The instance chooses the execution backend;
-local fulfillment runs in a service-owned controller, and external fulfillment
-runs in the helper. `launch`, `start NAME`, and `restore` return request IDs by
-default. Add `--wait --timeout 60s` to wait for those requests to be fulfilled.
-Timeouts do not cancel accepted work. `worker requests list/inspect/wait/cancel`
-operate on the returned IDs. Cancellation is atomic and supported before a
-controller claims a request; claimed/submitted jobs require worker/deployment
-controls, and cancellation never pretends to have stopped them.
+Template kinds are `run`, `task`, and `worker`. Saving an existing name requires
+`--yes` to overwrite it.
 
-`--allow-local-processes` only authorizes local bootstrap, offline administration,
-or direct worker execution on the current host. It is not sent to the API and
-does not override the instance's launch policy. Worker execution itself is `gammaboard node run`, using the service
-executable and its database/runtime configuration.
+## Database maintenance
 
-## Shutdown and recovery
+`gb status` includes database health and schema version. `gb db backup --output
+FILE` downloads a backup through the API. Local commands use the deployment's
+configured database directly:
 
-`gb stop` checkpoints and stops workers. `gb stop --wait` first finishes the runs
-accepted before draining, then completes exports and waits for external cleanup.
-New work is fenced during draining. Timeouts and export failures retain the
-service for inspection; an external-cleanup timeout retains the admission fence.
+| Command | Effect |
+| --- | --- |
+| `gb local db status` | Check database availability without the API |
+| `gb local db backup --output FILE` | Write a PostgreSQL backup on this host |
+| `gb local db create` | Create and migrate the configured logical database |
+| `gb local db migrate` | Apply supported schema migrations |
+| `gb local db restore FILE --yes` | Replace database contents from a backup |
+| `gb local db reset --yes` | Recreate the logical database from migrations |
+| `gb local db delete --yes` | Delete the logical database |
+| `gb local db purge --yes` | Remove the entire managed PostgreSQL cluster |
+| `gb local db stop` | Stop managed PostgreSQL after the service has stopped |
 
-The API reports `ready_to_exit` once application shutdown is complete. The local
-bootstrap owner or Slurm helper verifies actual process/allocation termination.
-An API disconnect before completion is an error, never inferred success.
+Stop the service before create/migrate/restore/reset/delete/purge. External clusters
+cannot be purged. Backups exclude external artifacts; see
+[backup and recovery](operations.md#backup-and-recovery).
 
-The service writes `state_dir/status.json` as an owner-side receipt, holds
-`service.lock`, and records startup snapshots under `state_dir/deployments`.
-Pending exports and shutdown requests live in PostgreSQL. Unexpected service
-termination does not automatically kill worker computations or delete data.
-Restart reacquires ownership and resumes durable coordination.
-
-## Database maintenance and diagnostics
-
-`gb db status` uses the API. `gb db backup --output ./database.dump` streams a
-backup to the caller. `gb local db create`, `migrate`, `restore`, `reset`, `delete`, and
-`purge` delegate to the local service executable and require local deployment
-configuration. Restore/reset/delete/purge require `--yes`; restore/reset/delete
-require the service to be stopped. `delete` removes the logical database; `purge`
-removes the entire managed cluster. External clusters cannot be purged.
+## Diagnostics and automation
 
 ```bash
 gb status --json
@@ -174,32 +228,28 @@ gb logs --service server
 gb logs --service db
 gb logs --run RUN --follow --jsonl
 gb run performance RUN --duration 10s --json
+gb build-info
+gb build-info --server
 gb completion bash
 ```
 
-Service logs are `log_dir/service.log`; PostgreSQL logs are `log_dir/postgres.log`.
-Finite JSON commands emit one document. Streaming logs use JSON Lines explicitly.
+`--json` emits one document for finite commands. Streaming logs use `--jsonl`.
+`build-info` inspects the client offline; `--server` queries the service.
+Deployment owners use `gb control acknowledge-cleanup REQUEST_ID` only after
+confirming external jobs are gone; see the [shutdown contract](cluster-launches.md#durable-instance-shutdown).
 
-## Command scope
+## Inspecting retained or imported results
 
-`gb config show` displays the resolved client endpoint and credential-file path;
-`gb config validate` validates that connection configuration offline. It does not
-claim to validate the running service. Use `gb local check-config` for full
-deployment validation and `gb status` for the server's effective configuration.
-Explicit endpoint/token-file overrides are applied before credentials are read.
-`auth login` does not require an existing token file.
+Benchmark helpers accept `--keep-instance /absolute/path`. They stop normally and
+write `retained-instance.json` with the command to reopen each retained instance
+without launching workers. See [benchmarking](benchmarking.md).
 
-`gb build-info` reports the installed client without connecting; `--server`
-requests service build information. `gammaboard` is exclusively the service,
-worker, and offline utility executable; it does not forward management commands.
+```bash
+gb run export RUN --kind results --output results.json
+gb run import-results results.json --name "Archived calculation"
+```
 
-`gb db status/backup` are remote operations. Offline status, creation, migration,
-restore, deletion, and cluster purge are explicitly `gb local db ...` operations.
-They require a deployment file, never just a client connection file. `start` and
-`restart` are convenient local bootstrap commands; restart always affects the
-whole instance and accepts no `db`/`server` component argument.
-
-`gb run validate FILE` validates through the API without executing a probe.
-`gb local check-run FILE --probe` explicitly executes the probe on this host and
-respects the deployment's process gate. Human output uses labeled summaries;
-`--json` gives one machine-readable document. The unused `--quiet` flag is removed.
+Imports create read-only dashboard archives from terminal tasks, without executing
+evaluators. They preserve task definitions, latest snapshots, plots, histograms and
+provenance. Full execution/performance history, child runs and resumable state are
+not included. Use a database backup for recovery. Remove archives with `run remove`.

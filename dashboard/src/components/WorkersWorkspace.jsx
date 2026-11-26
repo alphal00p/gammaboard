@@ -310,11 +310,11 @@ const WorkersWorkspace = ({ workers, runs, isConnected, error, isLoading = false
           setStartNodesError(null);
           try {
             const response = await autoRunNodes({ toml });
-            const requestId = response?.request?.id;
-            const started = Number(response?.started ?? 0);
+            const requestIds = response.request_ids.join(", ");
+            const requested = response.node_names.length;
             setLaunchOpen(false);
             setSnackbar({
-              message: `Created node launch request ${requestId ?? ""}; submitted ${started} node${started === 1 ? "" : "s"}.`,
+              message: `Created worker launch request ${requestIds} for ${requested} worker${requested === 1 ? "" : "s"}.`,
               severity: "success",
             });
           } catch (err) {

@@ -56,7 +56,7 @@ use axum::{
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -298,7 +298,7 @@ pub async fn spawn(
         .allowed_origins
         .iter()
         .map(|origin| {
-            axum::http::HeaderValue::from_str(origin.trim())
+            axum::http::HeaderValue::from_str(&normalize_browser_origin(origin)?)
                 .with_context(|| format!("invalid server.allowed_origins entry={origin:?}"))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
@@ -308,7 +308,6 @@ pub async fn spawn(
     let state = AppState {
         instance,
         store: store.clone(),
-        cleanup: config.cleanup.clone(),
         auth: config
             .auth
             .as_ref()
@@ -361,7 +360,6 @@ pub async fn spawn(
 pub(crate) struct AppState {
     instance: Option<crate::instance::Instance>,
     store: PgStore,
-    cleanup: node_api::GracefulNodeShutdownParams,
     pub(crate) auth: Option<AuthConfig>,
     server_name: String,
     allowed_origins: Vec<axum::http::HeaderValue>,
@@ -444,39 +442,6 @@ impl IntoResponse for ApiError {
     }
 }
 
-fn log_control_api_error(action: &str, err: &ApiError) {
-    match err {
-        ApiError::BadRequest(message) => tracing::warn!(
-            source = "control",
-            control_surface = "dashboard",
-            action,
-            error = %message,
-            "dashboard action rejected"
-        ),
-        ApiError::Unauthorized(message) | ApiError::Forbidden(message) => tracing::warn!(
-            source = "control",
-            control_surface = "dashboard",
-            action,
-            error = %message,
-            "dashboard action unauthorized"
-        ),
-        ApiError::NotFound(message) => tracing::warn!(
-            source = "control",
-            control_surface = "dashboard",
-            action,
-            error = %message,
-            "dashboard action target not found"
-        ),
-        ApiError::Internal(message) => tracing::error!(
-            source = "control",
-            control_surface = "dashboard",
-            action,
-            error = %message,
-            "dashboard action failed"
-        ),
-    }
-}
-
 #[derive(Deserialize)]
 struct RunsQuery {
     #[serde(default)]
@@ -495,6 +460,7 @@ struct RunPage<T> {
 #[derive(Serialize)]
 struct RunSummaryResponse {
     kind: String,
+    archived: bool,
     run_id: i32,
     run_name: String,
     parent_run_id: Option<i32>,
@@ -518,6 +484,7 @@ impl From<RunProgress> for RunSummaryResponse {
             });
         Self {
             kind: run.kind().to_owned(),
+            archived: run.archived,
             run_id: run.run_id,
             run_name: run.run_name,
             parent_run_id: run.parent_run_id,
@@ -534,17 +501,9 @@ impl From<RunProgress> for RunSummaryResponse {
 #[derive(Deserialize)]
 struct WorkersQuery {
     run_id: Option<i32>,
-}
-
-#[derive(Deserialize)]
-struct AssignNodeRequest {
-    run_id: i32,
-    role: String,
-}
-
-#[derive(Deserialize)]
-struct AutoAssignRequest {
-    max_evaluators: Option<usize>,
+    #[serde(default)]
+    state: gammaboard_client::protocol::WorkerFilter,
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -567,34 +526,10 @@ struct NodeLaunchRequestProgressRequest {
     error: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct DefinitionRequest {
-    toml: String,
-    #[serde(default)]
-    duplicate: bool,
-}
-
 #[derive(Default, Deserialize)]
 struct DefinitionQuery {
     #[serde(default)]
     duplicate: bool,
-}
-
-#[derive(Deserialize)]
-struct EditTaskRequest {
-    toml: String,
-    expected_toml: String,
-}
-
-#[derive(Deserialize)]
-struct UpdateTaskQueueTuningRequest {
-    queue_tuning: Option<SamplerQueueTuning>,
-}
-
-#[derive(Deserialize)]
-struct TemplateSaveRequest {
-    name: String,
-    toml: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -759,15 +694,21 @@ async fn get_run_summary(
     json_response(RunSummaryResponse::from(run))
 }
 
-async fn get_nodes(
+async fn get_workers(
     State(state): State<AppState>,
     Query(params): Query<WorkersQuery>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let workers = state
-        .store
-        .get_registered_worker_summaries(params.run_id)
-        .await?;
-    json_response(workers)
+) -> Result<Json<JsonValue>, ApiError> {
+    json_response(
+        state
+            .store
+            .worker_views(
+                manage::worker_filter(params.state),
+                params.name.as_deref(),
+                params.run_id,
+            )
+            .await
+            .map_err(crate::core::StoreError::from)?,
+    )
 }
 
 async fn get_node_panels(
@@ -810,31 +751,6 @@ async fn get_task_definition(
     let toml =
         run_api::export_task_definition(&state.store, run_id, task_id, query.duplicate).await?;
     json_response(DefinitionResponse { toml })
-}
-
-async fn edit_run_task(
-    State(state): State<AppState>,
-    AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
-    AxumJson(payload): AxumJson<EditTaskRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    run_api::edit_pending_task(
-        &state.store,
-        run_id,
-        task_id,
-        &payload.toml,
-        &payload.expected_toml,
-    )
-    .await
-    .inspect_err(|err| log_control_api_error("run_task_edit", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_task_edit",
-        run_id,
-        task_id,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({"run_id":run_id,"task_id":task_id.to_string()}))
 }
 
 async fn get_run_panels(
@@ -943,24 +859,6 @@ async fn get_template(
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let template = template_api::load_template(template_dir(&state, kind), &name)?;
     json_response(template)
-}
-
-async fn save_template(
-    State(state): State<AppState>,
-    AxumPath(kind): AxumPath<TemplateKind>,
-    AxumJson(payload): AxumJson<TemplateSaveRequest>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let template =
-        template_api::save_template(template_dir(&state, kind), &payload.name, &payload.toml)?;
-    json_response(template)
-}
-
-async fn delete_template(
-    State(state): State<AppState>,
-    AxumPath((kind, name)): AxumPath<(TemplateKind, String)>,
-) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    template_api::delete_template(template_dir(&state, kind), &name)?;
-    json_response(serde_json::json!({ "deleted": true, "name": name }))
 }
 
 fn append_engine_config_panels(
@@ -1363,431 +1261,13 @@ async fn get_logs(
     json_response(logs)
 }
 
-async fn create_run(
-    State(state): State<AppState>,
-    AxumJson(payload): AxumJson<DefinitionRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let config =
-        run_api::parse_run_add_config_toml_from_base(&payload.toml, &state.run_templates_dir)
-            .inspect_err(|err| log_control_api_error("run_create", err))?;
-    let config = if payload.duplicate {
-        run_api::prepare_run_duplicate(&state.store, config).await?
-    } else {
-        config
-    };
-    let run = run_api::create_run(&state.store, config)
-        .await
-        .inspect_err(|err| log_control_api_error("run_create", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_create",
-        run_id = run.run_id,
-        run_name = %run.run_name,
-        tasks_created = run.tasks_created,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "run_id": run.run_id,
-        "run_name": run.run_name,
-    }))
-}
-
-async fn add_run_tasks(
-    State(state): State<AppState>,
-    AxumPath(run_id): AxumPath<i32>,
-    AxumJson(payload): AxumJson<DefinitionRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let tasks = run_api::parse_task_queue_toml(payload.toml.trim())
-        .inspect_err(|err| log_control_api_error("run_add_tasks", err))?;
-    let result = if payload.duplicate {
-        run_api::append_task_duplicate(&state.store, run_id, tasks).await
-    } else {
-        run_api::append_tasks(&state.store, run_id, tasks).await
-    }
-    .inspect_err(|err| log_control_api_error("run_add_tasks", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_add_tasks",
-        run_id,
-        tasks_added = result.tasks.len(),
-        "dashboard action completed"
-    );
-    json_response(result.tasks)
-}
-
-async fn pause_run(
-    State(state): State<AppState>,
-    AxumPath(run_id): AxumPath<i32>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = run_api::pause_run(&state.store, run_id)
-        .await
-        .inspect_err(|err| log_control_api_error("run_pause", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_pause",
-        run_id = result.run_id,
-        run_name = %result.run_name,
-        assignments_cleared = result.assignments_cleared,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "run_id": result.run_id,
-        "assignments_cleared": result.assignments_cleared,
-    }))
-}
-
-async fn delete_run(
-    State(state): State<AppState>,
-    AxumPath(run_id): AxumPath<i32>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let run = state
-        .store
-        .get_run_progress(run_id)
-        .await
-        .map_err(ApiError::from)
-        .inspect_err(|err| log_control_api_error("run_remove", err))?;
-    let run = run.ok_or_else(|| ApiError::NotFound(format!("run {run_id} not found")))?;
-    let operation = state
-        .run_removals
-        .start(run_id, run.run_name, async move {
-            let result = run_api::remove_run(&state.store, run_id)
-                .await
-                .inspect_err(|err| log_control_api_error("run_remove", err))
-                .map_err(|err| err.to_string())?;
-            tracing::info!(
-                source = "control",
-                control_surface = "dashboard",
-                action = "run_remove",
-                run_id = result.run_id,
-                run_name = %result.run_name,
-                "dashboard action completed"
-            );
-            Ok(())
-        })
-        .await;
-    Ok((StatusCode::ACCEPTED, json_response(operation)?))
-}
-
-async fn get_run_removal(
-    State(state): State<AppState>,
-    AxumPath(operation_id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let operation = state.run_removals.get(&operation_id).await.ok_or_else(|| {
-        ApiError::NotFound(
-            "Deletion status is unavailable after a server restart or expired operation. Refresh the run list before retrying.".into(),
-        )
-    })?;
-    json_response(operation)
-}
-
-async fn delete_run_task(
-    State(state): State<AppState>,
-    AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = run_api::remove_pending_task(&state.store, run_id, task_id)
-        .await
-        .inspect_err(|err| log_control_api_error("run_task_remove", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_task_remove",
-        run_id = result.run_id,
-        task_id = result.task_id,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "run_id": result.run_id,
-        "task_id": result.task_id,
-    }))
-}
-
-async fn update_run_task_queue_tuning(
-    State(state): State<AppState>,
-    AxumPath((run_id, task_id)): AxumPath<(i32, i64)>,
-    AxumJson(payload): AxumJson<UpdateTaskQueueTuningRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result =
-        run_api::update_task_queue_tuning(&state.store, run_id, task_id, payload.queue_tuning)
-            .await
-            .inspect_err(|err| log_control_api_error("run_task_update_queue_tuning", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_task_update_queue_tuning",
-        run_id = result.run_id,
-        task_id = result.task.id,
-        "dashboard action completed"
-    );
-    json_response(result.task)
-}
-
-async fn assign_node(
-    State(state): State<AppState>,
-    AxumPath(node_name): AxumPath<String>,
-    AxumJson(payload): AxumJson<AssignNodeRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let assigned = node_api::assign_node(
-        &state.store,
-        &node_name,
-        payload.run_id,
-        payload
-            .role
-            .parse()
-            .map_err(|err: String| ApiError::BadRequest(err))?,
-    )
-    .await
-    .inspect_err(|err| log_control_api_error("node_assign", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "node_assign",
-        node_name = %assigned.node_name,
-        run_id = assigned.run_id,
-        run_name = %assigned.run_name,
-        role = %assigned.role,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "node_name": assigned.node_name,
-        "run_id": assigned.run_id,
-        "role": assigned.role.as_str(),
-    }))
-}
-
-async fn auto_assign_run(
-    State(state): State<AppState>,
-    AxumPath(run_id): AxumPath<i32>,
-    AxumJson(payload): AxumJson<AutoAssignRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = node_api::auto_assign_run(&state.store, run_id, payload.max_evaluators)
-        .await
-        .inspect_err(|err| log_control_api_error("run_auto_assign", err))?;
-
-    crate::local_control::mark_started(&state.store, result.run_id)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "run_auto_assign",
-        run_id = result.run_id,
-        run_name = %result.run_name,
-        sampler_already_assigned = result.sampler_already_assigned,
-        assigned_samplers = %result.assigned_samplers.join(","),
-        assigned_evaluators = result.assigned_evaluators.len(),
-        requested_evaluator_limit = payload.max_evaluators,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!(result))
-}
-
-async fn unassign_node(
-    State(state): State<AppState>,
-    AxumPath(node_name): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    node_api::unassign_node(&state.store, &node_name)
-        .await
-        .inspect_err(|err| log_control_api_error("node_unassign", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "node_unassign",
-        node_name = %node_name,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "node_name": node_name,
-    }))
-}
-
-async fn unassign_all_nodes(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let rows_updated = node_api::unassign_all_nodes(&state.store)
-        .await
-        .inspect_err(|err| log_control_api_error("node_unassign_all", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "node_unassign_all",
-        rows_updated,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "rows_updated": rows_updated,
-    }))
-}
-
-async fn stop_node(
-    State(state): State<AppState>,
-    AxumPath(node_name): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = node_api::stop_node(&state.store, &node_name)
-        .await
-        .inspect_err(|err| log_control_api_error("node_stop", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "node_stop",
-        node_name = %result.node_name,
-        rows_updated = result.rows_updated,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "node_name": result.node_name,
-        "rows_updated": result.rows_updated,
-    }))
-}
-
-async fn stop_all_nodes(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = node_api::stop_all_nodes(&state.store)
-        .await
-        .inspect_err(|err| log_control_api_error("node_stop_all", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "node_stop_all",
-        rows_updated = result.rows_updated,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({
-        "rows_updated": result.rows_updated,
-    }))
-}
-
-async fn stop_idle_nodes(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let result = node_api::stop_idle_nodes(&state.store)
-        .await
-        .inspect_err(|err| log_control_api_error("node_stop_idle", err))?;
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "node_stop_idle",
-        rows_updated = result.rows_updated,
-        "dashboard action completed"
-    );
-    json_response(serde_json::json!({ "rows_updated": result.rows_updated }))
-}
-
-#[derive(Deserialize)]
-struct OfflineNodeAction {
-    node_uuid: String,
-}
-
-async fn get_offline_nodes(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    json_response(
-        state
-            .store
-            .offline_nodes()
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?,
-    )
-}
-
-async fn start_offline_node(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-    AxumJson(action): AxumJson<OfflineNodeAction>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    start_saved_worker(&state, &name, &action.node_uuid, false).await
-}
-
-async fn restore_offline_node(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-    AxumJson(action): AxumJson<OfflineNodeAction>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    start_saved_worker(&state, &name, &action.node_uuid, true).await
-}
-
-async fn start_saved_worker(
-    state: &AppState,
-    name: &str,
-    uuid: &str,
-    restore_only: bool,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let id = state
-        .store
-        .start_offline_node(name, uuid, state.allow_local_node_spawn, restore_only)
-        .await
-        .map_err(|e| match e {
-            sqlx::Error::Protocol(message) => ApiError::BadRequest(message),
-            e => ApiError::Internal(e.to_string()),
-        })?;
-    json_response(serde_json::json!({"request_id":id}))
-}
-
-async fn unassign_offline_node(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-    AxumJson(action): AxumJson<OfflineNodeAction>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    update_offline_node(&state, &name, &action.node_uuid, false).await
-}
-async fn cancel_worker_restoration(
-    State(state): State<AppState>,
-    AxumPath(name): AxumPath<String>,
-    AxumJson(action): AxumJson<OfflineNodeAction>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    update_offline_node(&state, &name, &action.node_uuid, true).await
-}
-async fn update_offline_node(
-    state: &AppState,
-    name: &str,
-    uuid: &str,
-    cancel_restoration: bool,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let changed = if cancel_restoration {
-        state.store.cancel_worker_restoration(name, uuid).await
-    } else {
-        state.store.unassign_offline_node(name, uuid).await
-    }
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
-    if !changed {
-        return Err(ApiError::BadRequest(
-            "Node became live, changed identity, or has a pending launch. Refresh the node list."
-                .into(),
-        ));
-    }
-    json_response(serde_json::json!({"rows_updated":1}))
-}
-
-async fn auto_run_nodes(
-    State(state): State<AppState>,
-    AxumJson(payload): AxumJson<AutoRunNodesRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    create_and_maybe_resolve_node_launch_request(state, payload).await
-}
-
-async fn create_node_launch_request(
-    State(state): State<AppState>,
-    AxumJson(payload): AxumJson<AutoRunNodesRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    create_and_maybe_resolve_node_launch_request(state, payload).await
-}
-
-async fn get_node_launch_requests(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let requests = node_api::list_node_launch_requests(&state.store)
-        .await
-        .inspect_err(|err| log_control_api_error("node_launch_requests_list", err))?;
-    json_response(serde_json::json!({ "items": requests }))
-}
-
 async fn claim_external_node_launch_request(
     State(state): State<AppState>,
     AxumJson(payload): AxumJson<ExternalLauncher>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let _admission = crate::local_control::admit(&state.store)
+        .await
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let request = state
         .store
         .claim_external_launch(&payload.launcher_id, payload.request_id)
@@ -1827,111 +1307,6 @@ async fn update_node_launch_request_progress(
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     json_response(serde_json::json!({"ok":true}))
-}
-
-async fn create_and_maybe_resolve_node_launch_request(
-    state: AppState,
-    payload: AutoRunNodesRequest,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    json_response(
-        crate::api::node_launch::launch(&state.store, state.allow_local_node_spawn, payload)
-            .await?,
-    )
-}
-
-async fn restart_db(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    crate::local_control::require_local_processes(
-        state.runtime.runtime_config().externally_managed,
-        false,
-        "restart PostgreSQL locally",
-    )
-    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-
-    let runtime = state.runtime.runtime_config();
-    let local = runtime.local_postgres.clone();
-    let database_url = runtime.database.url.clone();
-    tokio::task::spawn_blocking(move || crate::local_db::reset_db(&local, true, &database_url))
-        .await
-        .map_err(|err| ApiError::Internal(format!("database restart task failed: {err}")))?
-        .map_err(|err| ApiError::Internal(err.to_string()))
-        .inspect_err(|err| log_control_api_error("db_restart", err))?;
-    state
-        .store
-        .bind_deployment(std::env::var("GAMMABOARD_DEPLOYMENT_ID").ok().as_deref())
-        .await
-        .map_err(|err| ApiError::Internal(err.to_string()))?;
-
-    tracing::info!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "db_restart",
-        deleted = true,
-        started = true,
-        "dashboard action completed"
-    );
-
-    json_response(serde_json::json!({
-        "deleted": true,
-        "started": true,
-    }))
-}
-
-async fn save_workers_for_restart(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let saved = state
-        .store
-        .save_workers_for_restart()
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    json_response(serde_json::json!({"workers_saved": saved}))
-}
-
-async fn shutdown_control_process(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    if let Ok(status) = crate::local_control::status(&state.store).await
-        && status["supervisor_reachable"] == true
-    {
-        let id = crate::local_control::request_stop(&state.store, None, false, None)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        return json_response(serde_json::json!({"shutdown_requested":true,"request_id":id}));
-    }
-    tracing::warn!(
-        source = "control",
-        control_surface = "dashboard",
-        action = "control_shutdown",
-        "dashboard action requested control process shutdown"
-    );
-    let store = state.store.clone();
-    tokio::spawn(async move {
-        let result = node_api::stop_workers_for_restart(&store, state.cleanup).await;
-        match result {
-            Ok(result) => tracing::info!(
-                source = "control",
-                control_surface = "dashboard",
-                action = "control_shutdown",
-                assignments_cleared = result.assignments_cleared,
-                rows_updated = result.rows_updated,
-                active_samplers_remaining = result.active_samplers_remaining,
-                live_nodes_remaining = result.live_nodes_remaining,
-                sampler_drain_timed_out = result.sampler_drain_timed_out,
-                node_stop_timed_out = result.node_stop_timed_out,
-                "control shutdown drain completed"
-            ),
-            Err(err) => tracing::error!(
-                source = "control",
-                control_surface = "dashboard",
-                action = "control_shutdown",
-                error = %err,
-                "control shutdown drain failed"
-            ),
-        }
-        std::process::exit(0);
-    });
-
-    json_response(serde_json::json!({ "shutdown_requested": true }))
 }
 
 async fn get_run_performance_graphs(
@@ -2005,27 +1380,21 @@ async fn export_histogram_bundle(
 
     json_response(response)
 }
-
-async fn instance_control_status(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    json_response(
-        crate::local_control::status(&state.store)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?,
-    )
-}
-async fn acknowledge_instance_cleanup(
-    State(state): State<AppState>,
-    AxumJson(body): AxumJson<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let id = body["request_id"]
-        .as_str()
-        .ok_or_else(|| ApiError::BadRequest("request_id is required".into()))?;
-    crate::local_control::acknowledge_cleanup(&state.store, id)
-        .await
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    json_response(serde_json::json!({"acknowledged":true}))
+/// Browser-origin configuration is an exact HTTP(S) origin, never a URL pattern.
+pub fn normalize_browser_origin(origin: &str) -> anyhow::Result<String> {
+    let parsed = url::Url::parse(origin)?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "http" | "https")
+            && parsed.host_str().is_some()
+            && !origin.contains('*')
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+            && parsed.path() == "/"
+            && parsed.query().is_none()
+            && parsed.fragment().is_none(),
+        "allowed browser origin must contain only an HTTP(S) scheme, host and optional port: {origin:?}"
+    );
+    Ok(parsed.origin().ascii_serialization())
 }
 
 #[cfg(test)]

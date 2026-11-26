@@ -329,6 +329,19 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), b"first");
     }
     #[test]
+    fn browser_task_identifiers_keep_bigint_precision() {
+        let request:Request=serde_json::from_value(serde_json::json!({"operation":"task","run":"1","action":{"action":"remove","id":"9007199254740993"}})).unwrap();
+        assert!(matches!(
+            request,
+            Request::Task {
+                action: protocol::TaskAction::Remove {
+                    id: 9007199254740993
+                },
+                ..
+            }
+        ));
+    }
+    #[test]
     fn protocol_rejects_unknown_fields_and_operations() {
         assert!(
             serde_json::from_value::<Request>(
@@ -417,6 +430,62 @@ mod consistency_tests {
             vec!["gb", "start", "--workers", "2", "--wait"],
         ] {
             cli::Cli::try_parse_from(&args).unwrap();
+        }
+    }
+    #[test]
+    fn consolidated_commands_have_one_advertised_entry_point() {
+        use clap::CommandFactory;
+        for args in [
+            vec!["gb", "db", "status"],
+            vec!["gb", "local", "db", "start"],
+            vec!["gb", "run", "export", "1"],
+        ] {
+            assert!(cli::Cli::try_parse_from(args).is_err());
+        }
+        for args in [
+            vec!["gb", "start", "db"],
+            vec!["gb", "local", "config", "validate"],
+            vec!["gb", "local", "run", "validate", "card.toml", "--probe"],
+            vec!["gb", "run", "export", "1", "--kind", "results"],
+            vec!["gb", "worker", "list", "--state", "all"],
+            vec!["gb", "worker", "list", "--offline"],
+        ] {
+            cli::Cli::try_parse_from(args).unwrap();
+        }
+        let mut tree = cli::Cli::command();
+        let help = tree
+            .find_subcommand_mut("local")
+            .unwrap()
+            .render_help()
+            .to_string();
+        assert!(!help.contains("check-run") && !help.contains("check-config"));
+        let help = tree
+            .find_subcommand_mut("run")
+            .unwrap()
+            .find_subcommand_mut("task")
+            .unwrap()
+            .render_help()
+            .to_string();
+        assert!(!help.contains("inspect"));
+    }
+    #[test]
+    fn launch_sources_are_explicit_and_do_not_mix_contracts() {
+        for source in [
+            serde_json::json!({"kind":"new","count":2}),
+            serde_json::json!({"kind":"saved","name":"worker","expected_uuid":"previous","restore_only":true}),
+            serde_json::json!({"kind":"restore_saved"}),
+        ] {
+            serde_json::from_value::<Request>(
+                serde_json::json!({"operation":"worker_launch","source":source}),
+            )
+            .unwrap();
+        }
+        for request in [
+            serde_json::json!({"operation":"worker_launch","count":2}),
+            serde_json::json!({"operation":"worker_launch","source":{"kind":"saved","name":"worker","count":2}}),
+            serde_json::json!({"operation":"database_status"}),
+        ] {
+            assert!(serde_json::from_value::<Request>(request).is_err());
         }
     }
     #[test]

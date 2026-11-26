@@ -167,10 +167,13 @@ def validate_batch(result, request, count):
     if request.observables:
         for bundle in result.observables:
             for histogram in bundle["histograms"].values():
+                _counter(histogram["sample_count"])
                 if histogram["sample_count"] != 1:
                     raise ValueError(
                         "observable output must describe exactly one sample"
                     )
+                for count in histogram["statistics"].values():
+                    _counter(count)
                 for b in [
                     *histogram["bins"],
                     histogram["underflow_bin"],
@@ -196,7 +199,10 @@ def validate_batch(result, request, count):
                 raise ValueError("diagnostics must describe one sample")
             for key in DIAGNOSTIC_COUNTS:
                 _counter(d[key], (1 << 63) - 1)
-            for key in (*DIAGNOSTIC_TIMES, *OPTIONAL_TIMES):
+            for key in DIAGNOSTIC_TIMES:
+                if _float(d[key]) < 0:
+                    raise ValueError("negative diagnostic timing")
+            for key in OPTIONAL_TIMES:
                 if d.get(key) is not None and _float(d[key]) < 0:
                     raise ValueError("negative diagnostic timing")
 
@@ -317,3 +323,116 @@ def json_response(result, request, values):
                 row[name] = getattr(result, name)[i]
         rows.append(row)
     return {"samples": rows}
+
+
+class EvaluationDecoder:
+    """Decode either selected-output encoding; retain the histogram schema across calls."""
+
+    def __init__(self, schema=None):
+        self.schema = schema
+        self.received_schema = False
+
+    def decode(self, response, binary, request, count):
+        if response.get("encoding") is None:
+            if binary or response.get("observable_schema") is not None:
+                raise ValueError("unexpected binary/schema in JSON evaluation")
+            rows = response.get("samples")
+            if not isinstance(rows, list) or len(rows) != count:
+                raise ValueError("evaluation result count mismatch")
+        else:
+            if (
+                response["encoding"] != BINARY_ENCODING
+                or response.get("samples") is not None
+            ):
+                raise ValueError("unsupported evaluation encoding")
+            schema = response.get("observable_schema")
+            if schema is not None:
+                if self.received_schema or (
+                    self.schema is not None and self.schema != schema
+                ):
+                    raise ValueError("observable schema changed or repeated")
+                if clear_schema(schema) != schema:
+                    raise ValueError("observable schema is not cleared")
+                self.schema = schema
+                self.received_schema = True
+            position = 0
+
+            def read(fmt):
+                nonlocal position
+                size = struct.calcsize(fmt)
+                if position + size > len(binary):
+                    raise ValueError("truncated evaluation binary")
+                value = struct.unpack_from(fmt, binary, position)
+                position += size
+                return value
+
+            def optional():
+                (tag,) = read("<B")
+                if tag not in (0, 1):
+                    raise ValueError("invalid optional tag")
+                return read("<d")[0] if tag else None
+
+            rows = []
+            for _ in range(count):
+                row = {"values": list(read("<" + "d" * len(request.components)))}
+                if request.observables:
+                    if self.schema is None:
+                        raise ValueError("missing observable schema")
+                    bundle = copy.deepcopy(self.schema)
+                    for name in sorted(bundle["histograms"]):
+                        h = bundle["histograms"][name]
+                        h["sample_count"] = 1
+                        counts = read("<QQQI")
+                        h["statistics"] = dict(
+                            zip(
+                                (
+                                    "in_range_entry_count",
+                                    "nan_value_count",
+                                    "mitigated_pair_count",
+                                ),
+                                counts[:3],
+                            )
+                        )
+                        bins = [*h["bins"], h["underflow_bin"], h["overflow_bin"]]
+                        previous = -1
+                        if counts[3] > len(bins):
+                            raise ValueError("too many populated bins")
+                        for _ in range(counts[3]):
+                            index, entries, weight, square, mitigated = read("<IQddQ")
+                            if not previous < index < len(bins):
+                                raise ValueError("invalid sparse bin index")
+                            previous = index
+                            bins[index].update(
+                                entry_count=entries,
+                                sum_weights=weight,
+                                sum_weights_squared=square,
+                                mitigated_fill_count=mitigated,
+                            )
+                    row["observables"] = bundle
+                if request.details:
+                    re, im = read("<dd")
+                    row["details"] = dict(
+                        integrand_value_re=re,
+                        integrand_value_im=im,
+                        parameterization_jacobian=optional(),
+                    )
+                if request.diagnostics:
+                    d = dict(zip(DIAGNOSTIC_COUNTS, read("<9q")))
+                    d.update(zip(DIAGNOSTIC_TIMES, read("<5d")))
+                    d.update((key, optional()) for key in OPTIONAL_TIMES)
+                    row["diagnostics"] = d
+                rows.append(row)
+            if position != len(binary):
+                raise ValueError("trailing evaluation binary")
+        result = EvaluationBatch(
+            values=np.asarray([r["values"] for r in rows], dtype=float).reshape(
+                count, len(request.components)
+            ),
+            **{
+                name: [r.get(name) for r in rows] if getattr(request, name) else None
+                for name in ("observables", "details", "diagnostics")
+            },
+        )
+        normalize_values(result.values, count, request.components)
+        validate_batch(result, request, count)
+        return rows

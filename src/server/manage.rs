@@ -1,8 +1,11 @@
 //! Management operations shared by remote clients and the dashboard's domain APIs.
 use super::*;
-use crate::core::{ControlPlaneStore, RunReadStore, RunTaskStore};
+use crate::core::{RunReadStore, RunTaskStore};
 use anyhow::{Context, Result, ensure};
-use gammaboard_client::protocol::{Request as ManagementRequest, TaskAction, TemplateAction};
+use gammaboard_client::protocol::{
+    ExportKind, LaunchSource, Request as ManagementRequest, TaskAction, TemplateAction,
+    WorkerFilter,
+};
 use serde_json::{Value, json};
 
 pub(super) async fn handle(
@@ -34,7 +37,11 @@ async fn resolve(store: &PgStore, reference: &str) -> Result<crate::stores::RunP
 async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> {
     let store = &state.store;
     match request {
-        ManagementRequest::Status {} => crate::local_control::status(store).await,
+        ManagementRequest::Status {} => {
+            let mut status=crate::local_control::status(store).await?;
+            status["database"]["managed"]=json!(state.instance.as_ref().is_some_and(|instance| instance.managed_database));
+            Ok(status)
+        },
         ManagementRequest::Stop { wait, timeout_ms } => {
             let id = crate::local_control::request_stop(store, None, wait, timeout_ms).await?;
             Ok(json!({"stop_id":id}))
@@ -44,6 +51,8 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
             Ok(json!({"acknowledged":true,"request_id":request_id}))
         }
         ManagementRequest::RunCreate {
+            request_id,
+            duplicate,
             toml,
             base_dir,
             name,
@@ -52,51 +61,80 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
             export_path,
         } => {
             let _admission = crate::local_control::admit(store).await?;
-            let mut definition = if let Some(base) = base_dir {
+            let mut payload = json!({"toml":toml,"base_dir":base_dir,"name":name,"start":start,"max_evaluators":max_evaluators,"export_path":export_path});
+            // Preserve old idempotency payloads when duplication is not requested.
+            if duplicate {payload["duplicate"]=true.into();}
+            if let Some(key) = &request_id {
                 ensure!(
-                    Path::new(&base).is_absolute(),
-                    "base_dir must be absolute on the deployment"
+                    !key.trim().is_empty() && key.len() <= 256,
+                    "request_id must contain 1..256 bytes"
                 );
-                run_api::parse_run_add_config_toml_from_base(&toml, Path::new(&base))?
-            } else {
-                run_api::parse_run_add_config_toml(&toml)?
-            };
-            if let Some(name) = name {
-                definition.name = name;
             }
-            if let Some(path) = &export_path {
-                ensure!(
-                    Path::new(path).is_absolute(),
-                    "export_path must be absolute on the deployment"
-                );
-                ensure!(!Path::new(path).exists(), "output already exists: {path}");
-            }
-            let created = run_api::create_run(store, definition).await?;
-            if let Some(path) = export_path {
-                crate::local_control::register_export(store, created.run_id, Path::new(&path))
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "created run_id={}; export registration failed",
-                            created.run_id
-                        )
-                    })?;
-            }
-            let assignment = if start {
-                Some(
-                    start_run(store, created.run_id, max_evaluators)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "created run_id={}; retry run start {}",
-                                created.run_id, created.run_id
-                            )
-                        })?,
-                )
+            let previous = if let Some(key) = &request_id {
+                store.creation_receipt(key, &payload).await?
             } else {
                 None
             };
-            Ok(json!({"created":created,"assignment":assignment}))
+            let created = if let Some(created) = previous {
+                created
+            } else {
+                let mut definition = if let Some(base) = &base_dir {
+                    ensure!(
+                        Path::new(base).is_absolute(),
+                        "base_dir must be absolute on the deployment"
+                    );
+                    run_api::parse_run_add_config_toml_from_base(&toml, Path::new(base))?
+                } else {
+                    run_api::parse_run_add_config_toml(&toml)?
+                };
+                if duplicate {definition=run_api::prepare_run_duplicate(store,definition).await?;}
+                if let Some(name) = name {
+                    definition.name = name;
+                }
+                if let Some(path) = &export_path {
+                    ensure!(
+                        Path::new(path).is_absolute(),
+                        "export_path must be absolute on the deployment"
+                    );
+                }
+                let scoped = if let Some(key) = &request_id {
+                    store.with_creation_request(key.clone(), payload)
+                } else {
+                    store.clone()
+                };
+                serde_json::to_value(run_api::create_run(&scoped, definition).await?)?
+            };
+            let id = created["run_id"]
+                .as_i64()
+                .context("missing created run ID")? as i32;
+            let mut receipt = json!({"request_id":request_id,"created":created,"start":{"state":"not_requested"}});
+            if let Some(path) = export_path {
+                receipt["export"] = match crate::local_control::register_export(
+                    store,
+                    id,
+                    Path::new(&path),
+                )
+                .await
+                {
+                    Ok(_) => json!({"state":"registered","path":path}),
+                    Err(error) => {
+                        json!({"state":"failed","error":{"code":"export_registration_failed","retryable":false,"message":format!("{error:#}")}})
+                    }
+                };
+            }
+            if start {
+                receipt["start"] = match start_run(store, id, max_evaluators).await {
+                    Ok(result) => result["start"].clone(),
+                    Err(error) => {
+                        json!({"state":"failed","error":{"code":"start_failed","retryable":false,"message":format!("{error:#}")}})
+                    }
+                };
+            }
+            Ok(receipt)
+        }
+        ManagementRequest::RunImportResults { bundle, name } => {
+            let _admission = crate::local_control::admit(store).await?;
+            crate::api::results::import_results(store, bundle, name).await
         }
         ManagementRequest::RunList { name } => {
             Ok(serde_json::to_value(if let Some(name) = name {
@@ -164,9 +202,13 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
                 run_api::create_run(store, run_api::parse_run_add_config_toml(&raw)?).await?,
             )?)
         }
-        ManagementRequest::RunExport { run } => Ok(
-            json!({"toml":run_api::export_run_definition(store,resolve(store,&run).await?.run_id).await?}),
-        ),
+        ManagementRequest::RunExport {run,kind} => {
+            let id=resolve(store,&run).await?.run_id;
+            match kind {
+                ExportKind::Definition=>Ok(json!({"toml":run_api::export_run_definition(store,id).await?})),
+                ExportKind::Results=>Ok(crate::api::results::run_results(store,id,None).await?),
+            }
+        },
         ManagementRequest::RunPause { runs, all } => {
             let mut results = Vec::new();
             for run in selected(store, runs, all).await? {
@@ -184,13 +226,30 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
             if dry_run {
                 return Ok(json!({"dry_run":true,"runs":runs}));
             }
-            let mut results = Vec::new();
+            // Parent deletion includes descendants; never race overlapping cascades.
+            let ids: std::collections::HashSet<_> = runs.iter().map(|run|run.run_id).collect();
+            let mut submitted = std::collections::HashSet::new();
+            let mut operations = Vec::new();
             for run in runs {
-                results.push(serde_json::to_value(
-                    run_api::remove_run(store, run.run_id).await?,
-                )?);
+                let mut parent=run.parent_run_id;
+                let mut covered=false;
+                while let Some(id)=parent {
+                    if ids.contains(&id) { covered=true; break; }
+                    parent=store.get_run_progress(id).await?.and_then(|run|run.parent_run_id);
+                }
+                if covered || !submitted.insert(run.run_id) { continue; }
+                let store=store.clone();
+                let id=run.run_id;
+                operations.push(state.run_removals.start(id,run.run_name,async move {
+                    run_api::remove_run(&store,id).await.map(|_|()).map_err(|error|format!("{error:#}"))
+                }).await);
             }
-            Ok(json!(results))
+            Ok(json!({"operations":operations}))
+        }
+        ManagementRequest::RunRemovalStatus { operation_id } => {
+            Ok(serde_json::to_value(state.run_removals.get(&operation_id).await.context(
+                "Deletion status unavailable after restart or expiry; inspect the run list before retrying"
+            )?)?)
         }
         ManagementRequest::RunPerformance {
             run,
@@ -259,93 +318,39 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
             Ok(json!({"ready":ready,"snapshot":s}))
         }
         ManagementRequest::Task { run, action } => {
-            task(store, resolve(store, &run).await?.run_id, action).await
+            task(state, resolve(store, &run).await?.run_id, action).await
         }
-        ManagementRequest::WorkerList { name, offline } => {
-            if offline {
-                return Ok(json!(
-                    store
-                        .offline_nodes()
-                        .await?
-                        .into_iter()
-                        .filter(|n| name.as_ref().is_none_or(|v| n["node_name"] == *v))
-                        .collect::<Vec<_>>()
-                ));
-            }
-            Ok(serde_json::to_value(
-                store
-                    .get_registered_worker_summaries(None)
-                    .await?
-                    .into_iter()
-                    .filter(|n| name.as_ref().is_none_or(|name| n.node_name == *name))
-                    .collect::<Vec<_>>(),
-            )?)
+        ManagementRequest::WorkerList {name,state:filter,run} => {
+            let run=match run {Some(run)=>Some(resolve(store,&run).await?.run_id),None=>None};
+            Ok(json!(store.worker_views(worker_filter(filter),name.as_deref(),run).await?))
         }
-        ManagementRequest::WorkerInspect { name } => {
-            let live = store
-                .get_registered_worker_summaries(None)
-                .await?
-                .into_iter()
-                .filter(|n| n.node_name == name)
-                .collect::<Vec<_>>();
-            let offline = store
-                .offline_nodes()
-                .await?
-                .into_iter()
-                .filter(|n| n["node_name"] == name)
-                .collect::<Vec<_>>();
-            ensure!(
-                !live.is_empty() || !offline.is_empty(),
-                "worker not found: {name}"
-            );
-            Ok(json!({"live":live,"offline":offline}))
+        ManagementRequest::WorkerInspect {name} => {
+            store.worker_views(None,Some(&name),None).await?.into_iter().next().context("worker not found")
         }
-        ManagementRequest::WorkerLaunch { count, toml } => {
-            let _admission = crate::local_control::admit(store).await?;
-            let result = crate::api::node_launch::launch(
-                store,
-                state.allow_local_node_spawn,
-                AutoRunNodesRequest {
-                    toml,
-                    count,
-                    max_start_failures: None,
-                    args: json!({}),
-                    name_prefix: None,
+        ManagementRequest::WorkerLaunch {source} => {
+            let _admission=crate::local_control::admit(store).await?;
+            let ids=match source {
+                LaunchSource::New{count,toml,max_start_failures,name_prefix,args}=>{
+                    let result=crate::api::node_launch::launch(store,state.allow_local_node_spawn,AutoRunNodesRequest{count,toml,max_start_failures,name_prefix,args:if args.is_null(){json!({})}else{args}}).await?;
+                    vec![result["request"]["id"].as_str().context("missing launch ID")?.parse()?]
                 },
-            )
-            .await?;
-            let id = result["request"]["id"]
-                .as_str()
-                .context("missing launch ID")?
-                .parse()?;
-            Ok(crate::api::node_launch::receipt(store, vec![id]).await?)
-        }
-        ManagementRequest::WorkerStart { name } => {
-            let _admission = crate::local_control::admit(store).await?;
-            let saved = offline(store, &name).await?;
-            let id = store
-                .start_offline_node(
-                    &name,
-                    saved["node_uuid"].as_str().context("missing identity")?,
-                    state.allow_local_node_spawn,
-                    false,
-                )
-                .await?;
-            Ok(crate::api::node_launch::receipt(store, vec![id]).await?)
-        }
-        ManagementRequest::WorkerRestore {} => {
-            let _admission = crate::local_control::admit(store).await?;
-            let ids = store
-                .restore_saved_workers(state.allow_local_node_spawn)
-                .await?;
-            Ok(crate::api::node_launch::receipt(store, ids).await?)
+                LaunchSource::Saved{name,expected_uuid,restore_only}=>{
+                    let saved=offline(store,&name).await?;
+                    let uuid=saved["node_uuid"].as_str().context("missing identity")?;
+                    ensure!(expected_uuid.as_deref().is_none_or(|expected|expected==uuid),"worker identity changed; refresh the worker list");
+                    vec![store.start_offline_node(&name,uuid,state.allow_local_node_spawn,restore_only).await?]
+                },
+                LaunchSource::RestoreSaved{}=>store.restore_saved_workers(state.allow_local_node_spawn).await?,
+            };
+            Ok(crate::api::node_launch::receipt(store,ids).await?)
         }
         ManagementRequest::WorkerRequestCancel { id } => {
             store.cancel_pending_launch(id).await?;
             Ok(json!({"request_id":id.to_string(),"state":"canceled"}))
         }
-        ManagementRequest::WorkerCancelRestoration { name } => {
+        ManagementRequest::WorkerCancelRestoration { name, expected_uuid } => {
             let saved = offline(store, &name).await?;
+            ensure!(expected_uuid.as_deref().is_none_or(|uuid|saved["node_uuid"]==uuid),"worker identity changed; refresh the worker list");
             Ok(
                 json!({"canceled":store.cancel_worker_restoration(&name,saved["node_uuid"].as_str().context("missing worker identity")?).await?}),
             )
@@ -383,8 +388,18 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
                 json!({"node_name":assigned.node_name,"run_id":assigned.run_id,"role":assigned.role.to_string()}),
             )
         }
-        ManagementRequest::WorkerUnassign { name } => {
-            node_api::unassign_node(store, &name).await?;
+        ManagementRequest::WorkerUnassign {name,all,expected_uuid}=>{
+            if all {
+                ensure!(name.is_none() && expected_uuid.is_none(),"choose a worker or all workers");
+                return Ok(json!({"rows_updated":node_api::unassign_all_nodes(store).await?}));
+            }
+            let name=name.context("worker name is required")?;
+            let worker=store.worker_views(None,Some(&name),None).await?.into_iter().next().context("worker not found")?;
+            let uuid=worker["node_uuid"].as_str().context("missing worker identity")?;
+            ensure!(expected_uuid.as_deref().is_none_or(|u|u==uuid),"worker identity changed; refresh the worker list");
+            if worker["state"]=="offline" {
+                ensure!(store.unassign_offline_node(&name,uuid).await?,"worker became live or has a pending launch; refresh the worker list");
+            } else {node_api::unassign_node(store,&name).await?;}
             Ok(json!({"node_name":name,"unassigned":true}))
         }
         ManagementRequest::WorkerRequests { id } => {
@@ -398,16 +413,6 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
                 )?);
             }
             Ok(serde_json::to_value(requests)?)
-        }
-        ManagementRequest::DatabaseStatus {} => {
-            let version: Option<i32> = sqlx::query_scalar(
-                "SELECT model_version FROM gammaboard_compatibility WHERE singleton",
-            )
-            .fetch_optional(store.pool())
-            .await?;
-            Ok(
-                json!({"reachable":true,"managed":state.instance.as_ref().is_some_and(|i|i.managed_database),"model_version":version}),
-            )
         }
         ManagementRequest::Template { kind, action } => template(state, &kind, action),
         ManagementRequest::Logs {
@@ -455,24 +460,7 @@ async fn execute(state: &AppState, request: ManagementRequest) -> Result<Value> 
 }
 
 pub async fn start_run(store: &PgStore, id: i32, max_evaluators: Option<usize>) -> Result<Value> {
-    if let Some(limit) = max_evaluators {
-        ensure!(limit > 0, "max-evaluators must be positive");
-    }
-    let assigned = node_api::auto_assign_run(store, id, max_evaluators).await?;
-    let workers = store.list_nodes(None).await?;
-    for role in [
-        crate::core::WorkerRole::SamplerAggregator,
-        crate::core::WorkerRole::Evaluator,
-    ] {
-        ensure!(
-            workers.iter().any(|n| n
-                .pool_assignment
-                .is_some_and(|a| a.run_id == id && a.role == role)),
-            "run {id} has insufficient compatible workers for {role}; launch workers and retry run start {id}"
-        );
-    }
-    crate::local_control::mark_started(store, id).await?;
-    Ok(serde_json::to_value(assigned)?)
+    store.try_start_run(id, max_evaluators).await
 }
 
 async fn selected(
@@ -492,19 +480,17 @@ async fn selected(
 }
 async fn offline(store: &PgStore, name: &str) -> Result<Value> {
     store
-        .offline_nodes()
+        .worker_views(Some(false), Some(name), None)
         .await?
         .into_iter()
         .find(|n| n["node_name"] == name)
         .context("worker is not offline")
 }
-async fn task(store: &PgStore, run: i32, action: TaskAction) -> Result<Value> {
+async fn task(state: &AppState, run: i32, action: TaskAction) -> Result<Value> {
+    let store = &state.store;
     let _admission = if !matches!(
         action,
-        TaskAction::List {}
-            | TaskAction::Inspect { .. }
-            | TaskAction::Export { .. }
-            | TaskAction::Remove { .. }
+        TaskAction::List {} | TaskAction::Export { .. } | TaskAction::Remove { .. }
     ) {
         Some(crate::local_control::admit(store).await?)
     } else {
@@ -512,17 +498,19 @@ async fn task(store: &PgStore, run: i32, action: TaskAction) -> Result<Value> {
     };
     match action {
         TaskAction::List {} => Ok(serde_json::to_value(store.list_run_tasks(run).await?)?),
-        TaskAction::Inspect { id } => {
-            Ok(crate::api::results::run_results(store, run, Some(id)).await?)
-        }
         TaskAction::Export { id } => {
             Ok(json!({"toml":run_api::export_task_definition(store,run,id,false).await?}))
         }
-        TaskAction::Append { toml } => Ok(json!(
-            run_api::append_tasks(store, run, run_api::parse_task_queue_toml(&toml)?)
-                .await?
-                .tasks
-        )),
+        TaskAction::Append { toml, duplicate } => {
+            let tasks = run_api::parse_task_queue_toml(&toml)?;
+            Ok(json!(if duplicate {
+                run_api::append_task_duplicate(store, run, tasks)
+                    .await?
+                    .tasks
+            } else {
+                run_api::append_tasks(store, run, tasks).await?.tasks
+            }))
+        }
         TaskAction::Duplicate { id } => {
             let raw = run_api::export_task_definition(store, run, id, true).await?;
             Ok(json!(
@@ -531,16 +519,33 @@ async fn task(store: &PgStore, run: i32, action: TaskAction) -> Result<Value> {
                     .tasks
             ))
         }
-        TaskAction::Edit { id, toml } => {
-            let expected = run_api::export_task_definition(store, run, id, false).await?;
+        TaskAction::Edit {
+            id,
+            toml,
+            expected_toml,
+        } => {
+            let expected = match expected_toml {
+                Some(value) => value,
+                None => run_api::export_task_definition(store, run, id, false).await?,
+            };
             run_api::edit_pending_task(store, run, id, &toml, &expected).await?;
             Ok(json!({"run_id":run,"task_id":id}))
         }
-        TaskAction::Tune { id, toml } => {
-            let updated =
-                run_api::update_task_queue_tuning(store, run, id, Some(toml::from_str(&toml)?))
-                    .await?;
+        TaskAction::Tune { id, queue_tuning } => {
+            let updated = run_api::update_task_queue_tuning(
+                store,
+                run,
+                id,
+                queue_tuning.map(serde_json::from_value).transpose()?,
+            )
+            .await?;
             Ok(json!({"run_id":run,"task":updated.task}))
+        }
+        TaskAction::CampaignScheduling { id, settings } => {
+            Ok(campaign::scheduling(state, run, id, serde_json::from_value(settings)?).await?)
+        }
+        TaskAction::CampaignTuning { id, settings } => {
+            Ok(campaign::tuning(state, run, id, serde_json::from_value(settings)?).await?)
         }
         TaskAction::Remove { id } => {
             run_api::remove_pending_task(store, run, id).await?;
@@ -639,4 +644,12 @@ pub(super) async fn backup(State(state): State<AppState>) -> Result<Response, Ap
     }
     .await
     .map_err(|e| ApiError::Internal(format!("{e:#}")))
+}
+
+pub(super) fn worker_filter(filter: WorkerFilter) -> Option<bool> {
+    match filter {
+        WorkerFilter::Live => Some(true),
+        WorkerFilter::Offline => Some(false),
+        WorkerFilter::All => None,
+    }
 }

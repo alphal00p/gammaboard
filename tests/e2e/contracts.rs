@@ -37,10 +37,8 @@ async fn full_stack_cli_lists_duplicate_run_names_and_reports_ambiguity() -> any
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "run name 'duplicate-run' matches multiple runs",
-        ))
-        .stderr(predicate::str::contains(format!("id={id_a}")))
-        .stderr(predicate::str::contains(format!("id={id_b}")));
+            "run 'duplicate-run' matched 2 runs",
+        ));
 
     harness.cleanup().await?;
     Ok(())
@@ -112,8 +110,8 @@ sampler = { config = { kind = "naive_monte_carlo" } }
         };
         let response = http_post_json(
             &server_url,
-            "/api/runs",
-            json!({"toml": draft, "duplicate": true}),
+            "/api/v1/manage",
+            json!({"operation":"run_create","start":false,"toml": draft, "duplicate": true}),
             Some(&cookie),
         )
         .await?
@@ -121,8 +119,8 @@ sampler = { config = { kind = "naive_monte_carlo" } }
         .text()
         .await?;
         let response: JsonValue = serde_json::from_str(&response)?;
-        assert_eq!(response["run_name"], name);
-        let id = response["run_id"].as_i64().unwrap() as i32;
+        assert_eq!(response["created"]["run_name"], name);
+        let id = response["created"]["run_id"].as_i64().unwrap() as i32;
         let tasks = store.list_run_tasks(id).await?;
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].state, RunTaskState::Pending);
@@ -148,8 +146,8 @@ sampler = { config = { kind = "naive_monte_carlo" } }
         };
         let response = http_post_json(
             &server_url,
-            &format!("/api/runs/{run_id}/tasks"),
-            json!({"toml": draft, "duplicate": true}),
+            "/api/v1/manage",
+            json!({"operation":"task","run":run_id.to_string(),"action":{"action":"append","toml": draft, "duplicate": true}}),
             Some(&cookie),
         )
         .await?
@@ -178,8 +176,8 @@ sampler = { config = { kind = "naive_monte_carlo" } }
     let two_tasks = format!("{queued}\n{queued}");
     let rejected = http_post_json(
         &server_url,
-        &format!("/api/runs/{run_id}/tasks"),
-        json!({"toml": two_tasks, "duplicate": true}),
+        "/api/v1/manage",
+        json!({"operation":"task","run":run_id.to_string(),"action":{"action":"append","toml": two_tasks, "duplicate": true}}),
         Some(&cookie),
     )
     .await?;
@@ -206,8 +204,8 @@ run = '''{raw}'''
     let draft = controller.replace("values = [1]", "values = [1, 2]");
     let response = http_post_json(
         &server_url,
-        "/api/runs",
-        json!({"toml": draft, "duplicate": true}),
+        "/api/v1/manage",
+        json!({"operation":"run_create","start":false,"toml": draft, "duplicate": true}),
         Some(&cookie),
     )
     .await?
@@ -215,8 +213,8 @@ run = '''{raw}'''
     .text()
     .await?;
     let response: JsonValue = serde_json::from_str(&response)?;
-    assert_eq!(response["run_name"], "editor-scan-copy");
-    let id = response["run_id"].as_i64().unwrap() as i32;
+    assert_eq!(response["created"]["run_name"], "editor-scan-copy");
+    let id = response["created"]["run_id"].as_i64().unwrap() as i32;
     let exported: toml::Value = toml::from_str(&runs::export_run_definition(&store, id).await?)?;
     assert_eq!(exported["name"].as_str(), Some("editor-scan-copy"));
     assert_eq!(
@@ -280,10 +278,10 @@ accumulator = { from_name = "sample" }
     let raw = definition["toml"].as_str().unwrap().to_owned();
     let edited = raw.replace("max_samples = 16", "max_samples = 24");
     let response = reqwest::Client::new()
-        .put(format!("{server_url}/api/runs/{run_id}/tasks/{sample_id}"))
+        .post(format!("{server_url}/api/v1/manage"))
         .header("cookie", &cookie)
         .header("content-type", "application/json")
-        .body(json!({"toml": edited, "expected_toml": raw}).to_string())
+        .body(json!({"operation":"task","run":run_id.to_string(),"action":{"action":"edit","id":sample_id,"toml": edited, "expected_toml": raw}}).to_string())
         .send()
         .await?;
     let status = response.status();
@@ -428,7 +426,7 @@ accumulator = { from_name = "sample" }
     );
     let response = harness
         .cli()
-        .args(["run", "export", "definition-copy"])
+        .args(["run", "export", "definition-copy", "--kind", "definition"])
         .output()?;
     anyhow::ensure!(response.status.success());
     let exported = runs::parse_run_add_config_toml(std::str::from_utf8(&response.stdout)?)?;
@@ -487,8 +485,8 @@ sampler = { config={kind="naive_monte_carlo"} }
         .fetch_one(&pool)
         .await?;
     assert!(saved);
-    assert_eq!(store.restore_saved_workers(true).await?.len(), 1);
-    assert_eq!(store.restore_saved_workers(true).await?.len(), 0);
+    assert_eq!(store.restore_saved_workers(false).await?.len(), 1);
+    assert_eq!(store.restore_saved_workers(false).await?.len(), 0);
     let requests = store.list_node_launch_requests().await?;
     let resumed = requests.iter().find(|r| r.id != id).unwrap();
     assert_eq!(resumed.backend, "external");
@@ -514,7 +512,7 @@ sampler = { config={kind="naive_monte_carlo"} }
     store.clear_desired_assignments_for_run(run.run_id).await?;
     assert!(store.get_desired_assignment(&names[0]).await?.is_none());
     store.request_node_shutdown(&names[0]).await?;
-    assert_eq!(store.restore_saved_workers(true).await?.len(), 0);
+    assert_eq!(store.restore_saved_workers(false).await?.len(), 0);
     pool.close().await;
     db.cleanup().await?;
     Ok(())

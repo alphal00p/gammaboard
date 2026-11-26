@@ -52,7 +52,7 @@ and target bands in the dashboard.
 | `unit` evaluator | `continuous_dims`, `discrete_dims`; installation/benchmark fixture |
 | `symbolica` evaluator | `args`, tagged `source` with expression/constants or compiled-library settings |
 | `gammaloop` evaluator | `state_folder`, integrand selection; dimensions inferred from state |
-| `process_evaluator` | `command`, `domain`, `args`, `output`; [process guide](../process_api/README.md) |
+| `process_evaluator` | `command`, `args`, optional `cwd`/`descriptor`; [process guide](../process_api/README.md) |
 | `naive_monte_carlo` sampler | Optional `seed` |
 | `havana_training` sampler | `seed`, `bins`, `samples_for_update`, `initial_training_rate`, `final_training_rate` |
 | `havana_inference` sampler | Trained source and optional `seed` |

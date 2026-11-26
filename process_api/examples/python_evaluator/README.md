@@ -9,7 +9,7 @@ Set the [run card](run.toml)'s `python` replacement to the worker interpreter, t
 create it from the repository root:
 
 ```bash
-./gammaboard run create process_api/examples/python_evaluator/run.toml
+./gb run create process_api/examples/python_evaluator/run.toml
 ```
 
 `src/run_evaluator.py` imports the class and calls

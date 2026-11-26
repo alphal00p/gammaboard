@@ -1,6 +1,6 @@
 use crate::{
     Client, connection,
-    protocol::{Request, TaskAction, TemplateAction},
+    protocol::{ExportKind, LaunchSource, Request, TaskAction, TemplateAction, WorkerFilter},
 };
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Parser, Subcommand};
@@ -39,7 +39,7 @@ pub enum Command {
         #[command(subcommand)]
         command: Config,
     },
-    /// Remote database status/downloads. Offline administration is under local db.
+    /// Download a database backup. Health is in status; offline maintenance is under local db.
     Db {
         #[command(subcommand)]
         command: Db,
@@ -100,6 +100,9 @@ impl std::ops::Deref for Start {
 }
 #[derive(Debug, Args)]
 pub struct StartupOptions {
+    /// Additional exact browser origins for this invocation (repeatable).
+    #[arg(long = "allowed-origin")]
+    pub allowed_origins: Vec<String>,
     /// Submit requests for this many additional workers using instance policy.
     #[arg(long,value_parser=clap::value_parser!(u32).range(1..))]
     pub workers: Option<u32>,
@@ -118,6 +121,7 @@ pub struct StartupOptions {
 impl Default for StartupOptions {
     fn default() -> Self {
         Self {
+            allowed_origins: Vec::new(),
             workers: None,
             restore_workers: false,
             wait: false,
@@ -158,6 +162,8 @@ pub enum Run {
     },
     Export {
         run: String,
+        #[arg(long, value_enum)]
+        kind: ExportKind,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -202,6 +208,13 @@ pub enum Run {
     },
     Create {
         file: PathBuf,
+        /// Reuse this key to safely recover creation after a lost response.
+        #[arg(long)]
+        request_id: Option<String>,
+        #[arg(long, requires = "start")]
+        wait_for_workers: bool,
+        #[arg(long, requires="wait_for_workers", default_value="60s", value_parser=parse_duration)]
+        timeout: Duration,
         #[arg(long)]
         name: Option<String>,
         #[arg(long)]
@@ -216,17 +229,27 @@ pub enum Run {
     List {
         name: Option<String>,
     },
-    #[command(visible_alias = "resume")]
+    #[command(alias = "resume")]
     Start {
         run: String,
         #[arg(long)]
+        wait_for_workers: bool,
+        #[arg(long, requires="wait_for_workers", default_value="60s", value_parser=parse_duration)]
+        timeout: Duration,
+        #[arg(long)]
         max_evaluators: Option<usize>,
+    },
+    /// Import a result bundle as an archived run that cannot execute.
+    ImportResults {
+        file: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
     },
     Results {
         run: String,
         #[arg(long)]
         task: Option<i64>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         output: Option<PathBuf>,
     },
 }
@@ -242,6 +265,7 @@ pub enum Task {
     List {
         run: String,
     },
+    #[command(hide = true)]
     Inspect {
         run: String,
         task_id: i64,
@@ -281,7 +305,9 @@ pub enum Task {
 pub enum Worker {
     List {
         name: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_enum, default_value = "live")]
+        state: WorkerFilter,
+        #[arg(long, hide = true, conflicts_with = "state")]
         offline: bool,
     },
     Inspect {
@@ -327,7 +353,7 @@ pub enum Worker {
     Unassign {
         name: String,
     },
-    #[command(name = "requests", visible_alias = "launch-request")]
+    #[command(name = "requests", alias = "launch-request")]
     LaunchRequest {
         #[command(subcommand)]
         command: LaunchRequest,
@@ -357,7 +383,6 @@ pub enum Config {
 }
 #[derive(Debug, Subcommand)]
 pub enum Db {
-    Status,
     Backup {
         #[arg(long, short)]
         output: PathBuf,
@@ -369,10 +394,32 @@ pub enum Local {
         #[command(subcommand)]
         command: LocalDb,
     },
-    /// Validate the selected deployment configuration without connecting.
+    Config {
+        #[command(subcommand)]
+        command: LocalConfig,
+    },
+    Run {
+        #[command(subcommand)]
+        command: LocalRun,
+    },
+    #[command(hide = true)]
     CheckConfig,
-    /// Validate/probe a run on this host, not on the remote service.
+    /// Validate a run on this host; descriptor discovery can execute evaluators.
+    #[command(hide = true)]
     CheckRun {
+        file: PathBuf,
+        #[arg(long)]
+        probe: bool,
+    },
+}
+#[derive(Debug, Subcommand)]
+pub enum LocalConfig {
+    Validate,
+}
+#[derive(Debug, Subcommand)]
+pub enum LocalRun {
+    /// Validate on this host. Descriptor discovery may initialize external providers.
+    Validate {
         file: PathBuf,
         #[arg(long)]
         probe: bool,
@@ -387,7 +434,6 @@ pub enum LocalDb {
     },
     Create,
     Migrate,
-    Start,
     Stop,
     Delete {
         #[arg(long)]
@@ -546,15 +592,13 @@ pub async fn execute(cli: Cli) -> Result<()> {
     let mut output = None;
     let mut raw = false;
     let mut launch_timeout = None;
+    let mut worker_wait = None;
     let request = match cli.command {
         Command::Status => Request::Status {},
         Command::BuildInfo { server: true } => Request::BuildInfo {},
         Command::Control {
             command: Control::AcknowledgeCleanup { request_id },
         } => Request::AcknowledgeCleanup { request_id },
-        Command::Db {
-            command: Db::Status,
-        } => Request::DatabaseStatus {},
         Command::Db {
             command: Db::Backup { output },
         } => {
@@ -615,6 +659,9 @@ pub async fn execute(cli: Cli) -> Result<()> {
         Command::Run { command } => match command {
             Run::Create {
                 file,
+                request_id,
+                wait_for_workers,
+                timeout,
                 name,
                 start,
                 max_evaluators,
@@ -627,7 +674,10 @@ pub async fn execute(cli: Cli) -> Result<()> {
                         "--export-path must be absolute on the deployment"
                     );
                 }
+                worker_wait = wait_for_workers.then_some(timeout);
                 Request::RunCreate {
+                    request_id,
+                    duplicate: false,
                     toml: std::fs::read_to_string(file)?,
                     base_dir,
                     name,
@@ -640,9 +690,18 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Run::Start {
                 run,
                 max_evaluators,
-            } => Request::RunStart {
-                run,
-                max_evaluators,
+                wait_for_workers,
+                timeout,
+            } => {
+                worker_wait = wait_for_workers.then_some(timeout);
+                Request::RunStart {
+                    run,
+                    max_evaluators,
+                }
+            }
+            Run::ImportResults { file, name } => Request::RunImportResults {
+                bundle: serde_json::from_slice(&std::fs::read(file)?)?,
+                name,
             },
             Run::Results {
                 run,
@@ -658,10 +717,14 @@ pub async fn execute(cli: Cli) -> Result<()> {
                 base_dir,
             },
             Run::Duplicate { source, name } => Request::RunDuplicate { source, name },
-            Run::Export { run, output: path } => {
+            Run::Export {
+                run,
+                kind,
+                output: path,
+            } => {
                 output = path;
-                raw = true;
-                Request::RunExport { run }
+                raw = kind == ExportKind::Definition;
+                Request::RunExport { run, kind }
             }
             Run::Pause(selection) => Request::RunPause {
                 runs: selection.runs,
@@ -727,10 +790,16 @@ pub async fn execute(cli: Cli) -> Result<()> {
                 until,
                 limit,
             },
+            Run::Task {
+                command: Task::Inspect { run, task_id },
+            } => Request::RunResults {
+                run,
+                task: Some(task_id),
+            },
             Run::Task { command } => {
                 let (run, action) = match command {
                     Task::List { run } => (run, TaskAction::List {}),
-                    Task::Inspect { run, task_id } => (run, TaskAction::Inspect { id: task_id }),
+                    Task::Inspect { .. } => unreachable!(),
                     Task::Export {
                         run,
                         task_id,
@@ -743,6 +812,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
                     Task::Append { run, file } => (
                         run,
                         TaskAction::Append {
+                            duplicate: false,
                             toml: std::fs::read_to_string(file)?,
                         },
                     ),
@@ -752,6 +822,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
                     Task::Edit { run, task_id, file } => (
                         run,
                         TaskAction::Edit {
+                            expected_toml: None,
                             id: task_id,
                             toml: std::fs::read_to_string(file)?,
                         },
@@ -760,7 +831,9 @@ pub async fn execute(cli: Cli) -> Result<()> {
                         run,
                         TaskAction::Tune {
                             id: task_id,
-                            toml: std::fs::read_to_string(file)?,
+                            queue_tuning: Some(serde_json::to_value(
+                                toml::from_str::<toml::Value>(&std::fs::read_to_string(file)?)?,
+                            )?),
                         },
                     ),
                     Task::Remove { run, task_id, yes } => {
@@ -772,7 +845,19 @@ pub async fn execute(cli: Cli) -> Result<()> {
             }
         },
         Command::Worker { command } => match command {
-            Worker::List { name, offline } => Request::WorkerList { name, offline },
+            Worker::List {
+                name,
+                state,
+                offline,
+            } => Request::WorkerList {
+                name,
+                state: if offline {
+                    WorkerFilter::Offline
+                } else {
+                    state
+                },
+                run: None,
+            },
             Worker::Inspect { name } => Request::WorkerInspect { name },
             Worker::Launch {
                 count,
@@ -781,22 +866,42 @@ pub async fn execute(cli: Cli) -> Result<()> {
             } => {
                 launch_timeout = waiting.timeout();
                 Request::WorkerLaunch {
-                    count: count.map(|n| n as usize),
-                    toml: config.map(std::fs::read_to_string).transpose()?,
+                    source: LaunchSource::New {
+                        count: count.map(|n| n as usize),
+                        toml: config.map(std::fs::read_to_string).transpose()?,
+                        max_start_failures: None,
+                        name_prefix: None,
+                        args: serde_json::json!({}),
+                    },
                 }
             }
             Worker::Start { name, waiting } => {
                 launch_timeout = waiting.timeout();
-                Request::WorkerStart { name }
+                Request::WorkerLaunch {
+                    source: LaunchSource::Saved {
+                        name,
+                        expected_uuid: None,
+                        restore_only: false,
+                    },
+                }
             }
             Worker::Restore { waiting } => {
                 launch_timeout = waiting.timeout();
-                Request::WorkerRestore {}
+                Request::WorkerLaunch {
+                    source: LaunchSource::RestoreSaved {},
+                }
             }
-            Worker::CancelRestoration { name } => Request::WorkerCancelRestoration { name },
+            Worker::CancelRestoration { name } => Request::WorkerCancelRestoration {
+                name,
+                expected_uuid: None,
+            },
             Worker::Stop { names, all, idle } => Request::WorkerStop { names, all, idle },
             Worker::Assign { name, run, role } => Request::WorkerAssign { name, run, role },
-            Worker::Unassign { name } => Request::WorkerUnassign { name },
+            Worker::Unassign { name } => Request::WorkerUnassign {
+                name: Some(name),
+                all: false,
+                expected_uuid: None,
+            },
             Worker::LaunchRequest { command } => match command {
                 LaunchRequest::List => Request::WorkerRequests { id: None },
                 LaunchRequest::Inspect { id } => Request::WorkerRequests { id: Some(id) },
@@ -841,13 +946,108 @@ pub async fn execute(cli: Cli) -> Result<()> {
         | Command::Completion { .. } => unreachable!(),
     };
     let started = std::time::Instant::now();
-    let value = if let Some(timeout) = launch_timeout {
+    let mut value = if let Some(timeout) = launch_timeout {
         client
             .request_with_timeout(&request, timeout.min(Duration::from_secs(30)))
             .await?
     } else {
         client.request(&request).await?
     };
+    if matches!(request, Request::RunRemove { dry_run: false, .. }) {
+        for operation in value["operations"]
+            .as_array_mut()
+            .context("missing removal operations")?
+        {
+            while operation["status"] == "running" {
+                tokio::time::sleep(Duration::from_millis(
+                    operation["poll_after_ms"].as_u64().unwrap_or(1000),
+                ))
+                .await;
+                let id = operation["operation_id"]
+                    .as_str()
+                    .context("missing removal ID")?
+                    .to_owned();
+                *operation = client
+                    .request(&Request::RunRemovalStatus {
+                        operation_id: id.clone(),
+                    })
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "removal {id} remains submitted; inspect its status before retrying"
+                        )
+                    })?;
+            }
+        }
+        if value["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|operation| operation["status"] != "completed")
+        {
+            print_value(&value, cli.json)?;
+            return Err(crate::ChildExit(1).into());
+        }
+    }
+    if matches!(
+        request,
+        Request::RunCreate { .. } | Request::RunStart { .. }
+    ) {
+        if let Some(timeout) = worker_wait {
+            let id = value
+                .get("created")
+                .and_then(|v| v.get("run_id"))
+                .or_else(|| value.get("run_id"))
+                .context("start receipt has no run ID")?
+                .to_string()
+                .trim_matches('"')
+                .to_owned();
+            let cap = match &request {
+                Request::RunCreate { max_evaluators, .. }
+                | Request::RunStart { max_evaluators, .. } => *max_evaluators,
+                _ => None,
+            };
+            while value["start"]["state"] == "blocked" {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    value["start"]["state"] = "timed_out".into();
+                    break;
+                }
+                tokio::time::sleep(remaining.min(Duration::from_millis(250))).await;
+                let remaining = timeout.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    value["start"]["state"] = "timed_out".into();
+                    break;
+                }
+                match client
+                    .request_with_timeout(
+                        &Request::RunStart {
+                            run: id.clone(),
+                            max_evaluators: cap,
+                        },
+                        remaining.min(Duration::from_secs(30)),
+                    )
+                    .await
+                {
+                    Ok(receipt) => value["start"] = receipt["start"].clone(),
+                    Err(error) => {
+                        value["start"] = serde_json::json!({"state":"unknown","error":{"code":"start_outcome_unknown","retryable":false,"message":format!("{error:#}"),"reconcile":"Inspect this run before retrying; an in-flight start may have committed."}});
+                        break;
+                    }
+                }
+            }
+        }
+        let failed = !matches!(
+            value["start"]["state"].as_str(),
+            Some("started" | "not_requested")
+        ) || value.get("export").is_some_and(|v| v["state"] == "failed");
+        print_value(&value, cli.json)?;
+        return if failed {
+            Err(crate::ChildExit(1).into())
+        } else {
+            Ok(())
+        };
+    }
     if let Some(timeout) = launch_timeout {
         let ids: Vec<String> = serde_json::from_value(value["request_ids"].clone())?;
         client
@@ -989,18 +1189,7 @@ fn bootstrap(cli: &Cli) -> Result<()> {
         config.get("database").is_some() && config.get("paths").is_some(),
         "local operations require a deployment configuration with [database] and [paths], not a client connection file"
     );
-    let executable = std::env::var_os("GAMMABOARD_SERVICE_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::current_exe()
-                .unwrap()
-                .with_file_name("gammaboard")
-        });
-    ensure!(
-        executable.is_file(),
-        "service executable not found at {}; install gammaboard or set GAMMABOARD_SERVICE_BINARY",
-        executable.display()
-    );
+    let executable = service_executable()?;
     let mut cmd = std::process::Command::new(executable);
     cmd.arg("--instance")
         .arg(
@@ -1014,10 +1203,16 @@ fn bootstrap(cli: &Cli) -> Result<()> {
     }
     if let Command::Local { command } = &cli.command {
         match command {
-            Local::CheckConfig => {
+            Local::CheckConfig
+            | Local::Config {
+                command: LocalConfig::Validate,
+            } => {
                 cmd.arg("check-config");
             }
-            Local::CheckRun { file, probe } => {
+            Local::CheckRun { file, probe }
+            | Local::Run {
+                command: LocalRun::Validate { file, probe },
+            } => {
                 cmd.arg("check-run").arg(file);
                 if *probe {
                     cmd.arg("--probe");
@@ -1028,9 +1223,6 @@ fn bootstrap(cli: &Cli) -> Result<()> {
                 match command {
                     LocalDb::Status => {
                         cmd.arg("status");
-                    }
-                    LocalDb::Start => {
-                        cmd.arg("start");
                     }
                     LocalDb::Stop => {
                         cmd.arg("stop");
@@ -1068,6 +1260,9 @@ fn bootstrap(cli: &Cli) -> Result<()> {
         _ => unreachable!(),
     };
     cmd.arg(name);
+    for origin in &args.allowed_origins {
+        cmd.args(["--allowed-origin", origin]);
+    }
     if let Some(c) = component {
         cmd.arg(c);
     }
@@ -1129,4 +1324,48 @@ fn child_output(cmd: &mut std::process::Command, json: bool) -> Result<()> {
     let value: Value =
         serde_json::from_slice(&output.stdout).context("service returned invalid JSON")?;
     print_value(&value, json)
+}
+
+/// An explicit override is authoritative; never silently fall back from it.
+fn service_executable() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("GAMMABOARD_SERVICE_BINARY") {
+        let path = PathBuf::from(path);
+        ensure!(
+            is_executable(&path),
+            "GAMMABOARD_SERVICE_BINARY points to a missing or non-executable file {}",
+            path.display()
+        );
+        return Ok(path);
+    }
+    let sibling = std::env::current_exe()?.with_file_name("gammaboard");
+    if is_executable(&sibling) {
+        return Ok(sibling);
+    }
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let candidate = dir.join("gammaboard");
+        if is_executable(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "service executable not found: tried {} and PATH. Install gammaboard beside gb or set GAMMABOARD_SERVICE_BINARY to its explicit path. Remote management commands only require gb.",
+        sibling.display()
+    )
+}
+
+fn is_executable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| {
+        if !metadata.is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    })
 }

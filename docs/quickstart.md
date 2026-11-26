@@ -22,12 +22,9 @@ is running and dashboard assets are installed. For headless execution, use
 `start --api-only --workers 2 --wait`. Starting services without `--workers`
 launches no workers. Every explicit count launches that many additional workers.
 
-The [local CLI guide](local-cli.md) explains the consolidated `gammaboard.toml`,
-explicit instance selection, output files, shutdown, and database administration.
-The checkout helper defaults to `dev-optim`; use `GAMMABOARD_PROFILE=release` for
-release builds. For installed binaries, build dashboard assets separately and set
-`server.dashboard_dir` in the instance file. Build those assets with `npm ci` and
-`npm run build` inside `dashboard/`. HPC uses the foreground service through the
+The [CLI reference](local-cli.md) covers commands, instance selection and output
+files. See [deployment](deployment.md) for release builds, executable discovery,
+authentication and optional dashboard assets. HPC deployments use the
 [Slurm helper](../ops/slurm/README.md).
 
 ## Default examples
@@ -106,7 +103,7 @@ without cross-bin covariance.
 Validate and start a selected card:
 
 ```bash
-./gb local check-run resources/templates/runs/tetrahedron-native.toml --probe
+./gb local run validate resources/templates/runs/tetrahedron-native.toml --probe
 ./gb start --api-only --workers 6 --wait
 ./gb run create resources/templates/runs/tetrahedron-native.toml \
   --start --max-evaluators 4 --export-path "$PWD/tetrahedron.json"
@@ -128,9 +125,8 @@ training and frozen-inference stages.
 
 The [process-worker tutorials](../process_api/examples/README.md) are separate from
 the dashboard catalog. The [stratification A/B benchmark](../benchmarks/stratification/README.md)
-uses the older one-dimensional tetrahedron path and calls the components directly;
+uses a one-dimensional tetrahedron path and calls the components directly;
 it is not a distributed run or a dashboard preset.
 
-For another local instance, copy `gammaboard.toml`, choose separate paths and ports,
-and pass `--instance FILE` on each command. Use explicit ports for each instance. See [deployment](deployment.md) for shared machines,
-authentication and cluster profiles.
+For multiple instances, configure distinct paths and ports as described in
+[deployment](deployment.md#instance-configuration).

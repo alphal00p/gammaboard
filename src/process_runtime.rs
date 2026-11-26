@@ -237,6 +237,14 @@ pub(crate) fn build_process_worker_command(
         EngineError::build(format!("process runtime requires a resource root: {err}"))
     })?)?;
     let workdir = expand_runtime_path(runtime_cwd.unwrap_or("$resources"), &resources_root)?;
+    if runtime_cwd.is_none() {
+        std::fs::create_dir_all(&workdir).map_err(|e| {
+            EngineError::build(format!(
+                "cannot create default process workdir {}: {e}; configure an explicit cwd",
+                workdir.display()
+            ))
+        })?;
+    }
     if !workdir.is_dir() {
         return Err(EngineError::build(format!(
             "process runtime workdir is not a directory: '{}'",

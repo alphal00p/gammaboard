@@ -124,6 +124,7 @@ def run_case(args, backend, label, params, domain, samples, cpus):
     with common.Session(
         args.binary, output, budget=1800, offset=args.port_offset,
         infrastructure_cpus=cpus[:2], shared_buffers="128MB",
+        keep_instance=(args.keep_instance/label) if args.keep_instance else None,
     ) as session:
         shutil.copy2(session.instance, output / "instance.toml")
         session.start_pinned_workers([cpus[3]], cpus[2])
@@ -269,6 +270,7 @@ def main():
     parser.add_argument("--worker", type=Path, required=True, help="matching optimized gammaloop_process binary")
     parser.add_argument("--args", type=Path, required=True, help="GammaLoop parameter JSON, as for wrapper --describe")
     parser.add_argument("--output", type=Path, required=True, help="fresh output directory")
+    parser.add_argument("--keep-instance",type=Path,help="Retain each stopped deployment under this directory for dashboard inspection")
     parser.add_argument("--seconds", type=float, default=30, help="approximate target per stage")
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=512, choices=[128, 256, 512, 1024, 2048])

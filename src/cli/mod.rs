@@ -54,7 +54,7 @@ enum Command {
     Start(local::StartArgs),
     Restart(gammaboard_client::cli::StartupOptions),
     Db(db::DbArgs),
-    #[command(visible_alias = "worker")]
+    #[command(alias = "worker")]
     Node {
         #[command(subcommand)]
         command: NodeCommand,
@@ -99,10 +99,23 @@ async fn dispatch_async(cli: Cli) -> Result<()> {
         (!legacy_runtime && PathBuf::from("gammaboard.toml").is_file())
             .then(|| PathBuf::from("gammaboard.toml"))
     });
-    let instance = selected
+    let mut instance = selected
         .as_deref()
         .map(instance::Instance::load)
         .transpose()?;
+    if let Some(instance) = &mut instance {
+        let origins = match &cli.command {
+            Command::Start(args) => &args.allowed_origins,
+            Command::Restart(args) => &args.allowed_origins,
+            _ => &Vec::new(),
+        };
+        for origin in origins {
+            let origin = gammaboard::server::normalize_browser_origin(origin)?;
+            if !instance.server.allowed_origins.contains(&origin) {
+                instance.server.allowed_origins.push(origin);
+            }
+        }
+    }
     match cli.command {
         Command::Start(args) => {
             return local::start(
@@ -154,13 +167,13 @@ async fn dispatch_async(cli: Cli) -> Result<()> {
         }
         Command::CheckRun { file, probe } => {
             let snapshot = tempfile::tempdir()?;
-            if probe {
+            {
                 let instance = instance
                     .as_ref()
-                    .context("check-run --probe requires --instance FILE")?;
+                    .context("local run validation requires --instance FILE")?;
                 instance.require_local_processes(
                     cli.allow_local_processes,
-                    "probe a run on this host",
+                    "validate a run on this host (descriptor discovery may execute an evaluator)",
                 )?;
                 instance.write_snapshot(snapshot.path())?;
                 RuntimeContext::load(
@@ -172,8 +185,8 @@ async fn dispatch_async(cli: Cli) -> Result<()> {
             shared::print_json(&gammaboard::api::runs::validate_run(definition, probe)?);
             Ok(())
         }
-        Command::Db(args) if instance.is_some() => {
-            let instance = instance.as_ref().unwrap();
+        Command::Db(args) => {
+            let instance = instance.as_ref().context("database administration requires --instance FILE; use gb local db with an explicit deployment")?;
             if instance.managed_database
                 && !matches!(
                     args.command,
@@ -188,7 +201,7 @@ async fn dispatch_async(cli: Cli) -> Result<()> {
                     "perform local database maintenance",
                 )?;
             }
-            return management::database(instance, args, cli.allow_local_processes).await;
+            return management::database(instance, args).await;
         }
         command => {
             let snapshot = tempfile::tempdir()?;
@@ -219,7 +232,6 @@ async fn dispatch_async(cli: Cli) -> Result<()> {
                     runtime.require_local_processes("run a local benchmark")?;
                     benchmark::run(args, runtime.runtime_config()).await
                 }
-                Command::Db(args) => db::run_db_command(args, runtime.runtime_config()),
                 _ => unreachable!(),
             }
         }

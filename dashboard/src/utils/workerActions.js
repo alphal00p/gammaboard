@@ -1,5 +1,6 @@
 export function workerAssignmentReason(run) {
   if (!run) return "Select a worker pool.";
+  if (run.archived) return "Archived results are read-only and cannot receive workers.";
   if (run.parent_run_id != null) return "Assign workers to the parent run's pool.";
   if (run.lifecycle_state === "completed") return "Append new tasks before assigning workers to this run.";
   if (run.lifecycle_state === "failed") return "Recover the failed task before assigning workers to this run.";

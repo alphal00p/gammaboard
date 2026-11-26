@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs, fetchCampaign, updateOfflineNode } from "./api";
+import { deleteRun, fetchSession, fetchRunPerformance, fetchRunPerformanceGraphs, fetchCampaign, updateOfflineNode, editRunTask, createRun, saveTemplateFile } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -12,21 +12,26 @@ test("restoration uses a distinct action from individual start and fences the wo
   const node = { node_name: "worker / one", node_uuid: "previous-process" };
   for (const action of ["start", "restore", "cancel-restoration", "unassign-offline"]) {
     await updateOfflineNode(node, action);
-    expect(fetch).toHaveBeenLastCalledWith(`/api/nodes/worker%20%2F%20one/${action}`, expect.objectContaining({
-      method: "POST", body: JSON.stringify({ node_uuid: "previous-process" }),
-    }));
+    const payload = JSON.parse(fetch.mock.lastCall[1].body);
+    expect(fetch.mock.lastCall[0]).toBe("/api/v1/manage");
+    const identity = action === "start" || action === "restore" ? payload.source : payload;
+    expect(identity).toMatchObject({ name: node.node_name, expected_uuid: node.node_uuid });
+    if (action === "start" || action === "restore") {
+      expect(payload.operation).toBe("worker_launch");
+      expect(identity.restore_only).toBe(action === "restore");
+    } else expect(payload.operation).toBe(action === "unassign-offline" ? "worker_unassign" : "worker_cancel_restoration");
   }
 });
 
-const removalResponse = (status, error = null) => ({
+const removalResponse = (status, error = null, accepted = false) => ({
   ok: true,
-  json: async () => ({ operation_id: "operation-1", run_id: 1, status, error, poll_after_ms: 1000 }),
+  json: async () => { const operation = { operation_id: "operation-1", run_id: 1, status, error, poll_after_ms: 1000 }; return accepted ? { operations: [operation] } : operation; },
 });
 
 test("deletion polls short requests and reports success only after the background operation completes", async () => {
   vi.useFakeTimers();
   const fetch = vi.fn()
-    .mockResolvedValueOnce(removalResponse("running"))
+    .mockResolvedValueOnce(removalResponse("running", null, true))
     .mockResolvedValueOnce(removalResponse("running"))
     .mockResolvedValueOnce(removalResponse("completed"));
   vi.stubGlobal("fetch", fetch);
@@ -35,9 +40,9 @@ test("deletion polls short requests and reports success only after the backgroun
   await vi.advanceTimersByTimeAsync(1000);
   expect(completed).toBe(false);
   expect(fetch).toHaveBeenCalledTimes(2);
-  expect(fetch.mock.calls[0][0]).toBe("/api/runs/1");
-  expect(fetch.mock.calls[0][1].method).toBe("DELETE");
-  expect(fetch.mock.calls[1][0]).toBe("/api/run-removals/operation-1");
+  expect(fetch.mock.calls[0][0]).toBe("/api/v1/manage");
+  expect(fetch.mock.calls[0][1].method).toBe("POST");
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ operation: "run_removal_status", operation_id: "operation-1" });
   await vi.advanceTimersByTimeAsync(1000);
   await expect(pending).resolves.toMatchObject({ status: "completed" });
 });
@@ -45,7 +50,7 @@ test("deletion polls short requests and reports success only after the backgroun
 test("deletion propagates a background failure instead of claiming success on acceptance", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("fetch", vi.fn()
-    .mockResolvedValueOnce(removalResponse("running"))
+    .mockResolvedValueOnce(removalResponse("running", null, true))
     .mockResolvedValueOnce(removalResponse("failed", "workers are still draining; run retained")));
   const pending = expect(deleteRun(1)).rejects.toThrow("workers are still draining; run retained");
   await vi.advanceTimersByTimeAsync(1000);
@@ -54,7 +59,7 @@ test("deletion propagates a background failure instead of claiming success on ac
 
 test("canceling status polling stops further requests", async () => {
   vi.useFakeTimers();
-  const fetch = vi.fn().mockResolvedValue(removalResponse("running"));
+  const fetch = vi.fn().mockResolvedValue(removalResponse("running", null, true));
   vi.stubGlobal("fetch", fetch);
   const controller = new AbortController();
   const pending = expect(deleteRun(1, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
@@ -105,4 +110,19 @@ test("summary, graph and campaign APIs encode identical rolling, all and custom 
     await fetchCampaign(1, "2", { section: "overview", selection });
     expect(fetch.mock.lastCall[0]).toBe(`/api/runs/1/tasks/2/campaign?section=overview${query ? `&${query}` : ""}`);
   }
+});
+
+
+test("dashboard mutations use the canonical contract and preserve bigint task IDs", async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+  vi.stubGlobal("fetch", fetch);
+  await editRunTask(1, "9007199254740993", "new", "previous");
+  expect(JSON.parse(fetch.mock.lastCall[1].body)).toEqual({ operation: "task", run: "1",
+    action: { action: "edit", id: "9007199254740993", toml: "new", expected_toml: "previous" } });
+  await saveTemplateFile("nodes", { name: "fleet", toml: "[[groups]]" });
+  expect(JSON.parse(fetch.mock.lastCall[1].body)).toMatchObject({ operation: "template", kind: "worker" });
+  fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ paths: { run_templates_dir: "/shared/templates/runs" } }) })
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ created: { run_id: 12 } }) });
+  expect(await createRun("name='new'")).toEqual({ run_id: 12 });
+  expect(JSON.parse(fetch.mock.lastCall[1].body)).toMatchObject({ operation: "run_create", base_dir: "/shared/templates/runs", start: false });
 });

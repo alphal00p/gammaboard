@@ -1,98 +1,130 @@
 # Management API
 
-GammaBoard hosts lifecycle coordination, the HTTP API, and optional dashboard
-assets in one process. Workers continue to communicate directly with PostgreSQL.
-The standalone `gb` executable depends only on the client/protocol crate, not the
-computation library or PostgreSQL driver.
+The CLI, dashboard and deployment helpers send authenticated JSON requests to
+`POST /api/v1/manage`. Each request has an `operation` discriminator. The complete
+schema is [Request](../crates/gb/src/protocol.rs); unknown operations and fields
+are rejected. Use matching client/service revisions.
 
-## Version 1
+The service owns lifecycle coordination and management. Workers use PostgreSQL
+directly for computation. Connections, CLI commands and local/remote file ownership
+are documented in the [CLI reference](local-cli.md).
 
-Authenticated clients post a JSON request to `/api/v1/manage`. Each request has an
-`operation` discriminator and the fields defined by `Request` in
-`crates/gb/src/protocol.rs`. Unknown operations/fields are rejected. Responses are
-JSON values; unsuccessful operations return non-success HTTP status and an error.
-The existing dashboard and launch-controller domain routes remain available and
-use the same application functions.
+## Authentication and endpoints
 
-Examples:
+Authenticate with `Authorization: Bearer TOKEN` or the dashboard session cookie.
+`POST /api/auth/login` accepts `{ "password": "..." }` and returns a token.
+`POST /api/auth/session` checks browser access and makes browsers send their Origin,
+including through same-origin proxies. Browser origins are configured explicitly;
+see [deployment access](deployment.md#authentication-and-browser-access).
+
+| Endpoint family | Purpose |
+| --- | --- |
+| `/api/v1/manage` | Run/task/worker/template management, status, logs and shutdown |
+| `/api/v1/database/backup` | POST to stream a PostgreSQL custom-format backup |
+| `/api/runs`, `/api/workers`, `/api/templates`, `/api/logs`, `/api/settings` | Dashboard reads and specialized panels |
+| `/api/histogram-bundle/*` | Histogram import/export |
+| `/api/node-launch-requests/*` | External-controller claims, leases and progress; see [launch protocol](cluster-launches.md) |
+
+Offline probes and database administration use `gb local`; the management protocol
+accepts no local-execution override. `status.database` includes reachability and
+schema version; status also includes effective deployment configuration.
+
+## Runs and retry receipts
 
 ```json
-{"operation":"run_list","name":null}
+{"operation":"run_create","request_id":"experiment-007","toml":"name = 'experiment'","base_dir":"/shared/project","start":true,"max_evaluators":4}
 ```
+
+`run_create` returns `request_id`, `created` (including `run_id`) and `start`.
+Optional `export_path` registers an absolute deployment-side result path with a
+separate export status. Creation remains committed if starting or export
+registration fails. Those partial outcomes return successful HTTP responses;
+inspect the receipt, not just the HTTP status. Failures before creation return a
+non-success status and `{error}`.
+
+A request ID is stored atomically with creation. Identical input replays the same
+run; changed input or a deleted-run key is rejected. Names are not deduplication
+keys. After an ambiguous transport failure, recover through the same creation key
+or inspect state before retrying. Other mutations have no generic exactly-once
+guarantee.
 
 ```json
-{"operation":"run_create","toml":"...","base_dir":null,"name":null,"start":true,"max_evaluators":4,"export_path":"/shared/project/result.json"}
+{"operation":"run_start","run":"42","max_evaluators":4}
 ```
+
+`run_start` returns `run_id` and `start`. `started` confirms admission of the complete
+worker group; readiness is separate. `blocked` includes code `workers_unavailable`,
+`retryable: true` and an availability summary. It holds no partial group and queues
+no durable start. `gb run start --wait-for-workers` polls admission until its deadline.
+
+Creation may return `not_requested`; unsuccessful execution may return `failed`.
+The CLI additionally reports `timed_out` or `unknown` when waiting expires or an
+RPC outcome is uncertain. It prints the receipt before exiting nonzero for an
+unsuccessful requested step. Waiting never recreates the run.
+
+## Tasks, exports and removal
+
+`task` carries a nested `action`: `list`, `export`, `append`, `duplicate`, `edit`,
+`tune`, `campaign_scheduling`, `campaign_tuning`, or `remove`. Edits accept
+`expected_toml` for optimistic concurrency. Task action IDs accept integers or
+decimal strings; browsers should use strings to preserve bigint precision.
+Campaign actions carry a `settings` object. `run_results` with `task` inspects a task.
+
+`run_export` requires `kind: "definition"` (returns `{toml}`) or `"results"`
+(returns a versioned archive). `run_import_results` accepts a format-2 `bundle`
+and optional `name`, creating a read-only run without evaluator execution.
+Uploads are limited to 64 MiB. Archives contain terminal-task definitions and
+latest snapshots, not restart state or complete history.
+
+`run_remove` accepts `runs`, `all` and `dry_run`. It returns `{operations:[...]}`
+immediately; poll each operation using:
 
 ```json
-{"operation":"worker_launch","count":6,"toml":null}
+{"operation":"run_removal_status","operation_id":"..."}
 ```
 
-The protocol covers runs, tasks, workers, launch-request inspection, templates,
-logs, database status, and instance shutdown. Effective deployment configuration
-is part of status; client configuration is inspected and validated locally. Request
-and result shapes are independent of presentation in the CLI. `gb --json` emits
-one JSON document for finite commands. Log streaming uses `--jsonl`.
+Status is `running`, `completed` or `failed`, with an error on failure. Deletion
+survives a disconnected caller. Running duplicates share an operation; parent and
+child selection deletes their tree once. Operations remain in memory for at least
+an hour after completion. After expiry or service restart, reconcile the run list
+before retrying. Submission success is distinct from deletion completion.
 
-## Connections and credentials
+## Workers
 
-Clients can use `--endpoint`, `GAMMABOARD_ENDPOINT`, or a connection file:
-
-```toml
-[client]
-endpoint = "https://gammaboard.example.org"
-token_file = "session.token"
+```json
+{"operation":"worker_launch","source":{"kind":"new","count":6}}
 ```
 
-Select the file with `--instance FILE`. Token paths resolve relative to that file.
-A local deployment's instance file also supplies connection information through
-its server address. A remote client does not need database credentials or access
-to the service's control directory.
+| `source.kind` | Fields and behavior |
+| --- | --- |
+| `new` | `count` or grouped `toml`; optional `name_prefix`, `max_start_failures`, `args` |
+| `saved` | `name`, optional `expected_uuid`, `restore_only`; use a stored launch recipe |
+| `restore_saved` | Request the fleet marked for restoration |
 
-`gb auth login --password-stdin --output session.token` obtains a session token
-without putting a password on the command line. Token files are created privately
-and existing files are not overwritten. Tokens use the existing session expiry
-and revocation rules. HTTP requests may authenticate with `Authorization: Bearer`
-or the dashboard session cookie. Use HTTPS for connections outside a trusted
-network; a reverse proxy can provide TLS without being part of the application.
+The instance selects the execution backend. Submission returns
+`{request_ids, node_names}`; it does not imply registration. Inspect progress with
+`worker_requests`. `worker_request_cancel` works before a controller claims the
+request. Claimed jobs require worker/deployment controls. `restore_only` requires
+saved restoration intent still to be present.
 
-## File ownership
+`worker_list` accepts `state` (`live`, `offline`, `all`), optional exact `name` and
+optional `run`. `worker_inspect` returns one record in the same schema.
+`GET /api/workers?state=...&run_id=...` supplies that model for dashboard polling.
+Saved launches, unassignment and restoration cancellation accept `expected_uuid`
+to reject stale worker identities.
 
-`gb run create ./run.toml` uploads the local document. Referenced resources must
-exist on the deployment. `--base-dir /shared/project` explicitly supplies the
-server-side directory used to resolve references; without it, references resolve
-from the service's working directory.
+## Shutdown
 
-`gb run results RUN --output ./result.json` downloads a result to the caller.
-`gb run create ... --export-path /shared/project/result.json` registers an export
-owned by the service, which continues after the caller exits. Export paths must
-be absolute. Local output files are written atomically without overwriting.
+`stop` accepts `wait` and optional `timeout_ms`, returning a durable `stop_id`.
+With `wait: true`, accepted runs finish before workers stop. The service completes
+exports, drains/checkpoints workers and waits for external cleanup acknowledgment.
+Poll `status` for the matching ID and inspect `stop_result.success`.
 
-`gb db backup --output ./database.dump` streams a completed PostgreSQL custom-format
-backup from `POST /api/v1/database/backup`. Offline restore, migration, reset,
-delete, and cluster purge are deployment operations executed by the separately
-installed service executable, not arbitrary remote file/process operations.
+The service publishes `ready_to_exit` briefly before shutting down. A lost
+connection before confirmation is unconfirmed shutdown. Deployment owners verify
+actual process/allocation termination and acknowledge external cleanup through
+`acknowledge_cleanup`. See [durable shutdown](cluster-launches.md#durable-instance-shutdown).
 
-## Long-running work and shutdown
-
-Launch requests and exports remain durable database records. Launch submission
-never runs a worker in the HTTP handler. The service chooses the backend, and
-local/external controllers consume the persisted requests. Launch, start, and
-restore return `request_ids` and `node_names`; `--wait` explicitly waits for request
-fulfillment. Request cancellation is allowed only before a controller claims it;
-otherwise it fails with guidance to use worker or deployment controls. `gb run wait` also polls without holding a server request open. Mutations
-are sent once: after an ambiguous transport failure inspect state before retrying;
-this API does not promise generic exactly-once execution.
-
-Shutdown returns a durable `stop_id`. The client polls status for that exact
-request. The service drains/checkpoints work, completes exports, and waits for
-external cleanup acknowledgment before publishing `ready_to_exit`. A short grace
-period lets clients observe this result before API and database shutdown. A lost
-connection before acknowledgment is reported as unconfirmed, never success.
-Local process exit and Slurm allocation termination are verified by their owners.
-
-All HTTP requests have bounded response timeouts. Explicit wait deadlines also
-bound each HTTP poll, so a stalled response cannot indefinitely extend a CLI
-wait. Measurement requests allow their explicitly requested duration plus a
-bounded response margin. Local probes and offline database maintenance belong
-to `gb local`; the management protocol accepts no local-execution override.
+CLI HTTP requests have bounded response timeouts, including each polling request.
+Wait deadlines bound the whole wait; a timeout does not cancel accepted launch,
+deletion, export or shutdown work.

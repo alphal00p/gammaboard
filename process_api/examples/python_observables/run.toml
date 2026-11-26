@@ -1,7 +1,7 @@
 # Python process evaluator returning a GammaLoop-compatible observable bundle.
 # Requires Python with the SDK and the gammaloop build feature; no physics state.
 # Synthetic polynomial f(x)=6*x*(1-x), not a physics amplitude.
-# Run: ./gammaboard run create process_api/examples/python_observables/run.toml
+# Run: ./gb run create process_api/examples/python_observables/run.toml
 
 replacements = { python = "python3" }
 name = "python-observables"

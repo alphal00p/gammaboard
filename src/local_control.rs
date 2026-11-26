@@ -72,6 +72,14 @@ pub async fn status(store: &PgStore) -> Result<Value> {
         "exports".into(),
         serde_json::to_value(exports(store).await?)?,
     );
+    let version: Option<i32> =
+        sqlx::query_scalar("SELECT model_version FROM gammaboard_compatibility WHERE singleton")
+            .fetch_optional(store.pool())
+            .await?;
+    value.insert(
+        "database".into(),
+        json!({"reachable":true,"model_version":version}),
+    );
     Ok(Value::Object(value))
 }
 pub async fn mark_started(store: &PgStore, run: i32) -> Result<()> {
@@ -178,16 +186,29 @@ pub struct Export {
     pub error: Option<String>,
 }
 pub async fn register_export(store: &PgStore, run: i32, path: &std::path::Path) -> Result<String> {
+    let mut tx = store.pool().begin().await?;
+    let path = path.to_string_lossy().into_owned();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,71809242))")
+        .bind(&path)
+        .execute(&mut *tx)
+        .await?;
+    if let Some(id)=sqlx::query_scalar::<_,String>("SELECT id FROM gammaboard_run_exports WHERE run_id=$1 AND path=$2 ORDER BY created_at LIMIT 1")
+        .bind(run).bind(&path).fetch_optional(&mut *tx).await? {return Ok(id);}
+    ensure!(
+        !std::path::Path::new(&path).exists(),
+        "export output already exists: {path}"
+    );
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO gammaboard_run_exports(id,run_id,path) VALUES($1,$2,$3)")
         .bind(&id)
         .bind(run)
-        .bind(path.to_string_lossy().as_ref())
-        .execute(store.pool())
-        .await
-        .context("could not register export (another pending request may own this path)")?;
+        .bind(path)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(id)
 }
+
 pub async fn import_export(store: &PgStore, export: &Export) -> Result<()> {
     sqlx::query("INSERT INTO gammaboard_run_exports(id,run_id,path,completed,error) SELECT $1,$2,$3,$4,$5 WHERE EXISTS(SELECT 1 FROM runs WHERE id=$2) ON CONFLICT(id) DO NOTHING")
         .bind(&export.id).bind(export.run_id).bind(&export.path).bind(export.completed).bind(&export.error).execute(store.pool()).await?;

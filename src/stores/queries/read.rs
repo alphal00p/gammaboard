@@ -34,6 +34,7 @@ fn id_text(value: impl Display) -> String {
 struct RunProgressBaseRow {
     run_id: i32,
     run_name: String,
+    archived: bool,
     run_toml: Option<String>,
     provenance: JsonValue,
     parent_run_id: Option<i32>,
@@ -92,6 +93,7 @@ impl RunProgressBaseRow {
         RunProgress {
             run_id: self.run_id,
             run_name: self.run_name,
+            archived: self.archived,
             run_toml: self.run_toml,
             provenance: self.provenance,
             parent_run_id: self.parent_run_id,
@@ -367,6 +369,7 @@ fn run_progress_sql(run_where_clause: &str) -> String {
         SELECT
             r.id as run_id,
             r.name as run_name,
+            r.archived,
             (SELECT parent.name FROM runs parent WHERE parent.id = r.parent_run_id) AS parent_run_name,
             r.run_toml,
             r.provenance,

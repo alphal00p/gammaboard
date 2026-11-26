@@ -502,7 +502,7 @@ def down(args, slurm):
             api=Api(manifest,job.node,args.admin_password)
             accepted=api.request("/v1/manage", {"operation":"stop","wait":getattr(args,"wait",False),"timeout_ms":None})
             while True:
-                status=api.request("/admin/control/status",method="GET")
+                status=api.request("/v1/manage", {"operation":"status"})
                 if status.get("stop_id") != accepted["stop_id"]:
                     raise RuntimeError("shutdown request was superseded; inspect status")
                 result=status.get("stop_result") or {}
@@ -599,7 +599,7 @@ def cleanup_external_jobs(manifest,api,slurm,request_id):
     except RuntimeError: pass
     slurm.cancel([job.id for job in slurm.active() if owned(job)])
     wait_absent(slurm,owned,SHUTDOWN_SECONDS)
-    api.request("/admin/control/acknowledge-cleanup",{"request_id":request_id})
+    api.request("/v1/manage",{"operation":"acknowledge_cleanup","request_id":request_id})
 
 
 def run_control(args, slurm):
@@ -625,7 +625,7 @@ def run_control(args, slurm):
             while not stop.is_set():
                 try:
                     if api is None: api=Api(manifest,gethostname(),password)
-                    status=api.request("/admin/control/status",method="GET")
+                    status=api.request("/v1/manage", {"operation":"status"})
                     if status.get("cleanup_required"):
                         cleanup_external_jobs(manifest,api,slurm,status["stop_id"])
                         launcher_status.update(launcher_error=None,launcher_last_success=time.time())
@@ -668,7 +668,7 @@ def run_control(args, slurm):
             while process.poll() is None and time.monotonic()-started < SHUTDOWN_SECONDS:
                 try:
                     if cleanup_api is None: cleanup_api=Api(manifest,gethostname(),password)
-                    status=cleanup_api.request("/admin/control/status",method="GET")
+                    status=cleanup_api.request("/v1/manage", {"operation":"status"})
                     request_id=status.get("stop_id")
                     if status.get("cleanup_required") and request_id not in acknowledged:
                         cleanup_external_jobs(manifest,cleanup_api,slurm,request_id)
@@ -872,7 +872,7 @@ def main(argv=None):
                     f"[[groups]]\ncount={args.count}\nname_prefix={json.dumps(args.prefix)}\nmax_start_failures={args.max_start_failures}\n[groups.config]\n"
                     + toml_dump(config)
                 )
-                print(json.dumps(api.request("/node-launch-requests", {"toml": toml})))
+                print(json.dumps(api.request("/v1/manage", {"operation":"worker_launch", "source":{"kind":"new","toml":toml}})))
             watch(
                 manifest,
                 job.node,

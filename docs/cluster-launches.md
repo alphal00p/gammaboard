@@ -2,15 +2,14 @@
 
 The Slurm helper and ordinary management clients use authenticated HTTP under
 `/api`. Workers retain direct PostgreSQL access for computation. The server accepts
-the current grouped node-launch TOML, validates/normalizes resources and atomically
-reserves each worker name and connection capacity. There is no flat-argument
-fallback. The ordinary local launcher uses the same canonical resource recipe.
+grouped worker-launch TOML, validates/normalizes resources and atomically
+reserves each worker name and connection capacity. The local launcher uses the same resource recipe.
 
 ## Lease and submission API
 
 | Endpoint | Request | Result |
 | --- | --- | --- |
-| `POST /node-launch-requests` | `{ "toml": "..." }` | Reserved grouped request |
+| `POST /v1/manage` | `{ "operation": "worker_launch", "source": { "kind": "new", "toml": "..." } }` | `{request_ids, node_names}` |
 | `POST /node-launch-requests/claim-external` | `{ "launcher_id": "unique-owner", "request_id": 123 }` (ID optional) | `{ "request": null }` or leased request |
 | `POST /node-launch-requests/123/lease` | `{ "lease_token": "...", "release": false }` | Extend lease; `true` expires it immediately |
 | `POST /node-launch-requests/123/progress` | `{ "lease_token": "...", "node_name": "w-1", "state": "submitted", "job_id": "456" }` | Durable per-worker transition; optional `error` |
@@ -53,8 +52,8 @@ watcher. Connected means launched, not that the worker stays alive indefinitely.
 
 ## Deployment and build identity
 
-The Slurm helper scopes a deployment to canonical workspace plus port offset and
-stores a unique generation ID, control job, image digest and config snapshots.
+The Slurm helper records each deployment in shared storage with a unique
+generation ID, control job, image digest and configuration snapshots.
 The active pointer and submissions use a workspace filesystem lock; shutdown and
 submission cannot interleave. Service images have fixed paths and can only be
 rebuilt while every deployment in that workspace is stopped. Workers verify the
@@ -65,8 +64,7 @@ verify both before authenticated control operations.
 `gammaboard build-info` reports the package version, source revision, compiled
 features, build ID and database model. When `GAMMABOARD_DEPLOYMENT_ID` is set, server
 startup binds the database to that deployment/build. Node registration and lease
-renewal are guarded inside PostgreSQL, including writes from old binaries that
-omit identity fields. Binding and registration serialize through an advisory lock;
+renewal are guarded inside PostgreSQL, including clients that omit identity fields. Binding and registration serialize through an advisory lock;
 a replacement refuses live workers and cancels unfinished requests from the old
 cohort. A bound database cannot be served without a deployment ID. Unbound local
 deployments do not enforce this cohort restriction.
@@ -74,7 +72,7 @@ deployments do not enforce this cohort restriction.
 Build identity covers the application revision/features. Image SHA-256 separately
 pins its container dependencies. Neither is authentication against a trusted
 operator who can edit the database or deployment files. See the
-[UBELIX operator guide](../ops/slurm/README.md) for publication, shutdown and repairs.
+[Slurm operator guide](../ops/slurm/README.md) for publication, shutdown and repairs.
 
 ## Durable instance shutdown
 

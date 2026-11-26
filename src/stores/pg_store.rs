@@ -3,6 +3,7 @@
 pub(crate) mod campaign;
 mod external_launch;
 mod read;
+mod run_admission;
 mod run_spec;
 mod runtime_log;
 
@@ -24,6 +25,7 @@ use sqlx::PgPool;
 #[derive(Clone)]
 pub struct PgStore {
     pool: PgPool,
+    creation_request: Option<(String, JsonValue)>,
     batch_listener: Option<std::sync::Arc<tokio::sync::Mutex<BatchListener>>>,
 }
 
@@ -59,6 +61,7 @@ impl PgStore {
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
+            creation_request: None,
             batch_listener: None,
         }
     }
@@ -631,6 +634,31 @@ impl ControlPlaneStore for PgStore {
     ) -> Result<i32, StoreError> {
         let sanitized_params = parse_run_create_payload(integration_params)?;
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        if let Some((key, payload)) = &self.creation_request {
+            let fresh=sqlx::query("INSERT INTO run_creation_requests(request_id,payload) VALUES($1,$2) ON CONFLICT DO NOTHING")
+                .bind(key).bind(payload).execute(&mut *tx).await?.rows_affected()==1;
+            let (expected, id): (JsonValue, Option<i32>) = sqlx::query_as(
+                "SELECT payload,run_id FROM run_creation_requests WHERE request_id=$1 FOR UPDATE",
+            )
+            .bind(key)
+            .fetch_one(&mut *tx)
+            .await?;
+            if &expected != payload {
+                return Err(StoreError::invalid_input(
+                    "request_id was already used for different creation input",
+                ));
+            }
+            if let Some(id) = id {
+                return Ok(id);
+            }
+            // A committed NULL is a tombstone left by deletion.
+            if !fresh {
+                return Err(StoreError::invalid_input(
+                    "request_id refers to a deleted run",
+                ));
+            }
+        }
+
         if let Some(parent) = parent {
             // Serialize child creation against retries and deletion. A crash
             // cannot leave a visible child without its parent identity.
@@ -723,6 +751,14 @@ impl ControlPlaneStore for PgStore {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx)?;
+        }
+
+        if let Some((key, _)) = &self.creation_request {
+            sqlx::query("UPDATE run_creation_requests SET run_id=$2 WHERE request_id=$1")
+                .bind(key)
+                .bind(run_id)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await.map_err(map_sqlx)?;
         Ok(run_id)

@@ -30,8 +30,8 @@ if Path(sys.argv[0]).name=='curl':
         if not (root/'supervisor.pid').exists():sys.exit(7)
         print('{"status":"ok"}')
     elif path=='/':print('<html>dashboard</html>')
-    elif path=='/api/node-launch-requests':print('{"requested":2,"started":2}')
-    elif path=='/api/nodes':
+    elif path=='/api/v1/manage':print('{"request_ids":["1"],"node_names":["smoke-1","smoke-2"]}')
+    elif path=='/api/workers':
         counter=root/'polls'
         n=int(counter.read_text())+1 if counter.exists() else 1
         counter.write_text(str(n))
@@ -51,7 +51,7 @@ if args[0]=='start':
     (root/'supervisor.pid').write_text(str(os.getpid()))
     while not stopped:time.sleep(.02)
     (root/'supervisor-stopped').write_text('yes')
-elif args[:2]==['local','check-run']:
+elif args[:3]==['local','run','validate']:
     card=tomllib.loads((root/'run.toml').read_text())
     assert card['evaluator']['kind']=='symbolica' and '--probe' in args
     if mode=='missing_compiler':
@@ -62,9 +62,9 @@ elif args[:2]==['run','start']:
     n=int((root/'polls').read_text())
     assignment={'assigned_samplers':['smoke-1'] if n>=3 and mode!='empty_assignment' else [],'assigned_evaluators':['smoke-2'] if n>=3 and mode!='empty_assignment' else []}
     (root/'assigned-after-polls').write_text(str(n))
-    print(json.dumps(assignment))
+    print(json.dumps({'start':{'state':'started','assignments':assignment['assigned_samplers']+assignment['assigned_evaluators']}}))
 elif args[:2]==['run','wait']:
-    assert len(json.loads((root/'assignment.json').read_text())['assigned_samplers'])==1
+    assert len(json.loads((root/'assignment.json').read_text())['start']['assignments'])==2
     print('completed')
 elif args[:2]==['run','inspect']:
     print(json.dumps({'tasks':[{'state':'completed','nr_completed_samples':32}]}))

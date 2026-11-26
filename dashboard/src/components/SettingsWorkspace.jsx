@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import DisclosureField from "./common/DisclosureField";
 import ConfigurationTree from "./panels/ConfigurationTree";
-import { fetchSettingsOverview, restartDatabase, shutdownControlProcess } from "../services/api";
+import { fetchSettingsOverview, shutdownControlProcess } from "../services/api";
 
 const PathValue = ({ label, value }) => <DisclosureField label={label} value={value || "not set"} />;
 
@@ -39,8 +39,6 @@ const SettingsWorkspace = ({ section = "settings" }) => {
   const { authenticated } = useAuth();
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState(null);
-  const [restartDbOpen, setRestartDbOpen] = useState(false);
-  const [restartingDb, setRestartingDb] = useState(false);
   const [shutdownControlOpen, setShutdownControlOpen] = useState(false);
   const [shuttingDownControl, setShuttingDownControl] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
@@ -84,7 +82,7 @@ const SettingsWorkspace = ({ section = "settings" }) => {
     <Stack spacing={2}>
       <LoadingStatus loading={refreshing} label="Refreshing settings…" />
       {error && <Alert severity="warning">Could not refresh settings. {error}</Alert>}
-      <LoadingStatus loading={restartingDb || shuttingDownControl} label={restartingDb ? "Restarting database…" : "Requesting shutdown…"} />
+      <LoadingStatus loading={shuttingDownControl} label="Requesting shutdown…" />
       {section === "settings" && <>
       <SettingsCard title="Repository">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
@@ -140,19 +138,16 @@ const SettingsWorkspace = ({ section = "settings" }) => {
       {authenticated ? (
         <SettingsCard title="Danger zone">
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            These actions affect the whole local control stack, not just one run or node.
+            Stopping affects the whole instance. Offline database maintenance is available through gb local db.
           </Typography>
           <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-            <Button color="warning" variant="outlined" disabled={restartingDb} onClick={() => setRestartDbOpen(true)}>
-              Reset DB
-            </Button>
             <Button
               color="error"
               variant="contained"
               disabled={shuttingDownControl}
               onClick={() => setShutdownControlOpen(true)}
             >
-              Kill control process
+              Stop instance
             </Button>
           </Stack>
         </SettingsCard>
@@ -167,51 +162,14 @@ const SettingsWorkspace = ({ section = "settings" }) => {
         message={snackbar?.message || ""}
       />
       <Dialog
-        open={active && restartDbOpen}
-        onClose={() => (restartingDb ? null : setRestartDbOpen(false))}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>Reset database?</DialogTitle>
-        <DialogContent>
-          This deletes local database state and recreates it from migrations. Running nodes and run execution will be
-          interrupted and existing local runs/data will be lost.
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRestartDbOpen(false)} disabled={restartingDb}>
-            Cancel
-          </Button>
-          <Button
-            color="warning"
-            variant="contained"
-            disabled={restartingDb}
-            onClick={async () => {
-              setRestartingDb(true);
-              try {
-                await restartDatabase();
-                setRestartDbOpen(false);
-                setSnackbar({ message: "Database reset.", severity: "success" });
-              } catch (err) {
-                setSnackbar({ message: err?.message || "Failed to reset database.", severity: "error" });
-              } finally {
-                setRestartingDb(false);
-              }
-            }}
-          >
-            Confirm Reset
-          </Button>
-        </DialogActions>
-      </Dialog>
-      <Dialog
         open={active && shutdownControlOpen}
         onClose={() => (shuttingDownControl ? null : setShutdownControlOpen(false))}
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Kill control process?</DialogTitle>
+        <DialogTitle>Stop instance?</DialogTitle>
         <DialogContent>
-          This asks the running backend process to exit. The dashboard and API will go offline until the deployment is
-          restarted.
+          This stops workers and requests deployment cleanup. The dashboard and API will go offline until the instance is restarted.
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setShutdownControlOpen(false)} disabled={shuttingDownControl}>
@@ -226,14 +184,14 @@ const SettingsWorkspace = ({ section = "settings" }) => {
               try {
                 await shutdownControlProcess();
                 setShutdownControlOpen(false);
-                setSnackbar({ message: "Control shutdown requested.", severity: "success" });
+                setSnackbar({ message: "Instance shutdown requested.", severity: "success" });
               } catch (err) {
-                setSnackbar({ message: err?.message || "Failed to shut down control process.", severity: "error" });
+                setSnackbar({ message: err?.message || "Failed to stop instance.", severity: "error" });
                 setShuttingDownControl(false);
               }
             }}
           >
-            Kill control process
+            Stop instance
           </Button>
         </DialogActions>
       </Dialog>
